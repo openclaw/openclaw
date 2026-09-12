@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { runPluginUpdateCommand } from "../../../cli/plugins-update-command.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -17,16 +18,35 @@ import {
 } from "../../../plugins/installed-plugin-index-records.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
+import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
 const mocks = vi.hoisted(() => ({
   hostRoot: "",
+  getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
+  log: vi.fn(),
+  error: vi.fn(),
   resolveNpmSpecMetadata:
     vi.fn<typeof import("../../../infra/install-source-utils.js").resolveNpmSpecMetadata>(),
   installPluginFromNpmSpec:
     vi.fn<typeof import("../../../plugins/install.js").installPluginFromNpmSpec>(),
+}));
+
+vi.mock("../../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/config.js")>()),
+  getRuntimeConfig: mocks.getRuntimeConfig,
+}));
+
+vi.mock("../../../runtime.js", () => ({
+  defaultRuntime: {
+    log: mocks.log,
+    error: mocks.error,
+    exit: (code: number) => {
+      throw new Error(`CLI exited with ${code}: ${mocks.error.mock.lastCall?.join(" ")}`);
+    },
+  },
 }));
 
 vi.mock("../../../infra/openclaw-root.js", async (importOriginal) => ({
@@ -119,14 +139,20 @@ describe("post-core convergence on source checkouts", () => {
   });
 
   it.each([
-    { version: "2026.9.3", selector: false, corrupt: false },
-    { version: HOST_VERSION, selector: false, corrupt: false },
-    { version: "2026.9.3", selector: true, corrupt: false },
-    { version: HOST_VERSION, selector: true, corrupt: false },
-    { version: HOST_VERSION, selector: false, corrupt: true },
+    { version: "2026.9.3", selector: false, corrupt: false, flow: "doctor" },
+    { version: HOST_VERSION, selector: false, corrupt: false, flow: "doctor" },
+    { version: "2026.9.3", selector: true, corrupt: false, flow: "doctor" },
+    { version: HOST_VERSION, selector: true, corrupt: false, flow: "doctor" },
+    { version: HOST_VERSION, selector: false, corrupt: true, flow: "doctor" },
+    ...["cli named", "cli all", "stable", "beta"].map((flow) => ({
+      version: HOST_VERSION,
+      selector: false,
+      corrupt: false,
+      flow,
+    })),
   ])(
-    "keeps the rebuilt plugin with npm $version (selector=$selector, corrupt=$corrupt)",
-    async ({ version, selector, corrupt }) => {
+    "keeps the rebuilt plugin with npm $version (selector=$selector, corrupt=$corrupt, flow=$flow)",
+    async ({ version, selector, corrupt, flow }) => {
       const root = tempDirs.make("openclaw-source-convergence-");
       const hostRoot = path.join(root, "host");
       const stateDir = path.join(root, "state");
@@ -189,6 +215,7 @@ describe("post-core convergence on source checkouts", () => {
         update: { channel: "dev" },
         plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
       };
+      mocks.getRuntimeConfig.mockReturnValue(cfg);
       const records: Record<string, PluginInstallRecord> = {
         codex: {
           source: "npm",
@@ -262,6 +289,28 @@ describe("post-core convergence on source checkouts", () => {
           expect.soft(loaded.stdout).toBe("synthetic turn completed");
           const startup = await runActivePluginPayloadSmokeCheck({ cfg, records, env });
           expect(startup.failures).toEqual([]);
+          if (flow === "cli named" || flow === "cli all") {
+            await runPluginUpdateCommand({
+              ...(flow === "cli named" ? { id: "codex" } : {}),
+              opts: { all: flow === "cli all", dryRun: true },
+            });
+            expect(mocks.error).not.toHaveBeenCalled();
+            expect(mocks.log.mock.calls.flat().join("\n")).toContain('Kept bundled plugin "codex"');
+          } else if (flow === "stable" || flow === "beta") {
+            const cohort = await convergePluginReleaseCohort({
+              config: { ...cfg, plugins: { ...cfg.plugins, installs: records } },
+              channel: flow,
+              coreVersion: HOST_VERSION,
+              timeoutMs: 60_000,
+              env,
+            });
+            expect(cohort.config.plugins?.installs).toEqual(records);
+            expect(cohort.updateOutcomes).toContainEqual(
+              expect.objectContaining({ pluginId: "codex", code: "source-bundled-plugin" }),
+            );
+          }
+          expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
+          expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
           if (version === HOST_VERSION && !selector && !corrupt) {
             const override = path.join(root, "selected-plugin");
             fs.symlinkSync(npmDir, override, process.platform === "win32" ? "junction" : "dir");

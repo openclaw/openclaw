@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
@@ -60,7 +61,14 @@ export async function convergePluginReleaseCohort(params: {
   let config = sync.config;
   let changed = sync.changed;
   let npmChanged = false;
-  const installOwners = Object.keys(config.plugins?.installs ?? {});
+  const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
+    config,
+    installRecords: config.plugins?.installs ?? {},
+    env: params.env,
+  });
+  const installOwners = Object.keys(config.plugins?.installs ?? {}).filter(
+    (id) => !sourceBundledIds.has(id),
+  );
   // Without prior package owners there is no retired child policy to reconcile.
   const beforeIndex = installOwners.length
     ? withPluginCache(createPluginCache(), () =>
