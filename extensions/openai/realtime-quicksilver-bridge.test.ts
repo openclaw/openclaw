@@ -1,7 +1,4 @@
-import { EventEmitter } from "node:events";
-import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
-import type { ClientOptions } from "ws";
 
 const { captureWsEventMock, webSocketConstructorMock } = vi.hoisted(() => ({
   captureWsEventMock: vi.fn(),
@@ -20,145 +17,12 @@ vi.mock("ws", async (importOriginal) => {
 
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
-import type {
-  OpenAIQuicksilverSocket,
-  OpenAIQuicksilverSocketFactory,
-} from "./realtime-quicksilver-sideband.js";
-
-class FakeSocket extends EventEmitter {
-  readyState = 0;
-  readonly sent: string[] = [];
-  closeCalls = 0;
-  deferClose = false;
-
-  open(): void {
-    this.readyState = 1;
-    this.emit("open");
-    this.afterOpen?.(this);
-  }
-
-  send(payload: string): void {
-    this.sent.push(payload);
-    const event = JSON.parse(payload) as { type?: string };
-    if ((event.type === "session.update" || event.type === "session.start") && this.autoStart) {
-      queueMicrotask(() =>
-        this.serverEvent({
-          type: "session.started",
-          session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
-        }),
-      );
-    }
-  }
-
-  close(): void {
-    if (this.readyState === 3) {
-      return;
-    }
-    this.closeCalls += 1;
-    if (this.deferClose) {
-      return;
-    }
-    this.finishClose(1000);
-  }
-
-  finishClose(code = 1006): void {
-    if (this.readyState === 3) {
-      return;
-    }
-    this.readyState = 3;
-    queueMicrotask(() => this.emit("close", code, Buffer.alloc(0)));
-  }
-
-  serverEvent(event: unknown): void {
-    this.emit("message", Buffer.from(JSON.stringify(event)), false);
-  }
-
-  constructor(
-    private readonly autoStart = true,
-    private readonly afterOpen?: (socket: FakeSocket) => void,
-  ) {
-    super();
-  }
-}
-
-function createHarness(params?: {
-  audioFormat?: "pcm16" | "g711_ulaw";
-  handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
-  autoStart?: boolean;
-  deferClose?: boolean;
-  afterOpen?: (socket: FakeSocket) => void;
-  model?: string;
-  resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
-  useDefaultSocket?: boolean;
-}) {
-  const socket = new FakeSocket(params?.autoStart, params?.afterOpen);
-  socket.deferClose = params?.deferClose ?? false;
-  const connections: Array<{ url: string; options: ClientOptions }> = [];
-  const webSocketFactory: OpenAIQuicksilverSocketFactory = (url, options) => {
-    connections.push({ url, options });
-    queueMicrotask(() => socket.open());
-    return socket as unknown as OpenAIQuicksilverSocket;
-  };
-  if (params?.useDefaultSocket) {
-    webSocketConstructorMock.mockImplementation(function (url: string, options: ClientOptions) {
-      connections.push({ url, options });
-      queueMicrotask(() => socket.open());
-      return socket;
-    });
-  }
-  const onAudio = vi.fn();
-  const onClearAudio = vi.fn();
-  const onTranscript = vi.fn();
-  const onToolCall = vi.fn();
-  const onReady = vi.fn();
-  const onError = vi.fn();
-  const onClose = vi.fn();
-  const onEvent = vi.fn();
-  const logger = { warn: vi.fn() };
-  const bridge = new OpenAIQuicksilverVoiceBridge(
-    {
-      providerConfig: {},
-      model: params?.model ?? "gpt-live-test-canary",
-      voice: "spruce",
-      instructions: "Use delegation for real work.",
-      audioFormat:
-        params?.audioFormat === "g711_ulaw"
-          ? { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }
-          : { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-      resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
-      ...(params?.useDefaultSocket ? {} : { webSocketFactory }),
-      onAudio,
-      onClearAudio,
-      onTranscript,
-      onToolCall,
-      handleDelegationInput: params?.handleDelegationInput,
-      onReady,
-      onError,
-      onClose,
-      onEvent,
-      logger,
-    },
-    openAIRealtimeHost,
-  );
-  return {
-    bridge,
-    connections,
-    logger,
-    onAudio,
-    onClearAudio,
-    onClose,
-    onError,
-    onEvent,
-    onReady,
-    onToolCall,
-    onTranscript,
-    socket,
-  };
-}
-
-function sentEvents(socket: FakeSocket): Array<Record<string, unknown>> {
-  return socket.sent.map((payload) => JSON.parse(payload) as Record<string, unknown>);
-}
+import {
+  createHarness,
+  FakeSocket,
+  sentEvents,
+} from "./realtime-quicksilver-bridge.test-support.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
 
 describe("OpenAIQuicksilverVoiceBridge", () => {
   it("connects directly to /v1/live and completes the Frameless Bidi handshake", async () => {
@@ -312,109 +176,6 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       content: "Unspoken background.",
     });
   });
-
-  it("waits for public transcript input and ignores duplicate notices after tool completion", async () => {
-    const harness = createHarness({ model: "gpt-live-1" });
-    await harness.bridge.connect();
-    const delegate = (id: string) =>
-      harness.socket.serverEvent({
-        type: "session.delegation.created",
-        offset_ms: 100,
-        delegation: { type: "delegation", target: "client", id },
-      });
-    const transcript = (delta: string) =>
-      harness.socket.serverEvent({
-        type: "session.input_transcript.delta",
-        delta,
-        start_ms: 0,
-        end_ms: 100,
-      });
-    delegate("early");
-    delegate("early");
-    expect(
-      sentEvents(harness.socket).filter((event) => event.type === "session.commentary.append"),
-    ).toEqual([]);
-    transcript("Find a train.");
-    expect(harness.onToolCall).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        callId: "early",
-        args: { question: expect.stringContaining("Find a train.") },
-      }),
-    );
-    harness.bridge.submitToolResult("early", "Done.");
-    transcript("Check a flight.");
-    delegate("early");
-    expect(harness.onToolCall).toHaveBeenCalledOnce();
-    delegate("next");
-    expect(harness.onToolCall).toHaveBeenCalledTimes(2);
-    expect(harness.onToolCall).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        callId: "next",
-        args: { question: expect.stringContaining("Check a flight.") },
-      }),
-    );
-    const closing = harness.bridge.close();
-    harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-    await closing;
-  });
-
-  it("rechecks delayed delegation authority after an event observer closes the call", async () => {
-    const harness = createHarness({ model: "gpt-live-1" });
-    await harness.bridge.connect();
-    harness.onEvent.mockImplementation((event) => {
-      if (event.type === "session.delegation.created") void harness.bridge.close();
-    });
-    harness.socket.serverEvent({
-      type: "session.delegation.created",
-      offset_ms: 0,
-      delegation: { type: "delegation", target: "client", id: "pending" },
-    });
-    harness.socket.serverEvent({
-      type: "session.input_transcript.delta",
-      delta: "Check a flight.",
-      start_ms: 0,
-      end_ms: 100,
-    });
-    expect(harness.onToolCall).not.toHaveBeenCalled();
-    harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-    await harness.bridge.close();
-  });
-
-  it.each(["local-close", "remote-close", "error"] as const)(
-    "revokes delayed public delegation on %s before late captions or timeout",
-    async (boundary) => {
-      const harness = createHarness({ model: "gpt-live-1" });
-      await harness.bridge.connect();
-      vi.useFakeTimers();
-      try {
-        harness.socket.serverEvent({
-          type: "session.delegation.created",
-          offset_ms: 0,
-          delegation: { type: "delegation", target: "client", id: "pending" },
-        });
-        const closing = boundary === "local-close" ? harness.bridge.close() : undefined;
-        if (boundary === "remote-close")
-          harness.socket.serverEvent({ type: "session.closed", reason: "remote_hangup" });
-        if (boundary === "error") harness.socket.emit("error", new Error("disconnected"));
-        harness.socket.serverEvent({
-          type: "session.input_transcript.delta",
-          delta: "Late request.",
-          start_ms: 0,
-          end_ms: 100,
-        });
-        if (boundary === "local-close")
-          harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-        await closing;
-        await vi.advanceTimersByTimeAsync(15_000);
-        expect(harness.onToolCall).not.toHaveBeenCalled();
-        expect(
-          sentEvents(harness.socket).filter((event) => event.type === "session.commentary.append"),
-        ).toEqual([]);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("classifies the retained public user request before consuming snapshots", async () => {
     const order: string[] = [];
@@ -1002,7 +763,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     captureWsEventMock.mockClear();
     const model = "sensitive-model-marker";
     const transcript = "sensitive-frame-marker";
-    const harness = createHarness({ model, useDefaultSocket: true });
+    const harness = createHarness({ model, mockDefaultSocket: webSocketConstructorMock });
 
     await harness.bridge.connect();
     harness.bridge.sendUserMessage(transcript);

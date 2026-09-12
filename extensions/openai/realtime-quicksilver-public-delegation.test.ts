@@ -137,10 +137,15 @@ describe("public GPT-Live delegation", () => {
         model: "gpt-live-1",
       });
       controller.handleEvent({ kind: "delegation", id: "pending" });
-      if (boundary === "stop") controller.stop(new Error("closed"));
-      else if (boundary === "detach") controller.detach();
-      else if (boundary === "abort") sessionController.abort();
-      else controller.beginTranscriptDrain(boundary === "drain-abort" ? "abort" : "detach");
+      if (boundary === "stop") {
+        controller.stop(new Error("closed"));
+      } else if (boundary === "detach") {
+        controller.detach();
+      } else if (boundary === "abort") {
+        sessionController.abort();
+      } else {
+        controller.beginTranscriptDrain(boundary === "drain-abort" ? "abort" : "detach");
+      }
       controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Late request." });
       await vi.advanceTimersByTimeAsync(15_000);
       expect(runAgentConsult).not.toHaveBeenCalled();
