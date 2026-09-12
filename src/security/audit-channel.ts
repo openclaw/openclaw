@@ -283,7 +283,7 @@ export async function collectChannelSecurityFindingsCore(params: {
       return auditState;
     }
 
-    if (input.dmPolicy !== "open" && auditState.admittedPrincipals.length === 0) {
+    if (input.dmPolicy !== "open" && !hasWildcard && auditState.admittedPrincipals.length === 0) {
       findings.push({
         checkId: `channels.${input.provider}.dm.locked`,
         severity: "info",
