@@ -103,6 +103,7 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }) {
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
+    ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
@@ -211,6 +212,74 @@ suite.define(() => {
   afterEach(async () => {
     await context?.close().catch(() => {});
     context = undefined;
+  });
+
+  it("opens an external question step without answering until completion is submitted", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const url = "https://chatgpt.com/apps/github/connector_question_proof";
+    const prompt = "Sign in to GitHub on ChatGPT to use it in Codex.";
+    await page.context().route(url, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<h1>Controlled sign-in page</h1><p>Browser navigation proof; no account sign-in.</p>",
+      }),
+    );
+    const request = questionRecord("question-external-step", [
+      {
+        questionId: "continue",
+        header: "Continue",
+        question: prompt,
+        url,
+        options: [{ label: "I've completed this step" }, { label: "Decline" }],
+        isOther: false,
+      },
+    ]);
+    await emitRequested(gateway, request);
+    const panel = panelFor(page, prompt);
+    await panel.waitFor();
+    const link = panel.getByRole("link", { name: "Open link", exact: true });
+    await expect.poll(() => link.count()).toBe(1);
+    expect(await link.getAttribute("href")).toBe(url);
+    await screenshot(page, "01-external-step-pending.png");
+
+    const popupPromise = page.waitForEvent("popup");
+    await link.click();
+    const popup = await popupPromise;
+    await popup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
+    expect(popup.url()).toBe(url);
+    expect(await popup.evaluate(() => window.opener)).toBeNull();
+    await screenshot(popup, "02-external-step-opened.png");
+    await popup.close();
+    await panel.waitFor();
+    await expectQuestionAttention(page, true);
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    expect(await panel.getByRole("button", { name: "Submit", exact: true }).isDisabled()).toBe(
+      true,
+    );
+
+    await panel.getByRole("radio", { name: /I've completed this step/ }).click();
+    // Opening the link with Enter must not trigger the panel's Enter-to-submit shortcut.
+    const keyboardPopupPromise = page.waitForEvent("popup");
+    await link.press("Enter");
+    const keyboardPopup = await keyboardPopupPromise;
+    await keyboardPopup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
+    await keyboardPopup.close();
+    await panel.waitFor();
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    await screenshot(page, "03-external-step-ready-to-confirm.png");
+
+    const answers = { answers: { continue: ["I've completed this step"] } };
+    await gateway.setMethodResponse("question.resolve", {
+      status: "answered",
+      answers,
+    } satisfies QuestionResolveResult);
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    const resolved = await gateway.waitForRequest("question.resolve");
+    expect(resolved.params).toEqual({ id: request.id, answers });
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+    await expect.poll(() => panel.count()).toBe(0);
+    await expectQuestionAttention(page, false);
+    await screenshot(page, "04-external-step-completed.png");
   });
 
   it("settles a live-edge transcript after a question enters footer flow", async () => {

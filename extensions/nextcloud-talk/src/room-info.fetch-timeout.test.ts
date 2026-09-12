@@ -1,6 +1,6 @@
-// Nextcloud Talk room info lookup tests cover real HTTP timeout behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 
 const REQUEST_TIMEOUT_MS = 500;
@@ -8,7 +8,7 @@ const REQUEST_TIMEOUT_MS = 500;
 describe("nextcloud talk room info fetch timeout", () => {
   it("bounds hanging room info GET requests", async () => {
     let received = false;
-    const runtimeError = vi.fn();
+    const runtime = createRuntimeSpies();
 
     await withServer(
       (request) => {
@@ -29,11 +29,7 @@ describe("nextcloud talk room info fetch timeout", () => {
             },
           } as never,
           roomToken: "abc123",
-          runtime: {
-            error: runtimeError,
-            exit: vi.fn(),
-            log: vi.fn(),
-          },
+          runtime,
           timeoutMs: REQUEST_TIMEOUT_MS,
         });
 
@@ -42,6 +38,6 @@ describe("nextcloud talk room info fetch timeout", () => {
     );
 
     expect(received).toBe(true);
-    expect(runtimeError).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 {
   "id": "opencode",
+  "categories": ["models"],
   "activation": { "onStartup": true },
   "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,

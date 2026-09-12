@@ -1536,7 +1536,16 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
-      config: testConfig,
+      config: {
+        ...testConfig,
+        channels: {
+          discord: {
+            accounts: {
+              creator: {},
+            },
+          },
+        },
+      },
       agentAccountId: "delivery",
       scheduledToolPolicy: {
         version: 1,
@@ -1560,9 +1569,19 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
-      config: testConfig,
+      config: {
+        ...testConfig,
+        channels: {
+          discord: {
+            accounts: {
+              creator: {},
+            },
+          },
+        },
+      },
       agentAccountId: "delivery",
       messageChannel: "discord",
+      messageProvider: "discord",
       scheduledToolPolicy: {
         version: 1,
         mode: "account",
@@ -3370,6 +3389,8 @@ describe("createOpenClawCodingTools read behavior", () => {
 
     expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
     expect(extractToolText(envResult)).not.toContain(credential);
+    expect(JSON.stringify(envResult.details)).not.toContain(credential);
+    expect(envResult.details).toEqual({ kind: "text", content: extractToolText(envResult) });
     expect(extractToolText(sourceResult)).toBe(source);
     expect(extractToolText(envrcResult)).toBe(source);
   });

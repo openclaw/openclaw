@@ -11,6 +11,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
 import { createConnectedContext } from "./profile-page.test-support.ts";
@@ -89,7 +90,7 @@ function createContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
-function stubProfileAvatarProcessing() {
+function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
   class StubUrl extends URL {
     static override createObjectURL = vi.fn(() => "blob:avatar");
     static override revokeObjectURL = vi.fn();
@@ -99,7 +100,7 @@ function stubProfileAvatarProcessing() {
     src = "";
     naturalWidth = 512;
     naturalHeight = 256;
-    decode = vi.fn(async () => undefined);
+    decode = decode;
   }
   vi.stubGlobal("URL", StubUrl);
   vi.stubGlobal("Image", StubImage);
@@ -122,10 +123,11 @@ function selectProfileAvatar(page: ParentNode) {
 
 async function startProfileSignIn(page: ParentNode) {
   page.querySelector<HTMLButtonElement>(".profile-auth-add-account")!.click();
-  await waitForFast(() => expect(page.querySelector('wa-option[value="openai"]')).not.toBeNull());
-  const picker = page.querySelector<HTMLElement & { value: string }>(".profile-auth-provider")!;
-  picker.value = "openai";
-  picker.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForFast(() =>
+    expect(page.querySelector('[role="option"][data-value="openai"]')).not.toBeNull(),
+  );
+  const picker = page.querySelector<HTMLElement>(".profile-auth-provider")!;
+  await choosePickerValue(picker, "openai");
   await waitForFast(() =>
     expect(page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")?.disabled).toBe(
       false,
@@ -514,15 +516,17 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   const page = mountProfilePage(harness.context);
 
   await page.updateComplete;
-  const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
+  const avatar = page.querySelector(".profile-hero__avatar .identity-avatar--agent")!;
+  const image = avatar.querySelector("img");
   expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
-  expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
+  expect(avatar.classList).toContain("is-pending");
 
   image?.dispatchEvent(new Event("error"));
   await page.updateComplete;
 
-  expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
-  expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+  expect(avatar.querySelector("img")).toBeNull();
+  expect(avatar.classList).toContain("is-fallback");
+  expect(avatar.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
 it("fetches a protected hero avatar with the current Control UI credential", async () => {
@@ -570,7 +574,9 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
       signal: expect.any(AbortSignal),
     });
     expect(
-      page.querySelector<HTMLImageElement>(".profile-hero__avatar-image")?.getAttribute("src"),
+      page
+        .querySelector<HTMLImageElement>(".profile-hero__avatar .identity-avatar__image")
+        ?.getAttribute("src"),
     ).toBe("blob:hero-avatar");
   });
 
@@ -682,6 +688,91 @@ it("replaces an in-flight identity request after a same-client reconnect", async
     "Fresh identity",
   );
   expect(selfCalls()).toHaveLength(2);
+});
+
+it.each([
+  { stage: "preprocessing", outcome: "success" },
+  { stage: "preprocessing", outcome: "failure" },
+  { stage: "mutation", outcome: "success" },
+  { stage: "mutation", outcome: "failure" },
+])("retires avatar $stage $outcome without disturbing a newer save", async ({ stage, outcome }) => {
+  let profile = { ...modelAccountProfile };
+  const staleDecode = createDeferred();
+  const staleMutation = createDeferred<{ profile: UserProfile; avatarRevision: string }>();
+  const currentMutation = createDeferred<{ profile: UserProfile; avatarRevision: string }>();
+  const decode = vi.fn<() => Promise<void>>(async () => undefined);
+  if (stage === "preprocessing") {
+    decode.mockImplementationOnce(() => staleDecode.promise);
+  }
+  stubProfileAvatarProcessing(decode);
+  let avatarRequests = 0;
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
+    }
+    if (method === "users.setAvatar") {
+      avatarRequests += 1;
+      return stage === "mutation" && avatarRequests === 1
+        ? staleMutation.promise
+        : currentMutation.promise;
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const avatarBefore = "/api/users/profile-1/avatar?v=before";
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+    avatarUrl: avatarBefore,
+  });
+  const page = mountProfilePage(harness.context);
+  const nameInput = () => page.querySelector<HTMLInputElement>(".identity-name-control input");
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  selectProfileAvatar(page);
+  await waitForFast(() =>
+    expect(stage === "preprocessing" ? decode.mock.calls.length : avatarRequests).toBe(1),
+  );
+
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  nameInput()!.value = "Current draft";
+  nameInput()!.dispatchEvent(new Event("input", { bubbles: true }));
+  selectProfileAvatar(page);
+  const expectedAvatarRequests = stage === "preprocessing" ? 1 : 2;
+  await waitForFast(() => expect(avatarRequests).toBe(expectedAvatarRequests));
+
+  if (outcome === "failure") {
+    (stage === "preprocessing" ? staleDecode : staleMutation).reject(new Error("Retired save"));
+  } else if (stage === "preprocessing") {
+    staleDecode.resolve();
+  } else {
+    staleMutation.resolve({
+      profile: { ...profile, displayName: "Retired identity" },
+      avatarRevision: "retired",
+    });
+  }
+  // Settle the retired promise chain while the replacement RPC remains pending.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await page.updateComplete;
+
+  expect(avatarRequests).toBe(expectedAvatarRequests);
+  expect(nameInput()?.disabled).toBe(true);
+  expect(nameInput()?.value).toBe("Current draft");
+  expect(page.querySelector('[role="alert"]')).toBeNull();
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toBe(avatarBefore);
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2);
+
+  profile = { ...profile, hasAvatar: true, avatarMime: "image/png", updatedAt: 3 };
+  currentMutation.resolve({ profile, avatarRevision: "current" });
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  expect(nameInput()?.value).toBe("Current draft");
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain("?v=current");
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(3);
 });
 
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {

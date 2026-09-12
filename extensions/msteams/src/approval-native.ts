@@ -1,9 +1,6 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type {
-  ChannelApprovalKind,
-  ChannelApprovalNativeRuntimeAdapter,
-} from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -116,14 +113,14 @@ const resolveMSTeamsOriginTarget = createChannelNativeOriginTargetResolver({
 });
 
 const msTeamsLazyApprovalNativeRuntime = createLazyChannelApprovalNativeRuntimeAdapter({
+  capabilityBoundary: true,
   eventKinds: ["exec", "plugin", "system-agent"],
   isConfigured: ({ cfg, accountId }) => isMSTeamsNativeApprovalClientEnabled({ cfg, accountId }),
   shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
     shouldHandleMSTeamsNativeApprovalRequest({ cfg, accountId, approvalKind, request }),
   load: async () => {
     const { msTeamsApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
-    // SAFETY: Core only returns payloads and entries produced by this same typed runtime.
-    return msTeamsApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter;
+    return msTeamsApprovalNativeRuntime;
   },
 });
 

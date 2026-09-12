@@ -103,9 +103,29 @@ export function updateChatRunProgressSnapshot(
     ? next.events.find((candidate) => candidate.stream === "usage")
     : undefined;
 
+  let recounted = false;
   const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
-    next.events = next.events.filter((candidate) => !predicate(candidate));
-    next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
+    let removedBytes = 0;
+    next.events = next.events.filter((candidate) => {
+      if (!predicate(candidate)) {
+        return true;
+      }
+      if (recounted) {
+        removedBytes += jsonUtf8Bytes(candidate);
+      }
+      return false;
+    });
+    if (recounted) {
+      next.byteLength -= removedBytes;
+    } else {
+      // Nested producer payloads can change between updates. Recount once,
+      // then charge only evictions during this synchronous update.
+      next.byteLength = next.events.reduce(
+        (total, candidate) => total + jsonUtf8Bytes(candidate),
+        0,
+      );
+      recounted = true;
+    }
   };
 
   if (

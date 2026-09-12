@@ -211,7 +211,10 @@ jobs:
             exit 1
           fi
 
-          added_or_deleted="$(python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff --name-status --diff-filter=AD)"
+          added_or_deleted="$(
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff HEAD --name-status --diff-filter=AD || exit "$?"
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff --cached HEAD --name-status --diff-filter=AD || exit "$?"
+          )"
           if [ -n "$added_or_deleted" ]; then
             echo "Docs agent added or deleted tracked files; forbidden:"
             printf '%s\n' "$added_or_deleted"
@@ -221,13 +224,35 @@ jobs:
           filter_bad_paths() {
             while IFS= read -r path; do
               case "$path" in
-                docs/*|README.md|CHANGELOG.md) ;;
+                docs/*|README.md) ;;
+                CHANGELOG/*.md)
+                  # Only regenerate an existing mirror from its original ordered sources.
+                  if ! python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 show "HEAD:$path" |
+                    node --input-type=module -e '
+                      import { readFileSync } from "node:fs";
+                      import { changelogEntryPath } from "./scripts/lib/release-changelog.mjs";
+                      import { parseReleaseDocsMirror, renderReleaseDocsMirror } from "./scripts/lib/release-docs-mirror.mjs";
+                      const file = process.argv[1];
+                      const metadata = parseReleaseDocsMirror(readFileSync(0, "utf8"));
+                      if (!metadata || file !== changelogEntryPath(metadata.version) ||
+                          readFileSync(file, "utf8") !== renderReleaseDocsMirror({ rootDir: process.cwd(), ...metadata })) {
+                        throw new Error("Docs agent may only regenerate an existing docs mirror");
+                      }
+                    ' "$path"
+                  then
+                    printf '%s\n' "$path"
+                  fi
+                  ;;
                 *) printf '%s\n' "$path" ;;
               esac
             done
           }
+          # A restored working copy can still hide a forbidden edit in the index.
           bad_paths="$(
-            python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff --name-only | filter_bad_paths
+            {
+              python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff HEAD --name-only || exit "$?"
+              python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 diff --cached HEAD --name-only || exit "$?"
+            } | sort -u | filter_bad_paths
           )"
           if [ -n "$bad_paths" ]; then
             echo "Docs agent touched non-doc paths; forbidden:"
@@ -267,7 +292,7 @@ jobs:
           target = os.environ["TARGET_BRANCH"]
           base_sha = os.environ["BASE_SHA"]
           try:
-              run_git(workspace, "diff", "--quiet")
+              run_git(workspace, "diff", "HEAD", "--quiet")
           except GitFailure:
               pass
           else:
@@ -276,7 +301,7 @@ jobs:
 
           run_git(workspace, "config", "user.name", "openclaw-docs-agent[bot]", reclaim_locks=True)
           run_git(workspace, "config", "user.email", "openclaw-docs-agent[bot]@users.noreply.github.com", reclaim_locks=True)
-          run_git(workspace, "add", "docs", "README.md", "CHANGELOG.md", reclaim_locks=True)
+          run_git(workspace, "add", "docs", "README.md", "CHANGELOG", reclaim_locks=True)
           run_git(workspace, "commit", "--no-verify", "-m", "docs: refresh documentation", reclaim_locks=True)
           for attempt in range(1, 6):
               try:

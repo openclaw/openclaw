@@ -1,7 +1,6 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { toErrorObject } from "./errors.js";
-import { installationTargetEnv } from "./installation-target-context.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   UPDATE_REPAIR_IPC_MAX_BYTES,
@@ -16,6 +15,9 @@ import {
 import { getUpdateRun } from "./update-run-ledger.js";
 
 const controller = new AbortController();
+// Capture admission before any rehearsal projection. Copied state is inference
+// input, never the authority for requester policy or update-run liveness.
+const ledgerEnv = { ...process.env };
 let started = false;
 let requestId = 0;
 let pending:
@@ -69,23 +71,21 @@ process.on("message", (raw: unknown) => {
         throw new Error("Repair worker already owns an execution.");
       }
       started = true;
-      // Agent execution temporarily projects isolated state into process.env.
-      // Run liveness must always read the admitting installation's ledger.
-      const ledgerEnv = {
-        ...process.env,
-        ...installationTargetEnv({
-          stateDir: message.target.stateDir,
-          configPath: message.target.configPath,
-          defaultWorkspaceDir: message.target.workspaceDir,
-        }),
-      };
       void (async () => {
-        const requesterAuthority = message.requester
-          ? await createManagedUpdateRequesterAuthority(message.requester, ledgerEnv)
+        const runtime = await import("./update-repair-agent.runtime.js");
+        const requester = message.requester;
+        const requesterAuthority = requester
+          ? await runtime.withUpdateRepairEnvironment(message.target, () =>
+              createManagedUpdateRequesterAuthority(requester, ledgerEnv),
+            )
           : undefined;
         return runUpdateRepairLoop({
           target: message.target,
-          context: { ...message.failure, ...message.context, phase: "verifying" },
+          context: {
+            ...message.failure,
+            ...message.context,
+            phase: message.context.phase ?? "verifying",
+          },
           budget: message.budget,
           signal: controller.signal,
           isCurrent: () => {
@@ -122,8 +122,8 @@ process.on("message", (raw: unknown) => {
           },
         });
       })()
-        .then((result) => {
-          closeOpenClawStateDatabase();
+        .then(async (result) => {
+          await closeOpenClawStateDatabaseAsync();
           send({ type: "result", result }, () => process.exit(0));
         })
         .catch(() => process.exit(1));
@@ -135,4 +135,4 @@ process.on("message", (raw: unknown) => {
     }
   }
 });
-send({ type: "ready" });
+send({ type: "ready", candidateRehearsal: true });

@@ -6,8 +6,9 @@ import { setVerbose } from "../global-state.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
+import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
+import { getDefaultRedactPatterns } from "./redact.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
@@ -261,6 +262,88 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["current", "current-extra", "custom-only"])(
+    "createSubsystemLogger.warn keeps structural protections with %s patterns",
+    (variant) => {
+      vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+      const patterns =
+        variant === "custom-only"
+          ? []
+          : getDefaultRedactPatterns().filter((pattern) => typeof pattern === "string");
+      if (variant !== "current") {
+        patterns.push("/project-private/g");
+      }
+      applyLoggingConfig({ level: "silent", consoleLevel: "warn", redactPatterns: patterns });
+      const warn = installConsoleMethodSpy("warn");
+      const input =
+        'body: client_se+cret=opaque-value-123&safe=1\nAuthorization: Digest username="alice", realm="example", response="digest-response-1234567890abcdef"; status=401';
+
+      const secret = "Ab9Q".repeat(10);
+      createSubsystemLogger("gateway").warn(
+        `${input}\n${secret} s3://user:${secret}@bucket project-private`,
+      );
+
+      expect(String(mockCall(warn)[0])).not.toContain(secret);
+      expect(String(mockCall(warn)[0])).toContain("s3://user:Ab9QAb…Ab9Q@bucket");
+      if (variant !== "current") {
+        expect(String(mockCall(warn)[0])).not.toContain("project-private");
+      }
+      expect(String(mockCall(warn)[0])).toContain("body: client_se+cret=***&safe=1");
+      expect(String(mockCall(warn)[0])).toContain("Authorization: Digest ***; status=401");
+    },
+  );
+
+  it("createSubsystemLogger.warn masks slash-containing database passwords with default patterns", () => {
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    applyLoggingConfig({ level: "silent", consoleLevel: "warn" });
+    const warn = installConsoleMethodSpy("warn");
+    createSubsystemLogger("gateway").warn(
+      `postgres://user:${"a".repeat(40)}/b@db.example.test/app`,
+    );
+    expect(String(mockCall(warn)[0])).toContain("postgres://user:aaaaaa…aa/b@db.example.test/app");
+  });
+
+  it("getLogger.info preserves every public URL in the final file message", async () => {
+    const url = "https://x.com/EliXPampa/status/2097727549400871286";
+    const inputs = [
+      `https://example.test/${"Ab9Q".repeat(10)}@latest`,
+      `https://example.test/path,${"Ab9Q".repeat(10)}`,
+      `s3://user:1234/${"Ab9Q".repeat(8)}Ab9`,
+      `payload ${JSON.stringify([url, url])}`,
+      `payload ${JSON.stringify({ a: url, b: url })}`,
+      `payload ${JSON.stringify([`${url}?safe=1`, url])}`,
+      `payload ${JSON.stringify(JSON.stringify([`${url}?safe=1`, url]))}`,
+    ];
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    for (const input of inputs) {
+      getLogger().info(input);
+    }
+    await testApi.flushFileLogQueueForTests();
+
+    const messages = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { message: string }).message);
+    expect(messages).toEqual(inputs);
+  });
+
+  it.each(["part/", "/", "1234/"])(
+    "getLogger.info retains malformed credential masking after %s",
+    async (prefix) => {
+      const secret = prefix === "1234/" ? `${"Ab9Q".repeat(8)}Ab9` : "Ab9Q".repeat(10);
+      const file = logPathTracker.nextPath();
+      setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+      getLogger().info(`s3://user:${prefix}${secret}@bucket`);
+      await testApi.flushFileLogQueueForTests();
+
+      const written = fs.readFileSync(file, "utf8");
+      expect(written).not.toContain(secret);
+      expect(written).toContain("@bucket");
+    },
+  );
 
   it("redacts sensitive tokens at the console sink so subsystem writes do not leak secrets (#73284)", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });

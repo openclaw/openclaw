@@ -4,35 +4,10 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { HOOK_INSTALL_ERROR_CODE } from "../hooks/install.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "./command-format.js";
 export { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
-
-export function resolveFileNpmSpecToLocalPath(
-  raw: string,
-): { ok: true; path: string } | { ok: false; error: string } | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file:")) {
-    return null;
-  }
-  const rest = trimmed.slice("file:".length);
-  if (!rest) {
-    return { ok: false, error: "unsupported file: spec: missing path" };
-  }
-  if (rest.startsWith("///")) {
-    return { ok: true, path: rest.slice(2) };
-  }
-  if (rest.startsWith("//localhost/")) {
-    return { ok: true, path: rest.slice("//localhost".length) };
-  }
-  if (rest.startsWith("//")) {
-    return {
-      ok: false,
-      error: 'unsupported file: URL host (expected "file:<path>" or "file:///abs/path")',
-    };
-  }
-  return { ok: true, path: rest };
-}
 
 export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
@@ -85,20 +60,17 @@ export function formatPluginInstallWithHookFallbackError(
   hookFallback: { error: string; code?: string },
 ): string {
   const formattedPluginError = formatPluginInstallAttemptError(pluginError);
-  const formattedHookError = formatPluginInstallAttemptError(hookFallback.error);
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
-    return `${formattedPluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
+    return `${formattedPluginError}\nUse \`${formatCliCommand("openclaw plugins update <id-or-npm-spec>")}\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
   if (
     pluginError.startsWith("Invalid extensions directory:") ||
-    pluginError === "Invalid path: must stay within extensions directory"
+    pluginError === "Invalid path: must stay within extensions directory" ||
+    hookFallback.code === HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS
   ) {
     return formattedPluginError;
   }
-  if (hookFallback.code === HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS) {
-    return formattedPluginError;
-  }
-  return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
+  return `${formattedPluginError}\nAlso not a valid hook pack: ${formatPluginInstallAttemptError(hookFallback.error)}`;
 }
 
 const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =
@@ -126,20 +98,4 @@ export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaul
   for (const warning of warnings) {
     runtime.log(theme.warn(warning));
   }
-}
-
-export function parseNpmPrefixSpec(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm:")) {
-    return null;
-  }
-  return trimmed.slice("npm:".length).trim();
-}
-
-export function parseNpmPackPrefixPath(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm-pack:")) {
-    return null;
-  }
-  return trimmed.slice("npm-pack:".length).trim();
 }

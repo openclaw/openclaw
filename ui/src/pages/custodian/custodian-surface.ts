@@ -2,7 +2,6 @@ import { consume } from "@lit/context";
 import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
 import { markdownBlocks } from "../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -98,7 +97,6 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override render() {
     const store = this.store;
-    const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.resourceBasePath);
     const alertCard = custodianAlertStore.alert
       ? renderCustodianAlertCard({
           alert: custodianAlertStore.alert,
@@ -182,7 +180,6 @@ class CustodianSurface extends OpenClawLightDomElement {
             return renderCustodianTranscriptEntry({
               message,
               boundaryAfterId: store.earlierBoundaryAfterId,
-              assistantAvatar,
               showQuestion,
               questionDisabled: !store.canSend || store.answeredQuestions.has(questionKey),
               onSelect: (label) => store.answerQuestion(message, label),
@@ -220,8 +217,6 @@ class CustodianSurface extends OpenClawLightDomElement {
           }
           ${renderPanelRefreshStatus({
             status: store.transcript.status,
-            onRetry: () => void store.refreshTranscriptIfIdle(),
-            retryDisabled: !store.canRefreshTranscript(),
             className: "custodian__transcript-status",
           })}
           ${

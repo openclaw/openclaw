@@ -25,6 +25,12 @@ import {
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
+  createStageTimingTracker,
+  formatStageTimings,
+  type StageTimingSummary,
+} from "openclaw/plugin-sdk/time-runtime";
+import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "../../native-tool-policy.js";
+import {
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
   type CodexPluginConfig,
@@ -71,14 +77,6 @@ type OpenClawSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 type CodexDynamicToolBuildEvent = Parameters<
   NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>
 >[0];
-const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
-  "exec",
-  "process",
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
   "exec",
@@ -190,15 +188,7 @@ export function resolveCodexAppServerHookChannelId(
     messageTo: params.messageTo,
   }).channelId;
 }
-type CodexDynamicToolBuildStageTiming = {
-  name: string;
-  durationMs: number;
-  elapsedMs: number;
-};
-type CodexDynamicToolBuildStageSummary = {
-  totalMs: number;
-  stages: CodexDynamicToolBuildStageTiming[];
-};
+type CodexDynamicToolBuildStageSummary = StageTimingSummary;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS = 1_000;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS = 500;
 /** Captures bounded preparation stages before a slow turn needs diagnosis. */
@@ -206,27 +196,8 @@ export function createCodexDynamicToolBuildStageTracker(): {
   mark: (name: string) => void;
   snapshot: () => CodexDynamicToolBuildStageSummary;
 } {
-  const startedAt = Date.now();
-  let previousAt = startedAt;
-  const stages: CodexDynamicToolBuildStageTiming[] = [];
-  const toMs = (value: number) => Math.max(0, Math.round(value));
-  return {
-    mark(name) {
-      const currentAt = Date.now();
-      stages.push({
-        name,
-        durationMs: toMs(currentAt - previousAt),
-        elapsedMs: toMs(currentAt - startedAt),
-      });
-      previousAt = currentAt;
-    },
-    snapshot() {
-      return {
-        totalMs: toMs(Date.now() - startedAt),
-        stages: stages.slice(),
-      };
-    },
-  };
+  const { mark, snapshot } = createStageTimingTracker();
+  return { mark, snapshot };
 }
 /** Returns true when dynamic-tool construction is slow enough to warrant a warning log. */
 export function shouldWarnCodexDynamicToolBuildStageSummary(
@@ -244,11 +215,7 @@ export function shouldWarnCodexDynamicToolBuildStageSummary(
 export function formatCodexDynamicToolBuildStageSummary(
   summary: CodexDynamicToolBuildStageSummary,
 ): string {
-  return summary.stages.length > 0
-    ? summary.stages
-        .map((stage) => `${stage.name}:${stage.durationMs}ms@${stage.elapsedMs}ms`)
-        .join(",")
-    : "none";
+  return formatStageTimings(summary.stages);
 }
 /** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(
@@ -727,9 +694,7 @@ function canCodexAppServerNativeToolSurfaceHonorSandbox(
 function canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox: {
   tools: Parameters<typeof isToolAllowed>[0];
 }): boolean {
-  return CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS.every((toolName) =>
-    isToolAllowed(sandbox.tools, toolName),
-  );
+  return CODEX_NATIVE_TOOL_REQUIREMENTS.every((toolName) => isToolAllowed(sandbox.tools, toolName));
 }
 function isCodexMemoryFlushRun(
   params?: Pick<EmbeddedRunAttemptParams, "trigger" | "memoryFlushWritePath">,

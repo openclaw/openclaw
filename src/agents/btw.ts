@@ -6,11 +6,16 @@ import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  buildReplyUsageState,
+  recordReplyUsageState,
+} from "../auto-reply/reply/reply-usage-state.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
   AssistantMessageEvent,
@@ -22,11 +27,13 @@ import type {
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
 import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
@@ -37,12 +44,12 @@ import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resol
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import type { AgentHarnessPreparedModelProvider } from "./harness/selection-decision.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "./harness/selection.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,
@@ -65,7 +72,7 @@ import {
 } from "./model-runtime-aliases.js";
 import { isOpenAIProvider } from "./openai-routing.js";
 import {
-  loadPreparedModelRuntimeSnapshot,
+  acquirePublishedPreparedModelRuntime,
   preparedModelRuntimeConfigsMatch,
   type PreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeStores,
@@ -90,6 +97,12 @@ import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
+import {
+  hasBillableUsage,
+  normalizeUsage,
+  toDiagnosticUsage,
+  type NormalizedUsage,
+} from "./usage.js";
 
 function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
   return content
@@ -421,6 +434,7 @@ async function materializeBtwRuntimeModel(
       ...(params.forceResolve !== undefined ? { forceResolve: params.forceResolve } : {}),
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, agentDir, config, {
+          modelIdSource: "selected",
           authStorage: params.authStorage,
           modelRegistry: params.modelRegistry,
           skipAgentDiscovery: true,
@@ -516,6 +530,7 @@ async function resolveRuntimeModel(params: {
     cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
+    agentId: params.agentId,
     harnessRuntime: params.harnessId,
     agentDir,
     sessionEntry: params.sessionEntry,
@@ -540,12 +555,14 @@ async function resolveRuntimeModel(params: {
     authProfileStoreSelection.ignoreAutoPreferredProfile && authProfileIdSource !== "user"
       ? undefined
       : authProfileId;
-  const runtimeAuthPreparation = prepareAgentRuntimeAuth({
+  const authParams = {
     provider: runtimeProvider,
     modelId: runtimeModelId,
     modelApi: model.api,
     modelBaseUrl: model.baseUrl,
     config: cfg,
+    agentId: params.agentId,
+    agentDir,
     env: process.env,
     workspaceDir,
     authProfileStore: authProfileStoreSelection.store,
@@ -554,7 +571,9 @@ async function resolveRuntimeModel(params: {
     harnessId: params.harnessId,
     harnessRuntime: params.harnessId,
     harnessAuthBootstrap: params.harnessAuthBootstrap,
-  });
+  } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
+  await reconcileAuthProfileQuotaBlocks(authParams);
+  const runtimeAuthPreparation = prepareAgentRuntimeAuth(authParams);
   model = await materializeBtwRuntimeModel({
     provider: runtimeProvider,
     modelId: runtimeModelId,
@@ -646,6 +665,7 @@ async function runCliBtwSideQuestion(params: {
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: params.cfg,
     overrideSeconds: params.opts?.timeoutOverrideSeconds,
+    overrideMs: params.opts?.timeoutOverrideMs,
   });
   const runId = params.authorityRunId;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -698,6 +718,21 @@ async function runCliBtwSideQuestion(params: {
   }
 }
 
+/** The visible answer may finish before cooperating provider and cleanup work settles. */
+async function withBtwPreparedRuntime(
+  input: Parameters<typeof acquirePublishedPreparedModelRuntime>[0],
+  run: (snapshot: PreparedModelRuntimeSnapshot) => Promise<ReplyPayload | undefined>,
+): Promise<ReplyPayload | undefined> {
+  return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
+    const lease = await acquirePublishedPreparedModelRuntime(input);
+    onAcquired({ release: () => lease[Symbol.asyncDispose]() });
+    return withPluginRuntimeGenerationScope(lease.snapshot, () => {
+      captureWorkContext();
+      return run(lease.snapshot);
+    });
+  });
+}
+
 /** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
   paramsInput: RunBtwSideQuestionParams,
@@ -724,7 +759,7 @@ export async function runBtwSideQuestion(
   }
 
   const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const preparedModelRuntime = await loadPreparedModelRuntimeSnapshot({
+  const runtimeInput = {
     config: params.cfg,
     agentId: params.agentId,
     agentDir: params.agentDir,
@@ -732,8 +767,8 @@ export async function runBtwSideQuestion(
     // Gateway-published owners are keyed with this flag, so a gateway-hosted
     // request that omits it can never match one.
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true as const } : {}),
-  });
-  return await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
+  };
+  return await withBtwPreparedRuntime(runtimeInput, async (preparedModelRuntime) => {
     const sessionAgentId = preparedModelRuntime.agentId ?? params.agentId;
     const workspaceDir =
       preparedModelRuntime.workspaceDir ??
@@ -837,6 +872,36 @@ export async function runBtwSideQuestion(
       }
       return runtimeSelection;
     };
+    const recordBtwUsage = (runtimeModel: Model, usage?: NormalizedUsage) => {
+      if (!hasBillableUsage(usage)) {
+        return;
+      }
+      const usageState = buildReplyUsageState({
+        config: params.cfg,
+        agentDir: params.agentDir,
+        agentId: sessionAgentId,
+        sessionId,
+        provider: runtimeModel.provider,
+        model: runtimeModel.id,
+        chatType: params.chatType,
+        usage,
+      });
+      // Delivery hooks use the reply correlation ID, not the side run's authority ID.
+      recordReplyUsageState(params.opts?.runId, usageState);
+      if (isDiagnosticsEnabled(params.cfg)) {
+        emitTrustedDiagnosticEvent({
+          type: "model.usage",
+          sessionKey: params.sessionKey,
+          sessionId,
+          channel: params.messageChannel,
+          agentId: sessionAgentId,
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+          usage: toDiagnosticUsage(usage),
+          costUsd: usageState.turnUsd,
+        });
+      }
+    };
     type BtwHarnessSideQuestionDispatch =
       | { kind: "handled"; payload: ReplyPayload }
       | {
@@ -886,27 +951,32 @@ export async function runBtwSideQuestion(
               authProfileId: runtime.authProfileId,
               authProfileIdSource: runtime.authProfileIdSource,
             });
-      const runtimeAuthPreparation = authProfileStoreSelection
-        ? prepareAgentRuntimeAuth({
-            provider: runtime.model.provider,
-            modelId: runtime.model.id,
-            modelApi: runtime.model.api,
-            modelBaseUrl: runtime.model.baseUrl,
-            config: params.cfg,
-            env: process.env,
-            workspaceDir,
-            authProfileStore: authProfileStoreSelection.store,
-            sessionAuthProfileId:
-              authProfileStoreSelection.ignoreAutoPreferredProfile &&
-              runtime.authProfileIdSource !== "user"
-                ? undefined
-                : runtime.authProfileId,
-            sessionAuthProfileSource: runtime.authProfileIdSource,
-            harnessId: selectedHarness.id,
-            harnessRuntime: selectedHarness.id,
-            harnessAuthBootstrap: selectedHarness.authBootstrap,
-          })
-        : runtime.runtimeAuthPreparation;
+      let runtimeAuthPreparation = runtime.runtimeAuthPreparation;
+      if (authProfileStoreSelection) {
+        const authParams = {
+          provider: runtime.model.provider,
+          modelId: runtime.model.id,
+          modelApi: runtime.model.api,
+          modelBaseUrl: runtime.model.baseUrl,
+          config: params.cfg,
+          agentId: sessionAgentId,
+          agentDir: params.agentDir,
+          env: process.env,
+          workspaceDir,
+          authProfileStore: authProfileStoreSelection.store,
+          sessionAuthProfileId:
+            authProfileStoreSelection.ignoreAutoPreferredProfile &&
+            runtime.authProfileIdSource !== "user"
+              ? undefined
+              : runtime.authProfileId,
+          sessionAuthProfileSource: runtime.authProfileIdSource,
+          harnessId: selectedHarness.id,
+          harnessRuntime: selectedHarness.id,
+          harnessAuthBootstrap: selectedHarness.authBootstrap,
+        } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
+        await reconcileAuthProfileQuotaBlocks(authParams);
+        runtimeAuthPreparation = prepareAgentRuntimeAuth(authParams);
+      }
       const selectedAuthProfileStore = authProfileStoreSelection?.store ?? runtime.authProfileStore;
       const implicitHarnessAuthPlan =
         selectedHarness.authBootstrap === "harness" &&
@@ -1067,6 +1137,7 @@ export async function runBtwSideQuestion(
         } finally {
           host.close();
         }
+        recordBtwUsage(runtimeModel, result.usage);
         return { kind: "handled", payload: { text: result.text } };
       } finally {
         preparedRunAdmission.close();
@@ -1408,6 +1479,8 @@ export async function runBtwSideQuestion(
     if (!answer) {
       throw new Error("No BTW response generated.");
     }
+
+    recordBtwUsage(runtimeModel, normalizeUsage(finalMessage?.usage));
 
     if (emittedBlocks > 0) {
       return undefined;

@@ -637,7 +637,10 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     const activeTabId = activeTab?.tabId ?? this.activeTabId;
     const widgets = activeTab ? orderedWidgets(snapshot, activeTab.tabId) : [];
     return html`
-      <section class="board-view" aria-label=${t("board.label")}>
+      <section
+        class=${`board-view ${widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS ? "board-view--single-full-width" : ""}`}
+        aria-label=${t("board.label")}
+      >
         ${renderBoardTabs({
           tabs,
           activeTabId,

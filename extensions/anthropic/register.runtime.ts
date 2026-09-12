@@ -49,6 +49,7 @@ import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
+import { resolveFastModeSupport } from "./fast-mode-policy.js";
 import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -88,20 +89,6 @@ const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_1M_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
-// Anthropic's introductory rate expires at the documented UTC month boundary.
-const ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
-const ANTHROPIC_SONNET_5_PROMOTIONAL_COST = {
-  input: 2,
-  output: 10,
-  cacheRead: 0.2,
-  cacheWrite: 2.5,
-};
-const ANTHROPIC_SONNET_5_STANDARD_COST = {
-  input: 3,
-  output: 15,
-  cacheRead: 0.3,
-  cacheWrite: 3.75,
-};
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
@@ -162,20 +149,12 @@ function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): Provi
   };
 }
 
-function resolveAnthropicSonnet5Cost(nowMs: number = Date.now()) {
-  return nowMs >= ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS
-    ? ANTHROPIC_SONNET_5_STANDARD_COST
-    : ANTHROPIC_SONNET_5_PROMOTIONAL_COST;
-}
-
 function resolveAnthropicModelCost(modelId: string) {
   // Snapshots share their dateless model's price; unlisted deployments retain
   // their discovered cost instead of inheriting a different version's pricing.
   const normalized = resolveClaudeModelIdentity({ id: modelId }).replace(/-\d{8}$/, "");
   const id = CLAUDE_MODEL_ID_ALIASES.get(normalized) ?? normalized;
-  return isAnthropicSonnet5Model(id)
-    ? resolveAnthropicSonnet5Cost()
-    : manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
+  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
 }
 
 const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
@@ -588,7 +567,11 @@ function applyAnthropicModernMaxTokens(params: {
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  if (!isAnthropic128kOutputModel(params.modelId)) {
+  // Catalog defaults must not raise an operator-configured output cap.
+  if (
+    params.model.maxTokensSource === "configured" ||
+    !isAnthropic128kOutputModel(params.modelId)
+  ) {
     return undefined;
   }
   if ((params.model.maxTokens ?? 0) >= ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS) {
@@ -895,6 +878,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
           });
     },
     wrapStreamFn: wrapAnthropicProviderStream,
+    resolveFastModeSupport,
     resolveUsageAuth: resolveAnthropicUsageAuth,
     fetchUsageSnapshot: fetchAnthropicUsage,
     isCacheTtlEligible: () => true,

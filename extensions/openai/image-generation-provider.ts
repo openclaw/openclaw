@@ -26,7 +26,7 @@ import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
-const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.6-sol";
+const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-6-astra";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
@@ -55,14 +55,18 @@ const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
+const OPENAI_IMAGE_25_MODELS = ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"] as const;
+const OPENAI_IMAGE_25_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 const OPENAI_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
+  ...OPENAI_IMAGE_25_MODELS,
   OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
   "gpt-image-1",
   "gpt-image-1-mini",
 ] as const;
 const OPENAI_FLEXIBLE_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
+  ...OPENAI_IMAGE_25_MODELS,
   "gpt-image-2-2026-04-21",
 ] as const;
 
@@ -248,6 +252,9 @@ function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined)
     !OPENAI_FLEXIBLE_IMAGE_MODELS.includes(model as (typeof OPENAI_FLEXIBLE_IMAGE_MODELS)[number])
   ) {
     return false;
+  }
+  if (size === "auto") {
+    return OPENAI_IMAGE_25_MODELS.some((candidate) => candidate === model);
   }
   const dimensions = /^(\d+)x(\d+)$/.exec(size ?? "");
   if (!dimensions) {
@@ -695,6 +702,9 @@ function createOpenAIImageGenerationProviderBase(params: {
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],
         qualities: [...OPENAI_QUALITIES],
+        qualitiesByModel: Object.fromEntries(
+          OPENAI_IMAGE_25_MODELS.map((model) => [model, [...OPENAI_IMAGE_25_QUALITIES]]),
+        ),
         backgrounds: [...OPENAI_BACKGROUNDS],
       },
     },

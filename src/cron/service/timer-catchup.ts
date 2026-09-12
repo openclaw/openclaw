@@ -20,6 +20,7 @@ import {
   releaseQueuedCronRun,
   reserveQueuedCronRun,
 } from "./run-admission.js";
+import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
@@ -170,6 +171,8 @@ function commitStartupCatchupRows(params: {
           }
           if (ownership.markerAtMs === job.state.runningAtMs) {
             delete job.state.runningAtMs;
+            delete job.state.runningReceiptId;
+            delete job.state.runningScheduleChangeId;
             changed = true;
           }
         }
@@ -317,9 +320,11 @@ async function planStartupCatchup(
     }
 
     const now = state.deps.nowMs();
-    const missed = collectStartupCatchupJobs(state, now, {
-      skipJobIds: opts?.skipJobIds,
-    });
+    const missed = skipCronJobsWithoutOwners(
+      state,
+      collectStartupCatchupJobs(state, now, { skipJobIds: opts?.skipJobIds }),
+      now,
+    );
     if (missed.length === 0) {
       return { candidates: [], deferredJobs: [] };
     }

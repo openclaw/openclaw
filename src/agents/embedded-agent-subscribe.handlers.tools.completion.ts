@@ -55,7 +55,6 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  hasTerminalControlCharacter,
   isAsyncStartedToolResult,
   isCronAddAction,
   isMiddlewareToolResultError,
@@ -98,6 +97,7 @@ import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
+  hasTerminalControlCharacter,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
@@ -343,9 +343,6 @@ export async function handleToolExecutionEnd(
   const sourceReplyFinal = deliveredMessageToolSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
     : undefined;
-  ctx.state.pendingMessagingTexts.delete(toolCallId);
-  ctx.state.pendingMessagingTargets.delete(toolCallId);
-  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
@@ -440,6 +437,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
+      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,
@@ -475,6 +473,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
+      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,

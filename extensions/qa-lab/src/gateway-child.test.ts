@@ -167,6 +167,7 @@ async function writePackagedGatewayFixture(root: string): Promise<string> {
   await writeFile(
     fixturePath,
     `import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 
 const args = process.argv.slice(2);
@@ -219,6 +220,17 @@ if (args[0] === "models") {
 }
 if (args[0] === "update") {
   const phase = args.includes("--help") ? "help" : "repair";
+  if (phase === "repair" && process.env.QA_ASSERT_AUTH_HANDOFF === "1") {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+    try {
+      const leases = db.prepare("SELECT owner_pid FROM agent_database_leases").all();
+      if (leases.length) throw new Error("staged auth database still leased by parent");
+      record({ kind: "auth-handoff", leases: leases.length });
+    } finally {
+      db.close();
+    }
+  }
   if (process.env.QA_FAIL_PLUGIN_SETUP === phase) {
     record({ kind: "plugins", args, authDbPath, configPath, stateDir });
     await fail(8, "plugin fixture rejected: Authorization: Bearer " + "fixture-plugin-secret".repeat(200));
@@ -232,8 +244,16 @@ if (args[0] === "update") {
     process.stderr.write("unknown option --accept-capabilities");
     process.exit(2);
   }
-  record({ kind: "plugins", args, authDbPath, configPath, stateDir });
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const portProbe = net.createServer();
+  await new Promise((resolve, reject) => {
+    portProbe.once("error", reject);
+    portProbe.listen(config.gateway.port, "127.0.0.1", resolve);
+  });
+  await new Promise((resolve, reject) => {
+    portProbe.close((error) => error ? reject(error) : resolve());
+  });
+  record({ kind: "plugins", args, authDbPath, configPath, stateDir, configPort: config.gateway.port });
   delete config.plugins.entries["qa-lab"];
   config.plugins.allow = config.plugins.allow.filter((id) => id !== "qa-lab");
   fs.writeFileSync(configPath, JSON.stringify(config));
@@ -1672,6 +1692,41 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
+  it("releases staged live auth stores before packaged Doctor starts", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "qa-synthetic-auth-handoff");
+    const fixtureRoot = await tempDirs.makeTempDir("qa-live-auth-handoff-");
+    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+    const recordPath = path.join(fixtureRoot, "commands.jsonl");
+    await mkdir(tempParentDir);
+    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [fixturePath],
+          tempParentDir,
+          usePackagedPlugins: true,
+        },
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.4",
+        alternateModel: "openai/gpt-5.4",
+        transportBaseUrl: "http://127.0.0.1:43123",
+        runtimeEnvPatch: {
+          QA_RECORD_PATH: recordPath,
+          QA_ASSERT_AUTH_HANDOFF: "1",
+        },
+      }),
+    ).rejects.toThrow("fixture gateway exit");
+    const records = await readJsonLines(recordPath);
+    expect(records.find((record) => record.kind === "auth-handoff")).toMatchObject({ leases: 0 });
+    expect(records.at(-1)).toMatchObject({
+      kind: "gateway",
+      authProfileIds: ["qa-live-openai-env"],
+    });
+  });
+
   it.each([false, true])(
     "lets the packaged candidate create its auth DB before gateway spawn (legacy=%s)",
     async (legacy) => {
@@ -1773,6 +1828,7 @@ describe("buildQaRuntimeEnv", () => {
         ],
         configPath: records.at(-1)?.configPath,
         stateDir: records.at(-1)?.stateDir,
+        configPort: records.at(-1)?.configPort,
       });
       expect(new Set(records.map((record) => record.authDbPath)).size).toBe(1);
     },
@@ -1810,7 +1866,11 @@ describe("buildQaRuntimeEnv", () => {
       const gateways = records.filter((record) => record.kind === "gateway");
       expect(gateways).toHaveLength(2);
       expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
-      expect(records.filter((record) => record.kind === "plugins")).toHaveLength(configBuilds);
+      const repairs = records.filter((record) => record.kind === "plugins");
+      expect(repairs).toHaveLength(configBuilds);
+      expect(repairs.map((record) => record.configPort)).toEqual(
+        retry === "bind" ? gateways.map((record) => record.configPort) : [gateways[0]?.configPort],
+      );
       expect(mutateConfig).toHaveBeenCalledTimes(configBuilds);
       expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
       expect(records.map((record) => record.kind)).toEqual([

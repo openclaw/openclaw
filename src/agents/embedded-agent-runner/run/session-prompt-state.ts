@@ -112,6 +112,9 @@ export function createEmbeddedRunSessionPromptState(input: {
     Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
+  if (params.pluginRuntimeRefreshContinuation) {
+    activateInternalPrompt(params.prompt);
+  }
   const activateCompactionContinuation = (instruction: string) => {
     compactionContinuationInstruction = instruction;
     activateInternalPrompt(basePromptOverride ?? "");

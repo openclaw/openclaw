@@ -137,7 +137,8 @@ export function proposalFromManifest(
 ): SkillWorkshopProposal {
   const updatedAt = parseDateMs(entry.updatedAt);
   const createdAt = parseDateMs(entry.createdAt);
-  const previousIsCurrent = previous?.updatedAt === updatedAt;
+  const previousIsCurrent =
+    previous?.updatedAt === updatedAt && !entry.degradedState && !previous.degradedState;
   return {
     key: entry.id,
     kind: entry.kind,
@@ -147,9 +148,16 @@ export function proposalFromManifest(
     body: previousIsCurrent ? previous.body : "",
     bodyLoaded: previousIsCurrent ? previous.bodyLoaded : false,
     status: entry.status,
+    degradedState: entry.degradedState,
     ...(previousIsCurrent && previous.origin ? { origin: previous.origin } : {}),
     version: previousIsCurrent ? previous.version : 1,
-    revisionHash: previousIsCurrent ? previous.revisionHash : null,
+    // A missing draft can still be rejected against its recorded revision.
+    // Usable drafts require inspection before a decision can capture their hash.
+    revisionHash: entry.degradedState
+      ? (entry.revisionHash ?? null)
+      : previousIsCurrent
+        ? previous.revisionHash
+        : null,
     ...(previousIsCurrent && previous.evaluation ? { evaluation: previous.evaluation } : {}),
     createdAt,
     updatedAt,
@@ -159,13 +167,29 @@ export function proposalFromManifest(
   };
 }
 
+function proposalBaseFromRecord(record: SkillProposalRecord) {
+  const updatedAt = parseDateMs(record.updatedAt);
+  const createdAt = parseDateMs(record.createdAt);
+  return {
+    key: record.id,
+    kind: record.kind,
+    slug: record.target.skillKey,
+    name: record.title || record.target.skillName,
+    oneLine: record.description,
+    status: record.status,
+    version: proposedVersionNumber(record.proposedVersion),
+    createdAt,
+    updatedAt,
+    recencyGroup: recencyGroup(updatedAt || createdAt),
+    ageLabel: compactAgeLabel(updatedAt || createdAt),
+  };
+}
+
 export function proposalFromInspect(
   result: SkillProposalInspectResult,
   previous: SkillWorkshopProposal | undefined,
 ): SkillWorkshopProposal {
   const record = result.record;
-  const updatedAt = parseDateMs(record.updatedAt);
-  const createdAt = parseDateMs(record.createdAt);
   const revisionHash = result.revisionHash?.trim() || null;
   const evaluation =
     record.evaluation?.revisionHash === revisionHash
@@ -174,22 +198,12 @@ export function proposalFromInspect(
         ? previous.evaluation
         : undefined;
   return {
-    key: record.id,
-    kind: record.kind,
-    slug: record.target.skillKey,
-    name: record.title || record.target.skillName,
-    oneLine: record.description,
+    ...proposalBaseFromRecord(record),
     body: stripProposalFrontmatter(result.content),
     bodyLoaded: true,
-    status: record.status,
     ...(record.origin ? { origin: record.origin } : {}),
-    version: proposedVersionNumber(record.proposedVersion),
     revisionHash,
     ...(evaluation ? { evaluation } : {}),
-    createdAt,
-    updatedAt,
-    recencyGroup: recencyGroup(updatedAt || createdAt),
-    ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: supportFilesFromInspect(result),
   };
 }
@@ -199,29 +213,42 @@ export function proposalFromEvaluation(
   previous: SkillWorkshopProposal,
 ): SkillWorkshopProposal {
   const record = result.record;
-  const updatedAt = parseDateMs(record.updatedAt);
-  const createdAt = parseDateMs(record.createdAt);
   return {
-    key: record.id,
-    kind: record.kind,
-    slug: record.target.skillKey,
-    name: record.title || record.target.skillName,
-    oneLine: record.description,
+    ...proposalBaseFromRecord(record),
     body: previous.body,
     bodyLoaded: previous.bodyLoaded,
-    status: record.status,
     ...(record.origin
       ? { origin: record.origin }
       : previous.origin
         ? { origin: previous.origin }
         : {}),
-    version: proposedVersionNumber(record.proposedVersion),
     revisionHash: result.evaluation.revisionHash,
     evaluation: result.evaluation,
-    createdAt,
-    updatedAt,
-    recencyGroup: recencyGroup(updatedAt || createdAt),
-    ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: previous.supportFiles,
+  };
+}
+
+// Terminal actions keep the reviewed draft; the record owns lifecycle metadata.
+export function proposalFromActionRecord(
+  record: SkillProposalRecord,
+  previous: SkillWorkshopProposal | undefined,
+): SkillWorkshopProposal {
+  return {
+    ...proposalBaseFromRecord(record),
+    body: previous?.body ?? "",
+    bodyLoaded: previous?.bodyLoaded ?? false,
+    ...(record.origin
+      ? { origin: record.origin }
+      : previous?.origin
+        ? { origin: previous.origin }
+        : {}),
+    revisionHash: previous?.revisionHash ?? null,
+    ...(record.evaluation
+      ? { evaluation: record.evaluation }
+      : previous?.evaluation
+        ? { evaluation: previous.evaluation }
+        : {}),
+    supportFiles: previous?.supportFiles ?? [],
+    degradedState: previous?.degradedState,
   };
 }

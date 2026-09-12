@@ -412,6 +412,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   skip: boolean;
 } {
   const { state, job, nowMs } = params;
+  const { log } = state.deps;
   let changed = false;
 
   if (!job.state) {
@@ -468,7 +469,8 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       !ownsCronRunMarker(state, job.id, job.state.runningAtMs, true) &&
       !isCronJobActive(job.id)
     ) {
-      job.state.runningAtMs = undefined;
+      Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
+      delete job.state.runningScheduleChangeId;
       changed = true;
     }
     return { changed, skip: true };
@@ -495,10 +497,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     Math.abs(nowMs - queuedAt) > CRON_STUCK_RUN_MS &&
     !ownsCronRunMarker(state, job.id, queuedAt)
   ) {
-    state.deps.log.warn(
-      { jobId: job.id, queuedAtMs: queuedAt },
-      "cron: clearing stuck queued marker",
-    );
+    log.warn({ jobId: job.id, queuedAtMs: queuedAt }, "cron: clearing stuck queued marker");
     job.state.queuedAtMs = undefined;
     changed = true;
   }
@@ -509,11 +508,9 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
     !ownsCronRunMarker(state, job.id, runningAt)
   ) {
-    state.deps.log.warn(
-      { jobId: job.id, runningAtMs: runningAt },
-      "cron: clearing stuck running marker",
-    );
-    job.state.runningAtMs = undefined;
+    log.warn({ jobId: job.id, runningAtMs: runningAt }, "cron: clearing stuck running marker");
+    Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
+    delete job.state.runningScheduleChangeId;
     changed = true;
     const nextRun = job.state.nextRunAtMs;
     const lastRun = job.state.lastRunAtMs;

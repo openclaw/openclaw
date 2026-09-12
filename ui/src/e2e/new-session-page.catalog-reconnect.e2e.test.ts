@@ -8,6 +8,10 @@ import {
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  TERMINAL_START_FEATURE_METHODS,
+  cliAgentCatalog,
+} from "./new-session-page.native-terminal.test-support.ts";
+import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
@@ -21,6 +25,30 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+function mainAndResearchAgents(mainWorkspace: string, researchWorkspace: string) {
+  return {
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Main" },
+        name: "Main",
+        workspace: mainWorkspace,
+        workspaceGit: true,
+      },
+      {
+        id: "research",
+        identity: { name: "Research" },
+        name: "Research",
+        workspace: researchWorkspace,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "main",
+    mainKey: "main",
+    scope: "agent",
+  };
+}
+
 function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
   return Boolean(
     request.params &&
@@ -28,40 +56,6 @@ function requestHasParam(request: { params?: unknown }, key: string, value: unkn
     !Array.isArray(request.params) &&
     (request.params as Record<string, unknown>)[key] === value,
   );
-}
-
-const TERMINAL_START_FEATURE_METHODS = [
-  "chat.metadata",
-  "chat.startup",
-  "sessions.catalog.list",
-  "sessions.catalog.startTerminal",
-  "sessions.create",
-  "sessions.title.prepare",
-  "sessions.dispatch",
-  "terminal.open",
-  "worktrees.create",
-] as const;
-
-function cliAgentCatalog(startTerminal: boolean) {
-  return {
-    id: "claude",
-    label: "Claude Code",
-    capabilities: {
-      continueSession: true,
-      archive: false,
-      ...(startTerminal ? { startTerminal: true } : {}),
-    },
-    hosts: [
-      {
-        hostId: "gateway:local",
-        label: "Local Claude Code",
-        kind: "gateway",
-        connected: true,
-        canStartTerminal: startTerminal,
-        sessions: [],
-      },
-    ],
-  };
 }
 
 suite.define(() => {
@@ -307,13 +301,6 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    await page.addInitScript(() => {
-      const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
-      proofWindow.terminalToggleProof = [];
-      window.addEventListener("openclaw:terminal-toggle", (event) => {
-        proofWindow.terminalToggleProof?.push((event as CustomEvent).detail);
-      });
-    });
     const worktreePath = "/home/peter/.openclaw/worktrees/terminal-e2e";
     const config = { tools: { web: { search: { provider: "brave" } } } };
     const gateway = await installMockGateway(page, {
@@ -331,27 +318,7 @@ suite.define(() => {
           runtimeConfig: config,
           config,
         },
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "research",
-              identity: { name: "Research" },
-              name: "Research",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": mainAndResearchAgents(WORKSPACE, WORKSPACE),
         "sessions.catalog.list": { catalogs: [cliAgentCatalog(true)] },
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
@@ -436,16 +403,17 @@ suite.define(() => {
       expect(methods.indexOf("worktrees.create")).toBeLessThan(
         methods.indexOf("sessions.catalog.startTerminal"),
       );
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      await page.waitForURL(`${suite.server.baseUrl}terminal/terminal-cli-1`);
+      const panel = page.locator("openclaw-terminal-page openclaw-terminal-panel");
+      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await panel.locator(".tp-host canvas").waitFor({ state: "visible" });
+      expect(await page.locator(".new-session-page__message").count()).toBe(0);
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
-            return proofWindow.terminalToggleProof;
-          }),
-        )
-        .toContainEqual({ open: true, terminalSessionId: "terminal-cli-1", agentOwned: false });
+        .poll(() => panel.locator(".tabstrip-tab.is-live").getAttribute("title"))
+        .toContain(worktreePath);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
 
+      await navigateInApp(page, "new-session", "?agent=research&catalog=claude");
       await expect
         .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
         .toBe(true);
@@ -466,7 +434,7 @@ suite.define(() => {
         catalogId: "claude",
         agentId: "research",
         hostId: "gateway:local",
-        cwd: worktreePath,
+        cwd: WORKSPACE,
       });
     } finally {
       await context.close();
@@ -576,7 +544,9 @@ suite.define(() => {
         expect(await page.locator(".new-session-page__starting").count()).toBe(0);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await gateway.resolveDeferred("sessions.catalog.startTerminal");
-        await expect.poll(() => message.inputValue()).toBe("");
+        await page.waitForURL(`${suite.server.baseUrl}terminal/native-cli`);
+        await expect.poll(() => message.count()).toBe(0);
+        await page.locator("openclaw-terminal-page .tabstrip-tab.is-live").waitFor();
         expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       } finally {
@@ -713,7 +683,13 @@ suite.define(() => {
             },
           ],
         },
-        "sessions.catalog.startTerminal": { sessionId: "claude-reconnect" },
+        "sessions.catalog.startTerminal": {
+          sessionId: "claude-reconnect",
+          agentId: "research",
+          shell: "claude",
+          cwd: "/home/peter/research",
+          confined: false,
+        },
       },
     });
 
@@ -786,27 +762,7 @@ suite.define(() => {
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "research",
-              identity: { name: "Research" },
-              name: "Research",
-              workspace: REFRESHED_RESEARCH_WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": mainAndResearchAgents(WORKSPACE, REFRESHED_RESEARCH_WORKSPACE),
       },
     });
 
@@ -879,27 +835,10 @@ suite.define(() => {
 
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
-      await gateway.setMethodResponse("agents.list", {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Main" },
-            name: "Main",
-            workspace: WORKSPACE,
-            workspaceGit: true,
-          },
-          {
-            id: "research",
-            identity: { name: "Research" },
-            name: "Research",
-            workspace: REFRESHED_RESEARCH_WORKSPACE,
-            workspaceGit: true,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
-      });
+      await gateway.setMethodResponse(
+        "agents.list",
+        mainAndResearchAgents(WORKSPACE, REFRESHED_RESEARCH_WORKSPACE),
+      );
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
 

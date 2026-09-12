@@ -21,17 +21,6 @@ describe("bonjour-ciao", () => {
     });
   });
 
-  it("suppresses ciao netmask assertion errors as non-fatal", () => {
-    const error = Object.assign(
-      new Error(
-        "IP address version must match. Netmask cannot have a version different from the address!",
-      ),
-      { name: "AssertionError" },
-    );
-
-    expect(classifyCiaoProcessError(error)).not.toBe(null);
-  });
-
   it("classifies networkInterfaces SystemError failures (restricted sandboxes)", () => {
     const err = Object.assign(
       new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),

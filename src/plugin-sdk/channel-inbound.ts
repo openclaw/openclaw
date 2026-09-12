@@ -40,6 +40,14 @@ import type {
   RunChannelTurnParams,
 } from "../channels/turn/types.js";
 
+export { runGroupThread, type GroupThreadTurn } from "../auto-reply/group-thread.js";
+export {
+  resolveGroupThreadMentionFacts,
+  isGroupThreadRouteExclusive,
+  resolveGroupThreadConfig,
+} from "../auto-reply/group-thread-config.js";
+export type { GroupThreadMentionFacts } from "../auto-reply/group-thread.types.js";
+export { getGroupThreadDeliverySession } from "../auto-reply/group-thread-context.js";
 export {
   readAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -274,6 +282,7 @@ export {
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 export {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   type ChannelPartialDeliveryError,
@@ -287,8 +296,6 @@ export {
   buildChannelInboundMediaPayload,
   formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
-  /** @deprecated Pass ordered facts as the context's `media` field. */
-  buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   ChannelInboundMediaInput,

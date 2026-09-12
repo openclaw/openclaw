@@ -25,10 +25,10 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 function mockSubmit(job: unknown, release = vi.fn(async () => {})): typeof release {
-  postJsonRequestMock.mockResolvedValue({
-    response: { json: async () => job },
+  postJsonRequestMock.mockImplementation(async () => ({
+    response: Response.json(job),
     release,
-  });
+  }));
   return release;
 }
 
@@ -49,100 +49,110 @@ describe("deepinfra video generation provider", () => {
   });
 
   it("submits an OpenAI video job, polls until succeeded, and returns the hosted output URL", async () => {
-    const release = mockSubmit({ id: "videos_abc", status: "queued" });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({ id: "videos_abc", status: "processing" }),
-    });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
-        id: "videos_abc",
-        status: "succeeded",
-        model: "Pixverse/Pixverse-T2V",
-        data: [{ url: "/generated/video.mp4" }],
-      }),
-    });
+    vi.useFakeTimers();
+    try {
+      const release = mockSubmit({ id: "videos_abc", status: "queued" });
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        Response.json({ id: "videos_abc", status: "processing" }),
+      );
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        Response.json({
+          id: "videos_abc",
+          status: "succeeded",
+          model: "Pixverse/Pixverse-T2V",
+          data: [{ url: "/generated/video.mp4" }],
+        }),
+      );
 
-    const provider = buildDeepInfraVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "deepinfra",
-      model: "deepinfra/Pixverse/Pixverse-T2V",
-      prompt: "A bicycle weaving through a rainy neon street",
-      cfg: {},
-      aspectRatio: "16:9",
-      durationSeconds: 8,
-      providerOptions: {
-        seed: 42,
-        negative_prompt: "blur",
-        style: "anime",
-      },
-    });
-
-    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
-      [
-        {
-          baseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultHeaders: {
-            Authorization: "Bearer provider-key",
-            "Content-Type": "application/json",
-          },
-          provider: "deepinfra",
-          capability: "video",
-          transport: "http",
-          request: undefined,
-        },
-      ],
-    ]);
-
-    expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstPostJsonRequest(
-      postJsonRequestMock,
-      "DeepInfra video submit request",
-    );
-    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
-    expect(postRequestHeaders).toBeInstanceOf(Headers);
-    expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
-      authorization: "Bearer provider-key",
-      "content-type": "application/json",
-    });
-    expect(postRequest).toEqual({
-      url: "https://api.deepinfra.com/v1/openai/videos",
-      headers: postRequestHeaders,
-      body: {
-        model: "Pixverse/Pixverse-T2V",
+      const provider = buildDeepInfraVideoGenerationProvider();
+      const pending = provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
         prompt: "A bicycle weaving through a rainy neon street",
-        aspect_ratio: "16:9",
-        seconds: 8,
-        seed: 42,
-        negative_prompt: "blur",
-        style: "anime",
-      },
-      timeoutMs: 60_000,
-      fetchFn: fetch,
-      allowPrivateNetwork: false,
-      dispatcherPolicy: undefined,
-    });
+        cfg: {},
+        aspectRatio: "16:9",
+        durationSeconds: 8,
+        providerOptions: {
+          seed: 42,
+          negative_prompt: "blur",
+          style: "anime",
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
 
-    expect(pollProviderOperationJsonMock).toHaveBeenCalledOnce();
-    const pollUrls = fetchWithTimeoutMock.mock.calls.map((call) => call[0]);
-    expect(pollUrls).toEqual([
-      "https://api.deepinfra.com/v1/openai/videos/videos_abc",
-      "https://api.deepinfra.com/v1/openai/videos/videos_abc",
-    ]);
+      expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
+        [
+          {
+            baseUrl: "https://api.deepinfra.com/v1/openai",
+            defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+            defaultHeaders: {
+              Authorization: "Bearer provider-key",
+              "Content-Type": "application/json",
+            },
+            provider: "deepinfra",
+            capability: "video",
+            transport: "http",
+            request: undefined,
+          },
+        ],
+      ]);
 
-    expect(result.videos).toEqual([
-      {
-        url: "https://api.deepinfra.com/generated/video.mp4",
-        mimeType: "video/mp4",
-        fileName: "video-1.mp4",
-      },
-    ]);
-    expect(result.model).toBe("Pixverse/Pixverse-T2V");
-    expect(result.metadata).toEqual({
-      jobId: "videos_abc",
-      status: "succeeded",
-    });
-    expect(release).toHaveBeenCalledOnce();
+      expect(postJsonRequestMock).toHaveBeenCalledOnce();
+      const postRequest = requireFirstPostJsonRequest(
+        postJsonRequestMock,
+        "DeepInfra video submit request",
+      );
+      const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
+      expect(postRequestHeaders).toBeInstanceOf(Headers);
+      expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
+        authorization: "Bearer provider-key",
+        "content-type": "application/json",
+      });
+      expect(postRequest).toEqual({
+        url: "https://api.deepinfra.com/v1/openai/videos",
+        headers: postRequestHeaders,
+        body: {
+          model: "Pixverse/Pixverse-T2V",
+          prompt: "A bicycle weaving through a rainy neon street",
+          aspect_ratio: "16:9",
+          seconds: 8,
+          seed: 42,
+          negative_prompt: "blur",
+          style: "anime",
+        },
+        timeoutMs: 60_000,
+        fetchFn: fetch,
+        allowPrivateNetwork: false,
+        dispatcherPolicy: undefined,
+      });
+
+      expect(pollProviderOperationJsonMock).toHaveBeenCalledOnce();
+      const pollUrls = fetchWithTimeoutMock.mock.calls.map((call) => call[0]);
+      expect(pollUrls).toEqual([
+        "https://api.deepinfra.com/v1/openai/videos/videos_abc",
+        "https://api.deepinfra.com/v1/openai/videos/videos_abc",
+      ]);
+
+      expect(result.videos).toEqual([
+        {
+          url: "https://api.deepinfra.com/generated/video.mp4",
+          mimeType: "video/mp4",
+          fileName: "video-1.mp4",
+        },
+      ]);
+      expect(result.model).toBe("Pixverse/Pixverse-T2V");
+      expect(result.metadata).toEqual({
+        jobId: "videos_abc",
+        status: "succeeded",
+      });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies configured request policy to OpenAI-compatible video requests", async () => {
@@ -307,8 +317,7 @@ describe("deepinfra video generation provider", () => {
           models: {
             providers: {
               deepinfra: {
-                // Assembled from pieces so TruffleHog's URI detector
-                // (security-fast CI gate) does not flag the fixture.
+                // Assemble the fixture URL at runtime to avoid scanner false positives.
                 baseUrl: ["https://user", "password@gw.example.com/v1/inference?token=secret"].join(
                   ":",
                 ),
@@ -385,9 +394,9 @@ describe("deepinfra video generation provider", () => {
 
   it("throws the job error when the video generation fails", async () => {
     mockSubmit({ id: "videos_fail", status: "queued" });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({ id: "videos_fail", status: "failed", error: "model overloaded" }),
-    });
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({ id: "videos_fail", status: "failed", error: "model overloaded" }),
+    );
 
     const provider = buildDeepInfraVideoGenerationProvider();
     await expect(
@@ -402,14 +411,10 @@ describe("deepinfra video generation provider", () => {
 
   it("reports malformed submit JSON as a provider error", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token");
-        },
-      },
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: new Response("{", { headers: { "content-type": "application/json" } }),
       release,
-    });
+    }));
 
     const provider = buildDeepInfraVideoGenerationProvider();
     await expect(

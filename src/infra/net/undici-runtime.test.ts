@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import {
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
@@ -132,6 +135,73 @@ function invokeProxyClientFactory(options: Record<string, unknown>): void {
 }
 
 describe("installed dispatcher lifecycle", () => {
+  it("loads lazily, retries failed initialization, and reuses the installed API behind overrides", () => {
+    const runtimeUrl = pathToFileURL(path.resolve("src/infra/net/undici-runtime.ts")).href;
+    const packageUrl = pathToFileURL(path.resolve("package.json")).href;
+    const output = execNodeEvalSync(
+      `
+      import assert from "node:assert/strict";
+      import { EventEmitter } from "node:events";
+      import { createRequire, registerHooks } from "node:module";
+
+      let resolutions = 0;
+      const hook = registerHooks({
+        resolve(specifier, context, nextResolve) {
+          if (
+            specifier === "undici/index.js" &&
+            context.parentURL?.split("?")[0].endsWith("/undici-dispatcher-options.ts")
+          ) {
+            resolutions++;
+            if (resolutions === 1) {
+              throw new Error("fixture Undici initialization failure");
+            }
+          }
+          return nextResolve(specifier, context);
+        },
+      });
+      const overrideKey = ${JSON.stringify(TEST_UNDICI_RUNTIME_DEPS_KEY)};
+      class OverrideAgent extends EventEmitter {}
+      const override = {
+        Agent: OverrideAgent,
+        EnvHttpProxyAgent: OverrideAgent,
+        ProxyAgent: OverrideAgent,
+        fetch() {},
+      };
+      const dispatchers = [];
+      try {
+        const { createHttp1Agent } = await import(${JSON.stringify(runtimeUrl)});
+        assert.equal(resolutions, 0, "import must leave Undici unloaded");
+        globalThis[overrideKey] = override;
+        assert.ok(createHttp1Agent() instanceof OverrideAgent);
+        assert.equal(resolutions, 0, "override must leave Undici unloaded");
+        delete globalThis[overrideKey];
+
+        assert.throws(() => createHttp1Agent(), /fixture Undici initialization failure/);
+        // Another Gateway consumer can load Undici before this owner retries.
+        // This avoids Node's first-loader parent cache masking repeated resolution.
+        createRequire(${JSON.stringify(packageUrl)})("undici/index.js");
+        dispatchers.push(createHttp1Agent());
+        assert.equal(resolutions, 2, "initialization must retry after a failure");
+
+        globalThis[overrideKey] = override;
+        assert.ok(createHttp1Agent() instanceof OverrideAgent);
+        delete globalThis[overrideKey];
+        dispatchers.push(createHttp1Agent());
+        assert.equal(dispatchers[1].constructor, dispatchers[0].constructor);
+        assert.equal(resolutions, 2, "warm native construction must reuse the installed API");
+        console.log("ok");
+      } finally {
+        delete globalThis[overrideKey];
+        hook.deregister();
+        await Promise.all(dispatchers.map((dispatcher) => dispatcher.destroy()));
+      }
+      `,
+      { imports: ["tsx"] },
+    );
+
+    expect(output.trim()).toBe("ok");
+  });
+
   it.each([
     ["close", "closed"],
     ["destroy", "destroyed"],

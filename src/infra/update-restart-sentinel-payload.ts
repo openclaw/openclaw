@@ -1,9 +1,5 @@
 // Builds restart sentinel payloads for update handoff reporting.
-import {
-  buildRestartSuccessContinuation,
-  formatDoctorNonInteractiveHint,
-  type RestartSentinelPayload,
-} from "./restart-sentinel.js";
+import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Update restart sentinel payloads carry update result details across a process
@@ -59,13 +55,10 @@ export function buildUpdateRestartSentinelPayload(params: {
   const result = normalizeControlPlaneUpdateResult(params.result);
   const recovery = resolvePersistedRecovery(result);
   const { meta } = params;
-  const continuation =
-    result.status === "ok"
-      ? buildRestartSuccessContinuation({
-          sessionKey: meta.sessionKey,
-          continuationMessage: meta.continuationMessage,
-        })
-      : null;
+  const continuationMessage = result.status === "ok" ? meta.continuationMessage?.trim() : undefined;
+  const continuation: RestartSentinelPayload["continuation"] = continuationMessage
+    ? { kind: "agentTurn", message: continuationMessage }
+    : null;
   return {
     kind: "update",
     status: result.status,
@@ -91,6 +84,7 @@ export function buildUpdateRestartSentinelPayload(params: {
         cwd: step.cwd,
         durationMs: step.durationMs,
         ...(step.advisory ? { advisory: true } : {}),
+        ...(step.failureFacts?.length ? { failureFacts: step.failureFacts } : {}),
         log: {
           stdoutTail: step.stdoutTail ?? null,
           stderrTail: step.stderrTail ?? null,

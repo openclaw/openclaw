@@ -1,6 +1,14 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { isCronSelfRemovalCurrent, type CronActiveJobMarker } from "../active-jobs.js";
+import {
+  isCronSelfRemovalCurrent,
+  noteActiveCronJobScheduleMutation,
+  type CronActiveJobMarker,
+} from "../active-jobs.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { cronStoreKey } from "../store/key.js";
+import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
 import {
   activateCronRunReceiptInDatabase,
   adjudicateActiveCronRunReceiptInDatabase,
@@ -11,6 +19,7 @@ import {
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
+  findActiveCronRunReceiptInDatabase,
   isCronRunReceiptSettlementPending,
   prepareCronRunReceiptAdjudication,
   prepareCronRunReceiptClaim,
@@ -19,9 +28,11 @@ import {
   type CronRunReceiptHandle,
   type CronRunReceiptStatus,
 } from "../store/run-receipt-store.js";
+import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronServiceState } from "./state.js";
+import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 export type CronRunReceiptSettlementDisposition = "owner-unavailable";
 
@@ -78,7 +89,7 @@ export function activateServiceCronRunReceiptInDatabase(
   });
 }
 
-export function cronRunReceiptOwnerMutationHooks(params: {
+function cronRunReceiptOwnerMutationHooks(params: {
   state: CronServiceState;
   jobId: string;
 }): CronStoreTransactionHooks {
@@ -99,6 +110,88 @@ export function cronRunReceiptOwnerMutationHooks(params: {
       });
     },
   };
+}
+
+export function cronRunReceiptMutationHooks(params: {
+  state: CronServiceState;
+  jobId: string;
+  ownerChanged: boolean;
+  triggerStateChanged: boolean;
+  scheduleChangedJob?: CronJob;
+}): CronStoreTransactionHooks | undefined {
+  const ownerHooks = params.ownerChanged ? cronRunReceiptOwnerMutationHooks(params) : undefined;
+  if (!ownerHooks && !params.triggerStateChanged && !params.scheduleChangedJob) {
+    return undefined;
+  }
+  return {
+    ...ownerHooks,
+    beforeWrite: (database) => {
+      if (params.scheduleChangedJob) {
+        const current = loadedCronStoreFromRows(
+          loadCronRows(
+            database,
+            cronStoreKey(params.state.deps.storePath),
+            new Set([params.jobId]),
+          ),
+        ).store.jobs[0];
+        if (current?.state.runningAtMs !== undefined) {
+          // A fresh nonce makes every committed edit a distinct state delta,
+          // even if a passive editor observed a retired run that has since ended.
+          params.scheduleChangedJob.state.runningScheduleChangeId = randomUUID();
+        } else {
+          delete params.scheduleChangedJob.state.runningScheduleChangeId;
+        }
+      }
+      if (params.triggerStateChanged) {
+        retireServiceCronRunTriggerStateInDatabase({ ...params, database });
+      }
+      ownerHooks?.beforeWrite?.(database);
+    },
+    afterCommit: () => {
+      ownerHooks?.afterCommit?.();
+      if (params.scheduleChangedJob) {
+        // Retire live ownership with the durable edit, never on a failed write.
+        noteActiveCronJobScheduleMutation(params.jobId);
+      }
+    },
+  };
+}
+
+function retireServiceCronRunTriggerStateInDatabase(params: {
+  state: CronServiceState;
+  database: DatabaseSync;
+  jobId: string;
+}): void {
+  const { database, jobId } = params;
+  const storePath = params.state.deps.storePath;
+  const active = findActiveCronRunReceiptInDatabase({ database, storePath, jobId });
+  if (active) {
+    retireCronRunTriggerStateInDatabase({ database, handle: active });
+    return;
+  }
+  const storeKey = cronStoreKey(storePath);
+  const job = loadedCronStoreFromRows(loadCronRows(database, storeKey, new Set([jobId]))).store
+    .jobs[0];
+  const startedAtMs = job?.state.runningAtMs;
+  if (!job || startedAtMs === undefined) {
+    return;
+  }
+  // Owner edits close execution authority before scheduler reconciliation.
+  // Only legacy markers without a receipt association need task-history fallback.
+  const receiptId =
+    job.state.runningReceiptId ??
+    findCronTaskRunRecoveryInDatabase({
+      database,
+      jobId,
+      storeKey,
+      startedAt: startedAtMs,
+    }).receiptId;
+  if (receiptId) {
+    retireCronRunTriggerStateInDatabase({
+      database,
+      handle: { receiptId, storeKey, jobId, startedAtMs },
+    });
+  }
 }
 
 export function assertServiceCronRunReceiptCurrent(
@@ -185,7 +278,7 @@ export function cronRunReceiptPersistHooks(params: {
   const deferTerminal = terminal && isCronRunReceiptSettlementPending(params.handle);
   return {
     beforeWrite: (database) => {
-      const unavailableError = `cron job agent is unavailable: ${params.handle.agentId}`;
+      const unavailableError = describeUnavailableCronAgent(params.handle.agentId);
       const recordsUnavailableGuard =
         terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
       if (

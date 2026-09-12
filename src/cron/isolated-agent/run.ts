@@ -114,7 +114,7 @@ export async function runCronIsolatedAgentTurn(
   if (!prepared.ok) {
     return { ...prepared.result, admissionDisposition: "rejected" };
   }
-  const preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
+  await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
   // the lease open until cleanup finishes, then fence detached borrowed work.
@@ -268,7 +268,6 @@ export async function runCronIsolatedAgentTurn(
               timeoutMs: prepared.context.timeoutMs,
               runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
               suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
-              pluginRegistry: prepared.context.pluginRegistry,
               executionIdentity: params.executionIdentity,
             };
             const execution = await prepared.context.sessionWorkAdmission.run(() =>
@@ -412,6 +411,5 @@ export async function runCronIsolatedAgentTurn(
     );
   } finally {
     leaseActive = false;
-    preparedRuntimeLease.release();
   }
 }

@@ -911,6 +911,10 @@ describe("cdp", () => {
     const wsPort = await startWsServerWithMessages((msg, socket) => {
       if (msg.method === "Accessibility.getFullAXTree") {
         socket.send(JSON.stringify({ id: msg.id, result: { nodes } }));
+      } else if (msg.method === "Runtime.evaluate") {
+        socket.send(
+          JSON.stringify({ id: msg.id, error: { code: -32000, message: "unavailable" } }),
+        );
       }
     });
 

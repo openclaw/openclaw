@@ -117,6 +117,30 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = new URL(
   "./fixtures/packed-plugin-sdk-type-smoke.ts",
   import.meta.url,
 );
+const PACKED_PLUGIN_SDK_SETUP_CONSUMER_FIXTURE = new URL(
+  "./fixtures/packed-plugin-sdk-setup-consumer.ts",
+  import.meta.url,
+);
+const PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS = [
+  "scripts/test-built-bundled-channel-entry-smoke.mts",
+  "scripts/test-built-bundled-channel-entry-smoke.mjs",
+] as const;
+
+export function resolvePackedBundledChannelEntrySmokeCommand(
+  fileExists: (path: string) => boolean = existsSync,
+  nodeExecPath = process.execPath,
+) {
+  const entrypoint = PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS.find(fileExists);
+  if (!entrypoint) {
+    throw new Error(
+      "release-check: target does not provide scripts/test-built-bundled-channel-entry-smoke.mts or .mjs",
+    );
+  }
+  return {
+    command: nodeExecPath,
+    args: [...(entrypoint.endsWith(".mts") ? ["--import", "tsx"] : []), entrypoint],
+  };
+}
 
 export function runReleaseCheckCommand(
   invocation: ReleaseCheckCommandInvocation,
@@ -611,6 +635,7 @@ export function createPackedCompletionSmokeEnv(
 }
 
 export function collectPackedInstalledPackageVerificationErrors(params: {
+  additionalCompanionManifestRoots?: string[];
   expectedVersion: string;
   installedBinaryVersion?: string;
   packageRoot: string;
@@ -619,6 +644,7 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     readFileSync(join(params.packageRoot, "package.json"), "utf8"),
   ) as { version?: string };
   const errors = collectInstalledPackageErrors({
+    additionalCompanionManifestRoots: params.additionalCompanionManifestRoots,
     expectedVersion: params.expectedVersion,
     installedVersion: packageJson.version?.trim() ?? "",
     packageRoot: params.packageRoot,
@@ -654,6 +680,9 @@ function verifyPackedInstalledPackage(params: {
     },
   ).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
+    // The selected source checkout is immutable release input. Its companion
+    // manifests are the exact inputs packed by the following plugin preflight.
+    additionalCompanionManifestRoots: [resolve("extensions")],
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,
@@ -705,6 +734,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
           noEmit: true,
           strict: true,
           skipLibCheck: false,
+          types: ["node"],
           target: "ES2022",
         },
         include: ["src/index.ts"],
@@ -718,6 +748,10 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
     PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE,
     join(params.consumerDir, "src", "index.ts"),
   );
+  copyFileSync(
+    PACKED_PLUGIN_SDK_SETUP_CONSUMER_FIXTURE,
+    join(params.consumerDir, "src", "packed-plugin-sdk-setup-consumer.ts"),
+  );
 }
 
 function runPackedPluginSdkTypescriptSmoke(
@@ -725,36 +759,52 @@ function runPackedPluginSdkTypescriptSmoke(
   tmpRoot: string,
   localPackageTarballs: string[],
 ): void {
-  const consumerDir = join(tmpRoot, "plugin-sdk-type-consumer");
   const aiTarball = localPackageTarballs.find(
     (localPackageTarball) => localPackageNameForTarball(localPackageTarball) === "@openclaw/ai",
   );
-  createPackedPluginSdkTypescriptSmokeProject({
-    consumerDir,
-    packageSpec: `file:${tarballPath}`,
-    aiPackageSpec: aiTarball ? `file:${aiTarball}` : undefined,
-  });
-  execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
-    cwd: consumerDir,
-    encoding: "utf8",
-    stdio: "inherit",
-  });
-
-  const installedOpenClawRoot = join(consumerDir, "node_modules", "openclaw");
-  const tscPath = [
-    join(consumerDir, "node_modules", "typescript", "bin", "tsc"),
-    join(installedOpenClawRoot, "node_modules", "typescript", "bin", "tsc"),
-  ].find((candidate) => existsSync(candidate));
-  if (!tscPath) {
-    throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
-  }
-  runReleaseCheckCommand(
-    { command: process.execPath, args: [tscPath, "-p", "tsconfig.json", "--pretty", "false"] },
+  for (const target of [
     {
-      cwd: consumerDir,
-      stdio: "inherit",
+      name: "plugin-sdk-released-setup-consumer",
+      packageSpec: "2026.9.4",
+      aiPackageSpec: undefined,
+      setupConsumerOnly: true,
     },
-  );
+    {
+      name: "plugin-sdk-type-consumer",
+      packageSpec: `file:${tarballPath}`,
+      aiPackageSpec: aiTarball ? `file:${aiTarball}` : undefined,
+      setupConsumerOnly: false,
+    },
+  ]) {
+    const consumerDir = join(tmpRoot, target.name);
+    createPackedPluginSdkTypescriptSmokeProject({ consumerDir, ...target });
+    if (target.setupConsumerOnly) {
+      copyFileSync(PACKED_PLUGIN_SDK_SETUP_CONSUMER_FIXTURE, join(consumerDir, "src", "index.ts"));
+    }
+    console.log(`release-check: compiling ${target.name} against ${target.packageSpec}`);
+    execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
+      cwd: consumerDir,
+      encoding: "utf8",
+      stdio: "inherit",
+    });
+
+    const installedOpenClawRoot = join(consumerDir, "node_modules", "openclaw");
+    const tscPath = [
+      join(consumerDir, "node_modules", "typescript", "bin", "tsc"),
+      join(installedOpenClawRoot, "node_modules", "typescript", "bin", "tsc"),
+    ].find((candidate) => existsSync(candidate));
+    if (!tscPath) {
+      throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
+    }
+    runReleaseCheckCommand(
+      { command: process.execPath, args: [tscPath, "-p", "tsconfig.json", "--pretty", "false"] },
+      {
+        cwd: consumerDir,
+        stdio: "inherit",
+      },
+    );
+    console.log(`release-check: ${target.name} compiled successfully`);
+  }
 }
 
 export function writePackedBundledPluginActivationConfig(homeDir: string): void {
@@ -953,16 +1003,11 @@ function runPackedBundledChannelEntrySmoke(tarballPath: string, packedRoot: stri
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
+    const bundledChannelEntrySmoke = resolvePackedBundledChannelEntrySmokeCommand();
     runReleaseCheckCommand(
       {
-        command: process.execPath,
-        args: [
-          "--import",
-          "tsx",
-          resolve("scripts/test-built-bundled-channel-entry-smoke.mts"),
-          "--package-root",
-          packageRoot,
-        ],
+        ...bundledChannelEntrySmoke,
+        args: [...bundledChannelEntrySmoke.args, "--package-root", packageRoot],
       },
       {
         stdio: "inherit",

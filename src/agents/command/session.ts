@@ -38,6 +38,7 @@ import {
   resolvePersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
 } from "../../config/sessions/session-store-owner.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -485,9 +486,15 @@ function resolveSessionKeyForRequestInternal(opts: {
 
   // Command preparation needs one owned entry. Exact reads preserve the SQLite target and
   // Doctor guards without enumerating the agent store or exposing hidden run-owned rows.
+  // Exclusion and lookup share the persisted locator; routing keeps the request key.
+  const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
   const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey)
-      ? loadExactSessionEntryReadOnly({ agentId: storeAgentId, storePath, sessionKey })?.entry
+    storeSessionKey && !isInternalSessionEffectsKey(storeSessionKey)
+      ? loadExactSessionEntryReadOnly({
+          agentId: storeAgentId,
+          storePath,
+          sessionKey: storeSessionKey,
+        })?.entry
       : undefined;
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was

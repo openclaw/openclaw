@@ -7,8 +7,8 @@ import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
 import type {
   PreparedConfiguredRuntimeModel,
   PreparedRuntimeCapabilityModel,
-} from "./prepared-model-runtime.configured.js";
-import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+  PreparedModelRuntimeInput,
+} from "./prepared-model-runtime.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 

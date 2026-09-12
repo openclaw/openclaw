@@ -4,7 +4,8 @@ import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core";
-import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { WebSocket, type RawData } from "ws";
+import { WebSocketServer } from "../../packages/gateway-client/src/websocket.test-support.js";
 import {
   type WorkerLiveEventParams,
   WORKER_PROTOCOL_FEATURES,

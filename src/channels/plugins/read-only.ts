@@ -3,6 +3,8 @@
  *
  * Builds lightweight channel plugin views from config, manifests, and setup metadata.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   sortUniqueStrings,
   uniqueStrings,
@@ -21,7 +23,10 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
+import {
+  resolveNormalizedAccountEntry,
+  type ChannelAccountKeyPolicy,
+} from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -189,25 +194,31 @@ function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: 
   });
 }
 
-function resolveManifestChannelAccountConfig(params: {
+function resolveManifestChannelAccount(params: {
   cfg: OpenClawConfig;
   channelId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   accountId?: string | null;
-}): Record<string, unknown> {
+}): ReturnType<ManifestChannelPlugin["config"]["resolveAccount"]> {
   const channelConfig = getChannelConfigRecord(params.cfg, params.channelId);
-  const resolvedAccountId = normalizeAccountId(params.accountId);
-  const accounts = channelConfig.accounts;
-  if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-    const accountConfig = resolveNormalizedAccountEntry(
-      accounts as Record<string, unknown>,
-      resolvedAccountId,
-      normalizeManifestAccountConfigKey,
-    );
-    if (accountConfig && typeof accountConfig === "object" && !Array.isArray(accountConfig)) {
-      return accountConfig as Record<string, unknown>;
-    }
-  }
-  return channelConfig;
+  const accountId = normalizeAccountId(params.accountId);
+  const accounts = asOptionalRecord(channelConfig.accounts);
+  const config =
+    asOptionalRecord(
+      accounts
+        ? resolveNormalizedAccountEntry(
+            accounts,
+            accountId,
+            normalizeManifestAccountConfigKey,
+            params.accountKeyPolicy,
+          )
+        : undefined,
+    ) ?? channelConfig;
+  return {
+    accountId,
+    name: normalizeOptionalString(readOwnRecordValue(config, "name")),
+    config,
+  };
 }
 
 function buildManifestChannelPlugin(params: {
@@ -235,6 +246,11 @@ function createManifestChannelPlugin(params: {
   if (!isSafeManifestChannelId(params.channelId)) {
     return undefined;
   }
+  // Package presentation describes one channel, even when the plugin owns several.
+  const packageChannel =
+    params.record.packageChannel?.id === params.channelId
+      ? params.record.packageChannel
+      : undefined;
   const catalogMeta =
     params.record.channelCatalogMeta?.id === params.channelId
       ? params.record.channelCatalogMeta
@@ -266,6 +282,8 @@ function createManifestChannelPlugin(params: {
     channelConfig?.description ?? catalogMeta?.blurb,
     params.record.description || "",
   );
+  const detailLabel = normalizeManifestText(packageChannel?.detailLabel, "");
+  const systemImage = normalizeManifestText(packageChannel?.systemImage, "");
   const commands = normalizeChannelCommandDefaults(
     channelConfig?.commands ?? catalogMeta?.commands,
   );
@@ -274,7 +292,9 @@ function createManifestChannelPlugin(params: {
     meta: {
       id: params.channelId,
       label,
-      selectionLabel: label,
+      selectionLabel: normalizeManifestText(packageChannel?.selectionLabel, label) || label,
+      ...(detailLabel ? { detailLabel } : {}),
+      ...(systemImage ? { systemImage } : {}),
       docsPath: `/channels/${encodeURIComponent(params.channelId)}`,
       blurb,
       ...(channelConfig?.preferOver?.length
@@ -297,14 +317,13 @@ function createManifestChannelPlugin(params: {
     config: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
       defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
-      resolveAccount: (cfg, accountId) => ({
-        accountId: normalizeAccountId(accountId),
-        config: resolveManifestChannelAccountConfig({
+      resolveAccount: (cfg, accountId) =>
+        resolveManifestChannelAccount({
           cfg,
           channelId: params.channelId,
           accountId,
+          accountKeyPolicy: params.record.channelAccountKeyPolicies?.[params.channelId],
         }),
-      }),
       isEnabled: (account, cfg) =>
         getChannelConfigRecord(cfg, params.channelId).enabled !== false &&
         account.config.enabled !== false,

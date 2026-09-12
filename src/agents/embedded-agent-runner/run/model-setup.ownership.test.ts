@@ -258,6 +258,7 @@ describe("model chat and native model ownership", () => {
         expect(snapshot.agentHarness.id).toBe("openclaw");
         expect(snapshot.lastProfileId).toBe("openai:fixture");
         expect(snapshot.contextTokenBudget).toBe(65_536);
+        expect(snapshot.modelContextWindow).toBe(65_536);
         expect(snapshot.effectiveModel.baseUrl).toBe("https://api.openai.com/v1");
         const payload: Record<string, unknown> = {};
         applyOpenAIResponsesPayloadPolicy(

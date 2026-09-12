@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import {
+  UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
   UPDATE_RUN_STEP_STATUSES,
@@ -21,6 +22,16 @@ const version = closedObject({
   sha: Type.Optional(Type.Union([text, Type.Null()])),
   buildId: Type.Optional(Type.Union([text, Type.Null()])),
 });
+const driver = closedObject({
+  host: Type.String({ minLength: 1, maxLength: 255 }),
+  pid: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  startIdentity: Type.String({ pattern: "^\\d+$", maxLength: 128 }),
+});
+const snapshotLocation = closedObject({
+  kind: Type.Enum(["explicit-tmpdir", "state-volume", "system-tmpdir"]),
+  directory: text,
+});
+const snapshotBytes = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 
 /** Wire projection of the canonical update ledger record. */
 export const UpdateRunRecordSchema = closedObject({
@@ -32,6 +43,8 @@ export const UpdateRunRecordSchema = closedObject({
   status,
   reason: Type.Union([text, Type.Null()]),
   origin: closedObject({
+    driver: Type.Optional(driver),
+    previousDrivers: Type.Optional(Type.Array(driver, { maxItems: UPDATE_RUN_DRIVER_LIMIT - 1 })),
     requester: Type.Optional(
       closedObject({
         channel: Type.Optional(text),
@@ -68,6 +81,54 @@ export const UpdateRunRecordSchema = closedObject({
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
       detail: Type.Optional(text),
+      failureFacts: Type.Optional(
+        Type.Array(
+          closedObject({
+            check: Type.String({ maxLength: 128 }),
+            code: Type.String({ maxLength: 80 }),
+            message: Type.Optional(Type.String({ maxLength: 200 })),
+            affectedKey: Type.Optional(Type.String({ maxLength: 128 })),
+            pluginId: Type.Optional(Type.String({ maxLength: 80 })),
+          }),
+          { maxItems: 5 },
+        ),
+      ),
+      configChange: Type.Optional(
+        Type.Union([
+          closedObject({ kind: Type.Literal("key"), key: text }),
+          closedObject({ kind: Type.Literal("migration"), message: text }),
+        ]),
+      ),
+      configWriteRefusal: Type.Optional(
+        closedObject({
+          reason: text,
+          message: text,
+          keys: Type.Array(text, { maxItems: 32 }),
+        }),
+      ),
+      snapshotCapacity: Type.Optional(
+        closedObject({
+          sqliteBytes: snapshotBytes,
+          pluginBytes: Type.Union([snapshotBytes, Type.Null()]),
+          requiredBytes: snapshotBytes,
+          reason: Type.Enum([
+            "explicit-tmpdir",
+            "state-volume",
+            "system-tmpdir",
+            "snapshot-capacity-insufficient",
+            "snapshot-location-unavailable",
+          ]),
+          candidates: Type.Array(
+            closedObject({
+              ...snapshotLocation.properties,
+              availableBytes: Type.Union([snapshotBytes, Type.Null()]),
+              allocationError: Type.Optional(text),
+            }),
+            { maxItems: 3 },
+          ),
+          selection: Type.Union([snapshotLocation, Type.Null()]),
+        }),
+      ),
     }),
     { maxItems: 128 },
   ),
@@ -83,7 +144,6 @@ export const UpdateRunRecordSchema = closedObject({
     channelsReady: Type.Optional(Type.Boolean()),
     readyz: Type.Optional(Type.Boolean()),
     settled: Type.Optional(Type.Boolean()),
-    inferenceProbe: Type.Optional(Type.Enum(["passed", "failed", "skipped", "unavailable"])),
     noticeDelivered: Type.Optional(Type.Boolean()),
     doctorHint: Type.Optional(text),
   }),

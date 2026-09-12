@@ -60,6 +60,7 @@ function scenario(): ControlUiMockGatewayScenario {
       "browser.request",
       "desktop.observe",
       "environments.list",
+      "environments.status",
       "sessions.diff",
       "tasks.list",
       "terminal.open",
@@ -77,9 +78,7 @@ function scenario(): ControlUiMockGatewayScenario {
         control: false,
         auth: "vnc-password",
       },
-      "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
-      },
+      "environments.status": { id: "gateway", type: "local", status: "available", desktop: true },
       "sessions.diff": {
         sessionKey,
         root: "/workspace/openclaw",
@@ -230,11 +229,8 @@ function sidePanelBody(page: Page): Locator {
   return page.locator('.sidebar-region [data-region="side"]:not([hidden])');
 }
 
-// Scope tab queries to the panel's own header: Terminal and Browser render the
-// same strip inside the panel body, so an unscoped descendant match would also
-// collect their inner rails. Match descendants of that header rather than a
-// direct child, so header layout wrappers can change without silently emptying
-// every tab assertion.
+// Scope tab queries to the side header so a panel promoted to main cannot add
+// its own strip to the side-panel assertions.
 const sidePanelTabLabelSelector = '[data-region-header="side"] .tabstrip-tab__label';
 
 async function openFromEmpty(page: Page, label: string) {
@@ -500,15 +496,9 @@ suite.define(() => {
           expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
           await sidePanel(page).getByLabel("VNC password", { exact: true }).waitFor();
           await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
-          expect(await tabLabels(page)).toEqual([
-            "Files",
-            "Review",
-            "Terminal",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-          ]);
+          await expect
+            .poll(() => tabLabels(page))
+            .toEqual(["Files", "Review", "zsh", "Tasks", "Browser", "Side chat", "Desktop"]);
           await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
           await expect
             .poll(() =>
@@ -806,15 +796,9 @@ suite.define(() => {
           await page.reload();
           await page.locator(".chat-group").first().waitFor();
           await sidePanel(page).locator('[data-region-header="side"]').waitFor();
-          expect(await tabLabels(page)).toEqual([
-            "Files",
-            "Review",
-            "Terminal",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-          ]);
+          await expect
+            .poll(() => tabLabels(page))
+            .toEqual(["Files", "Review", "zsh", "Tasks", "Browser", "Side chat", "Desktop"]);
           await expect
             .poll(() =>
               sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
@@ -837,9 +821,9 @@ suite.define(() => {
                 .locator('[data-region-header="side"] wa-tab[active] .tabstrip-tab__label')
                 .textContent(),
             )
-            .toContain("Terminal");
+            .toBe("zsh");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
+          await expect.poll(async () => (await tabLabels(page)).includes("zsh")).toBe(false);
 
           for (const label of ["Review", "Tasks", "Browser", "Side chat", "Desktop", "Files"]) {
             await sidePanel(page)
@@ -898,7 +882,7 @@ suite.define(() => {
             .toBeCloseTo(emptyResizedWidth, 0);
           const terminalLabel = sidePanel(page)
             .locator(sidePanelTabLabelSelector)
-            .filter({ hasText: "Terminal" });
+            .filter({ hasText: "shell 1" });
           await expect
             .poll(() =>
               terminalLabel.evaluate((label) => {
@@ -933,6 +917,9 @@ suite.define(() => {
           ).toBe(false);
           await openFromPlus(page, "Review");
           await openFromPlus(page, "Tasks");
+          await sidePanel(page)
+            .getByRole("button", { name: "Close tab: shell 1", exact: true })
+            .click();
           await sidePanel(page)
             .getByRole("button", { name: "Close Terminal", exact: true })
             .click();
@@ -982,7 +969,7 @@ suite.define(() => {
         await openFromPlus(page, "Terminal");
         await openFromPlus(page, "Side chat");
         await selectTab(page, "Side chat");
-        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "Terminal", "Side chat"]);
+        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "zsh", "Side chat"]);
         await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
 
         const geometry = await sidePanelBody(page).evaluate((element) => {

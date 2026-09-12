@@ -610,7 +610,7 @@ function createCodexInstallFixture(root: string) {
     cpu: [target.cpu],
   });
   writeJson(path.join(stateDir, "openclaw.json"), {
-    agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
   });
   writePluginInstallIndexForE2E(

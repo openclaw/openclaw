@@ -32,6 +32,7 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
 } from "./service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 export async function uninstallLaunchAgent({
   env,
@@ -167,6 +168,7 @@ async function restoreLaunchAgentOwnedFile(params: {
   mode: number;
 }): Promise<void> {
   if (params.contents === null) {
+    assertGatewayServiceUpdateCurrent();
     await fs.unlink(params.path).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -176,11 +178,14 @@ async function restoreLaunchAgentOwnedFile(params: {
   }
   const temporaryPath = `${params.path}.openclaw-${randomUUID()}.rollback`;
   try {
+    assertGatewayServiceUpdateCurrent();
     await fs.writeFile(temporaryPath, params.contents.toString("utf8"), {
       flag: "wx",
       mode: params.mode,
     });
+    assertGatewayServiceUpdateCurrent();
     await fs.rename(temporaryPath, params.path);
+    assertGatewayServiceUpdateCurrent();
     await fs.chmod(params.path, params.mode).catch(() => undefined);
   } finally {
     await fs.unlink(temporaryPath).catch(() => undefined);
@@ -204,6 +209,7 @@ async function restoreLaunchAgentInstallArtifacts(params: {
     mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
   });
   if (params.snapshot.plistContents === null) {
+    assertGatewayServiceUpdateCurrent();
     await fs.unlink(params.plistPath).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -317,6 +323,9 @@ async function activateLaunchAgent(params: {
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
+  if (args.beforeLoad) {
+    throw new Error("Deferred native service load is not supported on this platform.");
+  }
   await assertExternalLaunchAgentMutation(args.env, "install");
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
   const previousContents = await readExistingLaunchAgentPlist(targetPlistPath);

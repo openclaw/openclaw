@@ -1,15 +1,19 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   generateIdentity,
+  guardInstructions,
   MemoryAuditStore,
   MemoryReplayStore,
   open,
   sha256Hex,
   verifyReceipt,
+  type ReplayStore,
   type Verdict,
 } from "../protocol/index.js";
-import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
+import { ReefChannelConfigSchema } from "./config-schema.js";
+import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
@@ -22,10 +26,18 @@ import {
   transport,
   trust,
 } from "./flow.test-helpers.js";
-import type { ReefTransportClient } from "./transport.js";
+import { createConfiguredGuard } from "./guard.js";
+import { setReefRuntime } from "./runtime.js";
+import { ReefInboxEntryParkedError, type ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
-beforeEach(resetFlowStoresForTests);
+const oauthGuardModel = "gpt-5.6-terra";
+const oauthGuardResponseModel = `${oauthGuardModel}-2026-08-01`;
+
+beforeEach(() => {
+  resetFlowStoresForTests();
+  setReefRuntime(createPluginRuntimeMock());
+});
 afterEach(() => {
   vi.unstubAllEnvs();
   resetFlowStoresForTests();
@@ -56,6 +68,230 @@ describe("createConfiguredGuard", () => {
     const init = fetcher.mock.calls[0]?.[1];
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer guard-key");
   });
+
+  it.each([
+    { label: "with an exact provider-attested model", responseModel: oauthGuardModel },
+    {
+      label: "with a compact provider-attested date suffix",
+      responseModel: `${oauthGuardModel}-20260801`,
+    },
+    {
+      label: "with a dashed provider-attested date suffix",
+      responseModel: oauthGuardResponseModel,
+    },
+  ])(
+    "uses the host-owned OpenAI OAuth profile with strict structured output $label",
+    async ({ responseModel }) => {
+      const runtime = createPluginRuntimeMock();
+      const verdict = {
+        decision: "allow",
+        category: "safe",
+        reason: "Safe.",
+        policyVersion: "v1",
+      };
+      runtime.llm.complete = vi.fn().mockResolvedValue({
+        text: JSON.stringify(verdict),
+        provider: "openai",
+        model: oauthGuardModel,
+        responseModel,
+        stopReason: "stop",
+        agentId: "main",
+        usage: {},
+        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+        audit: { caller: { kind: "plugin", id: "reef" } },
+      });
+      setReefRuntime(runtime);
+      const classifier = createConfiguredGuard(
+        ReefChannelConfigSchema.parse({
+          guard: {
+            provider: "openai",
+            authMode: "oauth",
+            authProfileId: "openai:work",
+            pinnedModel: oauthGuardModel,
+            policyVersion: "v1",
+            timeoutMs: 1_000,
+          },
+        }),
+      );
+
+      await expect(
+        classifier.classify({
+          direction: "outbound",
+          source: "alice#1",
+          destination: "bob#1",
+          text: "hello",
+          policyVersion: "v1",
+        }),
+      ).resolves.toMatchObject({ decision: "allow", model: oauthGuardModel });
+
+      expect(runtime.llm.complete).toHaveBeenCalledWith({
+        model: `openai/${oauthGuardModel}@openai:work`,
+        systemPrompt: `${guardInstructions("outbound")} Set policyVersion to exactly "v1". The object must exactly match this schema: ${JSON.stringify(
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              decision: { type: "string", enum: ["allow", "deny", "review"] },
+              category: { type: "string" },
+              reason: { type: "string" },
+              policyVersion: { type: "string" },
+            },
+            required: ["decision", "category", "reason", "policyVersion"],
+          },
+        )}`,
+        messages: [
+          {
+            role: "user",
+            content: JSON.stringify({
+              direction: "outbound",
+              source: "alice#1",
+              destination: "bob#1",
+              text: "hello",
+              policyVersion: "v1",
+            }),
+          },
+        ],
+        maxTokens: 512,
+        purpose: "reef.guard",
+        reasoning: "low",
+        requiredAuthMode: "oauth",
+        responseFormat: {
+          type: "json_schema",
+          json_schema: {
+            name: "reef_guard_verdict",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                decision: { type: "string", enum: ["allow", "deny", "review"] },
+                category: { type: "string" },
+                reason: { type: "string" },
+                policyVersion: { type: "string" },
+              },
+              required: ["decision", "category", "reason", "policyVersion"],
+            },
+          },
+        },
+        signal: expect.any(AbortSignal),
+      });
+    },
+  );
+
+  it.each([
+    [
+      "wrong provider",
+      { provider: "anthropic", responseModel: oauthGuardResponseModel, stopReason: "stop" },
+    ],
+    [
+      "wrong logical model",
+      { model: "gpt-5.6-sol", responseModel: oauthGuardResponseModel, stopReason: "stop" },
+    ],
+    ["missing response model", { responseModel: undefined, stopReason: "stop" }],
+    ["mismatched response model", { responseModel: "gpt-5.6-sol", stopReason: "stop" }],
+    [
+      "non-date response suffix",
+      { responseModel: `${oauthGuardModel}-preview`, stopReason: "stop" },
+    ],
+    [
+      "inserted response segment before date",
+      { responseModel: `${oauthGuardModel}-preview-20260801`, stopReason: "stop" },
+    ],
+    ["incomplete response", { responseModel: oauthGuardResponseModel, stopReason: "length" }],
+    ["tool response", { responseModel: oauthGuardResponseModel, stopReason: "toolUse" }],
+    ["error response", { responseModel: oauthGuardResponseModel, stopReason: "error" }],
+    ["aborted response", { responseModel: oauthGuardResponseModel, stopReason: "aborted" }],
+  ])("fails closed for OAuth guard evidence: %s", async (_label, evidence) => {
+    const runtime = createPluginRuntimeMock();
+    runtime.llm.complete = vi.fn().mockResolvedValue({
+      text: JSON.stringify({
+        decision: "allow",
+        category: "safe",
+        reason: "Safe.",
+        policyVersion: "v1",
+      }),
+      provider: "openai",
+      model: oauthGuardModel,
+      ...evidence,
+      agentId: "main",
+      usage: {},
+      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+      audit: { caller: { kind: "plugin", id: "reef" } },
+    });
+    setReefRuntime(runtime);
+    const classifier = createConfiguredGuard(
+      ReefChannelConfigSchema.parse({
+        guard: {
+          provider: "openai",
+          authMode: "oauth",
+          authProfileId: "openai:work",
+          pinnedModel: oauthGuardModel,
+          policyVersion: "v1",
+          timeoutMs: 1_000,
+        },
+      }),
+    );
+
+    await expect(
+      classifier.classify({
+        direction: "outbound",
+        source: "alice#1",
+        destination: "bob#1",
+        text: "hello",
+        policyVersion: "v1",
+      }),
+    ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
+  });
+
+  it.each([
+    { responseModel: "gpt-5.6-luna-20260801", decision: "allow", category: "safe" },
+    { responseModel: undefined, decision: "deny", category: "guard_failure" },
+    { responseModel: "gpt-5.6-luna-20260802", decision: "deny", category: "guard_failure" },
+  ])(
+    "keeps dated OAuth guard model pins exact for response model $responseModel",
+    async ({ responseModel, decision, category }) => {
+      const runtime = createPluginRuntimeMock();
+      runtime.llm.complete = vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          decision: "allow",
+          category: "safe",
+          reason: "Safe.",
+          policyVersion: "v1",
+        }),
+        provider: "openai",
+        model: "gpt-5.6-luna-20260801",
+        responseModel,
+        stopReason: "stop",
+        agentId: "main",
+        usage: {},
+        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+        audit: { caller: { kind: "plugin", id: "reef" } },
+      });
+      setReefRuntime(runtime);
+      const classifier = createConfiguredGuard(
+        ReefChannelConfigSchema.parse({
+          guard: {
+            provider: "openai",
+            authMode: "oauth",
+            authProfileId: "openai:work",
+            pinnedModel: "gpt-5.6-luna-20260801",
+            policyVersion: "v1",
+            timeoutMs: 1_000,
+          },
+        }),
+      );
+
+      await expect(
+        classifier.classify({
+          direction: "outbound",
+          source: "alice#1",
+          destination: "bob#1",
+          text: "hello",
+          policyVersion: "v1",
+        }),
+      ).resolves.toMatchObject({ decision, category });
+    },
+  );
 });
 
 describe("ReefMessageFlow inbound", () => {
@@ -476,5 +712,132 @@ describe("ReefMessageFlow outbound", () => {
     });
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
     expect(relay.sendEnvelope).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReefMessageFlow delivery-store capacity", () => {
+  beforeEach(() => {
+    resetFlowStoresForTests();
+  });
+
+  afterEach(() => {
+    resetFlowStoresForTests();
+  });
+
+  it("parks after ingress without retaining bookkeeping when the delivered store fills before confirm", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const id = "01JZ0000000000000000000204";
+    const stores = flowStores(1);
+    await stores.delivered.add("occupied"); // delivered namespace full
+    const onIngress = vi.fn(async () => {});
+    const relay = transport();
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({ alice: peerTrust(alice) }).store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient, // SAFETY: test transport mock satisfies the client contract
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(23)),
+      replay: new MemoryReplayStore(),
+      ...stores,
+      onIngress,
+      onOwnerNotice: async () => {},
+    });
+    const entry: InboxEntry = {
+      seq: 1,
+      peer: "alice",
+      id,
+      kind: "message",
+      envelope: await envelope(alice, bob, id, "confirm hits full store"),
+      ts: Math.floor(Date.now() / 1_000),
+    };
+
+    await expect(flow.processEntries([entry])).rejects.toBeInstanceOf(ReefInboxEntryParkedError);
+    // Ingress ran, but no delivered marker was retained after confirm failed.
+    // Each re-poll re-ingests instead of unwinding the shared inbox.
+    expect(onIngress).toHaveBeenCalledTimes(1);
+    expect(relay.acknowledge).not.toHaveBeenCalled();
+    await expect(stores.delivered.status(id)).resolves.toBeUndefined();
+  });
+
+  it("parks an inbound message before ingress when replay state is at capacity", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const id = "01JZ0000000000000000000202";
+    const stores = flowStores();
+    const onIngress = vi.fn(async () => {});
+    const relay = transport();
+    const fullReplay = {
+      claim: async () => {
+        throw Object.assign(new Error("plugin state limit exceeded"), {
+          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        });
+      },
+    } as unknown as ReplayStore; // SAFETY: capacity stub only implements claim
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({ alice: peerTrust(alice) }).store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient, // SAFETY: test transport mock satisfies the client contract
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(21)),
+      replay: fullReplay,
+      ...stores,
+      onIngress,
+      onOwnerNotice: async () => {},
+    });
+    const entry: InboxEntry = {
+      seq: 1,
+      peer: "alice",
+      id,
+      kind: "message",
+      envelope: await envelope(alice, bob, id, "replay store is full"),
+      ts: Math.floor(Date.now() / 1_000),
+    };
+
+    await expect(flow.processEntries([entry])).rejects.toBeInstanceOf(ReefInboxEntryParkedError);
+    expect(onIngress).not.toHaveBeenCalled();
+    expect(relay.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("confirms the delivery marker after ingress, so delivered entries do not re-enter ingress", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const id = "01JZ0000000000000000000203";
+    const stores = flowStores();
+    let statusDuringIngress: "delivered" | undefined;
+    const onIngress = vi.fn(async () => {
+      statusDuringIngress = await stores.delivered.status(id);
+    });
+    const relay = transport();
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({ alice: peerTrust(alice) }).store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient, // SAFETY: test transport mock satisfies the client contract
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(22)),
+      replay: new MemoryReplayStore(),
+      ...stores,
+      onIngress,
+      onOwnerNotice: async () => {},
+    });
+    const entry: InboxEntry = {
+      seq: 1,
+      peer: "alice",
+      id,
+      kind: "message",
+      envelope: await envelope(alice, bob, id, "durable outcome first"),
+      ts: Math.floor(Date.now() / 1_000),
+    };
+
+    await flow.processEntries([entry]);
+    // The marker is written only after inbound handling succeeds.
+    expect(statusDuringIngress).toBeUndefined();
+    await expect(stores.delivered.status(id)).resolves.toBe("delivered");
+
+    await flow.processEntries([{ ...entry, seq: 2 }]);
+    expect(onIngress).toHaveBeenCalledOnce();
   });
 });

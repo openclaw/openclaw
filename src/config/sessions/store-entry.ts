@@ -187,8 +187,10 @@ type SessionEntryCandidate = {
 };
 
 export function resolveSessionEntryCandidates(params: {
-  entries: readonly SessionEntryCandidate[];
+  entries: Iterable<SessionEntryCandidate>;
   sessionKey: string;
+  /** Every consumed candidate has already passed canonical-key validation. */
+  canonicalKeys?: true;
 }): {
   normalizedKey: string;
   existing: SessionEntryCandidate | undefined;
@@ -197,7 +199,15 @@ export function resolveSessionEntryCandidates(params: {
   const trimmedKey = params.sessionKey.trim();
   const normalizedKey = normalizeStoreSessionKey(trimmedKey);
   const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalizedKey);
-  const entries = new Map(params.entries.map((candidate) => [candidate.sessionKey, candidate]));
+  const lookupKeys = params.canonicalKeys
+    ? new Set([trimmedKey, normalizedKey, ...foldedLegacyKeys])
+    : undefined;
+  const entries = new Map<string, SessionEntryCandidate>();
+  for (const candidate of params.entries) {
+    if (!lookupKeys || lookupKeys.has(candidate.sessionKey)) {
+      entries.set(candidate.sessionKey, candidate);
+    }
+  }
   const legacyKeySet = new Set<string>();
   const trimmedCandidate = entries.get(trimmedKey);
   if (
@@ -251,7 +261,7 @@ export function resolveSessionEntryCandidates(params: {
     }
   }
   for (const [candidateKey, candidate] of entries) {
-    if (candidateKey === normalizedKey) {
+    if (params.canonicalKeys || candidateKey === normalizedKey) {
       continue;
     }
     // Only collapse TRUE canonical aliases (same opaque-preserving key, e.g. a

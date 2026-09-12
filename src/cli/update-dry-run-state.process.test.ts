@@ -86,29 +86,16 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
   });
 }
 
-async function expectPreviewLedger(root: string, runId: string, before: string[]): Promise<void> {
-  const after = await snapshotTree(root);
-  const ledgerArtifacts = after.filter((entry) =>
-    /^(?:d state\/state$|f state\/state\/openclaw\.sqlite(?:-(?:wal|shm))? )/.test(entry),
-  );
-  expect(ledgerArtifacts).toContain("d state/state");
-  expect(ledgerArtifacts).toContainEqual(
-    expect.stringMatching(/^f state\/state\/openclaw\.sqlite [a-f0-9]{64}$/),
-  );
-  expect(after.filter((entry) => !ledgerArtifacts.includes(entry))).toEqual(before);
+async function expectUnrecordedPreview(root: string, before: string[]): Promise<void> {
+  expect(await snapshotTree(root)).toEqual(before);
 
   const status = runUpdateProcess(root, ["update", "status", "--json"]);
   expect(status.error).toBeUndefined();
   expect(status.status, status.stderr).toBe(0);
   const report = JSON.parse(status.stdout);
   expect(report.activeRun).toBeUndefined();
-  expect(report.lastRun).toMatchObject({
-    runId,
-    trigger: "cli",
-    phase: "finished",
-    status: "skipped",
-    reason: "dry-run",
-  });
+  expect(report.lastRun).toBeUndefined();
+  expect(await snapshotTree(root)).toEqual(before);
 }
 
 describe("update process state", () => {
@@ -210,7 +197,7 @@ process.stdin.resume();
       actions: expect.arrayContaining([expect.any(String)]),
     });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    await expectPreviewLedger(root, preview.runId, treeBefore);
+    await expectUnrecordedPreview(root, treeBefore);
   });
 
   it("keeps migration-pending config and SQLite markers immutable for the shorthand", async () => {
@@ -241,7 +228,7 @@ process.stdin.resume();
     const preview = JSON.parse(result.stdout);
     expect(preview).toMatchObject({ runId: expect.any(String), dryRun: true });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
-    await expectPreviewLedger(root, preview.runId, treeBefore);
+    await expectUnrecordedPreview(root, treeBefore);
     expect({
       migration: await sha256File(migrationMarkerPath),
       wal: await sha256File(walPath),
@@ -564,7 +551,14 @@ process.stdin.resume();
         "--json",
       ]);
 
-      expect(result.error).toBeUndefined();
+      expect(
+        result.error,
+        formatCliProcessFailure({
+          reason: `rejected ${command} arguments`,
+          stdout: result.stdout ?? "",
+          stderr: result.stderr ?? "",
+        }),
+      ).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(
         /--timeout must be a positive integer/iu,

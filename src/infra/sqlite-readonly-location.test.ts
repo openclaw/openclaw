@@ -11,11 +11,14 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
-  prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "./sqlite-snapshot-source.js";
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -492,7 +495,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       database.close();
       const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
       const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
-      const moduleUrl = new URL(`./sqlite-readonly-location${extension}`, workerUrl).href;
+      const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
       const script = `
         const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
         try {
@@ -534,6 +537,38 @@ describe("prepareSqliteReadOnlyLocation", () => {
     await expect(prepareSqliteReadOnlyLocation(missingPath)).rejects.toThrow(
       /SQLite read-only worker .*ENOENT.*\(code=ENOENT\)/u,
     );
+  });
+
+  it.each([
+    {
+      boundary: "tail start",
+      stderr: `🤖${"x".repeat(3_999)}`,
+      expectedTail: "x".repeat(3_999),
+    },
+    {
+      boundary: "Node stderr buffer end",
+      stderr: `${"x".repeat(1024 * 1024 - 1)}🤖${"x".repeat(4_096)}`,
+      expectedTail: `${"x".repeat(3_999)}�`,
+    },
+  ])("keeps worker stderr valid at the $boundary", async ({ stderr, expectedTail }) => {
+    const tempDir = tempDirs.make("openclaw-sqlite-readonly-stderr-");
+    const preloadPath = path.join(tempDir, "stderr-preload.cjs");
+    fs.writeFileSync(
+      preloadPath,
+      `process.once("beforeExit", () => process.stderr.write(${JSON.stringify(stderr)}));`,
+    );
+    const missingPath = path.join(tempDir, "missing.db");
+
+    await withEnvAsync(sqliteWorkerPreloadEnv(preloadPath), async () => {
+      let message = "";
+      try {
+        await prepareSqliteReadOnlyLocation(missingPath);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message.split("stderr (tail): ")[1]).toBe(expectedTail);
+    });
   });
 
   it("propagates sync public entry point failures", () => {

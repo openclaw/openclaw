@@ -71,6 +71,7 @@ describe("initial turn ownership through disconnect", () => {
       await flushStartupMicrotasks();
       expect(startup.get(input.recovery.sessionKey)).toMatchObject({
         phase: "failed",
+        startedAt: input.createdAt,
         initialTurn: { text: input.recovery.message, sendRunId: input.recovery.messageId },
         action: "retry",
       });
@@ -241,6 +242,7 @@ describe("initial turn ownership through disconnect", () => {
     expect(request).toHaveBeenCalledTimes(1);
     client.recoveryScopeReady = true;
     transition(gateway, { ...gateway.snapshot, phase: "connected" });
+    expect(startup.get(input.recovery.sessionKey)?.startedAt).toBe(input.createdAt);
     await vi.waitFor(() => expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false));
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.dispatch",

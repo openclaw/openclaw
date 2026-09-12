@@ -37,29 +37,33 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex supervision actions", () => {
-  it("advertises creation from startup config before the live snapshot is available", () => {
-    const startupConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": {} },
+  it.each(["openai/gpt-6-astra", "openai/gpt-5.6-sol"])(
+    "advertises creation for %s from startup config before the live snapshot is available",
+    (model) => {
+      const startupConfig = {
+        agents: {
+          defaults: {
+            model: { primary: model },
+            models: { [model]: {} },
+            modelPolicy: { allow: [model] },
+          },
         },
-      },
-    } satisfies OpenClawConfig;
-    const { runtime } = createRuntime();
-    const { api, getProvider } = createGatewayApi(runtime, startupConfig);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createEligibleControl(),
-      getRuntimeConfig: () => undefined,
-    });
+      } satisfies OpenClawConfig;
+      const { runtime } = createRuntime();
+      const { api, getProvider } = createGatewayApi(runtime, startupConfig);
+      registerCodexSessionCatalog({
+        api,
+        bindingStore: createCodexTestBindingStore(),
+        control: createEligibleControl(),
+        getRuntimeConfig: () => undefined,
+      });
 
-    expect(getProvider()?.resolveCreateSession?.({ agentId: "main" })).toEqual({
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
-    });
-  });
+      expect(getProvider()?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+        model,
+        agentRuntime: "codex",
+      });
+    },
+  );
 
   it("marks paired-node rows continuable only with complete permitted capabilities", async () => {
     const sourceByNode = new Map([
@@ -621,6 +625,7 @@ describe("Codex supervision actions", () => {
       kind: "node",
       nodeId: "devbox",
       command: CODEX_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ cwd: "/workspace/node-new" }),
       cwd: "/workspace/node-new",
       title: "codex",
@@ -761,18 +766,18 @@ describe("Codex supervision actions", () => {
     ]);
     expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(catalogHosts!));
     expect(invoke).not.toHaveBeenCalled();
-    const userSource = terminalHosts?.find((host) => host.label === "Local Codex · user");
-    expect(userSource).toBeDefined();
+    expect(terminalHosts?.filter((host) => host.kind === "gateway")).toEqual([
+      expect.objectContaining({ hostId: CODEX_LOCAL_SESSION_HOST_ID }),
+    ]);
+    const userSource = catalogHosts?.find((host) => host.label === "Local Codex · user");
+    expect(userSource).toMatchObject({ canStartTerminal: false });
     await expect(
       getProvider()?.startTerminalSession?.({
         agentId: "main",
         hostId: userSource!.hostId,
         cwd: binDir,
       }),
-    ).resolves.toMatchObject({
-      env: { CODEX_HOME: resolveCodexAppServerUserHomeDir(process.env) },
-      cwd: binDir,
-    });
+    ).rejects.toThrow("select the local machine or a connected node");
     pluginConfig = { appServer: { homeScope: "user" } };
     registerCodexSessionCatalog({
       api,
@@ -792,6 +797,7 @@ describe("Codex supervision actions", () => {
       kind: "node",
       nodeId: "devbox",
       command: CODEX_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       cwd: "/workspace/node",
     });
     expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("searchTerm");

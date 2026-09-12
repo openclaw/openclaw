@@ -63,7 +63,7 @@ import {
   openSlot,
 } from "./sidebar-layout.ts";
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
   dispatchEvent: (event: Event) => boolean;
@@ -83,16 +83,12 @@ export function invalidateImageLightbox(state: ChatPageHost) {
   return state.imageLightboxRequestVersion;
 }
 
-async function loadPageAssistantIdentity(
-  state: ChatPageHost,
-  opts?: { sessionKey?: string; expectedSessionKey?: string },
-) {
+async function loadPageAssistantIdentity(state: ChatPageHost) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
-  const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
-  const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
+  const sessionKey = state.sessionKey.trim();
   const agentId = resolveAgentIdForSession({
     sessionKey,
     assistantAgentId: state.assistantAgentId,
@@ -109,7 +105,7 @@ async function loadPageAssistantIdentity(
       state.client !== client ||
       !state.connected ||
       state.assistantIdentityRequestVersion !== requestVersion ||
-      state.sessionKey.trim() !== expectedSessionKey ||
+      state.sessionKey.trim() !== sessionKey ||
       resolveAgentIdForSession(state) !== agentId ||
       !identity
     ) {
@@ -187,6 +183,7 @@ export function createPageState(
     chatBranchesConnectionEpoch: null,
     chatToolMessages: [],
     guardianNotices: [],
+    providerPolicyNotice: null,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatQueueModeOverride: undefined,
@@ -392,6 +389,13 @@ export function createPageState(
   };
   state.updateSidebarLayout = (layout) => {
     const normalized = normalizeSidebarLayout(layout);
+    // Every close route commits here; tab switches retain the pending selection.
+    if (
+      (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
+      !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
+    ) {
+      state.sidebarContent = null;
+    }
     state.sidebarLayout = normalized;
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(

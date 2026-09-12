@@ -148,7 +148,11 @@ function makeContextParams(overrides: Partial<RequestRuntime> = {}): GatewayRequ
       broadcastVoiceWakeChanged: vi.fn(),
       broadcastVoiceWakeRoutingChanged: vi.fn(),
       kernel: {
-        notifyPluginMetadataChanged: vi.fn(),
+        applyPluginLifecycleChange: vi.fn(async () => ({
+          operationId: "fixture",
+          generation: 1,
+          pluginIds: [],
+        })),
         getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
       },
       unavailableGatewayMethods: new Set(),
@@ -286,6 +290,7 @@ describe("createGatewayRequestContext", () => {
     const context = createGatewayRequestContext(params);
 
     expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
+    expect(context.getDeferredChannelReloads?.()).toEqual([]);
 
     status = "active";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
@@ -295,6 +300,16 @@ describe("createGatewayRequestContext", () => {
 
     status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+
+    const deferred = [{ channel: "discord", publicationPending: true }];
+    params.runtime.runtimeState.configReloader = {
+      isConfigReloadSettled: () => false,
+      getDeferredChannelReloads: () => deferred,
+    };
+    expect(context.getDeferredChannelReloads?.()).toEqual(deferred);
+
+    params.runtime.lifecycle.closePreludeStarted = true;
+    expect(context.getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("publishes worker services through the kernel bridge", () => {
@@ -314,17 +329,6 @@ describe("createGatewayRequestContext", () => {
     expect(context.workerRepositoryWorkspaceMutationService).toBe(
       repositoryWorkspaceMutationService,
     );
-  });
-
-  it("routes plugin metadata changes through the kernel bridge", () => {
-    const notifyPluginMetadataChanged = vi.fn();
-    const params = makeContextParams();
-    params.runtime.kernel.notifyPluginMetadataChanged = notifyPluginMetadataChanged;
-    const context = createGatewayRequestContext(params);
-
-    context.notifyPluginMetadataChanged();
-
-    expect(notifyPluginMetadataChanged).toHaveBeenCalledOnce();
   });
 
   it("does not treat scoped CLI or backend callers as approval delivery routes", () => {

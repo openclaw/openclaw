@@ -1,7 +1,7 @@
 // Channels page view tests.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { WhatsAppStatus } from "../../api/types.ts";
+import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import {
@@ -79,7 +79,7 @@ function createChannelPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
 }
 
 describe("channels plugin presentation metadata", () => {
-  it("uses matching plugins.list metadata for the gallery and setup modal", () => {
+  it("uses matching plugins.list metadata and package icons or placeholders throughout setup", () => {
     const props = createProps({
       ts: Date.now(),
       channelOrder: ["slack"],
@@ -116,6 +116,23 @@ describe("channels plugin presentation metadata", () => {
       "blob:slack-plugin-icon",
     );
     expect(container.textContent).not.toContain("Legacy channel subtitle");
+    for (const selector of [".channels-item", ".channels-detail__header", ".channels-wizard"]) {
+      const icon = container.querySelector(`${selector} img`)!;
+      icon.dispatchEvent(new Event("error"));
+      expect(container.querySelector(`${selector} img`)).toBeNull();
+      expect(
+        container.querySelector(
+          `${selector} .channels-tile--fallback, ${selector} .channels-cover--fallback`,
+        )?.textContent,
+      ).toContain("SL");
+    }
+    props.pluginIconUrls = {};
+    props.pluginCatalog = {
+      ...props.pluginCatalog,
+      plugins: [createChannelPlugin({ hasIcon: false })],
+    };
+    render(renderChannels(props), container);
+    expect(container.querySelector(".channels-item img")).toBeNull();
   });
 });
 
@@ -246,6 +263,145 @@ describe("channel row actions", () => {
       expect(onAction).toHaveBeenCalledExactlyOnceWith("telegram");
     },
   );
+});
+
+describe("channel status issues", () => {
+  function createRunningSnapshot(): ChannelsStatusSnapshot {
+    return {
+      ts: 1,
+      channelOrder: ["discord", "slack"],
+      channelLabels: { discord: "Discord", slack: "Slack" },
+      channels: {
+        discord: { configured: true, running: true, connected: true, lastError: null },
+        slack: { configured: true, running: true },
+      },
+      channelAccounts: {
+        discord: [
+          { accountId: "default", configured: true, running: true, lastError: null },
+          { accountId: "community", configured: true, running: true, lastError: null },
+        ],
+      },
+      channelDefaultAccountId: { discord: "default" },
+    };
+  }
+
+  function findChannelRow(container: HTMLElement, label: string) {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>("button.channels-item")).find(
+      (row) => row.querySelector(".settings-row__title")?.textContent === label,
+    )!;
+  }
+
+  it("shows account policy and pending reload issues without hiding a running transport", () => {
+    const snapshot = createRunningSnapshot();
+    snapshot.statusIssues = [
+      {
+        channel: "discord",
+        accountId: "community",
+        kind: "config",
+        message: "Guild messages are blocked because the guild allowlist is empty.",
+        fix: "Add the intended guild to the allowlist.",
+      },
+      {
+        channel: "discord",
+        accountId: "community",
+        kind: "runtime",
+        message: "Channel restart is pending while active work drains.",
+        fix: "Wait for active work to finish, then refresh status.",
+      },
+    ];
+    const props = createProps(snapshot);
+    const container = document.createElement("div");
+    props.onShowDetail = (channel) => {
+      props.selectedChannel = channel;
+      render(renderChannels(props), container);
+    };
+
+    render(renderChannels(props), container);
+
+    const discord = findChannelRow(container, "Discord");
+    expect(discord.querySelector(".settings-status")?.textContent?.trim()).toBe("Needs attention");
+    expect(discord.querySelector(".settings-row__desc")?.textContent).toBe(
+      snapshot.statusIssues[0]!.message,
+    );
+    expect(
+      findChannelRow(container, "Slack").querySelector(".settings-status")?.textContent?.trim(),
+    ).toBe("Running");
+    expect(container.textContent).not.toContain("Some channel checks did not finish");
+
+    discord.click();
+
+    const detail = container.querySelector(".channels-detail")!;
+    const notices = detail.querySelectorAll('[role="note"]');
+    expect(notices).toHaveLength(2);
+    snapshot.statusIssues.forEach((issue, index) => {
+      expect(notices[index]!.textContent).toContain("Needs attention · community");
+      expect(notices[index]!.textContent).toContain(issue.message);
+      expect(notices[index]!.textContent).toContain(issue.fix);
+    });
+    const running = Array.from(detail.querySelectorAll("dt")).find(
+      (node) => node.textContent?.trim() === "Running",
+    );
+    expect(running?.nextElementSibling?.textContent?.trim()).toBe("Yes");
+
+    props.snapshot = { ...snapshot, ts: 2, statusIssues: [] };
+    render(renderChannels(props), container);
+
+    expect(
+      findChannelRow(container, "Discord").querySelector(".settings-status")?.textContent?.trim(),
+    ).toBe("Running");
+    expect(container.querySelectorAll('.channels-detail [role="note"]')).toHaveLength(0);
+    expect(container.textContent).not.toContain(snapshot.statusIssues[0]!.message);
+  });
+
+  it("escapes and redacts plugin issue text in the row and recovery notice", () => {
+    const snapshot = createRunningSnapshot();
+    snapshot.statusIssues = [
+      {
+        channel: "discord",
+        accountId: "<b>community</b>",
+        kind: "config",
+        message: 'Policy blocks <img src="x" onerror="alert(1)"> with Bearer abcdefghijkl',
+        fix: "Check <script>alert(1)</script> with Bearer mnopqrstuvwxyz",
+      },
+    ];
+    const props = createProps(snapshot);
+    props.selectedChannel = "discord";
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    const row = findChannelRow(container, "Discord");
+    const notice = container.querySelector('.channels-detail [role="note"]')!;
+    expect(row.textContent).toContain('<img src="x" onerror="alert(1)"> with Bearer [redacted]');
+    expect(notice.textContent).toContain("<b>community</b>");
+    expect(notice.textContent).toContain("<script>alert(1)</script> with Bearer [redacted]");
+    expect(container.textContent).not.toContain("abcdefghijkl");
+    expect(container.textContent).not.toContain("mnopqrstuvwxyz");
+    expect(row.querySelector(".settings-row__desc img")).toBeNull();
+    expect(notice.querySelector("b, img, script")).toBeNull();
+  });
+
+  it("keeps transport failures and partial probe diagnostics distinct from policy issues", () => {
+    const snapshot = createRunningSnapshot();
+    snapshot.channels.discord = { configured: true, running: true, lastError: "Connection closed" };
+    snapshot.partial = true;
+    snapshot.warnings = ["Slack probe timed out."];
+    const props = createProps(snapshot);
+    props.selectedChannel = "discord";
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    expect(
+      findChannelRow(container, "Discord").querySelector(".settings-status")?.textContent?.trim(),
+    ).toBe("Needs attention");
+    expect(
+      findChannelRow(container, "Slack").querySelector(".settings-status")?.textContent?.trim(),
+    ).toBe("Running");
+    expect(container.textContent).toContain("Connection closed");
+    expect(container.textContent).toContain("Slack probe timed out.");
+    expect(container.querySelectorAll('.channels-detail [role="note"]')).toHaveLength(0);
+  });
 });
 
 function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {

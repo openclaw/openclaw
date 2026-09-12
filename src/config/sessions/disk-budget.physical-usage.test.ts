@@ -4,8 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
+import {
+  hasRetainedSessionTranscriptArchives,
+  measureSessionPhysicalDiskUsage,
+  pruneSessionTranscriptArchivesToHighWater,
+} from "./disk-budget.js";
 
 const workers: Worker[] = [];
 const workerChannel = channel("worker_threads");
@@ -26,6 +32,108 @@ async function addSessionArtifacts(directory: string, index: number): Promise<vo
 }
 
 describe("physical session disk usage", () => {
+  it("reports scan overload before pruning archives and recovers after queued scans drain", async () => {
+    await withTestDir({ prefix: "openclaw-disk-usage-pressure-" }, async (directory) => {
+      const storePath = path.join(directory, "openclaw-agent.sqlite");
+      const archivePath = path.join(directory, "old.jsonl.deleted.2026-01-01T00-00-00.000Z.zst");
+      await fs.writeFile(storePath, Buffer.alloc(321));
+      await fs.writeFile(archivePath, Buffer.alloc(100));
+      const release = createDeferredCore();
+      const spy = vi
+        .spyOn(WorkerTaskPool.prototype, "run")
+        .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
+          spy.mockRestore();
+          // Delay preparation, not the caller's result or the pool's capacity decision.
+          return this.run(async () => {
+            await release.promise;
+            return input;
+          }, options);
+        });
+      const accepted = Array.from({ length: 128 }, () =>
+        measureSessionPhysicalDiskUsage(storePath),
+      );
+      let reported: unknown;
+      const excess = measureSessionPhysicalDiskUsage(storePath).catch((error: unknown) => {
+        reported = error;
+      });
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(reported).toMatchObject({ name: "WorkerTaskError", code: "overloaded" });
+        await expect(
+          pruneSessionTranscriptArchivesToHighWater({ storePath, highWaterBytes: 321 }),
+        ).rejects.toMatchObject({ code: "overloaded" });
+        expect((await fs.stat(archivePath)).size).toBe(100);
+        release.resolve();
+        const usage = {
+          databaseMainBytes: 321,
+          databaseWalBytes: 0,
+          sessionFilesBytes: 100,
+          totalBytes: 421,
+        };
+        expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => usage));
+        await expect(
+          pruneSessionTranscriptArchivesToHighWater({ storePath, highWaterBytes: 321 }),
+        ).resolves.toMatchObject({ removedFiles: 1, usage: { totalBytes: 321 } });
+        await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(workers).toHaveLength(1);
+      } finally {
+        release.resolve();
+        spy.mockRestore();
+        await Promise.allSettled([...accepted, excess]);
+      }
+    });
+  });
+
+  it.each(["legacy", "sqlite", "legacy-in-agent"] as const)(
+    "measures and prunes the canonical session artifacts through the %s selector",
+    async (selector) => {
+      await withTestDir({ prefix: "openclaw-disk-selector-" }, async (directory) => {
+        const agentDir = path.join(directory, "agents", "main");
+        const sessionsDir = path.join(agentDir, "sessions");
+        const databasePath = path.join(agentDir, "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(databasePath), { recursive: true });
+        await fs.writeFile(databasePath, Buffer.alloc(321));
+        await fs.writeFile(`${databasePath}-wal`, Buffer.alloc(654));
+        await fs.writeFile(`${databasePath}-shm`, Buffer.alloc(32_768));
+        await fs.writeFile(
+          path.join(path.dirname(databasePath), "unrelated.txt"),
+          Buffer.alloc(13),
+        );
+        await addSessionArtifacts(sessionsDir, 0);
+        const archivePath = path.join(
+          sessionsDir,
+          "old.jsonl.deleted.2026-01-01T00-00-00.000Z.zst",
+        );
+        await fs.writeFile(archivePath, Buffer.alloc(100));
+        const storePath = {
+          legacy: path.join(sessionsDir, "sessions.json"),
+          sqlite: databasePath,
+          "legacy-in-agent": path.join(path.dirname(databasePath), "sessions.json"),
+        }[selector];
+
+        await expect(measureSessionPhysicalDiskUsage(storePath)).resolves.toEqual({
+          databaseMainBytes: 321,
+          databaseWalBytes: 654,
+          sessionFilesBytes: 118,
+          totalBytes: 1_093,
+        });
+        await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(true);
+        const pruned = await pruneSessionTranscriptArchivesToHighWater({
+          storePath,
+          highWaterBytes: 993,
+        });
+        expect(pruned).toMatchObject({
+          removedFiles: 1,
+          usage: { sessionFilesBytes: 18, totalBytes: 993 },
+        });
+        await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(false);
+      });
+    },
+  );
+
   it("propagates worker transport failure and measures successfully after recovery", async () => {
     await withTestDir({ prefix: "openclaw-disk-usage-worker-error-" }, async (directory) => {
       const storePath = path.join(directory, "openclaw-agent.sqlite");
@@ -71,6 +179,7 @@ describe("physical session disk usage", () => {
       const storePath = path.join(directory, "openclaw-agent.sqlite");
       await fs.writeFile(storePath, Buffer.alloc(321));
       await fs.writeFile(`${storePath}-wal`, Buffer.alloc(654));
+      await fs.writeFile(`${storePath}-shm`, Buffer.alloc(32_768));
       await addSessionArtifacts(directory, 0);
       const realpath = vi.spyOn(nodeFs, "realpathSync");
       const fixtureSyncCalls = () =>

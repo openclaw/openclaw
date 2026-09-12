@@ -80,7 +80,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     {
       type: "provider", // default if omitted
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
       prompt: "Describe the image in <= 500 chars.",
       maxChars: 500,
       maxBytes: 10485760,
@@ -110,7 +110,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
-    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` names remain deprecated compatibility aliases.
+    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The `{{Attachment*}}` names replaced `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` in 2026.8.1. The older names remain deprecated compatibility aliases under the `media-legacy-projection` record: its approved `removeAfter` date is 2026-10-01, with removal additionally gated on a clean published-plugin artifact sweep. Migrate before that date - see [Media legacy projection](/plugins/sdk-migration/compatibility-policy#media-legacy-projection).
 
   </Tab>
 </Tabs>
@@ -280,7 +280,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-6-astra", capabilities: ["image"] },
             {
               provider: "google",
               model: "gemini-3-flash-preview",
@@ -363,7 +363,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-6-astra", capabilities: ["image"] },
             { provider: "anthropic", model: "claude-opus-5", capabilities: ["image"] },
             {
               type: "cli",
@@ -412,7 +412,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a per-capability summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.6-sol) · audio ok (whisper-cli observed=metal)
+📎 Media: image ok (openai/gpt-6-astra) · audio ok (whisper-cli observed=metal)
 ```
 
 For preflight inventory, run `openclaw capability audio providers`. Local rows show the local fallback winner separately from global provider selection, readiness, and separate capable/requested/observed backend fields. The same local selection is available as an informational doctor finding:
@@ -431,3 +431,10 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 
 - [Configuration](/gateway/configuration)
 - [Image & media support](/nodes/images)
+- [Audio and voice notes](/nodes/audio)
+- [Camera capture](/nodes/camera)
+- [Media playback](/nodes/media-playback)
+- [Talk mode](/nodes/talk)
+- [Voice wake](/nodes/voicewake)
+- [Mistral](/providers/mistral) — Voxtral audio transcription, one of the audio-capable providers above
+- [Media overview](/tools/media-overview) — how the media tools fit together

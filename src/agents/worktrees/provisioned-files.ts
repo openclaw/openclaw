@@ -257,6 +257,11 @@ export async function snapshotProvisionedFiles(
   if (files === undefined) {
     throw new Error("provisioned path ledger is unavailable");
   }
+  if (files.every((file) => file.mode === null)) {
+    commitGuard?.();
+    clearRegistryWorktreeProvisionedChunks(env, worktreeId);
+    return files.map((file) => ({ path: file.path, mode: null, chunks: 0 }));
+  }
   const ignoredUntracked = new Set(
     (
       await requireGitRaw(worktreePath, [

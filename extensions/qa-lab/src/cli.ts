@@ -22,7 +22,7 @@ import {
   QA_FRONTIER_PARITY_BASELINE_LABEL,
   QA_FRONTIER_PARITY_CANDIDATE_LABEL,
 } from "./providers/live-frontier/parity.js";
-import type { QaProviderMode, QaProviderModeInput } from "./run-config.js";
+import type { QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaScenarioRunCliOptions = {
@@ -162,206 +162,6 @@ function validateQaScenarioSelection(opts: QaScenarioRunCliOptions, command: Com
   }
 }
 
-async function runQaSelfCheck(opts: QaLabSelfCheckCommandOptions) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaLabSelfCheckCommand(opts);
-}
-
-async function runQaParityReport(opts: {
-  repoRoot?: string;
-  candidateSummary?: string;
-  baselineSummary?: string;
-  candidateLabel?: string;
-  baselineLabel?: string;
-  outputDir?: string;
-  runtimeAxis?: boolean;
-  summary?: string;
-  tokenEfficiency?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaParityReportCommand(opts);
-}
-
-async function runQaConfidenceReport(opts: {
-  repoRoot?: string;
-  manifest: string;
-  artifactRoot?: string;
-  outputDir?: string;
-  strictZeroUnknowns?: boolean;
-  strictGlobalPass?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaConfidenceReportCommand(opts);
-}
-
-async function runQaConfidenceSelfTest(opts: { repoRoot?: string; outputDir?: string }) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaConfidenceSelfTestCommand(opts);
-}
-
-async function runQaCoverageReport(opts: {
-  repoRoot?: string;
-  output?: string;
-  json?: boolean;
-  tools?: boolean;
-  summary?: string;
-  match?: string[];
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCoverageReportCommand(opts);
-}
-
-async function runQaJsonlReplay(opts: {
-  repoRoot?: string;
-  transcripts?: string;
-  outputDir?: string;
-  runtimePair?: string;
-  providerMode?: QaProviderModeInput;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaJsonlReplayCommand(opts);
-}
-
-async function runQaCharacterEval(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  model?: string[];
-  scenario?: string;
-  fast?: boolean;
-  thinking?: string;
-  modelThinking?: string[];
-  judgeModel?: string[];
-  judgeTimeoutMs?: number;
-  blindJudgeModels?: boolean;
-  concurrency?: number;
-  judgeConcurrency?: number;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCharacterEvalCommand(opts);
-}
-
-async function runQaManualLane(opts: {
-  repoRoot?: string;
-  transportId?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  message: string;
-  timeoutMs?: number;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaManualLaneCommand(opts);
-}
-
-async function runQaCredentialsAdd(opts: {
-  actorId?: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  kind: string;
-  note?: string;
-  payloadFile: string;
-  repoRoot?: string;
-  siteUrl?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsAddCommand(opts);
-}
-
-async function runQaCredentialsRemove(opts: {
-  actorId?: string;
-  credentialId: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  siteUrl?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsRemoveCommand(opts);
-}
-
-async function runQaCredentialsList(opts: {
-  actorId?: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  kind?: string;
-  limit?: number;
-  showSecrets?: boolean;
-  siteUrl?: string;
-  status?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsListCommand(opts);
-}
-
-async function runQaCredentialsDoctor(opts: {
-  actorId?: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  siteUrl?: string;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaCredentialsDoctorCommand(opts);
-}
-
-async function runQaUi(opts: {
-  repoRoot?: string;
-  host?: string;
-  port?: number;
-  advertiseHost?: string;
-  advertisePort?: number;
-  controlUiUrl?: string;
-  controlUiProxyTarget?: string;
-  uiDistDir?: string;
-  autoKickoffTarget?: string;
-  embeddedGateway?: string;
-  sendKickoffOnStart?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaLabUiCommand(opts);
-}
-
-async function runQaDockerScaffold(opts: {
-  repoRoot?: string;
-  outputDir: string;
-  gatewayPort?: number;
-  qaLabPort?: number;
-  providerBaseUrl?: string;
-  image?: string;
-  usePrebuiltImage?: boolean;
-  bindUiDist?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaDockerScaffoldCommand(opts);
-}
-
-async function runQaDockerBuildImage(opts: { repoRoot?: string; image?: string }) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaDockerBuildImageCommand(opts);
-}
-
-async function runQaDockerUp(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  gatewayPort?: number;
-  qaLabPort?: number;
-  providerBaseUrl?: string;
-  image?: string;
-  usePrebuiltImage?: boolean;
-  bindUiDist?: boolean;
-  skipUiBuild?: boolean;
-}) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaDockerUpCommand(opts);
-}
-
-async function runQaProviderServer(
-  providerMode: QaProviderMode,
-  opts: { host?: string; port?: number },
-) {
-  const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaProviderServerCommand(providerMode, opts);
-}
-
 export function isQaLabCliAvailable(): boolean {
   return hasQaScenarioPack();
 }
@@ -444,10 +244,12 @@ export function registerQaLabCli(program: Command) {
       });
       return;
     }
-    await runQaSelfCheck({
+    const selfCheckOptions = {
       repoRoot: opts.repoRoot,
       output: opts.output,
-    });
+    };
+    const runtime = await loadQaLabCliRuntime();
+    await runtime.runQaLabSelfCheckCommand(selfCheckOptions);
   });
 
   qa.command("suite")
@@ -564,7 +366,8 @@ export function registerQaLabCli(program: Command) {
         summary?: string;
         tokenEfficiency?: boolean;
       }) => {
-        await runQaParityReport(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaParityReportCommand(opts);
       },
     );
 
@@ -590,7 +393,8 @@ export function registerQaLabCli(program: Command) {
         summary?: string;
         match?: string[];
       }) => {
-        await runQaCoverageReport(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaCoverageReportCommand(opts);
       },
     );
 
@@ -619,7 +423,8 @@ export function registerQaLabCli(program: Command) {
         strictZeroUnknowns?: boolean;
         strictGlobalPass?: boolean;
       }) => {
-        await runQaConfidenceReport(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaConfidenceReportCommand(opts);
       },
     );
 
@@ -628,7 +433,8 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Artifact directory for the confidence self-test")
     .action(async (opts: { repoRoot?: string; outputDir?: string }) => {
-      await runQaConfidenceSelfTest(opts);
+      const runtime = await loadQaLabCliRuntime();
+      await runtime.runQaConfidenceSelfTestCommand(opts);
     });
 
   qa.command("jsonl-replay")
@@ -654,7 +460,8 @@ export function registerQaLabCli(program: Command) {
         providerMode?: QaProviderModeInput;
         outputDir?: string;
       }) => {
-        await runQaJsonlReplay(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaJsonlReplayCommand(opts);
       },
     );
 
@@ -714,7 +521,8 @@ export function registerQaLabCli(program: Command) {
         concurrency?: number;
         judgeConcurrency?: number;
       }) => {
-        await runQaCharacterEval(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaCharacterEvalCommand(opts);
       },
     );
 
@@ -741,7 +549,7 @@ export function registerQaLabCli(program: Command) {
         fast?: boolean;
         timeoutMs?: number;
       }) => {
-        await runQaManualLane({
+        const manualOptions = {
           repoRoot: opts.repoRoot,
           transportId: opts.transport,
           providerMode: opts.providerMode,
@@ -750,7 +558,9 @@ export function registerQaLabCli(program: Command) {
           fastMode: opts.fast,
           message: opts.message,
           timeoutMs: opts.timeoutMs,
-        });
+        };
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaManualLaneCommand(manualOptions);
       },
     );
 
@@ -772,7 +582,8 @@ export function registerQaLabCli(program: Command) {
         actorId?: string;
         json?: boolean;
       }) => {
-        await runQaCredentialsDoctor(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaCredentialsDoctorCommand(opts);
       },
     );
 
@@ -798,7 +609,8 @@ export function registerQaLabCli(program: Command) {
         actorId?: string;
         json?: boolean;
       }) => {
-        await runQaCredentialsAdd(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaCredentialsAddCommand(opts);
       },
     );
 
@@ -818,7 +630,8 @@ export function registerQaLabCli(program: Command) {
         actorId?: string;
         json?: boolean;
       }) => {
-        await runQaCredentialsRemove(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaCredentialsRemoveCommand(opts);
       },
     );
 
@@ -846,7 +659,8 @@ export function registerQaLabCli(program: Command) {
         actorId?: string;
         json?: boolean;
       }) => {
-        await runQaCredentialsList(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaCredentialsListCommand(opts);
       },
     );
 
@@ -888,7 +702,8 @@ export function registerQaLabCli(program: Command) {
         embeddedGateway?: string;
         sendKickoffOnStart?: boolean;
       }) => {
-        await runQaUi(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaLabUiCommand(opts);
       },
     );
 
@@ -921,7 +736,8 @@ export function registerQaLabCli(program: Command) {
         usePrebuiltImage?: boolean;
         bindUiDist?: boolean;
       }) => {
-        await runQaDockerScaffold(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaDockerScaffoldCommand(opts);
       },
     );
 
@@ -930,7 +746,8 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
     .action(async (opts: { repoRoot?: string; image?: string }) => {
-      await runQaDockerBuildImage(opts);
+      const runtime = await loadQaLabCliRuntime();
+      await runtime.runQaDockerBuildImageCommand(opts);
     });
 
   qa.command("up")
@@ -964,7 +781,8 @@ export function registerQaLabCli(program: Command) {
         bindUiDist?: boolean;
         skipUiBuild?: boolean;
       }) => {
-        await runQaDockerUp(opts);
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaDockerUpCommand(opts);
       },
     );
 
@@ -976,7 +794,9 @@ export function registerQaLabCli(program: Command) {
         parseQaCliTcpPortOption(value, "--port"),
       )
       .action(async (opts: { host?: string; port?: number }) => {
-        await runQaProviderServer(providerCommand.providerMode, opts);
+        const providerMode = providerCommand.providerMode;
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaProviderServerCommand(providerMode, opts);
       });
   }
 

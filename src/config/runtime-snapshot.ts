@@ -1,11 +1,16 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
+import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
-import { copyConfigResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
+import {
+  copyConfigResolutionFacts,
+  getConfigResolutionFacts,
+  serializeConfigResolutionFacts,
+} from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -15,6 +20,8 @@ export type RuntimeConfigSnapshotRefreshOptions = {
 export type RuntimeConfigSnapshotRefreshParams = RuntimeConfigSnapshotRefreshOptions & {
   sourceConfig: OpenClawConfig;
   preflightResult?: unknown;
+  /** Original write authority; refresh owners recheck immediately before activation. */
+  assertCurrent?: () => void;
 };
 type MaybePromise<T> = T | Promise<T>;
 
@@ -140,8 +147,12 @@ function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): bool
   if (left === right) {
     return true;
   }
-  // Authored SecretRefs live outside the JSON bytes. Projection must not replace their provenance.
-  if (getConfigResolutionFacts(left) !== getConfigResolutionFacts(right)) {
+  // Fresh reads allocate new facts. Compare their complete provenance, not object identity
+  // or just JSON config bytes: same-byte values can name different authored SecretRefs.
+  if (
+    getConfigResolutionFacts(left) !== getConfigResolutionFacts(right) &&
+    !isDeepStrictEqual(serializeConfigResolutionFacts(left), serializeConfigResolutionFacts(right))
+  ) {
     return false;
   }
   try {
@@ -218,18 +229,20 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   return true;
 }
 
-export function resetConfigRuntimeState(): void {
+export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean } = {}): void {
   clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
-  resetPublishedConfigRuntimeEnv();
+  resetPublishedConfigRuntimeEnv({ preserveOwnership: options.preserveConfigEnv });
 }
 
 export function clearRuntimeConfigSnapshot(): void {
-  resetConfigRuntimeState();
+  // Snapshot cleanup leaves process.env intact. Retain its config-owned layer so
+  // the next startup/reload can replace it without treating it as ambient input.
+  resetConfigRuntimeState({ preserveConfigEnv: true });
 }
 
 export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
@@ -316,10 +329,9 @@ export function selectApplicableRuntimeConfig(params: {
     return inputConfig;
   }
   const runtimeSourceConfig = params.runtimeSourceConfig ?? null;
-  if (!runtimeSourceConfig) {
-    return runtimeConfig;
-  }
-  if (configSnapshotsMatch(inputConfig, runtimeSourceConfig)) {
+  // A pinned file config is not an activated secrets snapshot. Without its source
+  // contract, replacing an explicit config can discard command-resolved credentials.
+  if (runtimeSourceConfig && configSnapshotsMatch(inputConfig, runtimeSourceConfig)) {
     return runtimeConfig;
   }
   return inputConfig;
@@ -450,24 +462,30 @@ export async function finalizeRuntimeSnapshotWrite(params: {
   formatRefreshError: (error: unknown) => string;
   preflightResult?: unknown;
   deferRuntimeActivation?: boolean;
+  assertCurrent?: () => void;
 }): Promise<void> {
-  if (params.deferRuntimeActivation) {
+  const notifyCommittedWrite = () => {
+    params.assertCurrent?.();
     params.notifyCommittedWrite();
+  };
+  params.assertCurrent?.();
+  if (params.deferRuntimeActivation) {
+    notifyCommittedWrite();
     return;
   }
   const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
+    let refreshed: boolean;
     try {
-      const refreshed = await refreshHandler.refresh({
+      refreshed = await refreshHandler.refresh({
         sourceConfig: params.nextSourceConfig,
         ...params.refreshOptions,
         preflightResult: params.preflightResult,
+        ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
       });
-      if (refreshed) {
-        params.notifyCommittedWrite();
-        return;
-      }
     } catch (error) {
+      // An expired writer must not clear the last-known-good runtime either.
+      params.assertCurrent?.();
       try {
         refreshHandler.clearOnRefreshFailure?.();
       } catch {
@@ -475,22 +493,32 @@ export async function finalizeRuntimeSnapshotWrite(params: {
       }
       throw params.createRefreshError(params.formatRefreshError(error), error);
     }
+    // Refresh can yield before returning even when it declines activation.
+    params.assertCurrent?.();
+    if (refreshed) {
+      notifyCommittedWrite();
+      return;
+    }
   }
 
   if (params.hadBothSnapshots) {
     const fresh = params.loadFreshConfig();
+    params.assertCurrent?.();
     setRuntimeConfigSnapshot(fresh, params.nextSourceConfig);
-    params.notifyCommittedWrite();
+    notifyCommittedWrite();
     return;
   }
 
   if (params.hadRuntimeSnapshot) {
     const fresh = params.loadFreshConfig();
+    params.assertCurrent?.();
     setRuntimeConfigSnapshot(fresh);
-    params.notifyCommittedWrite();
+    notifyCommittedWrite();
     return;
   }
 
-  setRuntimeConfigSnapshot(params.loadFreshConfig());
-  params.notifyCommittedWrite();
+  const fresh = params.loadFreshConfig();
+  params.assertCurrent?.();
+  setRuntimeConfigSnapshot(fresh);
+  notifyCommittedWrite();
 }

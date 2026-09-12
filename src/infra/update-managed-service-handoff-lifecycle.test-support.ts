@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -74,6 +78,7 @@ export type ManagedServiceManagerBoundaryResult = {
   sentinel: unknown;
   log: string;
   commandTimings: ManagedServiceCommandTiming[];
+  triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
 };
@@ -135,6 +140,49 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(sentinel).toBeNull();
   });
 
+  itUnix("accepts a failed unit that retained the parked generation after activation", async () => {
+    // A Gateway main process that exits non-zero during KillMode=mixed stop settles
+    // the unit into ActiveState=failed with the parked identity retained; the exact
+    // parked unit is still verified, so activation must proceed.
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+      updaterExitCode: 0,
+      updaterResult: { status: "ok", mode: "npm" },
+    });
+
+    expect(commands.map((command) => command.split(" ")[1])).toEqual(["show", "stop", "show"]);
+    expect(state).toMatchObject({ parked: true, postExitShows: 1, stopCompleted: true });
+    expect(sentinel).toBeNull();
+  });
+
+  itUnix("restores a failed unit that retained the parked generation", async () => {
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      cancelAfterPark: true,
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+    });
+    const verbs = commands.map((command) =>
+      command.split(" ").find((part) => ["show", "stop", "reset-failed", "start"].includes(part)),
+    );
+
+    expect(verbs).toEqual(["show", "stop", "show", "start", "show"]);
+    expect(state).toMatchObject({ parked: true, restored: true });
+    expect(sentinel).toMatchObject({
+      payload: {
+        status: "skipped",
+        stats: {
+          reason: "managed-service-handoff-cancelled",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+          ]),
+        },
+      },
+    });
+  });
+
   itUnix.each([
     [
       "an inactive replacement generation",
@@ -156,7 +204,15 @@ export function registerManagedSystemdHandoffConvergenceTests(
     ["a replacement main PID", { activeState: "deactivating", mainPid: "replacement" }],
     ["an active service", { activeState: "active", mainPid: "replacement" }],
     ["a restarting service", { activeState: "activating", mainPid: "none" }],
-    ["a failed service", { activeState: "failed", mainPid: "none" }],
+    [
+      "a failed service with a replacement generation",
+      {
+        activeState: "failed",
+        generation: "replacement",
+        invocation: "replacement",
+        mainPid: "none",
+      },
+    ],
     ["an inactive service retaining a main PID", { activeState: "inactive", mainPid: "parent" }],
     ["a replaced service unit", { activeState: "inactive", id: "replacement.service" }],
     ["an unloaded service unit", { activeState: "inactive", loadState: "not-found" }],
@@ -197,7 +253,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(
       commands.filter((command) => command.includes("start openclaw-gateway.service")),
     ).toHaveLength(0);
-    expect(state).toEqual({});
+    expect(state).toEqual({ nativeRelease: {} });
     expect(sentinel).toMatchObject({
       payload: {
         status: "skipped",
@@ -238,22 +294,27 @@ export function createManagedServiceManagerFixtureScript(params: {
   return `#!${process.execPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const statePath = ${JSON.stringify(statePath)};
-const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : {};
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 fs.appendFileSync(${JSON.stringify(commandsPath)}, args.join(" ") + "\\n");
 const action = args.find((arg) => ["show", "stop", "reset-failed", "start", "print", "disable", "bootout", "enable", "bootstrap", "kickstart"].includes(arg));
-if (${JSON.stringify(kind)} === "systemd") {
-  if (action === "stop") {
-    state.parked = true;
-    fs.writeFileSync(statePath, JSON.stringify(state));
+void (async () => {
+  if (${JSON.stringify(kind)} === "systemd" && action === "stop") {
+    ${managedServiceStateUpdateScript(statePath, "state.parked = true")};
     for (;;) {
       try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
     }
     sleep(${options?.systemdStopDelayMs ?? 0});
-    ${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
-    state.stopCompleted = true;
+    ${managedServiceStateUpdateScript(
+      statePath,
+      `${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
+      state.stopCompleted = true`,
+    )};
+    return;
   }
+  ${managedServiceStateUpdateScript(
+    statePath,
+    `
+if (${JSON.stringify(kind)} === "systemd") {
   if (action === "reset-failed") state.reset = true;
   if (action === "start" && ${JSON.stringify(options?.systemdFault)} === "start-failed") {
     state.startFailed = true;
@@ -301,11 +362,6 @@ if (${JSON.stringify(kind)} === "systemd") {
     state.loadedPrintsRemaining = ${options?.launchdTeardown?.loadedPrints ?? 0};
     state.pendingBootstrapFailures = ${options?.launchdTeardown?.pendingBootstrapFailures ?? 0};
     state.pendingOperationInProgress = ${options?.launchdTeardown?.pendingOperationInProgress ?? 0};
-    const delay = ${options?.launchdTeardown?.bootoutDelayMs ?? 0};
-    if (delay) setTimeout(() => {
-      state.bootoutCompleted = true;
-      fs.writeFileSync(statePath, JSON.stringify(state));
-    }, delay);
   }
   if (action === "enable") state.disabled = false;
   if (action === "bootstrap" || action === "kickstart") {
@@ -334,8 +390,8 @@ if (${JSON.stringify(kind)} === "systemd") {
       } else {
         state.unloaded = true;
         process.stderr.write("Could not find service\\n");
-        fs.writeFileSync(statePath, JSON.stringify(state));
-        process.exit(113);
+        process.exitCode = 113;
+        return state;
       }
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
@@ -348,7 +404,13 @@ if (${JSON.stringify(kind)} === "systemd") {
     }
   }
 }
-fs.writeFileSync(statePath, JSON.stringify(state));
+  `,
+  )};
+  if (action === "bootout" && ${options?.launchdTeardown?.bootoutDelayMs ?? 0}) {
+    await new Promise((resolve) => setTimeout(resolve, ${options?.launchdTeardown?.bootoutDelayMs ?? 0}));
+    ${managedServiceStateUpdateScript(statePath, "state.bootoutCompleted = true")};
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
 `;
 }
 
@@ -378,23 +440,33 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           meta: { root, handoffId: `${kind}-boundary` },
         })
       : null;
+  // Use the canonical row shape without moving publication ahead of the child.
+  const notificationEnvelope = notification
+    ? parseRestartSentinelEnvelope({ version: 1, payload: notification })
+    : null;
+  if (notification && !notificationEnvelope) {
+    throw new Error("Expected a valid updater notification fixture");
+  }
+  const notificationRow = notificationEnvelope
+    ? buildRestartSentinelRow(notificationEnvelope.payload, notificationEnvelope.payload.ts)
+    : null;
   return [
+    `void (async () => {`,
     `const fs = require("node:fs");`,
     ...(kind === "launchd"
       ? [
-          `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
+          `const state = ${managedServiceStateUpdateScript(statePath, "if (state.unloaded) state.updaterObservedUnloaded = true")};`,
           `if (!state.unloaded) process.exit(19);`,
-          `state.updaterObservedUnloaded = true;`,
-          `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
         ]
       : []),
     `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
-    ...(notification
+    ...(notificationEnvelope && notificationRow
       ? [
-          `const notification = ${JSON.stringify(notification)};`,
+          `const notification = ${JSON.stringify(notificationEnvelope.payload)};`,
+          `const row = ${JSON.stringify(notificationRow)};`,
           `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
-          `db.prepare("INSERT INTO gateway_restart_sentinel (sentinel_key, version, kind, status, ts, stats_json, payload_json, updated_at_ms) VALUES ('current', 1, ?, ?, ?, ?, ?, ?)").run(notification.kind, notification.status, notification.ts, JSON.stringify(notification.stats), JSON.stringify(notification), notification.ts); db.close();`,
-          `{ const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")); state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }; fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state)); }`,
+          `db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();`,
+          `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
           ...(options?.updaterNotification === "consumed" &&
           (updaterResult?.status === "ok" ||
             (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service))
@@ -429,6 +501,7 @@ export function createManagedServiceUpdaterFixtureScript(params: {
         ]
       : []),
     `process.stdout.write(remaining, () => { ${options?.updaterSignal ? 'process.kill(process.pid, "SIGTERM");' : `process.exit(${options?.updaterExitCode ?? 7});`} });`,
+    `})().catch((error) => { console.error(error); process.exitCode = 1; });`,
   ].join("");
 }
 
@@ -482,6 +555,63 @@ export function createManagedServiceCancellationPreload(params: {
       return child;
     };
   }`;
+}
+
+export async function prepareManagedServiceTriageClockPreload(
+  params: { root: string; scriptPath: string; statePath: string },
+  triageCommandArgv: string[],
+  triageInputPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+  const preloadPath = path.join(params.root, "triage-clock-preload.cjs");
+  const commandArgv = [...triageCommandArgv, "--update-result", triageInputPath];
+  // Only the generated helper advances its diagnostic timer. The installed
+  // command, its descendant, recovery, and lease clocks stay native.
+  const source = `if (process.argv[1] === ${JSON.stringify(params.scriptPath)}) {
+    const fs = require("node:fs");
+    const children = require("node:child_process");
+    const spawn = children.spawn;
+    const setTimeout = global.setTimeout;
+    const clearTimeout = global.clearTimeout;
+    const polls = new Map();
+    let diagnostic;
+    let captured = false;
+    children.spawn = (command, args, options) => {
+      const child = spawn(command, args, options);
+      if (command === ${JSON.stringify(commandArgv[0])} &&
+          (args.at(-1) === ${JSON.stringify(JSON.stringify(commandArgv))} ||
+           JSON.stringify(args.slice(-${commandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(commandArgv.slice(1)))})) {
+        diagnostic = child;
+        child.once("close", () => { diagnostic = undefined; });
+      }
+      return child;
+    };
+    global.clearTimeout = (timer) => {
+      clearInterval(polls.get(timer));
+      polls.delete(timer);
+      return clearTimeout(timer);
+    };
+    global.setTimeout = (callback, delay, ...args) => {
+      const timer = setTimeout(callback, delay, ...args);
+      if (!diagnostic || delay !== 60_000) return timer;
+      if (captured) throw new Error("duplicate diagnostic deadline");
+      captured = true;
+      const poll = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))})) return;
+        const descendantPid = Number(fs.readFileSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))}, "utf8"));
+        const state = JSON.parse(fs.readFileSync(${JSON.stringify(params.statePath)}, "utf8"));
+        if (state.triageDescendantPid !== descendantPid) return;
+        process.kill(descendantPid, 0);
+        global.clearTimeout(timer);
+        fs.writeFileSync(${JSON.stringify(path.join(params.root, "triage-deadline.json"))}, JSON.stringify({ requestedMs: delay, descendantPid }));
+        callback.apply(timer, args);
+      }, 5);
+      polls.set(timer, poll);
+      return timer;
+    };
+  }`;
+  await fs.writeFile(preloadPath, source);
+  return { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
 }
 
 export function createManagedServiceLaunchdClockPreload(params: {

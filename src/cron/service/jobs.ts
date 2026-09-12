@@ -184,7 +184,11 @@ function validateFullJob(
   if (context.kind !== "declarative") {
     validateCapabilities();
   }
-  assertMainSessionAgentId(job, context.defaultAgentId);
+  assertMainSessionAgentId(
+    job,
+    context.defaultAgentId,
+    context.kind === "patch" ? context.patch : undefined,
+  );
   assertDeliverySupport(job);
   assertAnnounceDeliveryChannelSupport(
     job,
@@ -229,6 +233,7 @@ export function createJob(
   // Schedule activation is stamped only by committed scheduling mutations.
   // Accepting caller state here would let imports spoof restart catch-up ownership.
   delete initialState.scheduleActivatedAtMs;
+  delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
   assertCronJobStateTimestamps(initialState);
   const job: CronStoredJob = {
@@ -420,6 +425,7 @@ export function applyJobPatch(
     // Runtime state patches may report execution progress, but the scheduler
     // alone owns the boundary that decides whether restart catch-up can run.
     delete statePatch.scheduleActivatedAtMs;
+    delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
     assertCronJobStateTimestamps(statePatch);
     job.state = { ...job.state, ...statePatch };

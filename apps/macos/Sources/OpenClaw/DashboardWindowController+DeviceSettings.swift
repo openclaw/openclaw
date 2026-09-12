@@ -47,10 +47,13 @@ extension DashboardWindowController {
         case let .set(key, value):
             await self.setDeviceSetting(key, value: value)
         case let .requestPermission(id):
-            _ = await PermissionManager.ensure([id.capability], interactive: true)
-            await PermissionMonitor.shared.refreshNow()
+            if let capability = id.capability {
+                _ = await PermissionManager.ensure([capability], interactive: true)
+            }
         case let .openSystemSettings(id):
-            SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: id.capability))
+            if let capability = id.capability {
+                SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: capability))
+            }
         case let .open(panel):
             await self.openDeviceSettingsPanel(panel)
         case .checkForUpdates:
@@ -151,6 +154,8 @@ extension DashboardWindowController {
         case .computerControlEnabled:
             defaults.set(enabled, forKey: computerControlEnabledKey)
             state.applyComputerControlHostState()
+        case .unattendedDesktopEnabled:
+            MacDesktopAvailabilityCoordinator.shared.setUnattendedEnabled(enabled)
         case .locationPrecise:
             defaults.set(enabled, forKey: locationPreciseKey)
         case .triggerChime:
@@ -216,6 +221,7 @@ extension DashboardWindowController {
             guard !Task.isCancelled, self.isWindowOpen else { return }
             switch outcome {
             case .offering: self.show()
+            case .superseded: break
             case let .unavailable(title, message):
                 let alert = NSAlert()
                 alert.messageText = title
@@ -223,6 +229,8 @@ extension DashboardWindowController {
                 alert.addButton(withTitle: String(localized: "OK"))
                 if let window = self.window { alert.beginSheetModal(for: window, completionHandler: nil) }
             }
+        case .diagnostics, .licenses, .about, .watch:
+            break
         case .connection: AppNavigationActions.openConnection()
         case .gateways: AppNavigationActions.openConnection(tab: .gateways)
         case .debug:

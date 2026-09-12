@@ -4,7 +4,10 @@ import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+} from "../../test-helpers/native-device-settings.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { renderUpdates } from "./updates.ts";
 
@@ -84,6 +87,35 @@ beforeEach(async () => {
 });
 
 describe("renderUpdates", () => {
+  it.each(["ios", "waiting"])(
+    "keeps Gateway updates without an advertised device updater: %s",
+    (host) => {
+      const nativeDeviceSettings = {
+        snapshot: host === "ios" ? createIosNativeDeviceSettingsSnapshot() : null,
+        subscribe: () => () => undefined,
+        set: vi.fn(),
+        requestPermission: vi.fn(),
+        openSystemSettings: vi.fn(),
+        openPanel: vi.fn(),
+        checkForUpdates: vi.fn(),
+        installChromeExtension: vi.fn(),
+        refresh: vi.fn(),
+        dispose: vi.fn(),
+      } satisfies NativeDeviceSettingsCapability;
+      const props = createProps({ nativeDeviceSettings });
+      render(renderUpdates(props), container);
+      expect(container.textContent).not.toContain("This Mac");
+      expect(container.textContent).not.toContain("This iPhone");
+      expect(container.textContent).not.toContain("This device");
+      expect(container.textContent).not.toContain("App version");
+      expect(container.textContent).not.toContain("Check for updates automatically");
+      expect(row("Gateway version").textContent).toContain("2026.8.1");
+      row("Update now").querySelector<HTMLButtonElement>("button")?.click();
+      expect(props.onUpdateNow).toHaveBeenCalledOnce();
+      expect(nativeDeviceSettings.checkForUpdates).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
     const nativeDeviceSettings = {
       snapshot: createNativeDeviceSettingsSnapshot(),
@@ -166,7 +198,7 @@ describe("renderUpdates", () => {
     expect(onUpdateNow).toHaveBeenCalledOnce();
   });
 
-  it("shows extended stable only for the exact authored value and disables auto-apply", () => {
+  it("shows extended stable for an authored channel and disables auto-apply", () => {
     render(
       renderUpdates(
         createProps({
@@ -186,6 +218,58 @@ describe("renderUpdates", () => {
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
     expect(automaticRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("reports a configless extended-stable package install by the Gateway channel and gates auto-apply", () => {
+    // A direct `npm install -g openclaw@extended-stable` never writes update.channel;
+    // the Gateway still resolves and publishes extended-stable as the schedule channel.
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { auto: { enabled: true } } },
+          schedule: { channel: "extended-stable", autoEnabled: true, install: { kind: "package" } },
+          updateAvailable: null,
+        }),
+      ),
+      container,
+    );
+
+    const channel = row("Release channel").querySelector<HTMLElement & { value: string }>(
+      "wa-radio-group",
+    );
+    expect(channel?.value).toBe("extended-stable");
+    expect(
+      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+    ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
+    const selected = channel?.querySelector<HTMLElement & { checked: boolean }>(
+      'wa-radio[value="extended-stable"]',
+    );
+    expect(selected?.checked).toBe(true);
+    const automatic = automaticUpdatesControl().toggle;
+    expect(automatic.checked).toBe(false);
+    expect(automatic.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps the authored channel ahead of the Gateway schedule channel", () => {
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { channel: "beta", auto: { enabled: false } } },
+          schedule: { channel: "extended-stable", autoEnabled: true, install: { kind: "package" } },
+          updateAvailable: null,
+        }),
+      ),
+      container,
+    );
+
+    const channel = row("Release channel").querySelector<HTMLElement & { value: string }>(
+      "wa-radio-group",
+    );
+    expect(channel?.value).toBe("beta");
+    expect(
+      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+    ).toEqual(["Stable", "Beta", "Dev"]);
+    expect(automaticUpdatesControl().toggle.hasAttribute("disabled")).toBe(false);
   });
 
   it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {

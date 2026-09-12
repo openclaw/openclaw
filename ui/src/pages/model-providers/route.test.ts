@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
@@ -53,10 +52,10 @@ function createModelsRouter(selectedId: string | null = "main") {
     gateway: store.gateway,
     agents,
     agentSelection: selection,
-  }) as ApplicationContext;
+  }) satisfies Parameters<NonNullable<typeof page.loader>>[0];
   const router = createRouter<
     "model-providers" | "other",
-    ApplicationContext,
+    typeof context,
     null,
     ModelProvidersRouteData
   >({
@@ -67,6 +66,7 @@ function createModelsRouter(selectedId: string | null = "main") {
   });
   cleanups.push(() => {
     router.stop();
+    selection.dispose();
     agents.dispose();
     store.gateway.stop();
   });

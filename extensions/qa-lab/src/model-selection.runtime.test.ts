@@ -36,10 +36,10 @@ describe("qa model selection runtime", () => {
   it("keeps the OpenAI live default when an API key is configured", () => {
     resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
 
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
     expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
-      primaryModel: "openai/gpt-5.6",
-      alternateModel: "openai/gpt-5.6-luna",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-terra",
     });
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
@@ -58,7 +58,7 @@ describe("qa model selection runtime", () => {
 
       expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
         primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-sol",
+        alternateModel: "openai/gpt-5.6-terra",
       });
       expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
         readOnly: true,
@@ -78,11 +78,11 @@ describe("qa model selection runtime", () => {
       },
     });
 
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
   });
 
-  it.each(["openai/gpt-5.6", "openai/gpt-5.6-sol"])(
-    "derives Luna after explicit Sol primary %s",
+  it.each(["openai/gpt-5.6", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra"])(
+    "derives Luna after explicit primary %s",
     (primaryModel) => {
       expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier", primaryModel })).toEqual({
         primaryModel,
@@ -91,7 +91,7 @@ describe("qa model selection runtime", () => {
     },
   );
 
-  it("derives Sol after an explicit Luna primary", () => {
+  it("derives Terra after an explicit Luna primary", () => {
     expect(
       resolveQaRuntimeModelPair({
         providerMode: "live-frontier",
@@ -99,7 +99,7 @@ describe("qa model selection runtime", () => {
       }),
     ).toEqual({
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-sol",
+      alternateModel: "openai/gpt-5.6-terra",
     });
   });
 
@@ -111,7 +111,7 @@ describe("qa model selection runtime", () => {
       }),
     ).toEqual({
       primaryModel: "anthropic/claude-sonnet-4-6",
-      alternateModel: "openai/gpt-5.6",
+      alternateModel: "openai/gpt-5.6-luna",
     });
   });
 

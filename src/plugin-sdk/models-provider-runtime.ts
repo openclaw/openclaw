@@ -9,6 +9,8 @@ import {
 export {
   buildPreparedModelsProviderData,
   formatModelsAvailableHeader,
+  getModelsRuntimeChoices,
+  MODEL_PICKER_CHANGED_MESSAGE,
   resolveModelsCommandReply,
 } from "../auto-reply/reply/commands-models.js";
 export type {

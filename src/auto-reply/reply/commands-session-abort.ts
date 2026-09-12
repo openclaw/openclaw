@@ -8,13 +8,9 @@ import {
   shouldPersistAbortCutoff,
   type AbortCutoff,
 } from "./abort-cutoff.js";
-import {
-  abortSessionRunTargetWithOutcome,
-  formatAbortReplyText,
-  isAbortTrigger,
-  setAbortMemory,
-  stopSubagentsForRequester,
-} from "./abort.js";
+import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./abort-operation.js";
+import { isAbortTrigger, setAbortMemory } from "./abort-primitives.js";
+import { formatAbortReplyText } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
   persistAbortTargetEntry,
@@ -95,6 +91,7 @@ async function applyAbortTarget(params: {
     return abortOutcome;
   }
 
+  await abortOutcome.retirement;
   const persisted = await persistAbortTargetEntry({
     isCurrent: params.isCurrent,
     entry: abortTarget.entry,

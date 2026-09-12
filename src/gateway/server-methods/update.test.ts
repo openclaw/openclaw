@@ -47,7 +47,10 @@ import {
 async function invokeUpdateRun(
   params: Record<string, unknown>,
   respond?: (ok: boolean, response?: unknown) => void,
-  runtimeConfig: OpenClawConfig = { update: {} },
+  runtimeConfig: OpenClawConfig = {
+    update: {},
+    commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
+  },
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
@@ -119,6 +122,20 @@ function mockGitInstallSurface(root: string) {
 describe("update.run acknowledgement", () => {
   const sessionKey = "agent:main:slack:dm:C0123ABC:thread:1234567890.123456";
 
+  it("keeps an operator update out of the selected non-owner chat", async () => {
+    const response = await captureUpdateRunPayload(
+      { sessionKey },
+      { commands: { ownerAllowFrom: ["telegram:12345"] } },
+    );
+    expect(response).toMatchObject({ ok: true, ackDelivered: false, ackQueued: false });
+    expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
+    expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
+    expect(getUpdateRun(expectDefined(response, "update response").runId)).toMatchObject({
+      origin: { sessionKey },
+      verification: { noticeDelivered: false },
+    });
+  });
+
   it.each([false, true])(
     "awaits the chat acknowledgement before updating (managed=%s)",
     async (managed) => {
@@ -188,7 +205,7 @@ describe("update.run acknowledgement", () => {
         expect.objectContaining({
           sessionKey,
           channel: "slack",
-          to: "slack:C0123ABC",
+          to: "C0123ABC",
           threadId: "1234567890.123456",
           message: `⬆️ Updating OpenClaw 1.0.0 → ${managed ? "2.0.0" : "the latest release"}. The gateway stays available while the update is validated; you'll get a message here when it finishes.`,
           deliveryIntentId: expect.stringMatching(/^update-run-ack:/),
@@ -215,7 +232,7 @@ describe("update.run acknowledgement", () => {
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        to: "slack:C0456DEF",
+        to: "C0456DEF",
         message: expect.stringContaining("⚠️ OpenClaw update failed: build-failed."),
       }),
     );

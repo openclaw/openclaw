@@ -11,14 +11,15 @@ import {
 } from "../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import { shouldUseFromAsSenderFallback } from "./sender-identity.js";
 import type { MsgContext } from "./templating.js";
 
@@ -232,28 +233,26 @@ function resolveOwnerAllowFromList(
     return [];
   }
   const filtered: string[] = [];
-  for (const entry of raw) {
-    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
-    if (!trimmed) {
+  for (const trimmed of normalizeStringEntries(raw.map((entry) => entry ?? ""))) {
+    const separatorIndex = trimmed.indexOf(":");
+    const prefix = trimmed.slice(0, separatorIndex);
+    const channel = separatorIndex > 0 ? normalizeAnyChannelId(prefix) : undefined;
+    if (!channel) {
+      filtered.push(trimmed);
       continue;
     }
-    const separatorIndex = trimmed.indexOf(":");
-    if (separatorIndex > 0) {
-      const prefix = trimmed.slice(0, separatorIndex);
-      const channel = normalizeAnyChannelId(prefix);
-      if (channel) {
-        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
-        if (!params.providerId || channel !== params.providerId) {
-          continue;
-        }
-        const remainder = trimmed.slice(separatorIndex + 1).trim();
-        if (remainder) {
-          filtered.push(remainder);
-        }
-        continue;
-      }
+    // Doctor owns bundled channel:user:id migration; third-party native identities stay intact.
+    if (
+      !params.providerId ||
+      channel !== params.providerId ||
+      (normalizeChatChannelId(prefix) && /^[^:]+:user:[^:\s*]+$/i.test(trimmed))
+    ) {
+      continue;
     }
-    filtered.push(trimmed);
+    const remainder = trimmed.slice(separatorIndex + 1).trim();
+    if (remainder) {
+      filtered.push(remainder);
+    }
   }
   return formatAllowFromList({ ...params, allowFrom: filtered });
 }
@@ -378,6 +377,7 @@ function resolveSenderCandidates(
   params: AllowFromParams & {
     senderId?: string | null;
     senderE164?: string | null;
+    commandSenderId?: string;
     from?: string | null;
     chatType?: string | null;
   },
@@ -405,6 +405,7 @@ function resolveSenderCandidates(
     pushCandidate(params.from);
   }
 
+  pushCandidate(params.commandSenderId);
   const normalized: string[] = [];
   for (const sender of candidates) {
     const entries = normalizeAllowFromEntry({ plugin, cfg, accountId, value: sender });
@@ -431,8 +432,8 @@ function resolveFallbackAllowFrom(params: {
     | undefined;
   const channelCfg = channels?.[providerId];
   const accountCfg =
-    resolveFallbackAccountConfig(channelCfg?.accounts, params.accountId) ??
-    resolveFallbackDefaultAccountConfig(channelCfg);
+    resolveFallbackAccountConfig(channelCfg?.accounts, providerId, params.accountId) ??
+    resolveFallbackDefaultAccountConfig(channelCfg, providerId);
   const allowFrom =
     accountCfg?.allowFrom ??
     accountCfg?.dm?.allowFrom ??
@@ -443,29 +444,35 @@ function resolveFallbackAllowFrom(params: {
 
 function resolveFallbackAccountConfig(
   accounts: AllowFromChannelConfig["accounts"],
+  channelId: string,
   accountId?: string | null,
 ) {
   const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
   if (!accounts || !normalizedAccountId) {
     return undefined;
   }
-  // Preserve existing inherited-key precedence before the canonical own-key/case-insensitive lookup.
-  return accounts[normalizedAccountId] ?? resolveAccountEntry(accounts, normalizedAccountId);
+  return resolveChannelAccountEntry(accounts, normalizedAccountId, channelId);
 }
 
-function resolveFallbackDefaultAccountConfig(channelCfg: AllowFromChannelConfig | undefined) {
+function resolveFallbackDefaultAccountConfig(
+  channelCfg: AllowFromChannelConfig | undefined,
+  channelId: string,
+) {
   const accounts = channelCfg?.accounts;
   if (!accounts) {
     return undefined;
   }
   const preferred =
-    resolveFallbackAccountConfig(accounts, channelCfg?.defaultAccount) ??
-    resolveFallbackAccountConfig(accounts, "default");
+    resolveFallbackAccountConfig(accounts, channelId, channelCfg?.defaultAccount) ??
+    resolveFallbackAccountConfig(accounts, channelId, "default");
   if (preferred) {
     return preferred;
   }
-  const definedAccounts = Object.values(accounts).filter(Boolean);
-  return definedAccounts.length === 1 ? definedAccounts[0] : undefined;
+  const definedAccountIds = Object.keys(accounts).filter((id) => accounts[id]);
+  const accountId = definedAccountIds.length === 1 ? definedAccountIds[0] : undefined;
+  return accountId === undefined
+    ? undefined
+    : resolveChannelAccountEntry(accounts, accountId, channelId);
 }
 
 function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
@@ -517,6 +524,7 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     accountId: ctx.AccountId,
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
+    commandSenderId: getCommandSenderAuthority(ctx)?.(),
     from,
     chatType: ctx.ChatType,
   });

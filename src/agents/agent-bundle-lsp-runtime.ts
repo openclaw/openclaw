@@ -32,7 +32,7 @@ type LspSession = {
   process: OwnedStdioProcess;
   requestId: number;
   pendingRequests: ReturnType<typeof createPendingRequestRegistry<number, unknown, undefined>>;
-  buffer: Buffer;
+  input: LspInputBuffer;
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
@@ -75,7 +75,7 @@ function createLspSession(serverName: string, child: OwnedStdioProcess): LspSess
     process: child,
     requestId: 0,
     pendingRequests: createPendingRequestRegistry<number, unknown, undefined>(),
-    buffer: Buffer.alloc(0),
+    input: { buffer: Buffer.alloc(0), length: 0 },
     initialized: false,
     capabilities: {},
     disposed: false,
@@ -147,8 +147,14 @@ class LspFramingError extends Error {
 }
 
 type LspParseResult =
-  | { readonly ok: true; readonly messages: unknown[]; readonly remaining: Buffer }
+  | { readonly ok: true; readonly messages: unknown[]; readonly consumed: number }
   | { readonly ok: false; readonly messages: unknown[]; readonly error: LspFramingError };
+
+type LspInputBuffer = {
+  buffer: Buffer;
+  length: number;
+  body?: { start: number; end: number };
+};
 
 function framingError(messages: unknown[], detail: string): LspParseResult {
   return {
@@ -190,35 +196,38 @@ function parseContentLength(header: string): number | LspFramingError {
   return length;
 }
 
-function parseLspMessages(buffer: Buffer): LspParseResult {
+function parseLspMessages(input: LspInputBuffer): LspParseResult {
   const messages: unknown[] = [];
-  let remaining = buffer;
+  let consumed = 0;
 
   while (true) {
-    const headerEnd = remaining.indexOf(LSP_HEADER_SEPARATOR);
-    if (headerEnd === -1) {
-      const maxIncompleteHeaderBytes = MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length - 1;
-      return remaining.length > maxIncompleteHeaderBytes
-        ? framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`)
-        : { ok: true, messages, remaining };
-    }
-    if (headerEnd > MAX_LSP_HEADER_BYTES) {
-      return framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`);
-    }
+    if (!input.body) {
+      const remaining = input.buffer.subarray(consumed, input.length);
+      const headerEnd = remaining.indexOf(LSP_HEADER_SEPARATOR);
+      if (headerEnd === -1) {
+        const maxIncompleteHeaderBytes = MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length - 1;
+        return remaining.length > maxIncompleteHeaderBytes
+          ? framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`)
+          : { ok: true, messages, consumed };
+      }
+      if (headerEnd > MAX_LSP_HEADER_BYTES) {
+        return framingError(messages, `header exceeds ${MAX_LSP_HEADER_BYTES} bytes`);
+      }
 
-    const contentLength = parseContentLength(remaining.subarray(0, headerEnd).toString("ascii"));
-    if (contentLength instanceof LspFramingError) {
-      return { ok: false, messages, error: contentLength };
+      const contentLength = parseContentLength(remaining.subarray(0, headerEnd).toString("ascii"));
+      if (contentLength instanceof LspFramingError) {
+        return { ok: false, messages, error: contentLength };
+      }
+      const start = consumed + headerEnd + LSP_HEADER_SEPARATOR.length;
+      input.body = { start, end: start + contentLength };
     }
-    const bodyStart = headerEnd + LSP_HEADER_SEPARATOR.length;
-    const bodyEnd = bodyStart + contentLength;
-    if (remaining.length < bodyEnd) {
-      return { ok: true, messages, remaining };
+    if (input.length < input.body.end) {
+      return { ok: true, messages, consumed };
     }
 
     let body: string;
     try {
-      body = LSP_BODY_DECODER.decode(remaining.subarray(bodyStart, bodyEnd));
+      body = LSP_BODY_DECODER.decode(input.buffer.subarray(input.body.start, input.body.end));
     } catch {
       return framingError(messages, "body is not valid UTF-8");
     }
@@ -230,7 +239,8 @@ function parseLspMessages(buffer: Buffer): LspParseResult {
         `body is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    remaining = remaining.subarray(bodyEnd);
+    consumed = input.body.end;
+    input.body = undefined;
   }
 }
 
@@ -298,16 +308,37 @@ function sendRequest(
 }
 
 function handleIncomingData(session: LspSession, chunk: Buffer | string) {
-  session.buffer = Buffer.concat([
-    session.buffer,
-    typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
-  ]);
-  const parsed = parseLspMessages(session.buffer);
-  session.buffer = parsed.ok
-    ? parsed.remaining.length === 0
-      ? Buffer.alloc(0)
-      : Buffer.from(parsed.remaining)
-    : Buffer.alloc(0);
+  const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+  const input = session.input;
+  const length = input.length + bytes.length;
+  if (length > input.buffer.length) {
+    // Grow geometrically while a frame arrives, instead of copying its full
+    // prefix on every stdout chunk. Only input.length bytes are initialized.
+    const capacity = Math.max(
+      length,
+      Math.min(
+        Math.max(4096, input.buffer.length * 2),
+        MAX_LSP_HEADER_BYTES + LSP_HEADER_SEPARATOR.length + MAX_LSP_BODY_BYTES,
+      ),
+    );
+    const buffer = Buffer.allocUnsafe(capacity);
+    input.buffer.copy(buffer, 0, 0, input.length);
+    input.buffer = buffer;
+  }
+  bytes.copy(input.buffer, input.length);
+  input.length = length;
+  const parsed = parseLspMessages(input);
+  if (!parsed.ok || parsed.consumed === input.length) {
+    session.input = { buffer: Buffer.alloc(0), length: 0 };
+  } else if (parsed.consumed > 0) {
+    // Detach the incomplete tail from completed frames and release spare capacity.
+    input.buffer = Buffer.from(input.buffer.subarray(parsed.consumed, input.length));
+    input.length -= parsed.consumed;
+    if (input.body) {
+      input.body.start -= parsed.consumed;
+      input.body.end -= parsed.consumed;
+    }
+  }
 
   for (const msg of parsed.messages) {
     if (typeof msg !== "object" || msg === null) {

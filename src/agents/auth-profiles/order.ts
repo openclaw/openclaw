@@ -17,7 +17,9 @@ import {
   resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
+import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { dedupeProfileIds } from "./profile-list.js";
+import { isSetupCredentialAccessible } from "./setup-access.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
@@ -38,6 +40,20 @@ type AuthProfileEligibility = {
   reasonCode: AuthProfileEligibilityReasonCode;
 };
 
+function isAuthProfileRuntimeSettlementCandidate(params: {
+  credential: AuthProfileCredential | undefined;
+  eligibility: AuthProfileEligibility;
+  includePendingOAuthRefresh?: boolean;
+}): boolean {
+  return (
+    params.eligibility.eligible ||
+    (params.includePendingOAuthRefresh === true &&
+      params.eligibility.reasonCode === "expired" &&
+      params.credential?.type === "oauth" &&
+      isPendingOAuthRefreshFence(params.credential))
+  );
+}
+
 function isProfileProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
@@ -47,6 +63,7 @@ function isProfileProviderCompatibleWithAuthProvider(params: {
   const providerKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
     ...params.authAliasLookupParams,
+    storedCredential: true,
   });
   return providerKey === params.providerAuthKey;
 }
@@ -124,6 +141,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
     resolveProviderIdForAuth(profileConfig.provider, {
       config: params.cfg,
       ...params.authAliasLookupParams,
+      storedCredential: true,
     }) !== providerAuthKey
   ) {
     return false;
@@ -139,6 +157,8 @@ export function resolveAuthProfileEligibility(params: {
   provider: string;
   profileId: string;
   now?: number;
+  /** Runtime resolvers may observe a durable pending refresh through settlement. */
+  includePendingOAuthRefresh?: boolean;
 }): AuthProfileEligibility {
   const providerAuthKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
@@ -157,6 +177,9 @@ export function resolveAuthProfileEligibility(params: {
       return { eligible: true, reasonCode: "ok" };
     }
     return { eligible: false, reasonCode: "profile_missing" };
+  }
+  if (!isSetupCredentialAccessible({ profileId: params.profileId, credential: cred })) {
+    return { eligible: false, reasonCode: "setup_inactive" };
   }
   if (
     !isProfileProviderCompatibleWithAuthProvider({
@@ -191,8 +214,17 @@ export function resolveAuthProfileEligibility(params: {
     credential: cred,
     now: params.now,
   });
+  if (
+    isAuthProfileRuntimeSettlementCandidate({
+      credential: cred,
+      eligibility: credentialEligibility,
+      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
+    })
+  ) {
+    return { eligible: true, reasonCode: "ok" };
+  }
   return {
-    eligible: credentialEligibility.eligible,
+    eligible: false,
     reasonCode: credentialEligibility.reasonCode,
   };
 }
@@ -210,6 +242,8 @@ type ResolveAuthProfileOrderParams = {
   cooldownScope?: "all-models";
   /** Read-only status keeps unresolved refs ordered so availability remains unknown. */
   readinessMode?: "execution" | "read-only";
+  /** Runtime resolvers may observe a durable pending refresh through settlement. */
+  includePendingOAuthRefresh?: boolean;
 };
 
 export type AuthProfileOrderResolution = {
@@ -309,6 +343,7 @@ export function resolveAuthProfileOrderWithMetadata(
       provider,
       profileId,
       now,
+      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
     });
     return (
       eligibility.eligible ||

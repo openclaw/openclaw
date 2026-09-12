@@ -119,6 +119,12 @@ export function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdat
 }
 
 export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
+  protected readonly createProvider = (): never => {
+    throw new Error("Startup catch-up harness does not acquire embedding providers");
+  };
+  protected releaseProvider(): never {
+    throw new Error("Startup catch-up harness does not own embedding providers");
+  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
@@ -354,8 +360,8 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected override listSessionCorpusEntries() {
-    const work = super.listSessionCorpusEntries().then(async (entries) => {
+  protected override listSessionCorpusEntries(options?: { includeContentRevision?: boolean }) {
+    const work = super.listSessionCorpusEntries(options).then(async (entries) => {
       this.corpusListCalls += 1;
       const callback = this.afterNextCorpusList;
       this.afterNextCorpusList = null;

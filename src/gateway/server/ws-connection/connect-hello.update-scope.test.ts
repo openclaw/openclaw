@@ -456,6 +456,7 @@ describe("sendGatewayHello update detail scope", () => {
       GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
     );
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
+    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-model-catalog");
   });
 
   it("reports Gateway build identity separately from configured UI source", async () => {
@@ -506,6 +507,7 @@ describe("sendGatewayHello update detail scope", () => {
     });
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.auth).toEqual({
+      method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
       recoveryMigrationAllowed: true,

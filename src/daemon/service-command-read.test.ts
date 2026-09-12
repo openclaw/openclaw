@@ -124,15 +124,17 @@ describe("native service command inspection", () => {
     it.each(["registered", "unavailable"])(
       "does not infer absence from a missing file when native inspection is %s",
       async (condition) => {
-        native.launchctl.mockResolvedValue(
-          condition === "registered"
-            ? { code: 0, termination: "exit", stdout: "state = waiting", stderr: "" }
-            : {
-                code: 1,
-                termination: "error",
-                stdout: "",
-                stderr: "native-inspection-secret-canary",
-              },
+        native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
+          args[1]?.startsWith("system/")
+            ? { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" }
+            : condition === "registered"
+              ? { code: 0, termination: "exit", stdout: "state = waiting", stderr: "" }
+              : {
+                  code: 1,
+                  termination: "error",
+                  stdout: "",
+                  stderr: "native-inspection-secret-canary",
+                },
         );
         native.scheduler.mockReturnValue(
           condition === "registered"

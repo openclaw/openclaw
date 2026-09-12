@@ -3,7 +3,7 @@
  * thinking, cache points, images, and usage into Bedrock Converse Stream calls.
  */
 import {
-  CachePointType,
+  type CachePointBlock,
   CacheTTL,
   BedrockRuntimeClient,
   type BedrockRuntimeClientConfig,
@@ -57,6 +57,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
+  bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -76,10 +77,19 @@ import {
   failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
-import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
+import {
+  resolveBedrockCachePoint,
+  resolveBedrockPromptCachePolicy,
+  type BedrockOptions,
+} from "./bedrock-options.js";
+import {
+  resolveBedrockClaudeThinkingProfile,
+  supportsBedrockNativeMaxEffort,
+} from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
   index?: number;
@@ -259,7 +269,8 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     let client: BedrockRuntimeClient | undefined;
     try {
       client = new BedrockRuntimeClient(config);
-      const cacheRetention = resolveCacheRetention(options.cacheRetention);
+      const cacheRetention = resolveCacheRetention(model, options.cacheRetention);
+      const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
         ?.thinking;
@@ -269,8 +280,8 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         (thinking as { type?: unknown }).type === "adaptive";
       let commandInput = {
         modelId: model.id,
-        messages: convertMessages(context, model, cacheRetention),
-        system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
+        messages: convertMessages(context, model, cachePoint),
+        system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
           ...(options.temperature !== undefined &&
@@ -486,16 +497,12 @@ function resolveSimpleBedrockOptions(
     return {
       ...base,
       maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-      reasoning: options?.reasoning === "off" ? "low" : (options?.reasoning ?? "high"),
+      reasoning: options?.reasoning,
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
   }
   if (!options?.reasoning) {
-    const reasoning =
-      usesClaudeOpus5BedrockContract(model) ||
-      (isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model))
-        ? "high"
-        : undefined;
+    const reasoning = usesClaudeOpus5BedrockContract(model) ? "high" : undefined;
     return {
       ...base,
       ...(reasoning !== undefined || supportsAdaptiveThinking(model)
@@ -825,6 +832,25 @@ function requiresMandatoryAdaptiveThinking(model: Model<"bedrock-converse-stream
   );
 }
 
+function resolveMandatoryAdaptiveDefault(model: Model<"bedrock-converse-stream">): ThinkingLevel {
+  const defaultLevel =
+    resolveBedrockClaudeThinkingProfile(model.id, model.params).defaultLevel ??
+    resolveBedrockClaudeThinkingProfile(resolveClaudeProfileNameModelId(model.name) ?? "")
+      .defaultLevel;
+  switch (defaultLevel) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return defaultLevel;
+    default:
+      // Adaptive is a picker mode; the Bedrock payload needs a scalar effort.
+      return "high";
+  }
+}
+
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
   const profileModelId = resolveClaudeProfileNameModelId(model.name);
   return (
@@ -872,11 +898,17 @@ function mapThinkingLevelToEffort(
 
 /**
  * Resolve cache retention preference.
- * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
+ * Nova requires explicit opt-in; other models retain the existing env/default policy.
  */
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+function resolveCacheRetention(
+  model: Model<"bedrock-converse-stream">,
+  cacheRetention?: CacheRetention,
+): CacheRetention {
   if (cacheRetention) {
     return cacheRetention;
+  }
+  if (resolveBedrockPromptCachePolicy(model) === "nova") {
+    return "none";
   }
   if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
     return "long";
@@ -890,9 +922,6 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
  * whose ARNs don't contain the model name.
  */
 function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolean {
-  if (usesClaudeFable5BedrockContract(model)) {
-    return true;
-  }
   if (resolveClaudeModelIdentity(model).startsWith("claude-")) {
     return true;
   }
@@ -904,14 +933,6 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
     name.includes("anthropic.claude") ||
     name.includes("anthropic/claude") ||
     name.includes("claude")
-  );
-}
-
-function supportsPromptCaching(model: Model<"bedrock-converse-stream">): boolean {
-  return (
-    usesClaudeFable5BedrockContract(model) ||
-    supportsBedrockPromptCaching(model.id, model.name) ||
-    supportsBedrockPromptCaching(resolveClaudeModelIdentity(model), model.name)
   );
 }
 
@@ -929,26 +950,30 @@ function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boo
 
 function buildSystemPrompt(
   systemPrompt: string | undefined,
-  model: Model<"bedrock-converse-stream">,
   cacheRetention: CacheRetention,
+  cachePoint: CachePointBlock | undefined,
 ): SystemContentBlock[] | undefined {
   if (!systemPrompt) {
     return undefined;
   }
 
-  const blocks: SystemContentBlock[] = [{ text: sanitizeSurrogates(systemPrompt) }];
+  if (cacheRetention === "none") {
+    return [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(systemPrompt)) }];
+  }
+  const split = splitSystemPromptCacheBoundary(systemPrompt);
+  const stablePrefix = split?.stablePrefix ?? systemPrompt;
+  const blocks: SystemContentBlock[] = stablePrefix
+    ? [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(stablePrefix)) }]
+    : [];
 
-  // Add cache point for supported Claude models when caching is enabled
-  if (cacheRetention !== "none" && supportsPromptCaching(model)) {
-    blocks.push({
-      cachePoint: {
-        type: CachePointType.DEFAULT,
-        ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
-      },
-    });
+  if (stablePrefix && cachePoint) {
+    blocks.push({ cachePoint });
   }
 
-  return blocks;
+  if (split?.dynamicSuffix) {
+    blocks.push({ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(split.dynamicSuffix)) });
+  }
+  return blocks.length > 0 ? blocks : undefined;
 }
 
 function normalizeToolCallId(id: string): string {
@@ -983,7 +1008,7 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
-  cacheRetention: CacheRetention,
+  cachePoint: CachePointBlock | undefined,
 ): Message[] {
   const result: Message[] = [];
   let firstVolatileMessageIndex: number | undefined;
@@ -1014,7 +1039,11 @@ function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        if (m.runtimeContextCarrier === true && firstVolatileMessageIndex === undefined) {
+        if (
+          m.runtimeContextCarrier === true &&
+          !bindsClaudeThinkingPrefix(model) &&
+          firstVolatileMessageIndex === undefined
+        ) {
           firstVolatileMessageIndex = result.length;
         }
         result.push({
@@ -1152,23 +1181,14 @@ function convertMessages(
 
   // Cache points include their entire prefix, so anchors after transient runtime
   // context would still cache volatile bytes even when those anchors are stable.
-  if (
-    cacheRetention !== "none" &&
-    supportsPromptCaching(model) &&
-    result.at(-1)?.role === ConversationRole.USER
-  ) {
+  if (cachePoint && result.at(-1)?.role === ConversationRole.USER) {
     const cacheAnchor = result.findLast(
       (message, index) =>
         message.role === ConversationRole.USER &&
         (firstVolatileMessageIndex === undefined || index < firstVolatileMessageIndex),
     );
     if (cacheAnchor?.content) {
-      cacheAnchor.content.push({
-        cachePoint: {
-          type: CachePointType.DEFAULT,
-          ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
-        },
-      });
+      cacheAnchor.content.push({ cachePoint });
     }
   }
 
@@ -1305,14 +1325,15 @@ function buildAdditionalModelRequestFields(
   options: BedrockOptions,
 ): DocumentType | undefined {
   // Mandatory-adaptive Claude routes preserve the public `off` control by
-  // lowering effort instead of silently falling back to the route's high default.
+  // lowering effort instead of silently falling back to the route's default.
   const mandatoryAdaptiveThinking = requiresMandatoryAdaptiveThinking(model);
   const reasoning =
     options.reasoning === "off"
       ? mandatoryAdaptiveThinking
         ? "low"
         : "off"
-      : (options.reasoning ?? (mandatoryAdaptiveThinking ? "high" : undefined));
+      : (options.reasoning ??
+        (mandatoryAdaptiveThinking ? resolveMandatoryAdaptiveDefault(model) : undefined));
   if (reasoning === "off") {
     return undefined;
   }

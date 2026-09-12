@@ -17,7 +17,11 @@ import {
   hasRetainedManagedNpmInstallMarker,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "../plugins/managed-npm-retention.js";
-import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import {
+  createPluginCache,
+  runOutsidePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairStaleManagedNpmInstallGenerations } from "./doctor-plugin-generations.js";
@@ -68,43 +72,51 @@ afterEach(() => {
 });
 
 describe("doctor managed npm generation repair", () => {
-  it("does not restore records repaired in another metadata scope", async () => {
-    const stateDir = tempDirs.make("openclaw-doctor-plugin-scope-");
-    const env = {
-      ...process.env,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    await writePersistedInstalledPluginIndexInstallRecords(
-      {
-        stale: {
-          source: "path",
-          installPath: path.join(stateDir, "removed-plugin"),
-          sourcePath: path.join(stateDir, "removed-plugin"),
+  it.each([false, true])(
+    "does not restore repaired records (independent writer: %s)",
+    async (independentWriter) => {
+      const stateDir = tempDirs.make("openclaw-doctor-plugin-scope-");
+      const env = {
+        ...process.env,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      await writePersistedInstalledPluginIndexInstallRecords(
+        {
+          stale: {
+            source: "path",
+            installPath: path.join(stateDir, "removed-plugin"),
+            sourcePath: path.join(stateDir, "removed-plugin"),
+          },
         },
-      },
-      { stateDir, candidates: [] },
-    );
-
-    await withPluginCache(createPluginCache(), async () => {
-      expect(await loadInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty("stale");
-      await withPluginCache(createPluginCache(), () =>
-        writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, candidates: [] }),
-      );
-      expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty(
-        "stale",
+        { stateDir, candidates: [] },
       );
 
-      await maybeRepairPluginRegistryState({
-        config: {},
-        env,
-        prompter: { shouldRepair: true },
-        stateDir,
+      await withPluginCache(createPluginCache(), async () => {
+        expect(await loadInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty("stale");
+        const write = () =>
+          withPluginCache(createPluginCache(), () =>
+            writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, candidates: [] }),
+          );
+        await (independentWriter ? runOutsidePluginCache(write) : write());
+        const retained = readPersistedInstalledPluginIndexInstallRecords({ stateDir });
+        if (independentWriter) {
+          expect(retained).toHaveProperty("stale");
+        } else {
+          expect(retained).toEqual({});
+        }
+
+        await maybeRepairPluginRegistryState({
+          config: {},
+          env,
+          prompter: { shouldRepair: true },
+          stateDir,
+        });
       });
-    });
 
-    expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({});
-  });
+      expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({});
+    },
+  );
 
   it("retires the stale flat install and prunes it after gateway shutdown", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
@@ -169,7 +181,7 @@ describe("doctor managed npm generation repair", () => {
       stateDir,
     });
 
-    const persisted = await readPersistedInstalledPluginIndexInstallRecords({ stateDir });
+    const persisted = readPersistedInstalledPluginIndexInstallRecords({ stateDir });
     expect(persisted?.[PLUGIN_ID]?.installPath).toBe(activePackageDir);
     expect(hasRetainedManagedNpmInstallMarker(stalePackageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "./vitest.commands-light-paths.mjs";
+import { gatewayPluginTestFiles } from "./vitest.gateway-server-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
@@ -148,6 +149,7 @@ export const forcedUnitFastTestFiles = [
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",
+  "test/scripts/pr-ci-sweeper.reopen-timer.test.ts",
 ];
 const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);
 const unitFastCandidateExactFiles = [...pluginSdkLightTestFiles, ...commandsLightTestFiles];
@@ -158,6 +160,7 @@ const broadUnitFastCandidateGlobs = [
   "test/**/*.test.ts",
 ];
 const ownerRoutedUnitTestPatterns = [
+  ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
   // Real Git process-tree fixtures stay in serial tooling even when their
   // subprocess harness moves into shared test support.

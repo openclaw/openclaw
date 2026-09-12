@@ -58,6 +58,7 @@ import {
   waitForExecScope,
 } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -1070,10 +1071,14 @@ describe("worker runtime", () => {
 
   it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
     const { gateway, workspaceDir, launch } = await setup();
+    const canonicalWorkspaceDir = await realpath(workspaceDir);
     const promptDir = path.join(workspaceDir, ".openclaw");
     const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
     await mkdir(promptDir);
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
+    for (const name of ["SOUL.md", "IDENTITY.md", "USER.md", "BOOTSTRAP.md", "MEMORY.md"]) {
+      await writeFile(path.join(workspaceDir, name), "unselected-workspace-bootstrap-marker");
+    }
     await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
     await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
     await writeFile(literalPrompt, "unrequested-file-contents");
@@ -1081,7 +1086,17 @@ describe("worker runtime", () => {
       launch.assignment.systemPrompt = literalPrompt;
     }
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFileFollowingParents");
+    try {
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      expect(
+        openedFiles.mock.calls
+          .map(([params]) => params.absolutePath)
+          .filter((filePath) => path.dirname(filePath) === canonicalWorkspaceDir),
+      ).toEqual([path.join(canonicalWorkspaceDir, "AGENTS.md")]);
+    } finally {
+      openedFiles.mockRestore();
+    }
 
     const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
     expect(prompt).toContain("prepared-worker-context");
@@ -1089,6 +1104,7 @@ describe("worker runtime", () => {
     expect.soft(prompt).not.toContain("ambient-system-marker");
     expect.soft(prompt).not.toContain("ambient-append-marker");
     expect.soft(prompt).not.toContain("unrequested-file-contents");
+    expect.soft(prompt).not.toContain("unselected-workspace-bootstrap-marker");
     if (extra) {
       expect.soft(prompt).toContain(literalPrompt);
     }

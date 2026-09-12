@@ -1,5 +1,6 @@
 // Outbound send service chooses plugin-handled message actions or the core
 // message/poll path while preserving media policy and transcript mirrors.
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -143,6 +144,7 @@ async function sendCoreMessage(params: {
       await params.ctx.input.onDeliveryResult?.(evidence);
     },
     onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
     skipQueue: params.ctx.input.skipQueue,
     onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
@@ -202,7 +204,9 @@ async function tryHandleWithPluginAction(params: {
   if (!handled) {
     return null;
   }
-  await params.onHandled?.();
+  if (projectPluginMessageDeliveryFact(handled)?.status !== "suppressed") {
+    await params.onHandled?.();
+  }
   return {
     handledBy: "plugin",
     payload: extractToolPayload(handled),
@@ -240,6 +244,13 @@ function createChannelActionContext(params: {
     gateway: params.ctx.gateway,
     toolContext: params.ctx.input.toolContext,
     dryRun: params.ctx.dryRun,
+    ...(params.action === "send"
+      ? {
+          onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+          assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
+          skipQueue: params.ctx.input.skipQueue,
+        }
+      : {}),
   };
 }
 

@@ -1,9 +1,5 @@
 // Signal helper module supports config schema behavior.
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  resolveAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   buildChannelConfigSchema,
   buildChannelReactionShape,
@@ -13,11 +9,11 @@ import {
   ChannelSendReadReceiptsSchema,
   ExecutableTokenSchema,
   ReplyToModeSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SIGNAL_RETIRED_TRANSPORT_KEYS = [
@@ -154,49 +150,18 @@ const SignalConfigSchemaBase = SignalAccountSchemaBase.extend({
 type SignalConfigValidationValue = z.infer<typeof SignalConfigSchemaBase>;
 
 function validateSignalConfigAllowFrom(value: SignalConfigValidationValue, ctx: z.RefinementCtx) {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
-  });
+  refineChannelDmPolicy({ channelId: "signal", value, ctx });
 
   for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
     if (!account) {
       continue;
     }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="open" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="allowlist" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to contain at least one sender ID',
-    });
+    refineChannelDmPolicy({ channelId: "signal", value, accountId, ctx });
   }
 }
 
 function validateSignalContainerAccounts(value: SignalConfigValidationValue, ctx: z.RefinementCtx) {
-  const defaultAccount = resolveAccountEntry(value.accounts, DEFAULT_ACCOUNT_ID);
+  const defaultAccount = resolveSignalAccountEntry(value.accounts, DEFAULT_ACCOUNT_ID);
   const effectiveDefaultAccount =
     defaultAccount?.account === undefined ? value.account : defaultAccount.account;
   const channelEnabled = value.enabled !== false;

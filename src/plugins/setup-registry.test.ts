@@ -26,15 +26,24 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-// plugin-module-loader-cache prefers native require() for compiled .js before
-// falling back to jiti. These tests script plugin-loading behavior through the
-// source-transform mock, so force the fallback path and keep the fixture
-// transformer authoritative.
-vi.mock("./native-module-require.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./native-module-require.js")>()),
-  isJavaScriptModulePath: (_modulePath: string) => false,
-  tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
-}));
+// Registry tests script exports at module binding; real setup ownership stays active.
+vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-module-loader-cache.js")>();
+  return {
+    ...actual,
+    bindPluginInstanceModuleLoader: (
+      params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
+    ) =>
+      params.instance.bindModuleLoader(
+        actual.getCachedPluginModuleLoader({
+          modulePath: params.source,
+          importerUrl: import.meta.url,
+          tryNative: false,
+          createLoader: getRegistryJitiMocks().createJiti,
+        }),
+      ),
+  };
+});
 
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
@@ -49,25 +58,6 @@ let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
-let setPluginSetupRegistryModuleLoaderFactoryForTest: typeof import("./setup-registry.test-fixtures.js").setPluginSetupRegistryModuleLoaderFactoryForTest;
-
-function forceNodeRuntimeVersionsForTest(): () => void {
-  const originalVersions = process.versions;
-  const nodeVersions = { ...originalVersions } as NodeJS.ProcessVersions & {
-    bun?: string | undefined;
-  };
-  delete nodeVersions.bun;
-  Object.defineProperty(process, "versions", {
-    configurable: true,
-    value: nodeVersions,
-  });
-  return () => {
-    Object.defineProperty(process, "versions", {
-      configurable: true,
-      value: originalVersions,
-    });
-  };
-}
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
@@ -217,7 +207,7 @@ function firstRecordArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unkno
 }
 
 afterEach(() => {
-  setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+  clearPluginSetupRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -239,27 +229,20 @@ describe("setup-registry module loader", () => {
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
     } = await import("./setup-registry.js"));
-    ({ clearPluginSetupRegistryCache, setPluginSetupRegistryModuleLoaderFactoryForTest } =
-      await import("./setup-registry.test-fixtures.js"));
-    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    ({ clearPluginSetupRegistryCache } = await import("./setup-registry.test-fixtures.js"));
+    clearPluginSetupRegistryCache();
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
-      diagnostics: [],
-    });
-    const restoreVersions = forceNodeRuntimeVersionsForTest();
-
-    try {
-      withMockedWindowsPlatform(() => {
-        resolvePluginSetupRegistry({
-          workspaceDir: pluginRoot,
-          env: {},
-        });
-      });
-    } finally {
-      restoreVersions();
-    }
+    const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
+    const source = path.join(pluginRoot, "setup-api.js");
+    withMockedWindowsPlatform(() =>
+      getCachedPluginModuleLoader({
+        modulePath: source,
+        importerUrl: import.meta.url,
+        tryNative: false,
+        createLoader: mocks.createJiti,
+      })(source),
+    );
 
     windowsSourceTransformCase = {
       expectedFilename: pathToFileURL(path.join(pluginRoot, "setup-api.js"), {
@@ -268,16 +251,16 @@ describe("setup-registry module loader", () => {
       filename: mockArg(mocks.createJiti, 0, 0),
       options: requireRecord(mockArg(mocks.createJiti, 0, 1)),
     };
-    setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+    clearPluginSetupRegistryCache();
   });
 
   beforeEach(() => {
     resetRegistryJitiMocks();
     setupRegistryWarn.mockReset();
-    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    clearPluginSetupRegistryCache();
   });
 
-  it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
+  it("uses safe Windows paths for explicitly transformed module loads", () => {
     expect(windowsSourceTransformCase.filename).toBe(windowsSourceTransformCase.expectedFilename);
     expect(windowsSourceTransformCase.options.tryNative).toBe(false);
   });
@@ -361,6 +344,58 @@ describe("setup-registry module loader", () => {
 
     expect(resolvePluginSetupProviderCore({ provider: "fixture", env: {} })?.label).toBe(
       expectedLabel,
+    );
+  });
+
+  it("executes canonical dist setup entries instead of their staging wrappers", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "extensions", "fixture");
+    const sourceSetup = path.join(pluginRoot, "setup-api.ts");
+    const stagingSetup = path.join(
+      packageRoot,
+      "dist-runtime",
+      "extensions",
+      "fixture",
+      "setup-api.js",
+    );
+    const canonicalSetup = path.join(packageRoot, "dist", "extensions", "fixture", "setup-api.js");
+    for (const setupPath of [sourceSetup, stagingSetup, canonicalSetup]) {
+      fs.mkdirSync(path.dirname(setupPath), { recursive: true });
+      fs.writeFileSync(setupPath, "export default {};\n", "utf8");
+    }
+    fs.writeFileSync(
+      path.join(path.dirname(stagingSetup), "package.json"),
+      JSON.stringify({ openclaw: { setupEntry: "./setup-api.js" } }),
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "fixture",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          setupSource: sourceSetup,
+          setup: { providers: [{ id: "fixture" }] },
+        },
+      ],
+      diagnostics: [],
+    });
+    const canonicalRealPath = fs.realpathSync(canonicalSetup);
+    mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
+      default: {
+        register(api: {
+          registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+        }) {
+          api.registerProvider({
+            id: "fixture",
+            label: modulePath === canonicalRealPath ? "canonical" : "staging",
+            auth: [],
+          });
+        },
+      },
+    }));
+
+    expect(resolvePluginSetupProviderCore({ provider: "fixture", env: {} })?.label).toBe(
+      "canonical",
     );
   });
 

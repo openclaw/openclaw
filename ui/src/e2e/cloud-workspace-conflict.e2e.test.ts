@@ -270,7 +270,9 @@ suite.define(() => {
           await page.reload();
           await notice.waitFor({ timeout: 10_000 });
           expect(await notice.count()).toBe(1);
+          expect(await notice.locator(".chat-sender-name").textContent()).toBe("Error");
           await gateway.waitForRequest("chat.startup");
+          await notice.hover();
           await capture(page, `04-${customType}-history.png`);
         },
       );

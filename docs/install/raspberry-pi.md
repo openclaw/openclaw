@@ -60,7 +60,8 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
     sudo apt update && sudo apt upgrade -y
     sudo apt install -y git curl build-essential
 
-    # Set timezone (important for cron and reminders)
+    # Set your timezone (important for cron and reminders).
+    # Replace America/Chicago with your own IANA zone (`timedatectl list-timezones`).
     sudo timedatectl set-timezone America/Chicago
     ```
 
@@ -137,7 +138,7 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 **Enable module compile cache** -- Speeds up repeated CLI invocations on lower-power Pi hosts. `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, avoiding extra process handoffs and keeping PID tracking simple on small hosts:
 
 ```bash
-grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
+grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF'
 export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
 mkdir -p /var/tmp/openclaw-compile-cache
 export OPENCLAW_NO_RESPAWN=1
@@ -197,13 +198,17 @@ OpenClaw state lives under:
 - `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions.
 - `~/.openclaw/workspace/` -- agent workspace (SOUL.md, memory, artifacts).
 
-These survive reboots and benefit from SSD over SD card for both performance and longevity. Take a portable snapshot with:
+These survive reboots and benefit from SSD over SD card for both performance and longevity. Create a backup archive with:
 
 ```bash
 openclaw backup create
 openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
+Absolute symbolic links keep their original target locations, including links
+to separately backed-up config or credentials. Review these links before
+activating state on another host or at another path; see the
+[backup symbolic-link caveat](/cli/backup#what-gets-backed-up).
 Restore verifies and extracts into a fresh staging directory; activation is a
 separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
 for the rollback warnings and activation sequence.

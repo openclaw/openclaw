@@ -186,7 +186,8 @@ function loadGatewayGeneration(
   pluginIds: string[] = [],
   pluginMetadataSnapshot?: ReturnType<typeof publishMetadata>,
 ) {
-  return loadGatewayPlugins({
+  const { pluginRegistry } = loadGatewayPlugins({
+    loadIntent: "startup",
     cfg: fixture.config,
     activationSourceConfig: fixture.config,
     autoEnabledReasons: {},
@@ -195,7 +196,9 @@ function loadGatewayGeneration(
     pluginMetadataSnapshot,
     baseMethods: [],
     log,
-  }).pluginRegistry;
+  });
+  setActivePluginRegistry(pluginRegistry);
+  return pluginRegistry;
 }
 
 const speechProviders = (cfg: OpenClawConfig) =>
@@ -680,6 +683,7 @@ describe("capability loading from a Gateway generation", () => {
         },
       });
       const registry = loadGatewayPlugins({
+        loadIntent: "startup",
         cfg: fixture.config,
         activationSourceConfig: fixture.config,
         autoEnabledReasons: {},
@@ -694,6 +698,7 @@ describe("capability loading from a Gateway generation", () => {
           metrics: { ...startupSnapshot.metrics, startupPlanMs: 0, startupPluginCount: 1 },
         },
       }).pluginRegistry;
+      setActivePluginRegistry(registry);
       expect(getPluginRuntimeLoadContext(registry)?.metadataSnapshot).toBe(snapshot);
       expect(registry.plugins).toContainEqual(
         expect.objectContaining({ id: "fixture-seed", status: "loaded" }),

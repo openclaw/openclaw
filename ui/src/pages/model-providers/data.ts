@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 // Merges gateway provider signals (auth status, live usage/quota, local session
 // cost) into one card list for the Models settings page.
 import type {
@@ -40,6 +41,16 @@ export type ModelProviderLogoutTarget = {
   profileIds: string[];
 };
 
+export type ModelProviderPendingLogout = {
+  cardId: string;
+  label: string;
+  target: ModelProviderLogoutTarget;
+};
+
+export type ModelProviderProfileOrderLock = NonNullable<
+  ModelAuthStatusProvider["profileOrderLocked"]
+>;
+
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
@@ -54,11 +65,22 @@ export type ModelProviderCard = {
   displayName: string;
   auth?: ModelProviderAuthSummary;
   profiles: ModelAuthStatusProfile[];
+  /** Gateway auth owner used for priority changes to each visible profile. */
+  profileProviderIds: Record<string, string>;
+  /** Explicit priority, or inventory order while selection is automatic, by auth owner. */
+  profileOrders: Record<string, string[]>;
+  /** Auth owners with explicit priority, including inherited and configured orders. */
+  profileOrderExplicitProviders: string[];
+  /** Auth owners whose stored priority can be reset. */
+  profileOrderStoredProviders: string[];
+  /** Configuration owner that pins priority for each auth owner. */
+  profileOrderLocks: Record<string, ModelProviderProfileOrderLock>;
   apiKey?: ModelAuthStatusProvider["apiKey"];
   hasConfigApiKey: boolean;
   modelCount: number;
   availableModelCount: number;
   catalogStatus?: ModelCatalogProviderOutcome["status"];
+  checkingModels?: boolean;
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
   /** Locally-computed session spend for the requested window. */
@@ -69,6 +91,7 @@ type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   providerOutcomes?: ModelCatalogProviderOutcome[];
+  pendingProviders?: readonly string[];
   configProviderIds?: string[] | null;
   configApiKeyProviderIds?: string[] | null;
   configProviderAuthModes?: Record<string, string> | null;
@@ -122,6 +145,11 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       id,
       displayName,
       profiles: [],
+      profileProviderIds: {},
+      profileOrders: {},
+      profileOrderExplicitProviders: [],
+      profileOrderStoredProviders: [],
+      profileOrderLocks: {},
       credentialProviderIds: [],
       logoutTargets: [],
       hasConfigApiKey: false,
@@ -171,6 +199,8 @@ function addLogoutTarget(
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
   const apiKeyCapabilities = new Map<string, boolean>();
+  const profileOrdersByAuthProvider = new Map<string, string[]>();
+  const explicitOrderProviders = new Set<string>();
   for (const capability of input.authStatus?.providerCapabilities ?? []) {
     const id = canonicalProviderId(capability.provider);
     if (!id) {
@@ -252,6 +282,29 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
     draft.card.displayName = provider.displayName || draft.card.displayName;
     draft.card.profiles.push(...provider.profiles);
+    if (provider.profiles.length > 0) {
+      const authProvider = provider.authProvider || provider.provider;
+      for (const profile of provider.profiles) {
+        draft.card.profileProviderIds[profile.profileId] = authProvider;
+      }
+      if (provider.profileOrder !== undefined) {
+        explicitOrderProviders.add(authProvider);
+      }
+      const order = provider.profileOrder ?? provider.profiles.map((profile) => profile.profileId);
+      profileOrdersByAuthProvider.set(authProvider, [
+        ...new Set([...(profileOrdersByAuthProvider.get(authProvider) ?? []), ...order]),
+      ]);
+      draft.card.profileOrders[authProvider] = order;
+      if (
+        provider.profileOrderStored === true &&
+        !draft.card.profileOrderStoredProviders.includes(authProvider)
+      ) {
+        draft.card.profileOrderStoredProviders.push(authProvider);
+      }
+      if (provider.profileOrderLocked !== undefined) {
+        draft.card.profileOrderLocks[authProvider] ??= provider.profileOrderLocked;
+      }
+    }
     if (provider.apiKey || provider.profiles.length > 0) {
       addProviderId(draft.card.credentialProviderIds, provider.provider);
     }
@@ -275,6 +328,18 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         ...(usage.plan ? { plan: usage.plan } : {}),
         ...(usage.billing?.length ? { billing: usage.billing } : {}),
       };
+    }
+  }
+
+  for (const draft of drafts) {
+    draft.card.profileOrderExplicitProviders = Object.keys(draft.card.profileOrders).filter(
+      (provider) => explicitOrderProviders.has(provider),
+    );
+    for (const authProvider of Object.keys(draft.card.profileOrders)) {
+      const completeOrder = profileOrdersByAuthProvider.get(authProvider);
+      if (completeOrder) {
+        draft.card.profileOrders[authProvider] = completeOrder;
+      }
     }
   }
 
@@ -339,6 +404,11 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       return Object.assign(
         {},
         draft.card,
+        {
+          checkingModels: input.pendingProviders?.some(
+            (id) => canonicalProviderId(id) === draft.card.id,
+          ),
+        },
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );
@@ -380,6 +450,14 @@ export function buildSelectableDefaultModels(
   for (const ref of selected) {
     if (seen.has(ref)) {
       continue;
+    }
+    const { model: modelRef, profile } = splitTrailingAuthProfile(ref);
+    if (profile) {
+      const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
+      if (match) {
+        selectable.push({ ...match, selectionRef: ref });
+        continue;
+      }
     }
     const slash = ref.indexOf("/");
     if (slash <= 0 || slash === ref.length - 1) {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { assertAuthProfileMigrationReady } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
   resolveAuthProfileEligibility,
@@ -1621,7 +1622,8 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       },
     });
 
-    expect(result.configOwnerMigrationApplied).toBe(false);
+    expect(result.blockedProfileIds).toEqual(new Set(["openai-codex:default"]));
+    expect(result.migratedProfileIds).toContain("openai:later");
     expect(result.warnings).toEqual([expect.stringContaining("SQLite verification failed")]);
     expect(fs.existsSync(configAuthPath)).toBe(true);
     expect(fs.existsSync(laterAuthPath)).toBe(false);
@@ -2207,7 +2209,8 @@ describe("legacy flat profiles through the canonical auth migration owner", () =
     expect(fs.existsSync(authPath)).toBe(false);
   });
 
-  it("reports legacy flat stores without rewriting when repair is declined", async () => {
+  it("reports affected providers without writing, then imports only after repair approval", async () => {
+    const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
     const state = await makeTestState();
     const legacy = {
       openai: {
@@ -2215,6 +2218,7 @@ describe("legacy flat profiles through the canonical auth migration owner", () =
       },
     };
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, state.agentDir());
 
     const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},
@@ -2225,6 +2229,29 @@ describe("legacy flat profiles through the canonical auth migration owner", () =
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([]);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(legacy);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("affected providers: openai"),
+      "Auth profile SQLite migration",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw doctor --fix"),
+      "Auth profile SQLite migration",
+    );
+    note.mockRestore();
+    const repaired = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+    });
+    expect(repaired.warnings).toEqual([]);
+    expect(
+      loadPersistedAuthProfileStore(state.agentDir())?.profiles["openai:default"],
+    ).toMatchObject({
+      type: "api_key",
+      provider: "openai",
+      key: "sk-openai",
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expectMigratedArchive(authPath);
   });
 
   it("moves aws-sdk auth profile markers into config metadata", async () => {
@@ -2325,7 +2352,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy OpenAI Codex auth profile config to the canonical OpenAI provider.",
+      "Migrated legacy auth profile config to canonical providers.",
     ]);
     expect(result.config.auth?.profiles).toEqual({
       "openai:default": {
@@ -2376,7 +2403,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy OpenAI Codex auth profile config to the canonical OpenAI provider.",
+      "Migrated legacy auth profile config to canonical providers.",
     ]);
     expect(result.config.auth?.order).toEqual({
       openai: ["openai:work"],
@@ -2452,7 +2479,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy OpenAI Codex auth profile config to the canonical OpenAI provider.",
+      "Migrated legacy auth profile config to canonical providers.",
     ]);
     expect(migrated.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.authProfileId).toBe(
       "openai:chatgpt-default",
@@ -3405,7 +3432,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     expect(result.detected).toEqual([authPath]);
     expect(result.changes).toEqual([
       expect.stringContaining("Migrated auth profile JSON"),
-      `Migrated 1 OpenAI Codex auth profile(s) in ${authPath} to provider "openai".`,
+      `Migrated retired auth profile identifiers in ${authPath}.`,
     ]);
     expect(result.warnings).toStrictEqual([]);
     expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({

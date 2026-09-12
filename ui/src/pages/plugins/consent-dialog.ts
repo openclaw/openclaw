@@ -5,11 +5,13 @@ import {
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
+import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import "../../components/modal-dialog.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
@@ -18,13 +20,15 @@ import type {
   PluginOperatorGrants,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { pluginArtPath, pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+import { pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+
+registerPluginManagementEnglish();
 
 registerPluginConsentEnglish();
 
 export type PluginConsentIntent =
   | { kind: "install"; request: PluginInstallRequest; installIdentity: string }
-  | { kind: "enable"; pluginId: string; rowKey: string };
+  | { kind: "enable" | "reload"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -60,40 +64,36 @@ export function renderArtTile(
   onIconError?: () => void,
   className = "plugins-tile",
 ): TemplateResult {
-  const art = pluginArtPath(slug);
-  if (art) {
-    return html`<span class=${className}>
-      <img src=${art} alt="" loading="lazy" decoding="async" />
+  return html`${imageWithFallback(iconUrl, (url, onError) => {
+    if (url) {
+      return html`<span class=${className} data-plugin-icon-id=${slug}>
+        <img
+          class="plugins-icon"
+          src=${url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          @error=${() => {
+            onError();
+            onIconError?.();
+          }}
+        />
+      </span>`;
+    }
+    const [from, to] = pluginFallbackGradient(slug);
+    const monogram = pluginMonogram(name);
+    return html`<span
+      class=${`${className} ${className}--fallback`}
+      data-plugin-icon-id=${slug}
+      style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
+      aria-hidden="true"
+    >
+      ${monogram ? html`<span>${monogram}</span>` : icons.plug}
     </span>`;
-  }
-  if (iconUrl) {
-    return html`<span class=${className}>
-      <img
-        class="plugins-icon"
-        src=${iconUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        @error=${onIconError}
-      />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(slug);
-  const monogram = pluginMonogram(name);
-  return html`<span
-    class=${`${className} ${className}--fallback`}
-    style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
-    aria-hidden="true"
-  >
-    ${monogram ? html`<span>${monogram}</span>` : icons.puzzle}
-  </span>`;
+  })}`;
 }
 
-export function renderPluginMetaRow(
-  label: string,
-  value: TemplateResult | string,
-  warning = false,
-) {
+function renderPluginMetaRow(label: string, value: TemplateResult | string, warning = false) {
   return html`
     <div class="plugins-detail__meta-row ${warning ? "plugins-consent__row--warning" : ""}">
       <span class="plugins-detail__meta-label">${label}</span>
@@ -137,7 +137,7 @@ function renderCapabilityRows(surface: Partial<PluginDeclaredSurface>, widened =
 export function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): TemplateResult {
   const rows = renderCapabilityRows(declared);
   return html`
-    <section class="plugins-consent__section">
+    <section class="plugins-consent__section oc-section">
       <h3>${t("pluginConsent.declaredTitle")}</h3>
       <p class="plugins-consent__description">${t("pluginConsent.declaredDescription")}</p>
       ${
@@ -172,7 +172,7 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
     return nothing;
   }
   return html`
-    <section class="plugins-consent__section">
+    <section class="plugins-consent__section oc-section">
       <h3>${t("pluginConsent.widenedTitle")}</h3>
       <p class="plugins-consent__description">
         ${t("pluginConsent.widenedDescription")}
@@ -225,7 +225,7 @@ function modelOverrideSummary(
 export function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): TemplateResult {
   const conversation = grants.hooks.allowConversationAccess;
   return html`
-    <section class="plugins-consent__section">
+    <section class="plugins-consent__section oc-section">
       <h3>${t("pluginConsent.grantsTitle")}</h3>
       <p class="plugins-consent__description">${t("pluginConsent.grantsDescription")}</p>
       <div class="plugins-consent__rows">
@@ -305,10 +305,6 @@ export function pluginOriginLabel(origin: string | undefined, official?: boolean
   return label ? t(label) : (origin ?? (official === false ? t("pluginConsent.community") : null));
 }
 
-export function pluginVerificationLabel(tier: string): string {
-  return tier === "source-linked" ? t("pluginsPage.verifiedSource") : tier;
-}
-
 function renderProvenance(source: PluginInspectSource | undefined) {
   if (!source) {
     return nothing;
@@ -359,7 +355,7 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
     trust.disposition === "clean" ? "ok" : trust.disposition === "blocked" ? "danger" : "warn";
   return html`
     <section class="plugins-consent__trust">
-      ${renderSettingsStatus({ kind, label })}
+      ${renderSettingsStatus({ kind, label, carapace: true })}
       ${
         trust.reasons?.length
           ? html`<ul>
@@ -400,13 +396,15 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
         : t("pluginsPage.installNamed", { name })
       : props.busy
         ? t("pluginsPage.working")
-        : t("pluginConsent.enableNamed", { name });
+        : consent.intent.kind === "reload"
+          ? t("pluginsPage.reloadNamed", { name })
+          : t("pluginConsent.enableNamed", { name });
   const confirmUnavailable =
     !props.canMutate || props.busy || props.loading || Boolean(props.error) || !inspection;
   const confirm = html`
     <button
       type="button"
-      class="btn primary"
+      class="btn primary oc-action oc-action-primary"
       ?disabled=${confirmUnavailable && !props.mutationBlockedReason}
       aria-disabled=${!props.canMutate ? "true" : nothing}
       @click=${() => {
@@ -425,7 +423,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
       style="--openclaw-modal-width: min(560px, calc(100vw - 32px));"
       @modal-cancel=${props.onCancel}
     >
-      <section class="plugins-consent" data-plugin-consent=${consent.intent.kind}>
+      <section class="plugins-consent oc-card" data-plugin-consent=${consent.intent.kind}>
         <header class="plugins-consent__header">
           ${renderArtTile(slug, name, props.iconUrl)}
           <div>
@@ -442,7 +440,11 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
             : props.error
               ? html`<div class="plugins-consent__error" role="alert">
                   <span>${props.error}</span>
-                  <button type="button" class="btn btn--sm" @click=${props.onRetry}>
+                  <button
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    @click=${props.onRetry}
+                  >
                     ${t("pluginsPage.tryAgain")}
                   </button>
                 </div>`
@@ -456,7 +458,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
                 : html`<p class="plugins-consent__description">${t("pluginConsent.fallback")}</p>`
         }
         <footer class="plugins-consent__actions">
-          <button type="button" class="btn" @click=${props.onCancel}>
+          <button type="button" class="btn oc-action oc-action-secondary" @click=${props.onCancel}>
             ${t("pluginsPage.cancel")}
           </button>
           ${renderReasonedDisabledControl(props.mutationBlockedReason, confirm)}

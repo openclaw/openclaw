@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
+  configWriteMock,
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginSnapshotReportMock,
   loadPluginManifestRegistryMock,
@@ -10,6 +11,7 @@ import {
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "../cli/plugins-cli-test-helpers.js";
+import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
 const snapshot = {
@@ -27,6 +29,40 @@ const install = {
 describe("plugin install persistence warning audiences", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+  });
+
+  it("delivers deferred source cleanup warnings to the live batch consumer", async () => {
+    const { persistPluginInstall } = await import("./install-persistence.js");
+    const cleanups: Parameters<PluginInstallRuntimeDeferral["deferCleanup"]>[0][] = [];
+    const lateWarning = vi.fn();
+    const warning = "Previous plugin source could not be removed";
+    setInstalledPluginIndexInstallRecords({
+      workboard: { source: "clawhub", installPath: "/private/previous-source/workboard" },
+    });
+    planPluginUninstallMock.mockReturnValueOnce({
+      ok: true,
+      config: {},
+      pluginId: "workboard",
+      actions: {},
+      directoryRemoval: { target: "/private/previous-source/workboard" },
+    });
+    applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
+      directoryRemoved: false,
+      warnings: [warning],
+    });
+    await persistPluginInstall({
+      snapshot,
+      pluginId: "workboard",
+      install,
+      enable: false,
+      runtime: { log: () => {} },
+      persistenceLogger: { warn: () => {} },
+      deferRuntime: { record: () => {}, deferCleanup: (cleanup) => cleanups.push(cleanup) },
+    });
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
+    expect(cleanups).toHaveLength(1);
+    await cleanups[0]!(() => {}, lateWarning);
+    expect(lateWarning).toHaveBeenCalledExactlyOnceWith(warning);
   });
 
   it("reports missing required configuration without forwarding informational logs", async () => {
@@ -63,7 +99,9 @@ describe("plugin install persistence warning audiences", () => {
     );
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("requires configuration first");
     expect(pluginsCliRuntimeLogs).toContain("Installed plugin: workboard");
-    expect(pluginsCliRuntimeLogs).toContain("Restart the gateway to load plugins.");
+    const sourceChangeMessage =
+      "Plugin source changes take effect on the next Gateway start. Installs performed by the running Gateway request an automatic restart when config reload is enabled; installs from a separate shell, or with config reload off, require a manual Gateway restart. Configuration reload can restart connected channels before that Gateway restart.";
+    expect(pluginsCliRuntimeLogs.filter((line) => line === sourceChangeMessage)).toHaveLength(1);
   });
 
   it("preserves owner-authored exclusive-slot warnings verbatim", async () => {
@@ -112,7 +150,6 @@ describe("plugin install persistence warning audiences", () => {
     async (audience) => {
       const { persistPluginInstall } = await import("./install-persistence.js");
       const warn = vi.fn();
-      const onCommitted = vi.fn();
       const cleanupDetail = "npm stderr PRIVATE_NPM_MARKER /private/previous-source/workboard";
       const refreshDetail = "PRIVATE_REFRESH_MARKER /private/registry-source/workboard";
       const configuredSource = "/private/configured-source/workboard/index.js";
@@ -135,7 +172,7 @@ describe("plugin install persistence warning audiences", () => {
         warnings: [cleanupDetail],
       });
       refreshPluginRegistryMock.mockImplementationOnce(async () => {
-        expect(onCommitted).toHaveBeenCalledExactlyOnceWith();
+        expect(configWriteMock).toHaveBeenCalledOnce();
         throw new Error(refreshDetail);
       });
       buildPluginSnapshotReportMock.mockReturnValue({
@@ -147,7 +184,6 @@ describe("plugin install persistence warning audiences", () => {
         snapshot,
         pluginId: "workboard",
         install,
-        onCommitted,
         ...(audience === "management" ? { persistenceLogger: { warn } } : {}),
       });
 

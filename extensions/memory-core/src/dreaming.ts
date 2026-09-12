@@ -24,6 +24,7 @@ import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import type { NarrativePhaseData } from "./dreaming-narrative.js";
 import { formatErrorMessage, includesSystemEventToken } from "./dreaming-shared.js";
+import type { PromotionRejectionCategory } from "./short-term-promotion-types.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
@@ -647,6 +648,19 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       });
       totalApplied += applied.applied;
       reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
+      if (applied.rejectedCandidates.length > 0) {
+        const rejectionCounts = new Map<PromotionRejectionCategory, number>();
+        for (const { category } of applied.rejectedCandidates) {
+          rejectionCounts.set(category, (rejectionCounts.get(category) ?? 0) + 1);
+        }
+        const summary = [...rejectionCounts]
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(([category, count]) => `${category}: ${count}`)
+          .join(", ");
+        reportLines.push(
+          `- Not promoted: ${applied.rejectedCandidates.length} candidate(s) (${summary}).`,
+        );
+      }
       if (params.config.verboseLogging) {
         const appliedSummary =
           applied.appliedCandidates.length > 0
@@ -661,9 +675,11 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
           `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
         );
       }
+      const deepHasContent = candidates.length > 0 || applied.applied > 0;
       await writeDeepDreamingReport({
         workspaceDir,
         bodyLines: reportLines,
+        hasContent: deepHasContent,
         nowMs: sweepNowMs,
         timezone: params.config.timezone,
         storage: params.config.storage ?? { mode: "separate", separateReports: false },

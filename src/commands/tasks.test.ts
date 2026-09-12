@@ -31,6 +31,7 @@ import type {
 } from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -38,6 +39,7 @@ import {
   tasksMaintenanceCommand,
   tasksShowCommand,
 } from "./tasks.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -46,14 +48,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -183,7 +177,7 @@ describe("tasks commands", () => {
         updatedAt: now - 40 * 60_000,
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksAuditCommand({ json: true }, runtime);
 
       const payload = readFirstJsonLog(runtime) as {
@@ -211,7 +205,7 @@ describe("tasks commands", () => {
         updatedAt: now - 45 * 60_000,
       });
 
-      const limitedRuntime = createRuntime();
+      const limitedRuntime = createTestRuntime();
       const auditStartedAt = Date.now();
       await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
       const auditFinishedAt = Date.now();
@@ -241,12 +235,12 @@ describe("tasks commands", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createTestRuntime();
       await tasksAuditCommand({ json: true }, jsonRuntime);
       expect(readFirstJsonLog(jsonRuntime)).toMatchObject({
         count: 1,
@@ -270,7 +264,7 @@ describe("tasks commands", () => {
         ],
       });
 
-      const textRuntime = createRuntime();
+      const textRuntime = createTestRuntime();
       await tasksAuditCommand({ json: false }, textRuntime);
       const output = vi
         .mocked(textRuntime.log)
@@ -294,7 +288,7 @@ describe("tasks commands", () => {
         task: "Inspect issue backlog",
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksListCommand({ json: true, runtime: "   ", status: "\t" }, runtime);
 
       expect(readFirstJsonLog(runtime)).toStrictEqual({
@@ -308,7 +302,7 @@ describe("tasks commands", () => {
 
   it("reports blank audit filters as absent in command JSON output", async () => {
     await withTaskCommandStateDir(async () => {
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksAuditCommand(
         {
           json: true,
@@ -382,7 +376,7 @@ describe("tasks commands", () => {
           runId: task.runId,
         },
       });
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
 
       await tasksCancelCommand({ lookup: task.taskId }, runtime);
 
@@ -419,7 +413,7 @@ describe("tasks commands", () => {
           runId: task.runId,
         },
       });
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksCancelCommand({ lookup: task.taskId }, runtime);
       expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(`Cancelled ${task.taskId}`));
       expectSafeTaskOutput(runtime);
@@ -428,7 +422,7 @@ describe("tasks commands", () => {
         cancelled: false,
         reason: `gateway refused${unsafe}`,
       });
-      const failureRuntime = createRuntime();
+      const failureRuntime = createTestRuntime();
       await tasksCancelCommand({ lookup: task.taskId }, failureRuntime);
       expectSafeTaskOutput(failureRuntime, "error");
     });
@@ -463,7 +457,7 @@ describe("tasks commands", () => {
           notifyPolicy: "silent",
         });
         mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
-        const runtime = createRuntime();
+        const runtime = createTestRuntime();
 
         await tasksCancelCommand({ lookup: task.taskId }, runtime);
 
@@ -507,7 +501,7 @@ describe("tasks commands", () => {
         },
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
 
       const payload = readFirstJsonLog(runtime) as {
@@ -560,7 +554,7 @@ describe("tasks commands", () => {
         },
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
       const payload = readFirstJsonLog(runtime) as {
@@ -633,7 +627,7 @@ describe("tasks commands", () => {
         [retiredKey]: { sessionId: "retired-run", updatedAt: old },
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
       const payload = readFirstJsonLog(runtime) as {
@@ -687,7 +681,7 @@ describe("tasks commands", () => {
         },
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
       expect(
@@ -708,7 +702,7 @@ describe("tasks commands", () => {
         taskRegistryMaintenance,
         "getTaskRegistryMaintenanceDiagnostics",
       );
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
 
       await tasksMaintenanceCommand({ json: false, apply: false }, runtime);
 
@@ -728,7 +722,7 @@ describe("tasks commands", () => {
         startedAt: 8_700_000_000_000_000,
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksShowCommand({ json: false, lookup: task.taskId }, runtime);
 
       const joined = vi
@@ -755,9 +749,9 @@ describe("tasks commands", () => {
         terminalSummary: `summary${unsafe}`,
       });
       markTaskLostById({ taskId: task.taskId, endedAt: Date.now(), error: `error${unsafe}` });
-      const showRuntime = createRuntime();
-      const listRuntime = createRuntime();
-      const auditRuntime = createRuntime();
+      const showRuntime = createTestRuntime();
+      const listRuntime = createTestRuntime();
+      const auditRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: task.taskId }, showRuntime);
       await tasksListCommand({}, listRuntime);
       await tasksAuditCommand({}, auditRuntime);
@@ -784,18 +778,18 @@ describe("tasks commands", () => {
       }
       expect(vi.mocked(listRuntime.log).mock.calls.flat().join("|")).toContain("error");
       expect(vi.mocked(auditRuntime.log).mock.calls.flat().join("|")).toContain("error");
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: task.taskId, json: true }, jsonRuntime);
       expect(readFirstJsonLog(jsonRuntime)).toEqual(jsonRoundTrip(getTaskById(task.taskId)));
       expect(getTaskById(task.taskId)).toMatchObject({
         runId: `run${unsafe}`,
         error: `error${unsafe}`,
       });
-      const lookupRuntime = createRuntime();
+      const lookupRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
       expectSafeTaskOutput(lookupRuntime, "error");
 
-      const jsonLookupRuntime = createRuntime();
+      const jsonLookupRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: `missing${unsafe}`, json: true }, jsonLookupRuntime);
       expect(readFirstJsonLog(jsonLookupRuntime)).toMatchObject({
         ok: false,
@@ -829,7 +823,7 @@ describe("tasks commands", () => {
             terminalSummary: "Generic terminal summary",
           });
         }
-        const runtime = createRuntime();
+        const runtime = createTestRuntime();
         await tasksListCommand({}, runtime);
         const output = vi.mocked(runtime.log).mock.calls.flat().join("|");
         expect(output).toContain(error);
@@ -852,7 +846,7 @@ describe("tasks commands", () => {
       });
       createInspectableTask({ progressSummary: "Fetching provider credentials" });
       createInspectableTask({ status: "succeeded", label: "Human-readable task title" });
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
 
       await tasksListCommand({}, runtime);
 
@@ -880,7 +874,7 @@ describe("tasks commands", () => {
         cleanupAfter,
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksMaintenanceCommand({ json: false, apply: true }, runtime);
 
       const joined = vi
@@ -906,7 +900,7 @@ describe("tasks commands", () => {
         endedAt: now - 8 * 24 * 60 * 60_000,
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
 
       const payload = readFirstJsonLog(runtime) as {
@@ -959,25 +953,23 @@ describe("tasks commands", () => {
         const loadSnapshot = vi.fn(() => {
           throw new Error("SQLITE_CORRUPT: task-flow maintenance restore failed");
         });
-        const saveSnapshot = vi.fn();
         const upsertFlow = vi.fn();
         const deleteFlow = vi.fn();
         configureTaskFlowRegistryRuntime({
           store: {
+            ...createInMemoryTaskFlowRegistryStore(),
             loadSnapshot,
-            saveSnapshot,
             upsertFlow,
             deleteFlow,
           },
         });
-        const runtime = createRuntime();
+        const runtime = createTestRuntime();
 
         await expect(tasksMaintenanceCommand({ json: true, apply }, runtime)).rejects.toThrow(
           "Task-flow registry restore failed: SQLITE_CORRUPT: task-flow maintenance restore failed. Refusing task maintenance.",
         );
 
         expect(loadSnapshot).toHaveBeenCalledTimes(1);
-        expect(saveSnapshot).not.toHaveBeenCalled();
         expect(upsertFlow).not.toHaveBeenCalled();
         expect(deleteFlow).not.toHaveBeenCalled();
         expect(runtime.log).not.toHaveBeenCalled();
@@ -1045,7 +1037,7 @@ describe("tasks commands", () => {
           },
         ],
       });
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
       const payload = readFirstJsonLog(runtime) as {

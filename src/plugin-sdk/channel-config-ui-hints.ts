@@ -135,7 +135,7 @@ function createChannelProgressUiHints(params: {
     },
     "streaming.progress.toolProgress": {
       label: `${channelLabel} Progress Tool Lines`,
-      help: "Show individual tool activity in progress drafts (default: false). Quiet drafts retain plans, approval requests, failures, and authored progress text.",
+      help: "Show individual tool activity, including intermediate failures, in progress drafts (default: false). Quiet drafts retain plans, approval requests, and authored progress text. Terminal task errors remain visible.",
     },
     ...(params.includeCommentary && params.commentaryOrder !== "after-command"
       ? commentaryHint

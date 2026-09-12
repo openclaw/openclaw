@@ -4,6 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import {
+  qaMaturityTaxonomyIdentity,
+  qaProfileEvidencePlan,
+  readQaMaturityTaxonomySource,
+} from "../../extensions/qa-lab/test-api.js";
 import { parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -16,7 +21,7 @@ type TaxonomyFixture = {
 
 type TaxonomySurfaceFixture = {
   id?: string;
-  status?: string;
+  archived?: boolean;
   categories?: TaxonomyCategoryFixture[];
 };
 
@@ -58,6 +63,10 @@ function writeQaEvidence(params: {
   dir: string;
   entries: Array<{ id: string; status: "pass" | "fail" | "blocked" | "skipped" }>;
   scorecard?: unknown;
+  historical?: boolean;
+  taxonomyPath?: string;
+  profile?: string;
+  generatedAt?: string;
 }) {
   const scorecard = params.scorecard ?? {
     filters: { surface: null, category: null },
@@ -91,9 +100,24 @@ function writeQaEvidence(params: {
       {
         kind: "openclaw.qa.evidence-summary",
         schemaVersion: 2,
-        generatedAt: "2026-06-23T00:00:00.000Z",
+        generatedAt: params.generatedAt ?? "2026-06-23T00:00:00.000Z",
         evidenceMode: "full",
-        profile: "all",
+        profile: params.profile ?? "all",
+        profilePlan: params.historical
+          ? undefined
+          : qaProfileEvidencePlan.build({
+              profile: params.profile ?? "all",
+              taxonomyIdentity: qaMaturityTaxonomyIdentity(
+                readQaMaturityTaxonomySource(
+                  params.taxonomyPath ?? path.join(repoRoot, "taxonomy.yaml"),
+                ),
+              ),
+              membershipScenarios: [],
+              selectedScenarios: [],
+              excludedScenarios: [],
+              expectedCells: [],
+              observedCells: [],
+            }),
         entries: params.entries.map((entry) => ({
           test: {
             kind: "qa-scenario",
@@ -118,9 +142,7 @@ function allProfileScorecardFixture(
   taxonomyPath = path.join(repoRoot, "taxonomy.yaml"),
 ) {
   const taxonomy = parseYaml(fs.readFileSync(taxonomyPath, "utf8")) as TaxonomyFixture;
-  const activeSurfaces = (taxonomy.surfaces ?? []).filter(
-    (surface) => surface.status !== "retired",
-  );
+  const activeSurfaces = (taxonomy.surfaces ?? []).filter((surface) => !surface.archived);
   const categoryReports = activeSurfaces.flatMap((surface) =>
     (surface.categories ?? []).map((category) => {
       const coverageIds = [
@@ -200,7 +222,7 @@ function expectedMaturityScorePercent(): number {
 }
 
 describe("maturity docs renderer CLI", () => {
-  it("renders mirror routes and public redirects with destination fragment precedence", () => {
+  it("rejects unresolved taxonomy routes and anchors while accepting published mirrors", () => {
     const fixtureDir = tempDirs.make("openclaw-maturity-docs-links-");
     const docsRoot = path.join(fixtureDir, "docs");
     const taxonomyPath = path.join(fixtureDir, "taxonomy.yaml");
@@ -213,9 +235,11 @@ describe("maturity docs renderer CLI", () => {
       ["docs/legacy-fragment.md#source-section", "[Source Section](/guide#destination-section)"],
       ["docs/legacy-empty.md#source-section", "[Source Section](/guide)"],
       ["docs/guide.md#direct-section", "[Direct Section](/guide#direct-section)"],
+      ["docs/guide.md#missing-section", null],
       ["docs/direct.mdx#direct-section", "[Direct Section](/direct#direct-section)"],
       ["docs/legacy-page.md", "[Legacy Page](/guide)"],
       ["docs/clawhub/publishing.md", "[Publishing](/clawhub/publishing)"],
+      ["docs/clawhub/publishing.md#missing-section", null],
       ["docs/clawhub/skill-format.md", "[Skill Format](/clawhub/skill-format)"],
       ["docs/clawhub/security-audits.md", "[Security Audits](/clawhub/security-audits)"],
       ["docs/clawhub/index.md", "[Index](/clawhub/index)"],
@@ -338,11 +362,30 @@ describe("maturity docs renderer CLI", () => {
       "--strict-inputs",
     );
 
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    const taxonomy = fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8");
-    const renderedLinks = taxonomy.match(/\[[^\]]+\]\([^)]+\)/g);
-    expect(renderedLinks).toEqual(links.flatMap(([, link]) => (link === null ? [] : [link])));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("maturity taxonomy has invalid docs references");
+    for (const invalidPath of [
+      "docs/clawhub/unknown.md",
+      "docs/clawhub/publishing.md#missing-section",
+      "docs/guide.md#missing-section",
+      "docs/unknown.md",
+      "docs/legacy-missing.md",
+      "docs/internal/private.md",
+      "docs/legacy-private.md",
+      "https://example.test/guide#external",
+      "docs/legacy-external.md",
+      "docs/legacy-chain.md",
+    ]) {
+      expect(result.stderr).toContain(invalidPath);
+    }
+    for (const publishedMirror of [
+      "docs/clawhub/skill-format.md",
+      "docs/clawhub/security-audits.md",
+      "docs/clawhub/index.md",
+    ]) {
+      expect(result.stderr).not.toContain(publishedMirror);
+    }
   });
 
   it("checks maturity inputs without requiring QA evidence artifacts", () => {
@@ -385,6 +428,227 @@ describe("maturity docs renderer CLI", () => {
     expect(result.stderr).toContain("failing-scenario (fail)");
     expect(result.stderr).toContain("blocked-scenario (blocked)");
   });
+
+  it.each(["missing", "mismatch"] as const)(
+    "rejects %s historical identity before mutating strict output",
+    (identityState) => {
+      const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
+      const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
+      const staticAssetsDir = path.join(outputDir, "assets");
+      fs.mkdirSync(staticAssetsDir);
+      fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
+      writeQaEvidence({
+        dir: evidenceDir,
+        entries: [{ id: "historical-pass", status: "pass" }],
+        historical: identityState === "missing",
+        scorecard: allProfileScorecardFixture(),
+      });
+
+      if (identityState === "mismatch") {
+        const file = path.join(evidenceDir, "qa-evidence.json");
+        const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
+        evidence.profilePlan.taxonomyIdentity.sha256 = "0".repeat(64);
+        fs.writeFileSync(file, JSON.stringify(evidence));
+      }
+
+      const result = runCli(
+        "--output-dir",
+        outputDir,
+        "--evidence-dir",
+        evidenceDir,
+        "--static-assets-dir",
+        staticAssetsDir,
+        "--strict-inputs",
+        "--allow-failures",
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `semantic taxonomy identity is ${identityState === "missing" ? "missing" : "mismatched"}`,
+      );
+      expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
+        "preserved\n",
+      );
+      expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
+    },
+  );
+
+  it("keeps historical outcomes but leaves current coverage unscored", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "historical-pass", status: "pass" }],
+      historical: true,
+      scorecard: allProfileScorecardFixture(),
+    });
+
+    const scoresPath = path.join(outputDir, "scores.yaml");
+    const scores = parseYaml(
+      fs.readFileSync(path.join(repoRoot, "qa/maturity-scores.yaml"), "utf8"),
+    );
+    const coverage = { score: 100, label: "Clawesome" };
+    scores.rollups.surface_average.coverage = { ...coverage };
+    scores.rollups.category_average.coverage = { ...coverage };
+    for (const surface of scores.surfaces) {
+      surface.scores.coverage = { ...coverage };
+      for (const category of surface.categories) {
+        category.coverage = { ...coverage };
+      }
+    }
+    fs.writeFileSync(scoresPath, stringifyYaml(scores));
+    const result = runCli(
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--scores",
+      scoresPath,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("semantic taxonomy identity is missing");
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    expect(scorecard).toContain("Coverage Unscored");
+    expect(scorecard).toContain("Historical evidence: taxonomy identity unknown");
+    expect(scorecard).toContain("1 passed");
+    expect(scorecard).toContain(
+      `<span className="maturity-summary-value">${expectedMaturityScorePercent()}%</span>`,
+    );
+    expect(scorecard).not.toContain("Readiness by area");
+    expect(scorecard).toContain("Historical category evidence");
+    const historicalCategory = allProfileScorecardFixture().categoryReports[0]!;
+    expect(scorecard).toContain(historicalCategory.name);
+    expect(scorecard).toContain(historicalCategory.id);
+    expect(scorecard).toContain(
+      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+    );
+  });
+
+  it("marks same-category historical evidence mismatched after capability meaning changes", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "previous-pass", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+    const taxonomy = readQaMaturityTaxonomySource(path.join(repoRoot, "taxonomy.yaml"));
+    taxonomy.surfaces
+      .flatMap((surface) => surface.categories)
+      .find((category) => category.features.length > 0)!.features[0]!.description =
+      "A changed capability contract";
+    const taxonomyPath = path.join(outputDir, "taxonomy.yaml");
+    fs.writeFileSync(taxonomyPath, stringifyYaml(taxonomy));
+    const result = runCli(
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--taxonomy",
+      taxonomyPath,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("semantic taxonomy identity is mismatched");
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    expect(scorecard).toContain("Coverage Unscored");
+    expect(scorecard).toContain("Historical evidence: taxonomy identity mismatch");
+    expect(scorecard).toContain("1 passed");
+    expect(scorecard).not.toContain("Readiness by area");
+    expect(scorecard).toContain("Historical category evidence");
+    const historicalCategory = allProfileScorecardFixture().categoryReports[0]!;
+    expect(scorecard).toContain(historicalCategory.name);
+    expect(scorecard).toContain(historicalCategory.id);
+    expect(scorecard).toContain(
+      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+    );
+  });
+
+  it("selects matching release coverage before newer mismatched all evidence", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
+    writeQaEvidence({
+      dir: path.join(evidenceDir, "release"),
+      profile: "release",
+      entries: [{ id: "current-pass", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+    writeQaEvidence({
+      dir: path.join(evidenceDir, "all"),
+      generatedAt: "2099-01-01T00:00:00.000Z",
+      entries: [{ id: "old-pass", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+    const file = path.join(evidenceDir, "all", "qa-evidence.json");
+    const stale = JSON.parse(fs.readFileSync(file, "utf8"));
+    stale.profilePlan.taxonomyIdentity.sha256 = "0".repeat(64);
+    for (const category of stale.scorecard.categoryReports) {
+      category.coverageIds.fulfillmentPercent = 100;
+    }
+    fs.writeFileSync(file, JSON.stringify(stale));
+    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    expect(result.status).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    expect(scorecard).toContain("Coverage Experimental - 0%");
+    expect(scorecard).toContain("Historical evidence: taxonomy identity mismatch");
+    expect(scorecard).toContain("Readiness by area");
+  });
+
+  it.each([
+    { status: "pass", allowFailures: false, exitCode: 0 },
+    { status: "fail", allowFailures: false, exitCode: 1 },
+    { status: "blocked", allowFailures: false, exitCode: 1 },
+    { status: "fail", allowFailures: true, exitCode: 0 },
+    { status: "blocked", allowFailures: true, exitCode: 0 },
+  ] as const)(
+    "keeps raw $status diagnostics separate from scorecard identity (allowFailures=$allowFailures)",
+    ({ status, allowFailures, exitCode }) => {
+      const outputDir = tempDirs.make("openclaw-maturity-raw-output-");
+      const evidenceDir = tempDirs.make("openclaw-maturity-raw-evidence-");
+      writeQaEvidence({
+        dir: evidenceDir,
+        entries: [{ id: "current-pass", status: "pass" }],
+        scorecard: allProfileScorecardFixture(),
+      });
+      const rawDir = path.join(evidenceDir, "native");
+      writeQaEvidence({
+        dir: rawDir,
+        profile: "native",
+        historical: true,
+        entries: [{ id: `native-${status}`, status }],
+      });
+      const rawPath = path.join(rawDir, "qa-evidence.json");
+      const raw = JSON.parse(fs.readFileSync(rawPath, "utf8"));
+      delete raw.scorecard;
+      fs.writeFileSync(rawPath, JSON.stringify(raw));
+      const staticAssetsDir = path.join(outputDir, "assets");
+      fs.mkdirSync(staticAssetsDir);
+      fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
+      const result = runCli(
+        "--output-dir",
+        outputDir,
+        "--evidence-dir",
+        evidenceDir,
+        "--static-assets-dir",
+        staticAssetsDir,
+        "--strict-inputs",
+        ...(allowFailures ? ["--allow-failures"] : []),
+      );
+      expect(result.status).toBe(exitCode);
+      expect(result.stderr).not.toContain("semantic taxonomy identity");
+      if (exitCode === 1) {
+        expect(result.stderr).toContain(`native-${status} (${status})`);
+        expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
+        expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
+          "preserved\n",
+        );
+      } else {
+        expect(result.stderr).toBe("");
+        const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+        expect(scorecard).toContain("Coverage Experimental - 0%");
+      }
+    },
+  );
 
   it("allows incomplete evidence without awarding Coverage to non-passing checks", () => {
     const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
@@ -440,6 +704,40 @@ describe("maturity docs renderer CLI", () => {
     expect(taxonomy).not.toMatch(
       /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
     );
+    const taxonomyDocument = parseDocsDocument(taxonomy);
+    for (const id of ["imessage", "imessage-and-bluebubbles"]) {
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+    }
+    for (const id of ["control-ui", "gateway-web-app"]) {
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+    }
+    for (const id of ["windows-app-node", "native-windows-companion-app"]) {
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+    }
+    for (const id of [
+      "chromeos-raspberry-pi-and-small-linux-devices",
+      "raspberry-pi-and-small-linux-devices",
+    ]) {
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+    }
+    for (const id of ["automation-and-durable-work", "automation-cron-hooks-tasks-polling"]) {
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+    }
     for (const [markdown, id] of [
       [scorecard, "surface-explorer"],
       [taxonomy, "product-areas"],

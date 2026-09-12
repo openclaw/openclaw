@@ -1,8 +1,10 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { formatUpdateAncestryBlockMessage } from "./update-command-handoff.js";
 import { captureOwnedManagedUpdatePreflightContext } from "./update-command-managed-context.js";
 import {
+  collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
@@ -18,6 +20,7 @@ export async function inspectUpdateDatabaseContexts(params: {
   jsonMode: boolean;
   timeoutMs: number;
   invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
 }) {
@@ -34,18 +37,21 @@ export async function inspectUpdateDatabaseContexts(params: {
       expectedService: params.expectedServices?.get(root),
     }).catch((error: unknown) => {
       if (error instanceof GatewayServiceUpdateOwnershipError) {
-        throw new UpdatePreMutationError("managed-service-preflight", error.message);
+        throw new UpdatePreMutationError("managed-service-preflight", error.message, {
+          failureFacts: error.failureFacts,
+        });
       }
       throw error;
     });
     const unavailable =
       inspected.serviceUpdateVerdict?.kind === "unavailable"
-        ? inspected.serviceUpdateVerdict.message
+        ? inspected.serviceUpdateVerdict
         : undefined;
     if (inspected.blockMessage || unavailable) {
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        formatUpdateAncestryBlockMessage(inspected.blockMessage ?? unavailable!),
+        formatUpdateAncestryBlockMessage(inspected.blockMessage ?? unavailable!.message),
+        { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
       );
     }
     if (inspected.serviceUpdateVerdict?.kind === "unresolved") {
@@ -64,6 +70,7 @@ export async function inspectUpdateDatabaseContexts(params: {
     stopState: service,
     processEnv: process.env,
     invocationCwd: params.invocationCwd,
+    legacyConfigPlan: params.legacyConfigPlan,
   });
   if (params.managedServiceRootRedirect && !managed) {
     throw new UpdatePreMutationError(
@@ -74,7 +81,11 @@ export async function inspectUpdateDatabaseContexts(params: {
   // Redirected package replacement does not own the invoking installation's stores.
   const contexts = params.managedServiceRootRedirect
     ? []
-    : [await captureTargetDatabaseSchemaContext(process.env)];
+    : [
+        await captureTargetDatabaseSchemaContext(process.env, {
+          legacyConfigPlan: params.legacyConfigPlan,
+        }),
+      ];
   if (managed) {
     contexts.push(managed);
   }

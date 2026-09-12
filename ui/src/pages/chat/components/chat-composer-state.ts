@@ -15,6 +15,7 @@ function createChatComposerState(): ChatComposerState {
     ...createSlashMenuState(),
     ...createSkillMenuState(),
     composerComposing: false,
+    editRevision: 0,
     mentionMenu: new HumanMentionMenu(),
     composingDraft: null,
     composerInputIntentKey: null,
@@ -97,6 +98,7 @@ export function commitComposerDraft(
     return;
   }
   const hadMentions = (props.getMentions?.() ?? props.mentions ?? []).length > 0;
+  getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
   if (hadMentions || mentions?.length) {
     props.onRequestUpdate?.();
@@ -104,6 +106,7 @@ export function commitComposerDraft(
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
+  state.editRevision += 1;
   state.composerInputIntentKey = key;
 }
 

@@ -67,10 +67,11 @@ function resolveParsedSessionStoreKey(
 ): { agentId: string; sessionKey: string } {
   const parsedAgentId = normalizeAgentId(parsed.agentId);
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
+  // Only legacy main aliases need the configured roster to resolve ownership.
   if (
     parsedAgentId !== DEFAULT_AGENT_ID ||
-    listAgentIds(cfg).includes(DEFAULT_AGENT_ID) ||
-    (rest !== "main" && rest !== normalizeMainKey(cfg.session?.mainKey))
+    (rest !== "main" && rest !== normalizeMainKey(cfg.session?.mainKey)) ||
+    listAgentIds(cfg).includes(DEFAULT_AGENT_ID)
   ) {
     return {
       agentId: parsedAgentId,

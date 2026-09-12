@@ -195,7 +195,7 @@ export async function tryReuseCodexLiveThread(
       ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
         binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
     ) {
-      params.buildFinalConfigPatch?.({ action: "resume", binding });
+      await params.buildFinalConfigPatch?.({ action: "resume", binding });
       throwIfAborted();
       return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
     }
@@ -248,10 +248,10 @@ export async function tryReuseCodexLiveThread(
     // Engine identity, projection epoch, and policy were checked by the owner
     // before this call; compatible bootstrap threads must keep their session.
 
-    const prebuiltFinalConfigPatch = params.buildFinalConfigPatch?.({
+    const prebuiltFinalConfigPatch = (await params.buildFinalConfigPatch?.({
       action: "resume",
       binding,
-    }) ?? {
+    })) ?? {
       configPatch: params.finalConfigPatch,
       nativeHookRelayGeneration: params.nativeHookRelayGeneration,
     };

@@ -51,6 +51,41 @@ describe("renderAssistantRequestFailureCopy", () => {
     },
   );
 
+  it("preserves an incomplete tool-call diagnosis without exposing provider text", () => {
+    const error = makeAssistantMessageFixture({
+      ...target,
+      errorCode: "incomplete_tool_call",
+      errorMessage: "PRIVATE_PROVIDER_DETAIL",
+    });
+    expect(formatUserFacingAssistantErrorText(error)).toBe(
+      "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
+    );
+  });
+
+  it("shows the provider cache limit after a tool-result request is rejected", () => {
+    const detail = "A maximum of 4 blocks with cache_control may be provided. Found 5.";
+    const errorBody = JSON.stringify({
+      error: {
+        message: "All target providers failed.",
+        attempts: [
+          { status: 400, details: { error: { type: "invalid_request_error", message: detail } } },
+        ],
+      },
+    });
+    expect(
+      formatUserFacingAssistantErrorText(
+        makeAssistantMessageFixture({
+          ...target,
+          errorCode: "400",
+          errorMessage: `400: ${errorBody}`,
+          errorBody,
+        }),
+      ),
+    ).toBe(
+      "LLM request rejected: provider allows at most 4 cache_control blocks; the request contained 5.",
+    );
+  });
+
   it("keeps provider bodies containing SQLite text redacted", () => {
     const errorMessage = '{"error":{"message":"database is locked PRIVATE_CANARY"}}';
     expect(

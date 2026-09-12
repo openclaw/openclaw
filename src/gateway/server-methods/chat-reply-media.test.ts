@@ -5,28 +5,58 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createPinnedLookup } from "../../infra/net/ssrf.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { setMediaStoreNetworkDepsForTest } from "../../media/store.test-support.js";
+import {
+  disposeStoreRemoteFixtures,
+  withStoreRemoteFixture,
+  wrapStoreSaveRemoteMedia,
+} from "../../media/store-network.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createManagedOutgoingMediaBlocks as createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
-import {
-  buildAssistantDisplayContentFromReplyPayloads,
-  replaceAssistantContentTextBlocks,
-} from "./chat-assistant-content.js";
+import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 const PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
   "base64",
 );
 const TEST_SESSION_KEY = "agent:main:webchat:direct:user";
+
+let storeSaveSpy: MockInstance<typeof import("../../media/fetch.js").saveRemoteMedia> | undefined;
+
+beforeAll(async () => {
+  // Spy after graph evaluation: importOriginal(fetch) can pull store into its mock cycle.
+  const mediaFetch = await import("../../media/fetch.js");
+  const saveRemoteMedia = mediaFetch.saveRemoteMedia;
+  storeSaveSpy = vi
+    .spyOn(mediaFetch, "saveRemoteMedia")
+    .mockImplementation(wrapStoreSaveRemoteMedia(saveRemoteMedia));
+});
+
+afterAll(() => {
+  try {
+    disposeStoreRemoteFixtures();
+  } finally {
+    storeSaveSpy?.mockRestore();
+  }
+});
 
 type ReplyMediaPayloads = Parameters<
   typeof normalizeWebchatReplyMediaPathsForDisplay
@@ -51,7 +81,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   });
 
   afterEach(async () => {
-    setMediaStoreNetworkDepsForTest();
     await testState.cleanup();
   });
 
@@ -206,13 +235,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       upstream.listen(0, "127.0.0.1", resolve);
     });
     const address = upstream.address() as AddressInfo;
-    setMediaStoreNetworkDepsForTest({
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-    });
 
     try {
       const remoteImageUrl = `http://127.0.0.1:${address.port}/remote.png?sig=secret`;
@@ -235,12 +257,18 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         ],
       });
       expect(payload?.mediaUrls).toHaveLength(3);
-      const content = await buildAssistantDisplayContentFromReplyPayloads({
-        sessionKey: TEST_SESSION_KEY,
-        agentId: "main",
-        payloads: payload ? [payload] : [],
-        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
-      });
+      const matchedUrls: string[] = [];
+      const { assistantContent: content } = await withStoreRemoteFixture(
+        { url: remoteImageUrl, onMatch: (url) => matchedUrls.push(url) },
+        () =>
+          buildAssistantReplyContent({
+            sessionKey: TEST_SESSION_KEY,
+            agentId: "main",
+            payloads: payload ? [payload] : [],
+            managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+          }),
+      );
+      expect(matchedUrls).toEqual([remoteImageUrl]);
       expect(content).toEqual([
         { type: "text", text: "Artifacts ready" },
         expect.objectContaining({
@@ -338,7 +366,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     const source = "data:audio/mpeg;base64,not-valid!";
     const errors: string[] = [];
 
-    const content = await buildAssistantDisplayContentFromReplyPayloads({
+    const { assistantContent: content } = await buildAssistantReplyContent({
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
       payloads: [{ mediaUrls: [source] }],
@@ -366,18 +394,19 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from([0, 1, 2, 3]));
 
-    const content = await buildAssistantDisplayContentFromReplyPayloads({
-      sessionKey: TEST_SESSION_KEY,
-      agentId: "main",
-      payloads: [
-        {
-          text: "Artifact result",
-          mediaUrls: [sourcePath],
-          attachments: [{ name: "mystery.blob", trustedLocalMedia: true }],
-        },
-      ],
-      managedMediaLocalRoots: [workspaceDir],
-    });
+    const { assistantContent: content, persistedAssistantContent } =
+      await buildAssistantReplyContent({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads: [
+          {
+            text: "Artifact result",
+            mediaUrls: [sourcePath],
+            attachments: [{ name: "mystery.blob", trustedLocalMedia: true }],
+          },
+        ],
+        managedMediaLocalRoots: [workspaceDir],
+      });
 
     expect(content).toEqual([
       { type: "text", text: "Artifact result" },
@@ -390,36 +419,58 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         },
       },
     ]);
+    expect(persistedAssistantContent).toEqual(content);
   });
 
-  it("preserves a structured media failure beside replaced transcript text", () => {
-    expect(
-      replaceAssistantContentTextBlocks(
-        [
-          { type: "text", text: "Artifact result" },
-          {
-            type: "attachment_error",
-            attachment: {
-              code: "delivery-failed",
-              kind: "document",
-              label: "report.7z",
-            },
-          },
-        ],
-        { content: [{ type: "text", text: "Canonical transcript text" }] },
-      ),
-    ).toEqual([
-      { type: "text", text: "Canonical transcript text" },
+  it("preserves paragraph order when media follows adjacent reply text payloads", async () => {
+    const payloads = [
+      { text: "First paragraph" },
       {
-        type: "attachment_error",
-        attachment: {
-          code: "delivery-failed",
-          kind: "document",
-          label: "report.7z",
-        },
+        text: "Second paragraph",
+        mediaUrl: `data:image/png;base64,${PNG_BYTES.toString("base64")}`,
       },
-    ]);
+    ];
+    const { assistantContent: displayContent, persistedAssistantContent: persistedContent } =
+      await buildAssistantReplyContent({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads,
+        transcriptMediaMessage: await buildWebchatAssistantMessageFromReplyPayloads(payloads),
+      });
+
+    expect(displayContent?.some((block) => block.type === "image")).toBe(true);
+    expect(
+      persistedContent?.filter((block) => block.type === "text").map((block) => block.text),
+    ).toEqual(["First paragraph", "Second paragraph"]);
+    expect(persistedContent?.at(-1)?.type).toBe("image");
   });
+
+  it.each([false, true])(
+    "keeps an image-only caption beside its image (reply directive=%s)",
+    async (replyToCurrent) => {
+      const payloads = [
+        { mediaUrl: `data:image/png;base64,${PNG_BYTES.toString("base64")}`, replyToCurrent },
+        { text: "Following paragraph" },
+      ];
+      const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads,
+        transcriptMediaMessage: await buildWebchatAssistantMessageFromReplyPayloads(payloads),
+      });
+
+      expect(assistantContent?.map((block) => block.type)).toEqual(["image", "text"]);
+      expect(persistedAssistantContent?.map((block) => block.type)).toEqual([
+        "text",
+        "image",
+        "text",
+      ]);
+      expect(persistedAssistantContent?.[0]?.text).toBe(
+        `${replyToCurrent ? "[[reply_to_current]]" : ""}Image reply`,
+      );
+      expect(persistedAssistantContent?.[2]?.text).toBe("Following paragraph");
+    },
+  );
 
   it("preserves local audio paths for WebChat audio embedding", async () => {
     const { stateDir, workspaceDir, cfg } = createMediaTestContext({ allowRead: false });
@@ -459,7 +510,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
       await fs.writeFile(sourcePath, bytes);
 
-      const content = await buildAssistantDisplayContentFromReplyPayloads({
+      const { assistantContent: content } = await buildAssistantReplyContent({
         sessionKey: TEST_SESSION_KEY,
         agentId: "main",
         payloads: [
@@ -495,7 +546,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     await fs.writeFile(secondPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
 
-    const content = await buildAssistantDisplayContentFromReplyPayloads({
+    const { assistantContent: content } = await buildAssistantReplyContent({
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
       payloads: [
@@ -525,7 +576,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
 
-    const content = await buildAssistantDisplayContentFromReplyPayloads({
+    const { assistantContent: content } = await buildAssistantReplyContent({
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
       payloads: [{ text: `MEDIA:${audioPath}`, trustedLocalMedia: true }],
@@ -554,7 +605,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       {},
     );
 
-    const content = await buildAssistantDisplayContentFromReplyPayloads({
+    const { assistantContent: content } = await buildAssistantReplyContent({
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
       payloads: [payload],
@@ -583,7 +634,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     await fs.writeFile(thirdPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
 
-    const content = await buildAssistantDisplayContentFromReplyPayloads({
+    const { assistantContent: content } = await buildAssistantReplyContent({
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
       payloads: [

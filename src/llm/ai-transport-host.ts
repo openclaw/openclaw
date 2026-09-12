@@ -15,6 +15,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
 
@@ -30,6 +31,9 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 configureAiTransportHost({
+  observePendingProviderWork: (pending) => {
+    void trackAsyncWork(() => pending).catch(() => {});
+  },
   buildModelFetch: buildGuardedModelFetch,
   resolveSecretSentinel: (value) => {
     const swapped = swapSecretSentinelsInText(value);

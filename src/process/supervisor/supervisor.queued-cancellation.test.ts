@@ -59,6 +59,50 @@ describe("process supervisor queued cancellation", () => {
     createPtyAdapterMock.mockReset();
   });
 
+  it("resolves invocation arguments after queued scope admission", async () => {
+    const first = createStubProcessAdapter(1234);
+    const replacement = createStubProcessAdapter(5678);
+    const firstStartup = createDeferred<StubProcessAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(firstStartup.promise);
+    createChildAdapterMock.mockResolvedValueOnce(replacement);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:deferred-args";
+    const firstRunPromise = supervisor.spawn(
+      createSpawnInput({ runId: "deferred-args-first", scopeKey }),
+    );
+    let invocationArgument = "before-admission";
+    const resolveArgs = vi.fn(() => [invocationArgument]);
+    const replacementRunPromise = supervisor.spawn(
+      Object.assign(
+        createSpawnInput({
+          runId: "deferred-args-replacement",
+          scopeKey,
+          replaceExistingScope: true,
+        }),
+        { resolveArgs },
+      ),
+    );
+
+    expect(resolveArgs).not.toHaveBeenCalled();
+    invocationArgument = "after-admission";
+    firstStartup.resolve(first);
+    const [firstRun, replacementRun] = await Promise.all([firstRunPromise, replacementRunPromise]);
+
+    try {
+      expect(resolveArgs).toHaveBeenCalledOnce();
+      expect(createChildAdapterMock.mock.calls[1]?.[0].argv).toEqual([
+        process.execPath,
+        "-e",
+        "process.stdout.write('should-not-run')",
+        "after-admission",
+      ]);
+    } finally {
+      first.settle(0);
+      replacement.settle(0);
+      await Promise.all([firstRun.wait(), replacementRun.wait()]);
+    }
+  });
+
   it.each(["child", "pty"] as const)(
     "does not start an already-cancelled queued %s replacement",
     async (mode) => {
@@ -78,13 +122,17 @@ describe("process supervisor queued cancellation", () => {
         createSpawnInput({ runId: `cancel-queued-${mode}-first`, scopeKey }),
       );
       const replacementRunId = `cancel-queued-${mode}-replacement`;
+      const resolveArgs = vi.fn(() => ["must-not-resolve"]);
       const replacementPromise = supervisor.spawn(
-        createSpawnInput({
-          runId: replacementRunId,
-          scopeKey,
-          mode,
-          replaceExistingScope: true,
-        }),
+        Object.assign(
+          createSpawnInput({
+            runId: replacementRunId,
+            scopeKey,
+            mode,
+            replaceExistingScope: true,
+          }),
+          mode === "child" ? { resolveArgs } : {},
+        ),
       );
 
       expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
@@ -98,6 +146,7 @@ describe("process supervisor queued cancellation", () => {
       expect(createPtyAdapterMock).not.toHaveBeenCalled();
       expect(first.killMock).not.toHaveBeenCalled();
       expect(replacement.killMock).not.toHaveBeenCalled();
+      expect(resolveArgs).not.toHaveBeenCalled();
       expect(replacementRun.pid).toBeUndefined();
       await expect(replacementRun.wait()).resolves.toMatchObject({
         reason: "manual-cancel",
@@ -113,6 +162,67 @@ describe("process supervisor queued cancellation", () => {
       await expect(firstRun.wait()).resolves.toMatchObject({ reason: "exit" });
     },
   );
+
+  it("releases startup ownership when deferred arguments throw", async () => {
+    const supervisor = createProcessSupervisor();
+    const input = Object.assign(
+      createSpawnInput({ runId: "failed-args", scopeKey: "scope:failed-args" }),
+      {
+        resolveArgs: () => {
+          throw new Error("argument preparation failed");
+        },
+      },
+    );
+
+    await expect(supervisor.spawn(input)).rejects.toThrow("argument preparation failed");
+    expect(createChildAdapterMock).not.toHaveBeenCalled();
+    await supervisor.shutdown();
+  });
+
+  it("keeps the active scope when replacement argument preparation fails", async () => {
+    const active = createStubProcessAdapter();
+    createChildAdapterMock.mockResolvedValueOnce(active);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:failed-replacement-args";
+    const activeRun = await supervisor.spawn(
+      createSpawnInput({ runId: "active-args-owner", scopeKey }),
+    );
+    try {
+      const replacement = Object.assign(
+        createSpawnInput({ runId: "bad-replacement-args", scopeKey, replaceExistingScope: true }),
+        {
+          resolveArgs: () => {
+            throw new Error("replacement arguments failed");
+          },
+        },
+      );
+      await expect(supervisor.spawn(replacement)).rejects.toThrow("replacement arguments failed");
+      expect(active.killMock).not.toHaveBeenCalled();
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    } finally {
+      active.settle(0);
+      await activeRun.wait();
+      await supervisor.shutdown();
+    }
+  });
+
+  it("allows immediate cancellation of a rejected argument preparation", async () => {
+    const supervisor = createProcessSupervisor();
+    const runId = "cancel-failed-args";
+    const input = Object.assign(createSpawnInput({ runId, scopeKey: "scope:cancel-failed-args" }), {
+      resolveArgs: () => {
+        throw new Error("argument preparation rejected");
+      },
+    });
+    const started = supervisor.spawn(input);
+    supervisor.cancel(runId, "manual-cancel");
+    await expect(started).rejects.toThrow("argument preparation rejected");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(createChildAdapterMock).not.toHaveBeenCalled();
+    await supervisor.shutdown();
+  });
 
   it("never starts cancelled queued replacements or cancels their surviving scope", async () => {
     const replacementCount = 32;

@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
@@ -128,6 +129,8 @@ export function makeDispatchTestContext(
 ): GatewayRequestContext {
   const workerEnvironmentService = overrides.workerEnvironmentService ?? {
     get: () => undefined,
+    readMachineShape: () => undefined,
+    machineShapeVersion: () => 0,
     inventoryVersion: () => 0,
     supportsExecutionMode: () => true,
   };
@@ -188,7 +191,13 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId?: string; machineClass?: string; deviceId?: string; autoDevice?: true } = {
+  target: {
+    profileId?: string;
+    machineClass?: string;
+    os?: string;
+    deviceId?: string;
+    autoDevice?: true;
+  } = {
     profileId: "test",
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,
@@ -213,7 +222,7 @@ export async function invokeSessionMove(
     abandonSource?: true;
     target:
       | { kind: "gateway" }
-      | { kind: "profile"; profileId: string; machineClass?: string }
+      | { kind: "profile"; profileId: string; machineClass?: string; os?: string }
       | { kind: "device"; deviceId: string };
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,
@@ -237,6 +246,7 @@ export async function invokeSessionMove(
 export async function invokeSessionReclaim(
   context: GatewayRequestContext,
   sessionMutationAuthorization?: SessionMutationAuthorization,
+  params: Omit<SessionsReclaimParams, "key"> = {},
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
@@ -244,7 +254,7 @@ export async function invokeSessionReclaim(
     'sessionDispatchHandlers["sessions.reclaim"] test invariant',
   )({
     req: { id: "reclaim-request" } as never,
-    params: { key: dispatchTestSessionKey },
+    params: { key: dispatchTestSessionKey, ...params },
     respond,
     context,
     client: null,

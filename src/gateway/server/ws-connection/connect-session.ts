@@ -416,6 +416,7 @@ export async function attachAuthenticatedGatewayConnect(
     connect: connectParams,
     connId,
     connectionKind: "gateway",
+    ...(!usesLegacyNodeProtocol && pluginSurfaceBaseUrl ? { pluginSurfaceBaseUrl } : {}),
     isDeviceTokenAuth: authMethod === "device-token",
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
@@ -596,6 +597,7 @@ export async function attachAuthenticatedGatewayConnect(
     const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(presenceKey, {
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
+      clientId: connectParams.client.id,
       ip: isLocalClient ? undefined : reportedClientIp,
       version: connectParams.client.version,
       platform: connectParams.client.platform,

@@ -147,12 +147,13 @@ async function renderCostUsageSummaryAsync(
   rich: boolean,
 ): Promise<string[]> {
   const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatTokenCount, formatUsd } = await loadUsageFormatModule();
+  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
+  const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
   const lines = [
     colorize(rich, theme.heading, `Usage cost (${days} days)`),
-    `${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
+    `${cachePrefix}${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
   ];
 
   if (summary.totals.missingCostEntries > 0) {
@@ -489,6 +490,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .command("call")
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
+      .option(
+        "--expect-url <url>",
+        "Fail if the resolved Gateway URL differs; preserves configured authentication",
+      )
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {
         await runGatewayCommand(

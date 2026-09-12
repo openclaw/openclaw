@@ -44,12 +44,13 @@ public final class OpenClawChatViewModel {
     /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
     /// Setter is module-internal for the thinking-level extension only.
-    public internal(set) var showsThinkingPicker = true
+    public internal(set) var showsThinkingPicker = false
     public internal(set) var preferredVerboseLevel: String
     var prefersExplicitVerboseLevel: Bool
     public private(set) var modelSelectionID: String = "__default__"
     public internal(set) var modelChoices: [OpenClawChatModelChoice] = []
     var modelAvailabilityIsSessionScoped = false
+    public internal(set) var modelCatalogMessage: String?
     @ObservationIgnored
     var nextModelCatalogRequestID: UInt64 = 0
     var modelPickerFavorites: [String]
@@ -518,9 +519,7 @@ public final class OpenClawChatViewModel {
         let initialResolvedThinkingLevel = normalizedThinkingLevel ?? "off"
         self.thinkingLevel = initialResolvedThinkingLevel
         self.preferredThinkingLevel = initialResolvedThinkingLevel
-        self.thinkingLevelOptions = Self.withCurrentThinkingOption(
-            Self.baseThinkingLevelOptions,
-            current: initialResolvedThinkingLevel)
+        self.thinkingLevelOptions = []
         self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
         let initialThinkingPreference = ThinkingPreferenceState(
             level: initialResolvedThinkingLevel,
@@ -1260,6 +1259,8 @@ extension OpenClawChatViewModel {
         self.invalidateComposerCapabilities()
         self.modelSelectionID = Self.defaultModelSelectionID
         self.modelAvailabilityIsSessionScoped = false
+        self.modelChoices = []
+        self.modelCatalogMessage = nil
         replaceMessages([])
         self.isShowingCachedTranscript = false
         self.hasAppliedLiveHistory = false

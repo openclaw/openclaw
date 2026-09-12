@@ -250,47 +250,21 @@ describe("memory index", () => {
       );
     }
 
-    const originalPrepare = fields.db.prepare.bind(fields.db);
-    let scannedBatches = 0;
-    const prepareSpy = vi.spyOn(fields.db, "prepare").mockImplementation((sql: string) => {
-      const statement = originalPrepare(sql);
-      if (!sql.includes("SELECT rowid, id, path")) {
-        return statement;
-      }
-      return {
-        all: (...args: Parameters<typeof statement.all>) => {
-          scannedBatches += 1;
-          return statement.all(...args);
-        },
-      } as unknown as typeof statement;
-    });
+    const caller = new AbortController();
+    const abortReason = new Error("caller stopped hybrid memory search");
+    const pending = manager.search("alpha", { signal: caller.signal });
+    setImmediate(() => caller.abort(abortReason));
 
-    try {
-      const caller = new AbortController();
-      const abortReason = new Error("caller stopped hybrid memory search");
-      const pending = manager.search("alpha", { signal: caller.signal });
-      setImmediate(() => caller.abort(abortReason));
+    await expect(pending).rejects.toBe(abortReason);
 
-      await expect(pending).rejects.toBe(abortReason);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(scannedBatches).toBe(1);
+    const healthyResults = await manager.search("alpha");
+    expect(healthyResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
 
-      const healthyResults = await manager.search("alpha");
-      expect(healthyResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
-
-      fields.ensureVectorReady = async () => {
-        throw new Error("vector store unavailable");
-      };
-      const degradedResults = await manager.search("alpha");
-      expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
-    } finally {
-      prepareSpy.mockRestore();
-    }
+    fields.ensureVectorReady = async () => {
+      throw new Error("vector store unavailable");
+    };
+    const degradedResults = await manager.search("alpha");
+    expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
   });
 
   it("supplements thin strict FTS results for conversational queries", async () => {

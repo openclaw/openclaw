@@ -415,7 +415,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     "No live channel service or external credential lease is required.",
   ];
 
-  async cleanup() {
+  async cleanupAfterGatewayStop() {
     await this.#state.cleanup();
   }
 }

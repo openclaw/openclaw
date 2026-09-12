@@ -792,13 +792,9 @@ export async function prepareBundledAiRuntimePackage(
 }
 
 async function normalizeOpenClawTarballModes(tarballPath: string) {
-  // npm/pnpm pack copy on-disk modes into the tarball (node-tar's portable
-  // mode-fix never adds read bits), so a restrictive-umask build host ships
-  // owner-only 0600/0700 entries that leave a root-installed CLI unreadable
-  // for non-root users under system tar and mode-preserving installers.
-  // Rewrite every entry to 0644/0755 the way a umask-022 host would have
-  // packed it, keeping executable bits. Stays on the system tar contract like
-  // the bundled AI runtime extraction above.
+  // npm can retain restrictive source read bits. Normalize those for non-root
+  // installers while preserving the archive's executable intent. pnpm derives
+  // that intent from bin and publishConfig.executableFiles, not source modes.
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
     await runPackageTar("extract", tarballPath, stageDir);

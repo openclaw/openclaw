@@ -1,6 +1,9 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type {
+  SessionPlacementDiskSpace,
+  SessionPlacementMachine,
+} from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type {
@@ -61,6 +64,7 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  agentId?: string;
   sessionId?: string;
   displayName?: string;
   incognito?: boolean;
@@ -87,6 +91,7 @@ export type SidebarRecentSession = {
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
+  pinnable: boolean;
   archived?: boolean;
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
@@ -105,6 +110,7 @@ export type SidebarRecentSession = {
   placementState?: SessionPlacementState;
   placementProviderId?: string;
   placementProfileId?: string;
+  placementMachine?: SessionPlacementMachine;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
@@ -116,6 +122,11 @@ export type SidebarRecentSession = {
   lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
+  /** Own attention remains distinct from the collapsed-tree projection. */
+  ownAttention?: SidebarSessionAttention;
+  childAttention?: readonly SidebarSessionAttention[];
+  unreadChildCount?: number;
+  queuedChildCount?: number;
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -156,6 +167,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "participants"
   | "placementProviderId"
   | "placementProfileId"
+  | "placementMachine"
   | "status"
   | "startedAt"
   | "updatedAt"
@@ -180,6 +192,10 @@ export function rowDemandsVisibility(
         row.containsActiveDescendant ||
         row.hasActiveRun ||
         row.runningChildCount > 0 ||
+        row.failedChildCount > 0 ||
+        (row.workspaceConflictCount ?? 0) > 0 ||
+        row.unread ||
+        (row.unreadChildCount ?? 0) > 0 ||
         row.attention.kind !== "none";
 }
 

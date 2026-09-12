@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -8,13 +9,16 @@ struct DeviceSettingsConsentTests {
         let sensitive: [DeviceSettingKey: DeviceSettingsConsent] = [
             .cookieSyncEnabled: .cookieSync,
             .computerControlEnabled: .computerControl,
+            .unattendedDesktopEnabled: .unattendedDesktop,
             .peekabooBridgeEnabled: .peekabooBridge,
             .cameraEnabled: .camera,
             .activeComputerPresenceEnabled: .activityReporting,
             .wakeEnabled: .voiceWake,
             .locationPrecise: .preciseLocation,
         ]
-        for key in DeviceSettingKey.allCases where key.valueType == .boolean {
+        for key in DeviceSettingKey.allCases {
+            guard DeviceSettingsRequest(body: ["type": "set", "key": key.rawValue, "value": true]) ==
+                .set(key, .boolean(true)) else { continue }
             #expect(try self.consent(key, raw: true) == sensitive[key], "Enable \(key.rawValue)")
             #expect(try self.consent(key, raw: false) == nil, "Disable \(key.rawValue)")
         }

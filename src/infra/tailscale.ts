@@ -87,8 +87,7 @@ function isTransientTailscaleStatusError(error: unknown): boolean {
  * Locate Tailscale binary using multiple strategies:
  * 1. PATH lookup (via which command)
  * 2. Known macOS app path
- * 3. find /Applications for Tailscale.app
- * 4. locate database (if available)
+ * 3. locate database (if available)
  *
  * @returns Path to Tailscale binary or null if not found
  */
@@ -123,30 +122,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
     return macAppPath;
   }
 
-  // Strategy 3: find command in /Applications
-  try {
-    const { stdout } = await runExec(
-      "find",
-      [
-        "/Applications",
-        "-maxdepth",
-        "3",
-        "-name",
-        "Tailscale",
-        "-path",
-        "*/Tailscale.app/Contents/MacOS/Tailscale",
-      ],
-      { timeoutMs: 5000 },
-    );
-    const found = stdout.trim().split("\n")[0];
-    if (found && (await checkBinary(found))) {
-      return found;
-    }
-  } catch {
-    // find failed, continue
-  }
-
-  // Strategy 4: locate command
+  // Strategy 3: locate command
   try {
     const { stdout } = await runExec("locate", ["Tailscale.app"]);
     const candidates = stdout

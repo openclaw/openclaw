@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 import {
-  DEFAULT_REDACT_PATTERNS,
+  DEFAULT_REDACT_STRING_PATTERNS,
   TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
 } from "./redact-patterns.js";
 import { redactSourceInputTextWithConfig } from "./redact-source.js";
@@ -44,9 +45,45 @@ afterEach(() => {
   tempDirs = [];
 });
 
+describe("bounded replacement output", () => {
+  it.each<[RegExp, string, string]>([
+    [/aaaa/g, "blue", "bluebbbbcccc"],
+    [/bbbb/g, "blue", "aaaabluecccc"],
+    [/cccc/g, "blue", "aaaabbbbblue"],
+    [/none/g, "blue", "aaaabbbbcccc"],
+    [/aaaa/g, "", "bbbbcccc"],
+  ])("preserves complete output for %s", (pattern, replacement, expected) => {
+    expect(
+      replacePatternBounded("aaaabbbbcccc", pattern, () => replacement, {
+        chunkThreshold: 4,
+        chunkSize: 4,
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps calling a stateful replacer after unchanged results", () => {
+    const calls: Array<{ match: string; offset: number; input: string }> = [];
+    const output = replacePatternBounded(
+      "red red red",
+      /red/g,
+      (match, offset, input) => {
+        calls.push({ match, offset, input });
+        return calls.length === 3 ? "blue" : match;
+      },
+      { chunkThreshold: 4, chunkSize: 4 },
+    );
+    expect(output).toBe("red red blue");
+    expect(calls).toEqual([
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red" },
+    ]);
+  });
+});
+
 describe("default redact pattern ownership", () => {
-  it("exposes the browser-safe canonical pattern table without drift", () => {
-    expect(defaults).toEqual(DEFAULT_REDACT_PATTERNS);
+  it("getDefaultRedactPatterns exposes the serializable string pattern table", () => {
+    expect(defaults).toEqual(DEFAULT_REDACT_STRING_PATTERNS);
   });
 });
 
@@ -957,6 +994,21 @@ describe("redactSensitiveText", () => {
     expect(headerBitmap.slice(header.indexOf("=") + 1).every(Boolean)).toBe(true);
   });
 
+  it("keeps original bitmap offsets after empty values and Unicode line prefixes", () => {
+    const input = '😀safe\r\nbody: code=&safe=1\rclient%5Fsecret="abc";&safe=2';
+    const resolved = resolveRedactOptions({ mode: "tools" });
+    const bitmap = computeSensitiveRedactionBitmap(input, resolved);
+    const secretStart = input.indexOf('"abc"');
+
+    expect(redactSensitiveText(input)).toBe(
+      "😀safe\r\nbody: code=***&safe=1\rclient%5Fsecret=***;&safe=2",
+    );
+    expect(bitmap).toHaveLength(input.length);
+    expect(bitmap.slice(0, secretStart).some(Boolean)).toBe(false);
+    expect(bitmap.slice(secretStart, secretStart + 5).every(Boolean)).toBe(true);
+    expect(bitmap.slice(secretStart + 5).some(Boolean)).toBe(false);
+  });
+
   it("masks token prefixes embedded after adjacent text", () => {
     const token = `ghp_${"a".repeat(5_000)}`;
     const output = redactSensitiveText(`prefix-${token} suffix`, { mode: "tools" });
@@ -1437,13 +1489,13 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("oauth-code-123");
   });
 
-  it("does not apply built-in form-body redaction when custom patterns override defaults", () => {
+  it("redactSensitiveText keeps form-body protection when custom patterns replace the string list", () => {
     const input = "password=value&safe=1";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: [String.raw`custom-secret-([A-Za-z0-9]+)`],
     });
-    expect(output).toBe(input);
+    expect(output).toBe("password=***&safe=1");
   });
 
   it("redacts private key blocks", () => {
@@ -1468,22 +1520,22 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
-  it("keeps single-capture custom patterns focused on the captured occurrence", () => {
-    const input = "password=abc123456789012345&confirm=abc123456789012345";
+  it("redactSensitiveText keeps single-capture custom patterns focused on the captured occurrence", () => {
+    const input = "project_value=abc123456789012345&confirm=abc123456789012345";
     const output = redactSensitiveText(input, {
       mode: "tools",
-      patterns: [String.raw`password=([^&]+)&confirm=\1`],
+      patterns: [String.raw`project_value=([^&]+)&confirm=\1`],
     });
-    expect(output).toBe("password=abc123…2345&confirm=abc123456789012345");
+    expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
   });
 
-  it("masks captured custom-pattern values even when the value repeats later", () => {
-    const input = "password=abc123456789012345&confirm=abc123456789012345";
+  it("redactSensitiveText masks captured custom-pattern values even when the value repeats later", () => {
+    const input = "project_value=abc123456789012345&confirm=abc123456789012345";
     const output = redactSensitiveText(input, {
       mode: "tools",
-      patterns: [String.raw`password=([^&]+)&confirm=[^&]+`],
+      patterns: [String.raw`project_value=([^&]+)&confirm=[^&]+`],
     });
-    expect(output).toBe("password=abc123…2345&confirm=abc123456789012345");
+    expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
   });
 
   it("honors escaped character classes in custom patterns", () => {
@@ -1897,7 +1949,7 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("does not resolve patterns when mode is off", () => {
+  it("resolveRedactOptions does not resolve patterns when mode is off", () => {
     const options = {
       mode: "off" as const,
       get patterns(): never {
@@ -1908,21 +1960,19 @@ describe("redactSensitiveText", () => {
     expect(resolveRedactOptions(options)).toEqual({
       mode: "off",
       patterns: [],
-      redactFormBodies: false,
     });
     expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef", options)).toBe(
       "OPENAI_API_KEY=sk-1234567890abcdef",
     );
   });
 
-  it("reuses compiled global regex patterns", () => {
+  it("resolveRedactOptions reuses compiled global regex patterns", () => {
     const pattern = /token=([A-Za-z0-9]+)/g;
     const resolved = resolveRedactOptions({
       mode: "tools",
       patterns: [pattern],
     });
 
-    expect(resolved.patterns).toHaveLength(1);
     expect(resolved.patterns[0]).toBe(pattern);
   });
 
@@ -2038,6 +2088,60 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("opaque-refresh-token-value");
   });
 
+  it.each([
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ECONNABORTED",
+    "ENETRESET",
+    "EPIPE",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EHOSTDOWN",
+  ])("preserves the known transport code %s only in object cause chains", (code) => {
+    expect(redactSecrets({ cause: { code, cause: { code } } })).toEqual({
+      cause: { code, cause: { code } },
+    });
+    expect(redactSecrets({ Cause: { CODE: code } })).toEqual({ Cause: { CODE: code } });
+  });
+
+  it.each([
+    { input: { cause: { code: "p4Q6x7J9" } }, expected: { cause: { code: "***" } } },
+    {
+      input: { cause: { code: "token-EAI_AGAIN-secret" } },
+      expected: { cause: { code: "token-…cret" } },
+    },
+    { input: { cause: { code: " EAI_AGAIN" } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: "EAI_AGAIN\n" } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456 } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: true } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456n } }, expected: { cause: { code: "***" } } },
+    {
+      input: { oauth: { cause: { code: "EAI_AGAIN" } } },
+      expected: { oauth: { cause: { code: "***" } } },
+    },
+    {
+      input: { providerAuth: { cause: { code: "p4Q6x7J9" } } },
+      expected: { providerAuth: { cause: { code: "***" } } },
+    },
+    { input: { cause: [{ code: "EAI_AGAIN" }] }, expected: { cause: [{ code: "***" }] } },
+    { input: { cause: { code: ["EAI_AGAIN"] } }, expected: { cause: { code: ["***"] } } },
+    { input: [{ cause: { code: "EAI_AGAIN" } }], expected: [{ cause: { code: "***" } }] },
+  ])(
+    "masks authorization codes outside the exact transport boundary: $input",
+    ({ input, expected }) => {
+      expect(redactSecrets(input)).toEqual(expected);
+    },
+  );
+
+  it("keeps secret masking ahead of known transport code preservation", () => {
+    registerSecretValueForRedaction("EAI_AGAIN");
+    const output = redactSecrets({ cause: { code: "EAI_AGAIN", token: "opaque-neighbor-secret" } });
+    expect(output.cause.code).not.toBe("EAI_AGAIN");
+    expect(output.cause.token).not.toBe("opaque-neighbor-secret");
+  });
+
   it("keeps structured error codes while redacting OAuth authorization codes", () => {
     const output = redactSecrets({
       manifest: {
@@ -2119,11 +2223,8 @@ describe("redactSensitiveLines", () => {
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
-  it("redacts structured auth when form-body preprocessing is disabled", () => {
-    const resolved = {
-      ...resolveRedactOptions({ mode: "tools" }),
-      redactFormBodies: false,
-    };
+  it("redactSensitiveLines keeps structured auth protection with custom-only patterns", () => {
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: ["project-private"] });
     const response = ["line", "digest", "response", "1234567890abcdef"].join("-");
 
     expect(
@@ -2146,10 +2247,8 @@ describe("redactSensitiveLines", () => {
     ).toEqual(["Authorization: Digest", " ***; status=401"]);
   });
 
-  it("applies exact registered secrets without falling back from empty resolved patterns", () => {
-    // Simulates the case where all user-configured patterns fail to compile.
-    // The pre-resolved empty array must be honored, not silently replaced with defaults.
-    const resolved = { mode: "tools" as const, patterns: [], redactFormBodies: false };
+  it("redactSensitiveLines keeps registered secrets when custom regexes are rejected", () => {
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: ["/(a+)+$/"] });
     const secret = "opaque-registry-value-1234567890";
     registerSecretValueForRedaction(secret);
     expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([

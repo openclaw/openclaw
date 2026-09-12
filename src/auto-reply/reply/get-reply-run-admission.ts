@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
@@ -42,7 +41,7 @@ import {
   resolvePreparedReplyQueueState,
 } from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
-import { resolveActiveRunQueueAction } from "./queue-policy.js";
+import { resolveActiveRunQueueAction, resolveReplyQueueAdmissionState } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import {
@@ -214,10 +213,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionId,
           isFirstTurnInSession,
           workspaceDir: context.skillsWorkspaceDir,
-          executionSkillsDir: path.join(
+          executionWorkspaceDir:
             sessionEntry?.worktree?.canonicalWorkspaceDir ?? context.workspaceDir,
-            "skills",
-          ),
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
@@ -229,14 +226,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let {
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    media: promptMedia,
-    currentInboundContext,
-  } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
+  let promptBodies = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
@@ -354,9 +344,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     rebindProvidedReplyOperation(latestSessionId);
     opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
-    const sessionFile = storePath
-      ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
-      : resolveSessionFilePathCore(latestSessionId, latestSessionEntry, sessionFilePathOptions);
+    // Queued admission uses the scoped key too. A legacy marker for the same
+    // transcript would make unchanged tool authority fail the steering check.
+    const sessionFile =
+      normalizeOptionalString(sessionKey) ??
+      (storePath
+        ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
+        : resolveSessionFilePathCore(latestSessionId, latestSessionEntry, sessionFilePathOptions));
     return { sessionEntry: latestSessionEntry, sessionId: latestSessionId, sessionFile };
   };
   let preparedSessionState = resolvePreparedSessionState();
@@ -422,7 +416,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: context.runtimePolicySessionKey,
       });
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime) {
+    if (useFastReplyRuntime && !params.configuredProfileId) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -430,7 +424,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         ),
       };
     }
-    const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
+    const shouldUseEphemeralSession =
+      params.autoFallbackPrimaryProbe !== undefined || params.configuredProfileId !== undefined;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry =
       shouldUseEphemeralSession && preparedSessionState.sessionEntry
@@ -447,6 +442,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       cfg,
       provider,
       modelId: model,
+      agentId,
+      configuredProfileId: params.configuredProfileId,
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,
@@ -523,6 +520,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
     const adoption = await admitReplyTurn({
+      agentId,
       sessionKey: commandTurnContinuationTargetKey,
       sessionId: providedReplyOperation.sessionId,
       expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
@@ -556,13 +554,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? replyRunRegistry.resolveCurrentInterruptTarget(sessionKey)
       : undefined;
   const pendingQueue = getExistingFollowupQueue(queueKey);
-  const queueAdmissionState = !pendingQueue
-    ? "empty"
-    : pendingQueue.items.some((item) => !item.steerPending) ||
-        pendingQueue.inFlight.size > 0 ||
-        pendingQueue.droppedCount > 0
-      ? "ready"
-      : "steering";
+  const queueAdmissionState = resolveReplyQueueAdmissionState(
+    pendingQueue,
+    replyRunRegistry.get(queueKey),
+  );
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
     !isRoomEvent &&
@@ -625,14 +620,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         // The interrupted run may have changed goal or suggestion state while admission waited.
         await refreshInboundContextAfterAdmissionWait();
         sessionEntry = context.getSessionEntry();
-        ({
-          prefixedCommandBody,
-          queuedBody,
-          transcriptBody,
-          transcriptCommandBody,
-          media: promptMedia,
-          currentInboundContext,
-        } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+        promptBodies = await traceRunPhase("reply.build_prompt_bodies", () =>
+          rebuildPromptBodies(),
+        );
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -643,16 +633,18 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   }
   if (activeRunQueueAction !== "drop") {
     await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
-    ({
-      prefixedCommandBody,
-      queuedBody,
-      transcriptBody,
-      transcriptCommandBody,
-      media: promptMedia,
-      currentInboundContext,
-    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+    promptBodies = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   }
 
+  const {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    media: promptMedia,
+    inboundMediaIndexes,
+    currentInboundContext,
+  } = promptBodies;
   return {
     kind: "ready",
     context,
@@ -666,6 +658,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     transcriptBody,
     transcriptCommandBody,
     promptMedia,
+    inboundMediaIndexes,
     currentInboundContext,
     isRoomEvent,
     providedReplyOperation,

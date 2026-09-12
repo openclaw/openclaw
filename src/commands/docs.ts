@@ -97,7 +97,7 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
 
 function parseDocsSearchResults(raw: unknown): DocResult[] {
   if (!Array.isArray(raw)) {
-    return [];
+    throw new Error("Docs search response is malformed: expected results array");
   }
   const results: DocResult[] = [];
   for (const item of raw) {
@@ -122,7 +122,7 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
 export async function docsSearchCommand(
   queryParts: string[],
   runtime: RuntimeEnv,
-  options: { json?: boolean } = {},
+  options: { json?: boolean; limit?: number } = {},
 ) {
   const query = queryParts.join(" ").trim();
   if (!query) {
@@ -151,6 +151,9 @@ export async function docsSearchCommand(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Docs search failed: ${message}`, { cause: error });
+  }
+  if (options.limit !== undefined) {
+    results = results.slice(0, options.limit);
   }
 
   if (options.json) {

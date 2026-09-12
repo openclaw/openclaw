@@ -3,14 +3,15 @@ import { createHash } from "node:crypto";
 import type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
-  MessageReceipt,
   MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getMatrixRuntime } from "../runtime.js";
+import { resolveMatrixReplyToEventId, resolveMatrixThreadRootId } from "./relations.js";
 import type { MatrixClient } from "./sdk.js";
 import type { MatrixMessageWireDispatch } from "./sdk/client-base.js";
 import { withResolvedMatrixSendClient } from "./send/client.js";
+import { createMatrixSendReceipt, type MatrixReceiptEvent } from "./send/receipt.js";
 import { resolveMatrixRoomId } from "./send/targets.js";
 import type { MatrixOutboundContent } from "./send/types.js";
 
@@ -351,39 +352,6 @@ function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void 
   }
 }
 
-function createReconciledMatrixReceipt(params: {
-  results: readonly { eventId: string; receiptKind: MessageReceiptPartKind }[];
-  replyToId?: string;
-  threadId?: string;
-}): MessageReceipt {
-  const uniqueResults = params.results.filter(
-    (result, index, results) =>
-      results.findIndex((entry) => entry.eventId === result.eventId) === index,
-  );
-  const platformMessageIds = uniqueResults.map((result) => result.eventId);
-  return {
-    ...(platformMessageIds[0] ? { primaryPlatformMessageId: platformMessageIds[0] } : {}),
-    platformMessageIds,
-    parts: uniqueResults.map((result, index) => {
-      const part: NonNullable<MessageReceipt["parts"]>[number] = {
-        platformMessageId: result.eventId,
-        kind: result.receiptKind,
-        index,
-      };
-      if (params.replyToId) {
-        part.replyToId = params.replyToId;
-      }
-      if (params.threadId) {
-        part.threadId = params.threadId;
-      }
-      return part;
-    }),
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.threadId ? { threadId: params.threadId } : {}),
-    sentAt: Date.now(),
-  };
-}
-
 async function requireTransactionScope(client: MatrixClient): Promise<string> {
   const scope = (await client.getTransactionScopeId()).trim();
   if (!scope) {
@@ -417,10 +385,7 @@ export async function reconcileMatrixUnknownSend(
         const roomId = await resolveMatrixRoomId(client, ctx.to);
         const wireEventType = await client.getMessageWireEventType(roomId);
         const orderedPlans = [...plans].toSorted((left, right) => left.partIndex - right.partIndex);
-        const results: Array<{
-          eventId: string;
-          receiptKind: MessageReceiptPartKind;
-        }> = [];
+        const results = new Map<string, MatrixReceiptEvent>();
         for (const plan of orderedPlans) {
           assertPlanIdentity(plan, {
             identity: plan,
@@ -430,38 +395,36 @@ export async function reconcileMatrixUnknownSend(
             wireEventType,
           });
           for (const event of plan.events) {
-            results.push({
-              eventId: await client.sendMessage(
-                roomId,
-                event.content,
-                event.transactionId,
-                async (dispatch) => {
-                  await persistMatrixDeliveryPlan({
-                    identity: plan,
-                    accountId: ctx.accountId,
-                    roomId,
-                    transactionScopeId,
-                    wireEventType,
-                    events: plan.events,
-                    dispatch,
-                  });
-                },
-              ),
-              receiptKind: event.receiptKind,
-            });
+            const messageId = await client.sendMessage(
+              roomId,
+              event.content,
+              event.transactionId,
+              async (dispatch) => {
+                await persistMatrixDeliveryPlan({
+                  identity: plan,
+                  accountId: ctx.accountId,
+                  roomId,
+                  transactionScopeId,
+                  wireEventType,
+                  events: plan.events,
+                  dispatch,
+                });
+              },
+            );
+            if (!results.has(messageId)) {
+              const replyToId = resolveMatrixReplyToEventId(event.content);
+              results.set(messageId, {
+                messageId,
+                kind: event.receiptKind,
+                ...(replyToId ? { replyToId } : {}),
+              });
+            }
           }
         }
-        const replyToId =
-          ctx.effectiveReplyToId !== undefined
-            ? ctx.effectiveReplyToId
-            : ctx.replyToMode === "off"
-              ? undefined
-              : ctx.replyToId;
-        const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
-        const receipt = createReconciledMatrixReceipt({
-          results,
-          ...(replyToId ? { replyToId } : {}),
-          ...(threadId ? { threadId } : {}),
+        const receipt = createMatrixSendReceipt({
+          roomId,
+          events: [...results.values()],
+          threadId: resolveMatrixThreadRootId(orderedPlans[0]!.events[0]!.content),
         });
         return {
           status: "sent",

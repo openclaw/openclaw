@@ -15,6 +15,8 @@ export type ToastOptions = {
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   anchorTopOffset?: number;
+  /** Bottom placement suits settings feedback without covering the page heading. */
+  placement?: "top" | "bottom";
   icon?: TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
@@ -65,18 +67,18 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback() {
+    super.disconnectedCallback();
+    // append() relocations reconnect before reactions run. Keep the notification
+    // and its deadline; only a real removal dismisses or returns it from a modal.
+    if (this.isConnected) {
+      return;
+    }
     const target = activeModalToastLayer() ?? restingToastLayer();
-    if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && target) {
+    if (this.parentElement?.localName === "openclaw-modal-dialog" && target) {
       target.append(this);
     } else {
       this.dismiss("disconnected");
     }
-    super.disconnectedCallback();
-  }
-
-  /** Keep the outcome intact and refresh ancestor-owned placement across moveBefore() handoffs. */
-  connectedMoveCallback() {
-    this.syncPlacement();
   }
 
   show(options: ToastOptions) {
@@ -156,7 +158,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     const anchored = anchorRect !== null && anchorRect.width > 0;
     return html`
       <div
-        class="app-toast ${anchored ? "app-toast--anchored" : ""}"
+        class="app-toast ${anchored ? "app-toast--anchored" : toast.placement === "bottom" ? "app-toast--bottom" : ""}"
         data-active=${this.active ? "true" : "false"}
         style=${styleMap(
           anchored
@@ -231,15 +233,13 @@ export function showToast(options: ToastOptions): boolean {
   }
   const modal = activeModalToastLayer();
   if (modal && host.parentElement !== modal) {
-    modal.moveBefore(host, null);
+    modal.append(host);
     const handoff = (event: Event) => {
       if (event.target !== modal) {
         return;
       }
       modal.removeEventListener("wa-after-hide", handoff);
-      queueMicrotask(() =>
-        (activeModalToastLayer() ?? restingToastLayer())?.moveBefore(host, null),
-      );
+      queueMicrotask(() => (activeModalToastLayer() ?? restingToastLayer())?.append(host));
     };
     modal.addEventListener("wa-after-hide", handoff);
   }

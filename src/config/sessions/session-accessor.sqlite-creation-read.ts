@@ -1,6 +1,9 @@
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
-import { projectSessionEntriesForListing } from "./session-accessor.sqlite-entry.js";
+import {
+  readSessionEntryCache,
+  type SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.js";
+import { iterateSessionEntriesForListing } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionAccessScope,
@@ -11,6 +14,26 @@ import {
   normalizeStoreSessionKey,
   resolveSessionEntryCandidates,
 } from "./store-entry.js";
+
+type CreationFacts = {
+  targetEntry: SessionEntryCreateWithTranscriptContext["targetEntry"];
+  labels: Set<string | undefined>;
+};
+
+function* collectCreationCandidates(
+  snapshot: SessionEntryCacheSnapshot,
+  normalizedKey: string,
+  facts: CreationFacts,
+) {
+  for (const candidate of iterateSessionEntriesForListing(snapshot)) {
+    if (candidate.sessionKey === normalizedKey) {
+      facts.targetEntry = candidate.entry;
+    } else {
+      facts.labels.add(candidate.entry.label);
+    }
+    yield candidate;
+  }
+}
 
 /** Owns the complete target payload and sibling-label facts before asynchronous preparation. */
 export function readSessionCreationSnapshot(
@@ -30,17 +53,13 @@ export function readSessionCreationSnapshot(
       ...collectSessionEntryLookupKeys(database, scope.sessionKey),
     ],
   });
-  const entries = projectSessionEntriesForListing(snapshot);
-  const resolved = resolveSessionEntryCandidates({ entries, sessionKey: scope.sessionKey });
-  const targetEntry = entries.find(
-    ({ sessionKey }) => sessionKey === resolved.normalizedKey,
-  )?.entry;
-  const labels = new Set<string | undefined>();
-  for (const { sessionKey, entry } of entries) {
-    if (sessionKey !== resolved.normalizedKey) {
-      labels.add(entry.label);
-    }
-  }
+  const facts: CreationFacts = { targetEntry: undefined, labels: new Set() };
+  const resolved = resolveSessionEntryCandidates({
+    entries: collectCreationCandidates(snapshot, normalizeStoreSessionKey(scope.sessionKey), facts),
+    sessionKey: scope.sessionKey,
+    canonicalKeys: true,
+  });
+  const { targetEntry, labels } = facts;
   return {
     normalizedKey: resolved.normalizedKey,
     legacyKeys: resolved.legacyKeys,

@@ -354,7 +354,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       try {
         ({ attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
           messageContent,
-          undefined,
           account.mediaMaxBytes,
         ));
         if (attachments.length > 0) {
@@ -485,7 +484,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             `This can leak conversation context between users.\n\n` +
             `Fix: Add to your OpenClaw config:\n` +
             `session:\n  dmScope: "per-channel-peer"\n\n` +
-            `Docs: https://docs.openclaw.ai/concepts/session#secure-dm-mode`;
+            `Docs: https://docs.openclaw.ai/concepts/session#dm-isolation`;
 
           sendDm({
             api,

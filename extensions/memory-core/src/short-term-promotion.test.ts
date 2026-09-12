@@ -657,6 +657,37 @@ describe("short-term promotion", () => {
     );
   });
 
+  it("keeps blocked origins out of ranking before applying the candidate limit", async (workspaceDir) => {
+    const nowMs = Date.parse("2026-04-03T10:00:00.000Z");
+    const origins = ["untrusted", "system", "owner", "agent", undefined] as const;
+    await recordMemoryRecalls(
+      workspaceDir,
+      "release notes",
+      origins.map((originClass, index) =>
+        memoryRecallResult(
+          "memory/2026-04-02.md",
+          index + 1,
+          index + 1,
+          index < 2 ? 0.99 : 0.1,
+          `Keep release notes beside the deployment checklist ${index}.`,
+          originClass
+            ? { provenance: { originClass, sessionKind: "interactive", observedAt: nowMs } }
+            : {},
+        ),
+      ),
+      { nowMs },
+    );
+
+    const ranked = await rankAllCandidates(workspaceDir, { nowMs });
+    expect(ranked.map((candidate) => candidate.startLine).toSorted((a, b) => a - b)).toEqual([
+      3, 4, 5,
+    ]);
+    expect(await rankAllCandidates(workspaceDir, { nowMs, limit: 1 })).toEqual(ranked.slice(0, 1));
+    expect(
+      await rankAllCandidates(workspaceDir, { nowMs, limit: 1, includePromoted: true }),
+    ).toEqual(ranked.slice(0, 1));
+  });
+
   it("records recalls and ranks candidates with weighted scores", async (workspaceDir) => {
     const shortTermResult = memoryRecallResult(
       "memory/2026-04-02.md",
@@ -764,7 +795,7 @@ describe("short-term promotion", () => {
     expect(ranked).toHaveLength(0);
   });
 
-  it("merges a repeated claim across three day files and clears the default gates", async (workspaceDir) => {
+  it("merges a repeated claim across days without faking query diversity", async (workspaceDir) => {
     const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
     let candidateKey;
 
@@ -821,8 +852,17 @@ describe("short-term promotion", () => {
       }
     }
 
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      }),
+    ).resolves.toHaveLength(0);
+
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
+      minScore: 0,
+      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
     });
 
@@ -833,9 +873,9 @@ describe("short-term promotion", () => {
     expect(ranked[0]?.recallCount).toBe(0);
     expect(ranked[0]?.dailyCount).toBe(3);
     expect(ranked[0]?.signalCount).toBe(3);
-    expect(ranked[0]?.uniqueQueries).toBe(3);
+    expect(ranked[0]?.uniqueQueries).toBe(0);
     expect(ranked[0]?.recallDays).toEqual(queryDays);
-    expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
+    expect(ranked[0]?.score).toBeLessThan(0.75);
     expect(ranked[0] && isPromotionOriginBlocked(ranked[0])).toBe(false);
   });
 
@@ -954,7 +994,7 @@ describe("short-term promotion", () => {
     );
   });
 
-  it("lets grounded durable evidence satisfy default deep thresholds", async (workspaceDir) => {
+  it("does not let grounded backfill keys satisfy query diversity", async (workspaceDir) => {
     await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
       'Always use "Happy Together" calendar for flights and reservations.',
     ]);
@@ -986,25 +1026,78 @@ describe("short-term promotion", () => {
       nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
     });
 
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      }),
+    ).resolves.toHaveLength(0);
+
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
+      minScore: 0,
+      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
     });
 
     expect(ranked).toHaveLength(1);
     expect(ranked[0]?.groundedCount).toBe(3);
-    expect(ranked[0]?.uniqueQueries).toBe(3);
+    expect(ranked[0]?.uniqueQueries).toBe(0);
     expect(ranked[0]?.avgScore).toBeGreaterThan(0.85);
 
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates: ranked,
+      minScore: 0,
+      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
     });
 
     expect(applied.applied).toBe(1);
     const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memory).toContain('Always use "Happy Together" calendar');
+  });
+
+  it("preserves interactive query diversity across grounded reruns", async (workspaceDir) => {
+    const snippet = "Keep encrypted router backups in S3 Glacier.";
+    await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+    const groundedItem = groundedCandidateFixture({
+      path: "memory/2026-04-03.md",
+      snippet,
+      query: "__dreaming_grounded_backfill__:candidate",
+    });
+
+    await recordGroundedShortTermCandidates({
+      workspaceDir,
+      query: "__dreaming_grounded_backfill__",
+      items: [groundedItem],
+      nowMs: Date.parse("2026-04-03T09:00:00.000Z"),
+    });
+    for (const query of ["router backups", "encrypted retention", "glacier storage"]) {
+      await recordMemoryRecalls(
+        workspaceDir,
+        query,
+        [memoryRecallResult("memory/2026-04-03.md", 1, 1, 0.92, snippet)],
+        { nowMs: Date.parse("2026-04-03T10:00:00.000Z") },
+      );
+    }
+
+    const before = await rankAllCandidates(workspaceDir);
+    expect(before).toHaveLength(1);
+    expect(before[0]?.uniqueQueries).toBe(3);
+
+    await recordGroundedShortTermCandidates({
+      workspaceDir,
+      query: "__dreaming_grounded_backfill__",
+      items: [groundedItem],
+      nowMs: Date.parse("2026-04-03T11:00:00.000Z"),
+    });
+
+    const after = await rankAllCandidates(workspaceDir);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.key).toBe(before[0]?.key);
+    expect(after[0]?.uniqueQueries).toBe(3);
+    expect(after[0]?.groundedCount).toBe(2);
   });
 
   it("removes grounded-only staged entries without deleting mixed live entries", async (workspaceDir) => {
@@ -1464,6 +1557,47 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toContain("signal threshold");
+    expect(applied.rejectedCandidates[0]?.category).toBe("signal threshold");
+  });
+
+  it("does not let recall days satisfy the apply-time query gate", async (workspaceDir) => {
+    const nowIso = new Date().toISOString();
+    const applied = await applyShortTermPromotions({
+      workspaceDir,
+      candidates: [
+        {
+          key: "memory:memory/2026-04-03.md:1:2",
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "Move backups to S3 Glacier.",
+          recallCount: 3,
+          signalCount: 3,
+          avgScore: 0.95,
+          maxScore: 0.95,
+          uniqueQueries: 0,
+          firstRecalledAt: nowIso,
+          lastRecalledAt: nowIso,
+          ageDays: 0,
+          score: 0.95,
+          recallDays: ["2026-04-01", "2026-04-02", "2026-04-03"],
+          conceptTags: ["glacier", "backups"],
+          components: {
+            frequency: 0.6,
+            relevance: 0.95,
+            diversity: 0,
+            recency: 1,
+            consolidation: 0.6,
+            conceptual: 0.4,
+          },
+        },
+      ],
+    });
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe("query threshold (0 < 3)");
+    expect(applied.rejectedCandidates[0]?.category).toBe("query threshold");
   });
 
   it("does not rank contaminated dreaming snippets from an existing short-term store", async (workspaceDir) => {
@@ -1625,6 +1759,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toContain("age threshold");
+    expect(applied.rejectedCandidates[0]?.category).toBe("age threshold");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
@@ -1668,6 +1803,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
+    expect(applied.rejectedCandidates[0]?.category).toBe("contamination");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
@@ -1729,6 +1865,7 @@ describe("short-term promotion", () => {
     const applied = await applyAllCandidates(workspaceDir, ranked);
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
+    expect(applied.rejectedCandidates[0]?.category).toBe("origin");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
@@ -2563,6 +2700,7 @@ describe("short-term promotion", () => {
           path: "memory/2026-04-01.md",
           endLine: 2,
           snippet,
+          userQueryHashes: ["a", "b"],
           conceptTags: deriveConceptTags({
             path: "memory/2026-04-01.md",
             snippet,
@@ -3041,6 +3179,8 @@ describe("short-term promotion", () => {
           expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o755);
 
           const secondSnippet = "Keep writing through a shared read-only directory.";
+          const lexicalCollisionPath = path.join(workspaceDir, "memory-alias.md");
+          await fs.writeFile(lexicalCollisionPath, "Do not overwrite this lexical collision.");
           await writeDailyMemoryNote(workspaceDir, "2026-04-30", [secondSnippet]);
           await recordMemoryRecalls(
             workspaceAlias,
@@ -3058,6 +3198,9 @@ describe("short-term promotion", () => {
             });
             expect(applied.applied).toBe(1);
             expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);
+            expect(await fs.readFile(lexicalCollisionPath, "utf-8")).toBe(
+              "Do not overwrite this lexical collision.",
+            );
             expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o555);
           } finally {
             await fs.chmod(sharedDir, 0o755);

@@ -19,7 +19,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, isPathInside, readLocalFileSafely } from "../infra/fs-safe.js";
-import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
@@ -46,27 +45,10 @@ const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 let playbackCacheOperationTail = Promise.resolve();
-let resolvePinnedHostnameForTest: typeof resolvePinnedHostname | undefined;
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
 };
-
-/** Overrides the canonical remote resolver for loopback integration tests. */
-function setMediaStoreNetworkDepsForTest(deps?: {
-  resolvePinnedHostname?: typeof resolvePinnedHostname;
-}): void {
-  resolvePinnedHostnameForTest = deps?.resolvePinnedHostname;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
-    enforcePlaybackTranscodeCacheLimit,
-    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
-    PLAYBACK_TRANSCODE_TTL_MS,
-    setMediaStoreNetworkDepsForTest,
-  };
-}
 
 function resolveMediaSubdir(subdir: string, caller: string): string {
   if (typeof subdir !== "string") {
@@ -304,11 +286,6 @@ export async function writePlaybackTranscodeCache(params: {
   });
 }
 
-/** Serializes maintenance quota scans with cache insertions. */
-async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
-  await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
-}
-
 /** Prunes expired playback renditions and reapplies the fixed cache size budget. */
 export async function prunePlaybackTranscodeCache(): Promise<void> {
   await queuePlaybackCacheOperation(async () => {
@@ -540,7 +517,6 @@ export async function saveMediaSource(
       headers,
       subdir,
       maxBytes,
-      resolvePinnedHostnameForTest,
     });
   }
   const baseId = crypto.randomUUID();

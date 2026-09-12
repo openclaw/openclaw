@@ -47,6 +47,7 @@ const suite = createControlUiE2eSuite({
 async function installChunkFailure(page: Page, chunk: RegExp, manualProbe?: Promise<void>) {
   let headCount = 0;
   let chunkRequestCount = 0;
+  let failedChunkUrl: string | undefined;
   await page.route("**/*", async (route) => {
     if (route.request().method() !== "HEAD") {
       await route.fallback();
@@ -61,6 +62,13 @@ async function installChunkFailure(page: Page, chunk: RegExp, manualProbe?: Prom
     await route.fallback();
   });
   await page.route(chunk, async (route: Route) => {
+    // A shared module can have both a facade and implementation matching the
+    // prefix. Count retries of the injected failure, not its other dependencies.
+    failedChunkUrl ??= route.request().url();
+    if (route.request().url() !== failedChunkUrl) {
+      await route.fallback();
+      return;
+    }
     chunkRequestCount += 1;
     if (chunkRequestCount === 1) {
       await route.abort("internetdisconnected");
@@ -487,6 +495,15 @@ suite.define(() => {
         if (testCase.webChrome) {
           await installNativeWebChrome(page);
         }
+        if (testCase.preserveCollapsedNavigation) {
+          // Bootstrap consumes this one-shot intent; seed each recovered document
+          // before its router can canonicalize the URL during the retry probe.
+          await page.addInitScript(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("nav", "collapsed");
+            window.history.replaceState(window.history.state, "", url);
+          });
+        }
         const failure = await installChunkFailure(page, testCase.chunk);
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -505,13 +522,6 @@ suite.define(() => {
           });
         }
 
-        if (testCase.preserveCollapsedNavigation) {
-          await page.evaluate(() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set("nav", "collapsed");
-            window.history.replaceState(window.history.state, "", url);
-          });
-        }
         await retryThroughReload(page, error);
         if (testCase.webChrome) {
           const toolbar = page.locator(".macos-titlebar-controls");

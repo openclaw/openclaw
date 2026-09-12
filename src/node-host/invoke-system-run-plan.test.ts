@@ -4,11 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
-} from "../infra/system-run-approval-binding.js";
+import { resolveMutableFileOperandSnapshotSync } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
+import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildSystemRunApprovalPlan,

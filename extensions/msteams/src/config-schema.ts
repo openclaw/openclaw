@@ -127,6 +127,8 @@ const MSTeamsAccountConfigBaseSchema = z
       .strict()
       .optional(),
   })
+  // Root and named-account policy, SSO, and cloud checks run together below so
+  // inherited values are validated on each effective account configuration.
   .strict();
 
 export const MSTeamsConfigSchema = MSTeamsAccountConfigBaseSchema.extend({

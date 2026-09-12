@@ -50,6 +50,7 @@ import {
   writeSessionIngestionState,
 } from "./session-ingestion.js";
 import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
+import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
 type ForgetDatabase = {
@@ -238,7 +239,6 @@ async function planMemoryIndex(params: {
           (source.source === "sessions" && removedSessionPaths.has(source.path)),
       );
       const chunkIds = chunks.map((chunk) => chunk.id);
-      const chunkHashes = [...new Set(chunks.map((chunk) => chunk.hash))];
       const ftsRows =
         chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
           ? executeSqliteQuerySync(
@@ -247,16 +247,14 @@ async function planMemoryIndex(params: {
             ).rows.length
           : 0;
       const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
-      const embeddingCacheRows =
-        chunkHashes.length > 0 && tableExists(db, "memory_embedding_cache")
-          ? executeSqliteQuerySync(
-              db,
-              kysely
-                .selectFrom("memory_embedding_cache")
-                .select("hash")
-                .where("hash", "in", chunkHashes),
-            ).rows.length
-          : 0;
+      let embeddingCacheRows = 0;
+      if (params.sessionIds.size > 0 && tableExists(db, "memory_embedding_cache")) {
+        const cacheCount = db
+          .prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache")
+          // SAFETY: the aggregate query always returns one row with the declared count alias.
+          .get() as { count?: unknown };
+        embeddingCacheRows = Number(cacheCount.count ?? 0);
+      }
       return { chunks, sources, ftsRows, embeddingCacheRows, hasVectorTable, databasePath };
     },
     { agentId: params.agentId },
@@ -446,17 +444,25 @@ async function forgetWorkspaceMemory(
     }
   }
 
-  const [shortTermEntries, ingestionState, backups, artifactProvenance, sessionCorpusEntries] =
-    await Promise.all([
-      readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-      }),
-      readSessionIngestionState(workspaceDir),
-      readMemoryPreimages(workspaceDir),
-      listMemoryArtifactProvenance({ workspaceDir }),
-      listSessionTranscriptCorpusEntriesForAgent(params.agentId),
-    ]);
+  const nowIso = new Date().toISOString();
+  const [
+    shortTermEntries,
+    phaseSignals,
+    ingestionState,
+    backups,
+    artifactProvenance,
+    sessionCorpusEntries,
+  ] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+    }),
+    readPhaseSignalStore(workspaceDir, nowIso),
+    readSessionIngestionState(workspaceDir),
+    readMemoryPreimages(workspaceDir),
+    listMemoryArtifactProvenance({ workspaceDir }),
+    listSessionTranscriptCorpusEntriesForAgent(params.agentId),
+  ]);
   const sessionKeys = new Set(targets.map((target) => target.sessionKey));
   const curatedWrites = new Map(
     artifactProvenance
@@ -475,6 +481,15 @@ async function forgetWorkspaceMemory(
       !entryKeys.has(key) &&
       !entryKeys.has(value.key) &&
       !referencesSession(`${value.path}\n${value.snippet}`, params.agentId, sessionIds),
+  );
+  const retainedShortTermSet = new Set(retainedShortTerm);
+  const removedShortTermKeys = new Set(
+    shortTermEntries
+      .filter((entry) => !retainedShortTermSet.has(entry))
+      .flatMap(({ key, value }) => [key, value.key]),
+  );
+  const removedPhaseSignalKeys = Object.keys(phaseSignals.entries).filter(
+    (key) => entryKeys.has(key) || removedShortTermKeys.has(key),
   );
   const retainedSeenMessages = Object.entries(ingestionState.seenMessages).filter(
     ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
@@ -598,7 +613,6 @@ async function forgetWorkspaceMemory(
   try {
     const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
     const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-    const chunkHashes = [...new Set(indexPlan.chunks.map((chunk) => chunk.hash))];
     if (chunkIds.length > 0 && indexPlan.hasVectorTable) {
       const loaded = await loadSqliteVecExtension({ db });
       if (!loaded.ok) {
@@ -614,9 +628,9 @@ async function forgetWorkspaceMemory(
       agentId: params.agentId,
       sessionIds: [...sessionIds],
     });
-    if (recorded === 0 && changedPaths.size > 0) {
-      // Repeating a partial purge can still rewrite an unindexed file. Fence
-      // pending shadow rebuilds before any filesystem mutation, even on failure.
+    if (recorded === 0) {
+      // Every explicit purge invalidates in-flight cache work, including a
+      // repeated purge whose selected source was already scrubbed.
       executeSqliteQuerySync(
         db,
         kysely
@@ -657,13 +671,19 @@ async function forgetWorkspaceMemory(
             .where("source", "=", source.source),
         );
       }
-      if (indexPlan.embeddingCacheRows > 0) {
-        executeSqliteQuerySync(
-          db,
-          kysely.deleteFrom("memory_embedding_cache").where("hash", "in", chunkHashes),
-        );
+      if (tableExists(db, "memory_embedding_cache")) {
+        executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
       }
     });
+    if (removedPhaseSignalKeys.length > 0) {
+      for (const key of removedPhaseSignalKeys) {
+        delete phaseSignals.entries[key];
+      }
+      phaseSignals.updatedAt = nowIso;
+      // Phase signals are derived from recall rows. Remove them first so a
+      // later failure leaves the authoritative recall evidence for a retry.
+      await writePhaseSignalStore(workspaceDir, phaseSignals);
+    }
     if (retainedShortTerm.length !== shortTermEntries.length) {
       await writeMemoryCoreWorkspaceEntries({
         namespace: SHORT_TERM_RECALL_NAMESPACE,

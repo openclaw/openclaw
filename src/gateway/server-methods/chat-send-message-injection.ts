@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
@@ -17,7 +20,8 @@ import {
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
@@ -35,8 +39,12 @@ import type { GatewayRequestContext } from "./types.js";
 /** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
+  abortSignal: AbortSignal;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
-  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
+  session: Pick<
+    PreparedChatSendSession,
+    "cfg" | "entry" | "sessionKey" | "storePath" | "clientRunId"
+  >;
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
@@ -44,12 +52,53 @@ export function createChatSendMessageInjectionStarter(params: {
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
+  logGateway: GatewayRequestContext["logGateway"];
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
-  const { cfg, entry } = params.session;
+  const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
   return (): ReplyMessageInjectionAttempt | undefined => {
     if (!params.target || isInternalTextSlashCommandTurn) {
+      return undefined;
+    }
+    // Preparation can outlive terminal delivery. Recheck before the backend
+    // takes this input; an unreadable receipt cannot authorize steering.
+    let fenceEntry = entry;
+    if (sessionKey) {
+      try {
+        fenceEntry =
+          loadSessionEntry({
+            sessionKey,
+            storePath,
+            readConsistency: "latest",
+          }) ?? entry;
+      } catch (error: unknown) {
+        params.logGateway.warn(
+          `failed to reload session entry before steering fence on ${sessionKey}: ${String(error)}`,
+        );
+        return undefined;
+      }
+    }
+    // Terminal run ids are accumulated session history; compare the fence
+    // against the active source-turn identity (carried on the injection target
+    // by the owning registry, falling back to the entry's own claim source) so
+    // an unrelated earlier tombstone does not force a safe steer into
+    // follow-up mode.
+    const activeSourceTurnId =
+      normalizeOptionalString(params.target?.sourceTurnId) ??
+      normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
+      "";
+    if (
+      fenceEntry &&
+      isRestartRecoveryTerminalDeliveryFailClosed(
+        fenceEntry,
+        fenceEntry.sessionId,
+        activeSourceTurnId,
+      )
+    ) {
+      params.logGateway.warn(
+        `active run ${clientRunId} cannot own another terminal source-reply send on session ${sessionKey}; rejecting steer injection before queueing`,
+      );
       return undefined;
     }
     const { debounceMs } = resolveQueueSettings({
@@ -111,6 +160,7 @@ export function createChatSendMessageInjectionStarter(params: {
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
         waitForTranscriptCommit: true,
+        abortSignal: params.abortSignal,
         ...(debounceMs !== undefined ? { debounceMs } : {}),
         taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
@@ -168,6 +218,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     inboundAudio: hasInboundAudio(finalizedCtx),
   });
   if (finalization.status === "rejected") {
+    // Rejection also covers withdrawing a canceled queued steer. Fallback
+    // dispatch retains the source run's abort signal and skips canceled input.
     return false;
   }
   recordAcceptedSessionParticipantInput(ctx, { agentId, sessionKey, storePath });

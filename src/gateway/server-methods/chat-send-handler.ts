@@ -426,6 +426,7 @@ async function handleChatSendWithOptions(
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
+      abortSignal: activeRunAbort.controller.signal,
       request: normalizedRequest.value,
       session: preparedSession.value,
       admittedSessionSettings: admitted.value.admittedSessionSettings,
@@ -433,6 +434,7 @@ async function handleChatSendWithOptions(
       imageOrder,
       documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
+      logGateway: context.logGateway,
     });
     const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn

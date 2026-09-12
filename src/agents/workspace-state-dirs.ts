@@ -6,23 +6,28 @@ import { listSessionEntryKeysReadOnly } from "../config/sessions/session-accesso
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { listAgentIds, resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
 import { listAgentWorkspaceDirs } from "./workspace-dirs.js";
 import { assertWorkspaceStateMigrationReady } from "./workspace-legacy-state.js";
+import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 
 /** Select configured workspaces and active sandbox copies for migration and readiness. */
-export function listWorkspaceStateDirs(params: {
+export async function listWorkspaceStateDirs(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   stateDir: string;
-}): string[] {
+}): Promise<string[]> {
   const dirs = new Set(listAgentWorkspaceDirs(params.cfg, params.env));
 
   for (const agentId of listAgentIds(params.cfg)) {
+    if (readAgentDatabaseAdmissionRefusal(agentId, { env: params.env })) {
+      continue;
+    }
     const sandbox = resolveSandboxConfigForAgent(params.cfg, agentId);
     if (sandbox.mode === "off" || sandbox.workspaceAccess === "rw") {
       continue;
@@ -52,7 +57,7 @@ export function listWorkspaceStateDirs(params: {
 
     // Sandbox containers may be pruned while their workspace survives. The
     // agent-owned session store remains the durable authority for that copy.
-    const sessionKeys = listSessionEntryKeysReadOnly({
+    const sessionKeys = await listSessionEntryKeysReadOnly({
       agentId,
       env: params.env,
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -83,17 +88,23 @@ export function listWorkspaceStateDirs(params: {
 }
 
 /** Refuse completion before channels accept work that a workspace cannot execute. */
-export function assertConfiguredWorkspaceStateReady(params: {
+export async function assertConfiguredWorkspaceStateReady(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): void {
+  operation?: "doctor";
+}): Promise<void> {
   const env = params.env ?? process.env;
   const homedir = os.homedir;
-  const workspaceDirs = listWorkspaceStateDirs({
+  const workspaceDirs = await listWorkspaceStateDirs({
     cfg: params.cfg,
     env,
     homedir,
     stateDir: resolveStateDir(env, homedir),
   });
-  assertWorkspaceStateMigrationReady({ workspaceDirs, env, homedir });
+  if (params.operation === "doctor") {
+    for (const workspaceDir of workspaceDirs) {
+      await readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
+    }
+  }
+  assertWorkspaceStateMigrationReady({ ...params, workspaceDirs, env, homedir });
 }

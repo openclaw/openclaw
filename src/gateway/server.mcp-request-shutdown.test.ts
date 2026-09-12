@@ -6,13 +6,17 @@ import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
-import { fetchMcpAppView } from "../agents/mcp-ui-resource.js";
+import { fetchMcpAppView, getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
+import { writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
+  rpcReq,
 } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -164,6 +168,212 @@ input.on("close", () => process.exit(0));
       for (const restore of restorers) {
         restore();
       }
+      if (root) {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+});
+
+function ticketFromStandaloneUrl(url: string | undefined): string {
+  const ticket = url?.split("#", 2)[1];
+  if (!ticket) {
+    throw new Error("expected an MCP App standalone ticket");
+  }
+  return ticket;
+}
+
+async function connectPairedOperator(params: {
+  gateway: GatewayHarness;
+  scopes: string[];
+}): Promise<WebSocket> {
+  const issued = await issueOperatorToken({
+    name: `mcp-app-authority-${randomUUID()}`,
+    approvedScopes: params.scopes,
+    clientId: GATEWAY_CLIENT_NAMES.TEST,
+    clientMode: GATEWAY_CLIENT_MODES.TEST,
+  });
+  const ws = await params.gateway.openWs();
+  await connectOk(ws, {
+    skipDefaultAuth: true,
+    deviceIdentityPath: issued.identityPath,
+    deviceToken: issued.token,
+    scopes: params.scopes,
+  });
+  return ws;
+}
+
+async function callStandaloneTool(params: {
+  port: number;
+  ticket: string;
+  label: string;
+}): Promise<Response> {
+  return await fetch(`http://127.0.0.1:${params.port}/__openclaw__/mcp-app/view`, {
+    method: "POST",
+    headers: {
+      Authorization: `MCP-App ${params.ticket}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      method: "tools/call",
+      params: { name: "mutate", arguments: { label: params.label } },
+    }),
+  });
+}
+
+describe("MCP App standalone ticket authority", () => {
+  it("binds paired operator scope, separates ticket strength, and revalidates live grants", async () => {
+    let gateway: GatewayHarness | undefined;
+    let runtime: SessionMcpRuntime | undefined;
+    let writer: WebSocket | undefined;
+    let reader: WebSocket | undefined;
+    let root: string | undefined;
+    try {
+      await writeConfigFile({ mcp: { apps: { enabled: true } } });
+      gateway = await createGatewaySuiteHarness({
+        serverOptions: { bind: "loopback", auth: { mode: "none" } },
+      });
+      await gateway.server.startupSettled;
+
+      root = await fs.mkdtemp(path.join(resolveStateDir(), "mcp-app-authority-"));
+      const serverPath = path.join(root, "server.mjs");
+      const markerPath = path.join(root, "tool-calls.jsonl");
+      await fs.writeFile(
+        serverPath,
+        `import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const markerPath = ${JSON.stringify(markerPath)};
+const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+const input = createInterface({ input: process.stdin });
+input.on("line", (line) => {
+  const request = JSON.parse(line);
+  if (request.method === "initialize") {
+    send(request.id, {
+      protocolVersion: request.params.protocolVersion,
+      capabilities: { tools: {}, resources: {} },
+      serverInfo: { name: "authority-fixture", version: "1.0.0" },
+    });
+  } else if (request.method === "tools/list") {
+    send(request.id, { tools: [{
+      name: "mutate",
+      inputSchema: { type: "object", properties: { label: { type: "string" } } },
+      _meta: { ui: { resourceUri: "ui://authority/app", visibility: ["app"] } },
+    }] });
+  } else if (request.method === "resources/read") {
+    send(request.id, { contents: [{
+      uri: "ui://authority/app",
+      mimeType: "text/html;profile=mcp-app",
+      text: "<!doctype html><title>Authority fixture</title>",
+      _meta: { ui: {} },
+    }] });
+  } else if (request.method === "tools/call") {
+    appendFileSync(markerPath, JSON.stringify(request.params.arguments) + "\\n");
+    send(request.id, { content: [{ type: "text", text: "mutated" }] });
+  }
+});
+input.on("close", () => process.exit(0));
+`,
+      );
+
+      const sessionId = `mcp-app-authority-${randomUUID()}`;
+      const sessionKey = `agent:main:${sessionId}`;
+      runtime = await getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey,
+        workspaceDir: root,
+        cfg: {
+          mcp: {
+            apps: { enabled: true },
+            servers: {
+              authority: { command: process.execPath, args: [serverPath] },
+            },
+          },
+        },
+      });
+      const prepared = expectDefined(
+        await fetchMcpAppView({
+          runtime,
+          agentId: "main",
+          serverName: "authority",
+          toolName: "mutate",
+          uiResourceUri: "ui://authority/app",
+          toolInput: {},
+          toolResult: { content: [] },
+          allowedAppToolNames: new Set(["mutate"]),
+        }),
+        "prepared MCP App view",
+      );
+
+      writer = await connectPairedOperator({
+        gateway,
+        scopes: ["operator.read", "operator.write"],
+      });
+      reader = await connectPairedOperator({ gateway, scopes: ["operator.read"] });
+      const viewParams = { sessionKey, agentId: "main", viewId: prepared.viewId };
+      const writerView = await rpcReq<{ standaloneUrl?: string }>(
+        writer,
+        "mcp.app.view",
+        viewParams,
+      );
+      const readerView = await rpcReq<{ standaloneUrl?: string }>(
+        reader,
+        "mcp.app.view",
+        viewParams,
+      );
+      if (!writerView.ok) {
+        throw new Error(`writer view failed: ${JSON.stringify(writerView.error)}`);
+      }
+      if (!readerView.ok) {
+        throw new Error(`reader view failed: ${JSON.stringify(readerView.error)}`);
+      }
+      expect(writerView).toMatchObject({ ok: true });
+      expect(readerView).toMatchObject({ ok: true });
+      const writerTicket = ticketFromStandaloneUrl(writerView.payload?.standaloneUrl);
+      const readerTicket = ticketFromStandaloneUrl(readerView.payload?.standaloneUrl);
+      expect(readerTicket).not.toBe(writerTicket);
+
+      const directReaderCall = await rpcReq(reader, "mcp.app.callTool", {
+        ...viewParams,
+        toolName: "mutate",
+        arguments: { label: "direct-reader" },
+      });
+      expect(directReaderCall.ok).toBe(false);
+      expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe("");
+
+      const readerStandaloneCall = await callStandaloneTool({
+        port: gateway.port,
+        ticket: readerTicket,
+        label: "standalone-reader",
+      });
+      expect(readerStandaloneCall.status).toBe(403);
+      expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe("");
+
+      const writerStandaloneCall = await callStandaloneTool({
+        port: gateway.port,
+        ticket: writerTicket,
+        label: "standalone-writer",
+      });
+      expect(writerStandaloneCall.status).toBe(200);
+      expect(await writerStandaloneCall.json()).toMatchObject({ ok: true });
+      expect(await fs.readFile(markerPath, "utf8")).toBe('{"label":"standalone-writer"}\n');
+
+      const liveView = expectDefined(
+        getMcpAppViewLease(prepared.viewId, runtime),
+        "live MCP App view",
+      );
+      liveView.authorizeAppInteraction = async () => false;
+      const revokedCall = await callStandaloneTool({
+        port: gateway.port,
+        ticket: writerTicket,
+        label: "revoked-writer",
+      });
+      expect(revokedCall.status).toBe(403);
+      expect(await fs.readFile(markerPath, "utf8")).toBe('{"label":"standalone-writer"}\n');
+    } finally {
+      writer?.terminate();
+      reader?.terminate();
+      await runtime?.dispose();
+      await gateway?.close();
       if (root) {
         await fs.rm(root, { recursive: true, force: true });
       }

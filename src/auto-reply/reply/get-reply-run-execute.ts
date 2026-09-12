@@ -28,7 +28,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { buildInboundMediaNoteProjection } from "../media-note.js";
+import { getGroupThreadTurn } from "../group-thread-context.js";
+import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -67,6 +68,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     transcriptBody,
     transcriptCommandBody,
     promptMedia,
+    inboundMediaIndexes,
     currentInboundContext,
     isRoomEvent,
     providedReplyOperation,
@@ -141,8 +143,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   } = params;
 
   const runHasStoredSessionModelOverride = Boolean(
-    normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
-    normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
+    preparedSessionState.sessionEntry?.modelOverrideSource !== "default" &&
+    (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
+      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
   );
   const runHasLegacyAutoFallbackWithoutOrigin =
     runHasStoredSessionModelOverride &&
@@ -150,7 +153,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const runHasSessionModelOverride =
     runHasStoredSessionModelOverride && !runHasLegacyAutoFallbackWithoutOrigin;
   const runModelOverrideSource = runHasSessionModelOverride
-    ? preparedSessionState.sessionEntry?.modelOverrideSource
+    ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
+      ? undefined
+      : preparedSessionState.sessionEntry?.modelOverrideSource
     : undefined;
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
@@ -226,7 +231,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
   );
   const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
-  const inboundMediaIndexes = buildInboundMediaNoteProjection(ctx).mediaIndexes ?? [];
   const promptMediaForRun = suppressUnresolvedPromptMedia({
     promptMedia: promptMedia ?? [],
     inboundMediaIndexes,
@@ -300,7 +304,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat
-            ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
+            ? {
+                provenance: resolveInternalTurnTranscript({
+                  InputProvenance: inputProvenance,
+                  InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
+                }).provenance,
+              }
             : {}),
           ...(transport ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
@@ -353,6 +362,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
   const admittedSessionSettings = opts?.admittedSessionSettings;
+  const groupTurn = getGroupThreadTurn();
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -376,7 +386,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
             : { kind: "drop" as const, reason: "source-unavailable" as const },
         }
       : {}),
-    messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    messageId:
+      groupTurn && groupTurn.round > 1
+        ? groupTurn.messageId
+        : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid),
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
@@ -498,7 +511,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           : {}),
       },
       timeoutMs,
-      runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
+      runTimeoutOverrideMs:
+        opts?.timeoutOverrideMs !== undefined || opts?.timeoutOverrideSeconds !== undefined
+          ? timeoutMs
+          : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: resolveOwnerPromptNumbers({
         ownerNumbers: command.ownerList,

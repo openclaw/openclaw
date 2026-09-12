@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -11,8 +13,19 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
-import { createSessionContext, createTestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createSessionContext,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
+import * as chatThreadBuild from "./chat-thread-build.ts";
+import { renderChat } from "./chat-view.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 
 function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
@@ -41,6 +54,54 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   pane.onPaneSessionChange = vi.fn();
   return { client, key, pane, requestUpdate, sessions, sourceSessionKey, state };
 }
+
+describe("catalog transcript cache", () => {
+  beforeEach(installTranscriptDomMocks);
+  afterEach(resetTranscriptTestDom);
+
+  it("reuses unchanged catalog history while admitting an older page", () => {
+    const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture());
+    const sessionKey = buildCatalogSessionKey(
+      { catalogId: "fixture", hostId: "gateway:local", threadId: "history" },
+      "main",
+    );
+    pane.sessionKey = state.sessionKey = sessionKey;
+    const messages = [
+      { role: "user", content: "Saved catalog question", timestamp: 2, messageId: "user" },
+      { role: "assistant", content: "Saved catalog answer", timestamp: 3, messageId: "answer" },
+    ];
+    Object.assign(pane, { catalogMessages: messages, catalogLoading: false });
+    state.settings = { ...state.settings, chatShowToolCalls: true };
+    state.chatVerboseLevel = "full";
+    state.chatToolMessages = [
+      { role: "toolResult", toolName: "read", content: "Unrelated live tool", toolCallId: "live" },
+    ];
+    const container = document.body.appendChild(document.createElement("div"));
+    const build = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const draw = () => {
+      pane.render();
+      render(renderChat(expectDefined(pane.chatProps, "rendered catalog props")), container);
+    };
+
+    draw();
+    expect(container.textContent).toContain("Saved catalog answer");
+    expect(container.textContent).not.toContain("Unrelated live tool");
+    draw();
+    expect(build).toHaveBeenCalledOnce();
+
+    Object.assign(pane, {
+      catalogMessages: [
+        { role: "assistant", content: "Older catalog answer", timestamp: 1, messageId: "older" },
+        ...messages,
+      ],
+    });
+    draw();
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Older catalog answer");
+    expect(container.textContent).toContain("Saved catalog answer");
+    expect(container.textContent).not.toContain("Unrelated live tool");
+  });
+});
 
 describe("chat pane catalog session lifecycle", () => {
   it.each(["global", "agent:other:main", "agent:other:catalog:fixture:gateway:Thread"])(

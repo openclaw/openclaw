@@ -77,6 +77,8 @@ async function withRecoveryRuntime(
     placements: Map<string, RecoveryPlacement>;
     runtime: ReturnType<typeof createGatewayWorkerPlacementRuntime>;
     start: () => Promise<void>;
+    stop: () => Promise<void>;
+    catalogChanged: (profileId: string) => void;
     warn: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ): Promise<void> {
@@ -108,7 +110,21 @@ async function withRecoveryRuntime(
       reconcile: vi.fn(async () => await options.startup?.(placements)),
       reconcileActive: vi.fn(async () => await options.sweep?.(placements)),
     }));
+    let onMachineShapeChanged: ((profileId: string) => void) | undefined;
     const environments = {
+      get: (environmentId: string) => ({
+        environmentId,
+        providerId: "fake",
+        profileId: "development",
+        ownerEpoch: 1,
+      }),
+      readMachineShape: () => ({ cpu: 4 }),
+      subscribeMachineShapeChanged: (listener: (profileId: string) => void) => {
+        onMachineShapeChanged = listener;
+        return () => {
+          onMachineShapeChanged = undefined;
+        };
+      },
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -153,6 +169,10 @@ async function withRecoveryRuntime(
             throw new Error("worker placement runtime did not start");
           }
         },
+        stop: async () => {
+          await sidecar.current?.stop();
+        },
+        catalogChanged: (profileId) => onMachineShapeChanged?.(profileId),
         warn,
       });
     } finally {
@@ -164,6 +184,37 @@ async function withRecoveryRuntime(
 }
 
 describe("worker placement recovery session events", () => {
+  it("refreshes correlated session observers when machine metadata arrives and unsubscribes on stop", async () => {
+    const placement = recoveryPlacement();
+    await withRecoveryRuntime(
+      { placement },
+      async ({ context, placements, start, stop, catalogChanged }) => {
+        placements.set("stale-session", {
+          ...placement,
+          sessionId: "stale-session",
+          sessionKey: "agent:main:stale",
+          activeOwnerEpoch: 2,
+        });
+        await start();
+        const initialVersion = readSessionsMutationVersion(context);
+        catalogChanged("other-profile");
+        expect(readSessionsMutationVersion(context)).toBe(initialVersion);
+        catalogChanged("development");
+        flushPendingSessionsChangedEvents(context);
+        expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+          "sessions.changed",
+          expect.objectContaining({ reason: "placement", sessionKey: placement.sessionKey }),
+          new Set(["session-observer"]),
+          expect.objectContaining({ agentId: placement.agentId, dropIfSlow: true }),
+        );
+        expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
+        await stop();
+        catalogChanged("development");
+        expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
+      },
+    );
+  });
+
   it("publishes a recovered move once and ignores an unchanged periodic sweep", async () => {
     const recovered = recoveryPlacement("local");
     let sweepCount = 0;

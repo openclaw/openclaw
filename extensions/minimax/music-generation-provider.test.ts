@@ -1,10 +1,12 @@
-// Minimax tests cover music generation provider plugin behavior.
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  expectAllowPrivateNetworkPolicy,
+  expectMinimaxGuardedFetchCall,
   getMinimaxProviderHttpMocks,
   installMinimaxProviderHttpMockCleanup,
   loadMinimaxMusicGenerationProviderModule,
+  mockCallArg,
 } from "./provider-http.test-helpers.js";
 
 const {
@@ -44,30 +46,6 @@ function mockMusicGenerationResponse(json: Record<string, unknown>): void {
   });
 }
 
-function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected mock call ${index}`);
-  }
-  return call[0] as Record<string, unknown>;
-}
-
-function expectMinimaxGuardedFetchCall(index: number, url: string) {
-  const call = fetchWithTimeoutGuardedMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected MiniMax guarded fetch call ${index + 1}`);
-  }
-  const [actualUrl, init, timeoutMs, fetchFn, options] = call;
-  expect(actualUrl).toBe(url);
-  expect((init as RequestInit | undefined)?.method).toBe("GET");
-  expect(Number.isInteger(timeoutMs)).toBe(true);
-  expect(timeoutMs).toBeGreaterThan(0);
-  expect(fetchFn).toBe(fetch);
-  return {
-    options: options as Record<string, unknown> | undefined,
-  };
-}
-
 function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
   const call = fetchWithTimeoutMock.mock.calls[0];
   if (!call) {
@@ -79,12 +57,6 @@ function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
   expect(timeoutMs).toBeGreaterThan(totalTimeoutMs - 1_000);
   expect(timeoutMs).toBeLessThanOrEqual(totalTimeoutMs);
   expect(fetchFn).toBe(fetch);
-}
-
-function expectAllowPrivateNetworkPolicy(options: Record<string, unknown> | undefined): void {
-  expect(options).toEqual({
-    ssrfPolicy: { allowPrivateNetwork: true },
-  });
 }
 
 function streamedAudioResponse(bytes: string): Response {

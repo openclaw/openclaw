@@ -174,6 +174,10 @@ function archiveNavigationRecord(record: Record<string, unknown>): Record<string
   navigation.message = record.message
     ? { role: role === "user" || role === "assistant" ? role : undefined }
     : false;
+  if (record.type === "custom_message") {
+    navigation.display = record.display === true;
+    navigation.customType = record.customType;
+  }
   return navigation;
 }
 

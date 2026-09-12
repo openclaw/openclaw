@@ -1,7 +1,9 @@
 // Control UI view renders the gateway connection settings content.
-import { html } from "lit";
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { html, nothing } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import {
   renderSettingsPage,
@@ -9,176 +11,263 @@ import {
   renderSettingsSecretInput,
   renderSettingsSection,
   renderSettingsStatus,
-  renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatGatewayHost } from "../../lib/gateway-host.ts";
+import { classifyGatewaySecret } from "../../lib/gateway-secret-shape.ts";
 import { renderSystemSection } from "./system-section.ts";
 
+registerSettingsEnglish();
+
+type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+
 type ConnectionProps = {
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
   hello: GatewayHelloOk | null;
   settings: UiSettings;
-  password: string;
+  /** URL of the live connection; the draft in `settings` may differ until Connect. */
+  liveGatewayUrl: string;
+  secret: string;
   lastError: string | null;
-  lastChannelsRefresh: number | null;
   systemInfo: SystemInfoResult | null;
   systemInfoUnavailable: boolean;
-  showGatewayToken: boolean;
-  showGatewayPassword: boolean;
+  systemInfoLoading: boolean;
+  /** True when the draft differs from the live connection. */
+  dirty: boolean;
+  sessionDirty: boolean;
+  sessionSaved: boolean;
+  showGatewaySecret: boolean;
   onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
-  onPasswordChange: (next: string) => void;
+  onSecretChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
-  onToggleGatewayTokenVisibility: () => void;
-  onToggleGatewayPasswordVisibility: () => void;
+  onToggleGatewaySecretVisibility: () => void;
   onConnect: () => void;
-  onRefresh: () => void;
+  onDiscardConnection: () => void;
+  onReconnect: () => void;
+  onSaveSession: () => void;
+  onDiscardSession: () => void;
 };
 
-function renderSecretRow(params: {
-  label: string;
-  value: string;
-  placeholder: string;
-  visible: boolean;
-  showLabel: string;
-  hideLabel: string;
-  toggleLabel: string;
-  onInput: (next: string) => void;
-  onToggle: () => void;
-}) {
-  const { label, ...secret } = params;
+const AUTH_MODE_KEYS: Record<GatewayAuthMode, string> = {
+  none: "connection.access.auth.none",
+  token: "connection.access.auth.token",
+  password: "connection.access.auth.password",
+  "trusted-proxy": "connection.access.auth.trustedProxy",
+};
+
+function formatTick(tickIntervalMs: number | undefined): string | null {
+  if (!tickIntervalMs) {
+    return null;
+  }
+  const seconds = tickIntervalMs / 1000;
+  return `${seconds.toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1)}s`;
+}
+
+function renderSecretRow(props: ConnectionProps, authMode: GatewayAuthMode | undefined) {
+  const hintKey =
+    authMode === "password"
+      ? "connection.access.passwordHint"
+      : authMode === "token"
+        ? "connection.access.tokenHint"
+        : "connection.access.secretHint";
   return renderSettingsRow({
-    title: label,
-    control: renderSettingsSecretInput({ ...secret, ariaLabel: label }),
+    title: t("connection.access.secret"),
+    description: t(hintKey),
+    control: html`<div class="settings-input-with-hint">
+      ${renderSettingsSecretInput({
+        ariaLabel: t("connection.access.secret"),
+        value: props.secret,
+        placeholder: t("connection.access.secretPlaceholder"),
+        visible: props.showGatewaySecret,
+        showLabel: t("connection.access.showSecret"),
+        hideLabel: t("connection.access.hideSecret"),
+        toggleLabel: t("connection.access.toggleSecretVisibility"),
+        onInput: props.onSecretChange,
+        onToggle: props.onToggleGatewaySecretVisibility,
+      })}
+      ${
+        classifyGatewaySecret(props.secret) === "setup-code"
+          ? html`<p class="settings-row__desc" role="status">
+              ${t("connection.access.setupCodeHint")}
+            </p>`
+          : nothing
+      }
+    </div>`,
+    stackedOnNarrow: true,
   });
 }
 
 export function renderConnection(props: ConnectionProps) {
-  const snapshot = props.hello?.snapshot as
-    | {
-        authMode?: "none" | "token" | "password" | "trusted-proxy";
-      }
-    | undefined;
-  const tickIntervalMs = props.hello?.policy?.tickIntervalMs;
-  const tick = tickIntervalMs
-    ? `${(tickIntervalMs / 1000).toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1)}s`
-    : t("common.na");
-  const isTrustedProxy = snapshot?.authMode === "trusted-proxy";
+  const snapshot = props.hello?.snapshot as { authMode?: GatewayAuthMode } | undefined;
+  const connected = props.phase === "connected";
+  const busy = ["connecting", "starting", "reconnecting"].includes(props.phase);
+  const submitting = busy && !props.dirty;
+  const reloadRequired = props.phase === "reload-required";
+  const authMode = snapshot?.authMode;
+  const draftAuthMode =
+    gatewayCredentialScope(props.settings.gatewayUrl) ===
+    gatewayCredentialScope(props.liveGatewayUrl)
+      ? authMode
+      : undefined;
+  const isTrustedProxy = draftAuthMode === "trusted-proxy";
+  const statusKey = connected ? "connected" : props.phase === "stopped" ? "offline" : props.phase;
+  const actionLabel = submitting
+    ? t(
+        props.phase === "reconnecting"
+          ? "connection.access.status.reconnecting"
+          : "connection.access.status.connecting",
+      )
+    : connected || busy
+      ? t("connection.access.applyReconnect")
+      : t(props.lastError ? "connection.access.retry" : "common.connect");
+  const tick = formatTick(props.hello?.policy?.tickIntervalMs);
 
-  const accessRows = html`
+  const rows = html`
     ${renderSettingsRow({
-      title: t("connection.access.wsUrl"),
+      title: t("connection.access.gatewayUrl"),
+      description: t("connection.access.gatewayUrlHint"),
       control: html`
         <input
           class="settings-input"
-          aria-label=${t("connection.access.wsUrl")}
+          aria-label=${t("connection.access.gatewayUrl")}
+          inputmode="url"
+          autocapitalize="none"
+          autocorrect="off"
+          autocomplete="off"
+          spellcheck="false"
           .value=${props.settings.gatewayUrl}
           @input=${(e: Event) => {
-            const v = (e.target as HTMLInputElement).value;
-            props.onConnectionChange({ gatewayUrl: v });
+            props.onConnectionChange({ gatewayUrl: (e.target as HTMLInputElement).value });
           }}
-          placeholder="ws://100.x.y.z:18789"
+          placeholder="wss://gateway.example:443"
         />
       `,
     })}
     ${
       isTrustedProxy
-        ? ""
-        : html`
-            ${renderSecretRow({
-              label: t("connection.access.token"),
-              value: props.settings.token,
-              placeholder: "OPENCLAW_GATEWAY_TOKEN",
-              visible: props.showGatewayToken,
-              showLabel: t("connection.access.showToken"),
-              hideLabel: t("connection.access.hideToken"),
-              toggleLabel: t("connection.access.toggleTokenVisibility"),
-              onInput: (next) => props.onConnectionChange({ token: next }),
-              onToggle: props.onToggleGatewayTokenVisibility,
-            })}
-            ${renderSecretRow({
-              label: t("connection.access.password"),
-              value: props.password,
-              placeholder: t("connection.access.passwordPlaceholder"),
-              visible: props.showGatewayPassword,
-              showLabel: t("connection.access.showPassword"),
-              hideLabel: t("connection.access.hidePassword"),
-              toggleLabel: t("connection.access.togglePasswordVisibility"),
-              onInput: props.onPasswordChange,
-              onToggle: props.onToggleGatewayPasswordVisibility,
-            })}
-          `
+        ? renderSettingsRow({
+            title: t("connection.access.secret"),
+            description: t("connection.access.trustedProxy"),
+            control: renderSettingsStatus({
+              kind: "ok",
+              label: t("connection.access.trustedProxyStatus"),
+            }),
+          })
+        : renderSecretRow(props, draftAuthMode)
     }
-    ${renderSettingsRow({
-      title: t("connection.access.sessionKey"),
-      control: html`
-        <input
-          class="settings-input"
-          aria-label=${t("connection.access.sessionKey")}
-          .value=${props.settings.sessionKey}
-          @input=${(e: Event) => props.onSessionKeyChange((e.target as HTMLInputElement).value)}
-        />
-      `,
-    })}
-    <div class="settings-row">
-      <div class="settings-row__text">
-        <span class="settings-row__desc"
-          >${
-            isTrustedProxy
-              ? t("connection.access.trustedProxy")
-              : t("connection.access.connectHint")
-          }</span
-        >
-      </div>
-      <div class="settings-row__control">
-        <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-        <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-      </div>
-    </div>
-  `;
-
-  const snapshotRows = html`
-    ${renderSettingsRow({
-      title: t("connection.snapshot.status"),
-      control: renderSettingsStatus({
-        kind: props.connected ? "ok" : "warn",
-        label: props.connected ? t("common.ok") : t("common.offline"),
-      }),
-    })}
-    ${renderSettingsRow({
-      title: t("connection.snapshot.tickInterval"),
-      control: renderSettingsValue(tick),
-    })}
-    ${renderSettingsRow({
-      title: t("connection.snapshot.lastChannelsRefresh"),
-      control: renderSettingsValue(
-        props.lastChannelsRefresh
-          ? formatRelativeTimestamp(props.lastChannelsRefresh)
-          : t("common.na"),
-      ),
-    })}
     ${
-      props.lastError
+      !connected && props.lastError
         ? renderSettingsRow({
             title: renderSettingsStatus({
               kind: "danger",
-              label: t("connection.snapshot.lastError"),
+              label: t("connection.access.lastError"),
             }),
             description: props.lastError,
           })
-        : ""
+        : nothing
     }
+    ${
+      (!connected || props.dirty) && !reloadRequired
+        ? html`<div class="settings-row connection-actions">
+            <div class="settings-row__text">
+              <span class="settings-row__desc" role="status">
+                ${props.dirty ? t("connection.access.unsavedHint") : nothing}
+              </span>
+            </div>
+            <div class="settings-row__control connection-actions__buttons">
+              ${
+                props.dirty
+                  ? html`<button class="btn" @click=${props.onDiscardConnection}>
+                      ${t("connection.access.discard")}
+                    </button>`
+                  : nothing
+              }
+              <button class="btn primary" ?disabled=${submitting} @click=${props.onConnect}>
+                ${submitting ? html`<span class="btn__spinner" aria-hidden="true"></span>` : nothing}
+                ${actionLabel}
+              </button>
+            </div>
+          </div>`
+        : nothing
+    }
+    <details class="connection-details">
+      <summary>${t("connection.access.details")}</summary>
+      <div class="connection-details__body">
+        ${
+          connected && (authMode || tick)
+            ? html`<p class="settings-row__desc">
+                ${[authMode ? t(AUTH_MODE_KEYS[authMode]) : null, tick ? t("connection.access.tick", { tick }) : null].filter(Boolean).join(" · ")}
+              </p>`
+            : nothing
+        }
+        <p class="settings-row__desc">${t("connection.access.reconnectHint")}</p>
+        <button class="btn" ?disabled=${!connected || props.dirty} @click=${props.onReconnect}>
+          ${t("connection.access.reconnect")}
+        </button>
+      </div>
+    </details>
   `;
 
   return renderSettingsPage([
     renderSettingsSection(
-      { title: t("connection.access.title"), description: t("connection.access.subtitle") },
-      accessRows,
+      {
+        title: t("connection.access.title"),
+        description: connected
+          ? t("connection.access.connectedTo", { host: formatGatewayHost(props.liveGatewayUrl) })
+          : busy || reloadRequired
+            ? t(`connection.access.status.${statusKey}`)
+            : t("connection.access.descriptionOffline"),
+        actions: renderSettingsStatus({
+          kind: connected ? "ok" : "warn",
+          label: t(`connection.access.status.${statusKey}`),
+        }),
+      },
+      rows,
+    ),
+    renderSettingsSection(
+      {
+        title: t("connection.access.sessionTitle"),
+        description: t("connection.access.sessionDescription", {
+          host: formatGatewayHost(props.liveGatewayUrl),
+        }),
+      },
+      html`
+        ${renderSettingsRow({
+          title: t("connection.access.sessionKey"),
+          description: t("connection.access.sessionKeyHint"),
+          control: html`
+            <input
+              class="settings-input"
+              aria-label=${t("connection.access.sessionKey")}
+              .value=${props.settings.sessionKey}
+              @input=${(e: Event) => props.onSessionKeyChange((e.target as HTMLInputElement).value)}
+            />
+          `,
+        })}
+        ${
+          props.sessionDirty
+            ? html`<div class="settings-row">
+                <div class="settings-row__text"></div>
+                <div class="settings-row__control connection-actions__buttons">
+                  <button class="btn" @click=${props.onDiscardSession}>
+                    ${t("connection.access.discard")}
+                  </button>
+                  <button
+                    class="btn primary"
+                    ?disabled=${!props.settings.sessionKey.trim()}
+                    @click=${props.onSaveSession}
+                  >
+                    ${t("common.save")}
+                  </button>
+                </div>
+              </div>`
+            : props.sessionSaved
+              ? html`<div class="settings-row" role="status">${t("connection.access.saved")}</div>`
+              : nothing
+        }
+      `,
     ),
     renderSystemSection(props),
-    renderSettingsSection(
-      { title: t("connection.snapshot.title"), description: t("connection.snapshot.subtitle") },
-      snapshotRows,
-    ),
   ]);
 }

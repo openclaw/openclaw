@@ -465,6 +465,41 @@ describe("ollama plugin", () => {
       models: ["qwen2.5-coder:7b"],
     },
     {
+      name: "rejects an explicitly selected embedding-only model before reset",
+      models: ["embedding-model"],
+      customModelId: "embedding-model",
+      capabilities: ["embedding"],
+      omitListedCapabilities: true,
+      error: "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
+    },
+    {
+      name: "retains known embedding-only metadata when inspection is unavailable",
+      models: ["embedding-model"],
+      customModelId: "embedding-model",
+      capabilities: ["embedding"],
+      inspectionFailed: true,
+      error: "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
+    },
+    {
+      name: "keeps legacy model selection when capability metadata is unavailable",
+      models: ["legacy-model"],
+      customModelId: "legacy-model",
+      inspectionFailed: true,
+    },
+    {
+      name: "rejects an inventory known to contain only embedding models before reset",
+      models: ["embedding-model"],
+      capabilities: ["embedding"],
+      error:
+        "No Ollama chat models are available at http://ollama-host:11434.\nPull a chat model first, then re-run setup.",
+    },
+    {
+      name: "accepts a model supporting both completion and embeddings before reset",
+      models: ["dual-model"],
+      customModelId: "dual-model",
+      capabilities: ["completion", "embedding"],
+    },
+    {
       name: "refuses to pull an unavailable local model during destructive-reset preflight",
       models: [],
       customModelId: "gemma4",
@@ -512,13 +547,36 @@ describe("ollama plugin", () => {
     reachable?: boolean;
     customBaseUrl?: string;
     customModelId?: string;
+    capabilities?: string[];
+    omitListedCapabilities?: boolean;
+    inspectionFailed?: boolean;
     cloud?: "confirmed" | "unauthenticated" | "unconfirmed";
     error?: string;
-  }>)("$name", async ({ models, reachable = true, customBaseUrl, customModelId, cloud, error }) => {
+  }>)("$name", async (testCase) => {
+    const {
+      models,
+      reachable = true,
+      customBaseUrl,
+      customModelId,
+      capabilities,
+      omitListedCapabilities,
+      inspectionFailed,
+      cloud,
+      error,
+    } = testCase;
     fetchOllamaModelsMock.mockResolvedValue({
       reachable,
-      models: models.map((name) => ({ name })),
+      models: models.map((name) => ({
+        name,
+        capabilities: omitListedCapabilities ? undefined : capabilities,
+      })),
     });
+    if (capabilities) {
+      queryOllamaModelShowInfoMock.mockResolvedValue({ capabilities });
+    }
+    if (inspectionFailed) {
+      queryOllamaModelShowInfoMock.mockResolvedValue({ showInspectionFailed: true });
+    }
     if (cloud === "unauthenticated") {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(JSON.stringify({ signin_url: "https://ollama.com/signin" }), {
@@ -761,6 +819,10 @@ describe("ollama plugin", () => {
   it.each([
     { baseUrl: "http://127.0.0.1:11434", contextTokens: 32_768 },
     { baseUrl: "https://ollama.com", contextTokens: undefined },
+    { baseUrl: "https://api.ollama.com", contextTokens: undefined },
+    { baseUrl: "https://models.ollama.com/v1", contextTokens: undefined },
+    { baseUrl: "http://api.ollama.com:11434", contextTokens: undefined },
+    { baseUrl: "https://ollama.com.example/v1", contextTokens: 32_768 },
   ])(
     "prepares the exact configured idle model at $baseUrl with its runtime context",
     async ({ baseUrl, contextTokens }) => {

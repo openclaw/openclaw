@@ -88,7 +88,7 @@ export function createConfigServerMock() {
         appliedHash = `hash-${hashCounter}`;
       }
       // Like the real gateway: ack with the persisted snapshot hash.
-      return { hash: `hash-${hashCounter}` };
+      return { config: JSON.parse(storedRaw), hash: `hash-${hashCounter}` };
     }
     return {};
   });
@@ -99,7 +99,7 @@ export function createConfigServerMock() {
  * createConfigServerMock variant whose FIRST config.set stays pending until
  * `firstSet` resolves — for exercising mid-flight edits/reverts/teardown.
  */
-export function createDeferredSetServerMock() {
+export function createDeferredSetServerMock(firstAckConfig?: Record<string, unknown>) {
   const firstSet = deferred<unknown>();
   let hashCounter = 1;
   let storedRaw = '{\n  "count": 1\n}\n';
@@ -118,9 +118,9 @@ export function createDeferredSetServerMock() {
     if (method === "config.set") {
       const { raw, baseHash } = params as { raw: string; baseHash: string };
       submissions.push({ raw, baseHash });
-      storedRaw = raw;
+      storedRaw = submissions.length === 1 && firstAckConfig ? JSON.stringify(firstAckConfig) : raw;
       hashCounter += 1;
-      const ack = { hash: `hash-${hashCounter}` };
+      const ack = { config: JSON.parse(storedRaw), hash: `hash-${hashCounter}` };
       return submissions.length === 1 ? firstSet.promise.then(() => ack) : Promise.resolve(ack);
     }
     if (method === "config.apply") {
@@ -128,7 +128,7 @@ export function createDeferredSetServerMock() {
       applySubmissions.push({ raw, baseHash });
       storedRaw = raw;
       hashCounter += 1;
-      return Promise.resolve({ hash: `hash-${hashCounter}` });
+      return Promise.resolve({ config: JSON.parse(storedRaw), hash: `hash-${hashCounter}` });
     }
     return Promise.resolve({});
   });

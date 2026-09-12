@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
@@ -21,6 +22,158 @@ async function captureHistoryIssuanceProof(page: Page, name: string): Promise<vo
 }
 
 suite.define(() => {
+  it("switches immediately but shows a skeleton only for slow history", async () => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      reducedMotion: "no-preference",
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.startup", "chat.history"],
+      sessionKey: "agent:main:session-a",
+      historyMessages: [{ role: "assistant", content: "Previous conversation." }],
+      sessionTranscripts: {
+        "agent:main:session-b": {
+          messages: [{ role: "assistant", content: "Destination conversation." }],
+        },
+      },
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+    });
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      await gateway.waitForRequest("chat.startup");
+      const loader = page.locator(
+        ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+      );
+      await loader.waitFor({ state: "attached" });
+      const frames = await loader.evaluate(async (node) => {
+        // Restart the CSS animation for clock samples even if CI reached this node after completion.
+        node.style.animationName = "none";
+        void getComputedStyle(node).animationName;
+        node.style.animationName = "";
+        const animation = node.getAnimations()[0];
+        if (!animation) {
+          throw new Error("The loading skeleton has no reveal animation");
+        }
+        await animation.ready;
+        animation.pause();
+        return [499, 575, 650].map((time) => {
+          animation.currentTime = time;
+          const style = getComputedStyle(node);
+          return { opacity: Number(style.opacity), visibility: style.visibility };
+        });
+      });
+      expect(frames[0]).toEqual({ opacity: 0, visibility: "hidden" });
+      expect(frames[1]?.opacity).toBeGreaterThan(0);
+      expect(frames[1]?.opacity).toBeLessThan(1);
+      expect(frames[2]).toEqual({ opacity: 1, visibility: "visible" });
+      await gateway.resolveDeferred("chat.startup");
+      const previous = page.locator(".chat-thread").getByText("Previous conversation.");
+      await previous.waitFor({ state: "visible" });
+      expect(await loader.count()).toBe(0);
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.waitForFunction(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
+      await gateway.deferNext("chat.startup");
+      const [revealDelay] = await Promise.all([
+        page.evaluate(
+          () =>
+            new Promise<{ delay: number; previousVisible: boolean }>((resolve) => {
+              const started = performance.now();
+              let revealAnimation: Animation | undefined;
+              let previousVisible = false;
+              // Reduced-motion animations can finish before the first sampled frame.
+              // Retain their clock before getAnimations() drops the finished effect.
+              const observer = new MutationObserver(() => {
+                const skeleton = document.querySelector(
+                  ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+                );
+                revealAnimation ??= skeleton?.getAnimations()[0];
+                if (revealAnimation) {
+                  observer.disconnect();
+                }
+              });
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ["class"],
+              });
+              const sample = () => {
+                const skeleton = document.querySelector(
+                  ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+                );
+                if (skeleton) {
+                  revealAnimation ??= skeleton.getAnimations()[0];
+                  previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
+                    (pane) =>
+                      getComputedStyle(pane).opacity !== "0" &&
+                      pane.getAttribute("aria-hidden") === "false" &&
+                      pane.textContent.includes("Previous conversation."),
+                  );
+                  const currentTime = revealAnimation?.currentTime;
+                  if (
+                    getComputedStyle(skeleton).visibility === "visible" &&
+                    typeof currentTime === "number"
+                  ) {
+                    observer.disconnect();
+                    resolve({
+                      delay: currentTime,
+                      previousVisible,
+                    });
+                    return;
+                  }
+                }
+                if (performance.now() - started > 3_000) {
+                  observer.disconnect();
+                  resolve({ delay: -1, previousVisible });
+                  return;
+                }
+                requestAnimationFrame(sample);
+              };
+              sample();
+            }),
+        ),
+        page
+          .locator('[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link')
+          .click(),
+      ]);
+      expect(revealDelay.delay).toBeGreaterThanOrEqual(480);
+      expect(revealDelay.previousVisible).toBe(false);
+      expect(revealDelay.delay).toBeLessThan(1_000);
+      await expect
+        .poll(() =>
+          loader.evaluate((node) => ({
+            opacity: getComputedStyle(node).opacity,
+            duration: getComputedStyle(node).animationDuration,
+            reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+          })),
+        )
+        .toEqual({ opacity: "1", duration: "1e-05s", reduced: true });
+      expect(
+        await page
+          .locator(".chat-pane-cache__pane--visible")
+          .getByText("Previous conversation.")
+          .count(),
+      ).toBe(0);
+      await gateway.resolveDeferred("chat.startup");
+      await page
+        .locator(".chat-thread")
+        .getByText("Destination conversation.")
+        .waitFor({ state: "visible" });
+      await page
+        .locator('[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link')
+        .click();
+      await previous.waitFor({ state: "visible" });
+      expect(
+        await page
+          .locator(".chat-pane-cache__pane--visible openclaw-panel-loading-skeleton")
+          .count(),
+      ).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each(["named", "short"] as const)(
     "retains deferred history across %s chat canonicalization",
     async (reference) => {
@@ -96,9 +249,7 @@ suite.define(() => {
           sessionKey,
         );
         expect(await gateway.getRequests("chat.startup")).toHaveLength(initialStartups + 1);
-        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(
-          reference === "named" ? 1 : 0,
-        );
+        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
         await captureHistoryIssuanceProof(page, `canonical-${reference}-history`);
       } finally {
         await suite.closeBrowserContext(context);

@@ -34,12 +34,14 @@ import {
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getSecretEgressCertificateStatus } from "../secrets/egress-proxy/registry.js";
 import {
   listActiveDegradedSecretOwners,
   redactSecretDegradationReason,
 } from "../secrets/runtime-degraded-state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
@@ -137,27 +139,6 @@ function compareSessionCandidatesByUpdatedAt(
   return (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
 }
 
-function selectRecentSessionCandidates(
-  candidates: SessionEntrySummary[],
-  limit: number,
-): SessionEntrySummary[] {
-  const selected: SessionEntrySummary[] = [];
-  for (const candidate of candidates) {
-    const insertAt = selected.findIndex(
-      (selectedCandidate) => compareSessionCandidatesByUpdatedAt(candidate, selectedCandidate) < 0,
-    );
-    if (insertAt >= 0) {
-      selected.splice(insertAt, 0, candidate);
-      if (selected.length > limit) {
-        selected.pop();
-      }
-    } else if (selected.length < limit) {
-      selected.push(candidate);
-    }
-  }
-  return selected;
-}
-
 async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   const {
     classifySessionKey,
@@ -250,7 +231,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
         });
         const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
-        const resolvedModel = resolveSessionModelRef(cfg, entry, agentId);
+        const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
         const model = resolvedModel.model ?? configuredSessionModel ?? null;
         const lookupModel =
           resolveStatusModelLookupRef({
@@ -423,7 +404,11 @@ export async function getStatusSummary(
     return agentList.agents.map((agent, index) => {
       const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
       let waitingForRoute = false;
-      if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
+      if (
+        summary.enabled &&
+        !agent.admissionRefusal &&
+        (summary.target === "last" || summary.target === "owner")
+      ) {
         const heartbeatSession = resolveHeartbeatSessionKey(
           cfg,
           agent.id,
@@ -453,7 +438,7 @@ export async function getStatusSummary(
       }
       return {
         agentId: agent.id,
-        enabled: summary.enabled,
+        enabled: summary.enabled && !agent.admissionRefusal,
         every: summary.every,
         everyMs: summary.everyMs,
         waitingForRoute,
@@ -511,6 +496,10 @@ export async function getStatusSummary(
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
+      ...(agent.status ? { status: agent.status } : {}),
+      ...(includeSensitive && agent.admissionRefusal
+        ? { admissionRefusal: agent.admissionRefusal }
+        : {}),
       path: includeSensitive ? path : "[redacted]",
       count,
       recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
@@ -518,7 +507,11 @@ export async function getStatusSummary(
   );
   const recent = sessionDetails
     ? await sessionDetails.buildSessionRows(
-        selectRecentSessionCandidates(sessionStores.recent, RECENT_SESSION_LIMIT),
+        sortAndLimitBy(
+          sessionStores.recent,
+          RECENT_SESSION_LIMIT,
+          compareSessionCandidatesByUpdatedAt,
+        ),
       )
     : [];
   const hostDesktopStatus =
@@ -546,6 +539,7 @@ export async function getStatusSummary(
     channelSummary,
     queuedSystemEvents,
     startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
+    secretEgressProxy: getSecretEgressCertificateStatus(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);

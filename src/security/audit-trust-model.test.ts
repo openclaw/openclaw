@@ -420,7 +420,7 @@ describe("security audit trust model findings", () => {
         },
       },
       {
-        name: "flags open groupPolicy when coding profile exposes cron",
+        name: "flags open groupPolicy when coding exposes update, automation, and plugin tools",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false }, profile: "coding" },
@@ -431,8 +431,8 @@ describe("security audit trust model findings", () => {
           );
           expect(finding?.severity).toBe("critical");
           expect(finding?.detail).toContain("channels.whatsapp.groupPolicy");
-          expect(finding?.detail).toContain("controlPlane=[automations]");
-          expect(finding?.detail).not.toContain("controlPlane=[automations, gateway]");
+          expect(finding?.detail).toContain("controlPlane=[automations, gateway, plugins]");
+          expect(finding?.remediation).toContain("`plugins`");
         },
       },
       {
@@ -465,12 +465,12 @@ describe("security audit trust model findings", () => {
             (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
           );
           expect(finding?.detail).toContain(
-            "agents.defaults (profile=messaging; controlPlane=[automations])",
+            "agents.defaults (profile=messaging; controlPlane=[automations, gateway])",
           );
         },
       },
       {
-        name: "reports per-agent control-plane exposure",
+        name: "reports default and per-agent control-plane exposure",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false }, profile: "messaging" },
@@ -485,17 +485,19 @@ describe("security audit trust model findings", () => {
           expect(finding?.detail).toContain(
             "agents.entries.ops (profile=messaging; controlPlane=[gateway])",
           );
-          expect(finding?.detail).not.toContain("agents.defaults (profile=messaging");
+          expect(finding?.detail).toContain(
+            "agents.defaults (profile=messaging; controlPlane=[gateway])",
+          );
         },
       },
       {
-        name: "does not flag control-plane exposure when gateway and cron are denied",
+        name: "does not flag control-plane exposure when gateway, cron, and plugins are denied",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: {
             elevated: { enabled: false },
             profile: "coding",
-            deny: ["gateway", "cron"],
+            deny: ["gateway", "cron", "plugins"],
           },
         } satisfies OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {

@@ -7,6 +7,7 @@ import {
   logInboundDrop,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
+  resolveGroupThreadMentionFacts,
   resolveUnmentionedGroupInboundPolicy,
   toHistoryMediaEntries,
   toInboundMediaFactsWithMetadata,
@@ -77,6 +78,7 @@ import {
   resolveDiscordMessageMentionDocuments,
   resolveDiscordMessageText,
 } from "./message-text.js";
+import { buildDiscordRoutePeer } from "./route-resolution.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -205,7 +207,8 @@ async function recordDiscordPendingHistoryEntry(params: {
     limit: params.preflight.historyLimit,
     mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
     messageId: params.message.id,
-    shouldRecord: () => !params.preflight.abortSignal?.aborted,
+    shouldRecord: () =>
+      !params.preflight.abortSignal?.aborted && params.preflight.isPolicyCurrent?.() !== false,
     media: async () =>
       toHistoryMediaEntries(
         await resolveDiscordHistoryMediaForPendingRecord({
@@ -220,7 +223,7 @@ async function recordDiscordPendingHistoryEntry(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
-  if (params.abortSignal?.aborted) {
+  if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
     return null;
   }
   const logger = getChildLogger({ module: "discord-auto-reply" });
@@ -256,7 +259,7 @@ export async function preflightDiscordMessage(
         messageChannelId,
       }),
     );
-    if (params.abortSignal?.aborted) {
+    if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
       return null;
     }
   }
@@ -283,7 +286,7 @@ export async function preflightDiscordMessage(
   }
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
-  if (params.abortSignal?.aborted) {
+  if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
     return null;
   }
   const { isDirectMessage, isGroupDm } = resolveDiscordPreflightConversationKind({
@@ -334,7 +337,7 @@ export async function preflightDiscordMessage(
     config: pluralkitConfig,
     abortSignal: params.abortSignal,
   });
-  if (params.abortSignal?.aborted) {
+  if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
     return null;
   }
   const sender = resolveDiscordSenderIdentity({
@@ -379,7 +382,7 @@ export async function preflightDiscordMessage(
       allowNameMatching,
       conversationId: messageChannelId,
     });
-    if (params.abortSignal?.aborted) {
+    if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
       return null;
     }
     if (!access) {
@@ -417,7 +420,7 @@ export async function preflightDiscordMessage(
     messageChannelId,
     abortSignal: params.abortSignal,
   });
-  if (!threadContext) {
+  if (!threadContext || params.isPolicyCurrent?.() === false) {
     return null;
   }
   const { earlyThreadChannel, earlyThreadParentId, earlyThreadParentName, earlyThreadParentType } =
@@ -437,6 +440,9 @@ export async function preflightDiscordMessage(
     memberRoleIds,
     earlyThreadParentId,
   });
+  if (params.isPolicyCurrent?.() === false) {
+    return null;
+  }
   const {
     conversationRuntime,
     threadBinding,
@@ -623,6 +629,9 @@ export async function preflightDiscordMessage(
 
   // Only authorized guild senders should reach the expensive transcription path.
   const { resolveDiscordPreflightAudioMentionContext } = await loadPreflightAudioRuntime();
+  if (params.isPolicyCurrent?.() === false) {
+    return null;
+  }
   const { hasTypedText, transcript: preflightTranscript } =
     await resolveDiscordPreflightAudioMentionContext({
       message,
@@ -632,7 +641,7 @@ export async function preflightDiscordMessage(
       cfg: params.cfg,
       abortSignal: params.abortSignal,
     });
-  if (params.abortSignal?.aborted) {
+  if (params.abortSignal?.aborted || params.isPolicyCurrent?.() === false) {
     return null;
   }
 
@@ -659,7 +668,25 @@ export async function preflightDiscordMessage(
         source.documents.some((text) => matchesActiveDiscordMentionPatterns(text, mentionRegexes)),
     ) ||
       matchesActiveDiscordMentionPatterns(preflightTranscript ?? "", mentionRegexes));
-  const wasMentioned = wasNormallyMentioned || hasActiveBotMention;
+  const groupThread = resolveGroupThreadMentionFacts({
+    cfg: params.cfg,
+    channel: "discord",
+    peerId: isDirectMessage
+      ? buildDiscordRoutePeer({
+          isDirectMessage,
+          isGroupDm,
+          directUserId: author.id,
+          conversationId: messageChannelId,
+        }).id
+      : params.cfg.broadcast?.[`discord:${messageChannelId}`] !== undefined
+        ? messageChannelId
+        : (threadParentId ?? messageChannelId),
+    text: mentionText || preflightTranscript || "",
+    sessionKey: boundSessionKey || effectiveRoute.sessionKey,
+    acpBinding: Boolean(configuredBinding),
+  });
+  const wasMentioned =
+    wasNormallyMentioned || hasActiveBotMention || Boolean(groupThread?.mentionedAgentIds.length);
   logDiscordPreflightInboundSummary({
     messageId: message.id,
     guildId: params.data.guild_id ?? undefined,
@@ -704,6 +731,9 @@ export async function preflightDiscordMessage(
         ...(contextBinding ? { contextBinding } : {}),
       });
     const commandAccess = await resolveCommandIngress();
+    if (params.isPolicyCurrent?.() === false) {
+      return null;
+    }
     commandAuthorized = commandAccess.commandAccess.authorized;
     channelIngress = commandAccess;
     resolveChannelIngress = resolveCommandIngress;
@@ -719,7 +749,7 @@ export async function preflightDiscordMessage(
     }
   }
 
-  const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
+  const canDetectMention = Boolean(groupThread) || Boolean(botId) || mentionRegexes.length > 0;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention,
@@ -818,6 +848,9 @@ export async function preflightDiscordMessage(
     channelName: channelName ?? messageChannelId,
   });
   const { resolveDiscordSystemEvent } = await loadSystemEventsRuntime();
+  if (params.isPolicyCurrent?.() === false) {
+    return null;
+  }
   const systemText = resolveDiscordSystemEvent(message, systemLocation);
   if (systemText) {
     logDebug(`[discord-preflight] drop: system event`);
@@ -839,6 +872,9 @@ export async function preflightDiscordMessage(
       cfg: params.cfg,
       bindingResolution: configuredBinding,
     });
+    if (params.isPolicyCurrent?.() === false) {
+      return null;
+    }
     if (!ensured.ok) {
       logVerbose(
         `discord: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
@@ -915,6 +951,7 @@ export async function preflightDiscordMessage(
   );
   return buildDiscordMessagePreflightContext({
     preflightParams: params,
+    groupThread,
     data,
     client: params.client,
     message,

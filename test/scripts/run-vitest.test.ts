@@ -376,6 +376,121 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ).toEqual([argv]);
   });
 
+  it.each([
+    {
+      name: "tooling",
+      options: ["--exclude", "test/scripts/run-vitest.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"] },
+    },
+    {
+      name: "Docker tooling",
+      options: ["--exclude", "test/scripts/docker-build-helper.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/docker-build-helper.test.ts"] },
+    },
+    {
+      name: "UI",
+      options: ["--exclude", "ui/src/pages/chat/chat-send.test.ts"],
+      expectedOptions: { exclude: ["ui/src/pages/chat/chat-send.test.ts"] },
+    },
+    {
+      name: "browser UI",
+      options: ["--exclude", "ui/src/components/markdown-mermaid.runtime.browser.test.ts"],
+      expectedOptions: { exclude: ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"] },
+    },
+    {
+      name: "inline",
+      options: ["--exclude=test/scripts/run-vitest.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"] },
+    },
+    {
+      name: "empty inline",
+      options: ["--exclude=", "test/scripts/run-vitest.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"] },
+    },
+    {
+      name: "comma",
+      options: [
+        "--exclude",
+        "test/scripts/run-vitest.test.ts,test/scripts/docker-build-helper.test.ts",
+      ],
+      expectedOptions: {
+        exclude: ["test/scripts/run-vitest.test.ts,test/scripts/docker-build-helper.test.ts"],
+      },
+    },
+    {
+      name: "pipe",
+      options: [
+        "--exclude",
+        "test/scripts/run-vitest.test.ts|test/scripts/docker-build-helper.test.ts",
+      ],
+      expectedOptions: {
+        exclude: ["test/scripts/run-vitest.test.ts|test/scripts/docker-build-helper.test.ts"],
+      },
+    },
+    {
+      name: "name regexp",
+      options: ["--testNamePattern", "test/scripts/(run-vitest|test-projects).test.ts"],
+      expectedOptions: { testNamePattern: "test/scripts/(run-vitest|test-projects).test.ts" },
+    },
+    {
+      name: "repeated",
+      options: [
+        "--exclude",
+        "test/scripts/run-vitest.test.ts",
+        "--exclude",
+        "test/scripts/run-vitest-progress.test.ts",
+      ],
+      expectedOptions: {
+        exclude: ["test/scripts/run-vitest.test.ts", "test/scripts/run-vitest-progress.test.ts"],
+      },
+    },
+    {
+      name: "following flag",
+      options: ["--exclude", "test/scripts/run-vitest.test.ts", "--passWithNoTests=false"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"], passWithNoTests: false },
+    },
+    {
+      name: "missing operand before flag",
+      options: ["--exclude=", "--passWithNoTests=false"],
+      expectedOptions: { exclude: [true], passWithNoTests: false },
+    },
+    {
+      name: "native separator",
+      options: ["--", "test/scripts/run-vitest.test.ts"],
+      expectedOptions: { "--": ["test/scripts/run-vitest.test.ts"] },
+    },
+  ])(
+    "keeps $name option operands out of implicit config selection",
+    ({ options, expectedOptions }) => {
+      const argv = ["run", ...options];
+      const native = parseCLI(["vitest", ...argv]);
+
+      expect(native.filter).toEqual([]);
+      expect(native.options).toMatchObject(expectedOptions);
+      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+      expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(native);
+    },
+  );
+
+  it("routes a positional UI test independently of excluded tooling files", () => {
+    const argv = [
+      "list",
+      "ui/src/pages/chat/chat-send.test.ts",
+      "--exclude",
+      "test/scripts/run-vitest.test.ts",
+      "--passWithNoTests=false",
+    ];
+    const native = parseCLI(["vitest", ...argv]);
+
+    expect(native.filter).toEqual(["ui/src/pages/chat/chat-send.test.ts"]);
+    expect(native.options.exclude).toEqual(["test/scripts/run-vitest.test.ts"]);
+    expect(native.options.passWithNoTests).toBe(false);
+    expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+    expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(
+      parseCLI(["vitest", "--config", "test/vitest/vitest.ui.config.ts", ...argv]),
+    );
+  });
+
   it("routes explicit tooling tests through the tooling config", () => {
     expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
       "run",
@@ -917,6 +1032,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=test/vitest/vitest.package-contract.config.ts",
       "--config=test/vitest/vitest.tui-pty.config.ts",
       "--config=test/vitest/vitest.gateway.config.ts",
       "--config=./test/vitest/vitest.ui-e2e.config.ts",
@@ -1064,46 +1180,65 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
     try {
       expect(await waitForClose(watched.child)).toEqual({ code: null, signal: "SIGTERM" });
+      expect(await watched.completion).toEqual({
+        code: null,
+        signal: "SIGTERM",
+        groupJoined: true,
+      });
     } finally {
       watched.teardown();
       forceKillVitestProcessGroup(watched.child);
+      await watched.completion;
     }
   });
 
-  posixIt("stops residual process-group descendants before completing", async () => {
+  posixIt.each([
+    { timeout: false, exitCode: 0, expectedCode: 0 },
+    { timeout: true, exitCode: 0, expectedCode: 1 },
+    { timeout: true, exitCode: 7, expectedCode: 7 },
+  ])("settles descendants (timeout=$timeout, child=$exitCode)", async (row) => {
     const watchedEnv = {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
     };
     let noOutputTimedOut = false;
-    const watched = spawnWatchedVitestProcess({
-      pnpmArgs: [
-        "exec",
-        "node",
-        "-e",
-        [
-          'const { spawn } = require("node:child_process");',
-          'process.once("SIGTERM", () => process.exit(0));',
-          'const descendant = spawn(process.execPath, ["-e",',
-          '  "setInterval(() => {}, 1000); process.send(process.pid);",',
-          '], { stdio: ["ignore", "ignore", "ignore", "ipc"] });',
-          'descendant.once("message", (pid) => {',
-          "  descendant.disconnect();",
-          "  process.stdout.write(`${pid}\\n`);",
-          "});",
-          "descendant.unref();",
-          "setInterval(() => {}, 1000);",
-        ].join("\n"),
-      ],
-      spawnParams: {
-        detached: true,
+    // Only watchdog timers are fake; child I/O, diagnostics, and group joins stay real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { clock } = setTimeout as typeof setTimeout & { clock: { tick(ms: number): void } };
+    let watched: ReturnType<typeof spawnWatchedVitestProcess>;
+    try {
+      watched = spawnWatchedVitestProcess({
+        pnpmArgs: [
+          "exec",
+          "node",
+          "-e",
+          [
+            'const { spawn } = require("node:child_process");',
+            `process.once("SIGTERM", () => process.exit(${row.exitCode}));`,
+            'const descendant = spawn(process.execPath, ["-e",',
+            '  "setInterval(() => {}, 1000); process.send(process.pid);",',
+            '], { stdio: ["ignore", "ignore", "ignore", "ipc"] });',
+            'descendant.once("message", (pid) => {',
+            "  descendant.disconnect();",
+            "  process.stdout.write(`${pid}\\n`);",
+            "});",
+            "descendant.unref();",
+            "setInterval(() => {}, 1000);",
+          ].join("\n"),
+        ],
+        spawnParams: {
+          detached: true,
+          env: watchedEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
         env: watchedEnv,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-      env: watchedEnv,
-      onNoOutputTimeout: () => {
-        noOutputTimedOut = true;
-      },
-    });
+        onNoOutputTimeout: () => {
+          noOutputTimedOut = true;
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const rawExit = waitForClose(watched.child, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
     let descendantPid = 0;
     const lines = createInterface({ input: watched.child.stdout! });
     const ready = new Promise<void>((resolve, reject) => {
@@ -1114,7 +1249,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
           descendantPid = Number(line);
           expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
           expect(isProcessAlive(descendantPid)).toBe(true);
-          process.kill(watched.child.pid!, "SIGTERM");
+          if (row.timeout) {
+            clock.tick(Number(watchedEnv.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS));
+          } else {
+            process.kill(watched.child.pid!, "SIGTERM");
+          }
           resolve();
         } catch (error) {
           reject(error instanceof Error ? error : new Error(String(error)));
@@ -1125,7 +1264,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
     try {
       const snapshot = await Promise.race([
-        Promise.all([ready, watched.completion]).then(([, result]) => {
+        Promise.all([ready, rawExit, watched.completion]).then(([, raw, result]) => {
           const psArgs =
             process.platform === "linux" ? ["-eL", "-o", "pgid=,state="] : ["-axo", "pgid=,state="];
           const stateResult = spawnSync("ps", psArgs, {
@@ -1142,9 +1281,9 @@ registerHooks({resolve(specifier, context, nextResolve) {
             stateResult.status === 0 &&
             rows.every(Boolean) &&
             rows
-              .filter((row) => Number(row?.[1]) === watched.child.pid)
-              .every((row) => /^[ZX]/.test(row?.[2] ?? ""));
-          return { groupStopped, noOutputTimedOut, result };
+              .filter((processRow) => Number(processRow?.[1]) === watched.child.pid)
+              .every((processRow) => /^[ZX]/.test(processRow?.[2] ?? ""));
+          return { groupStopped, noOutputTimedOut, raw, result };
         }),
         delay(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS, undefined, { ref: false }).then(() => {
           throw new Error("timed out waiting for watched Vitest completion");
@@ -1153,8 +1292,9 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
       expect(snapshot).toEqual({
         groupStopped: true,
-        noOutputTimedOut: false,
-        result: { code: 0, signal: null, groupJoined: true },
+        noOutputTimedOut: row.timeout,
+        raw: { code: row.exitCode, signal: null },
+        result: { code: row.expectedCode, signal: null, groupJoined: true },
       });
     } finally {
       lines.close();

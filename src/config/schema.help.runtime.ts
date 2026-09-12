@@ -177,8 +177,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
-    "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
-  "gateway.auth.password": "Required for Tailscale funnel.",
+    "Shared secret selected by gateway.auth.mode=token, the default for new local onboarding. Clients may send it in either auth.token or auth.password. Non-loopback binds require an enabled authentication mode.",
+  "gateway.auth.password":
+    "Shared secret selected by gateway.auth.mode=password. Clients may send it in either auth.token or auth.password. Password mode is required for Tailscale Funnel.",
   "agents.defaults.sandbox.browser.network":
     'Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Use the dedicated default or a custom bridge network; "none" is unsupported because browser control requires published CDP ports.',
   "agents.entries.*.sandbox.browser.network":
@@ -296,7 +297,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.workerRuns.isolation":
     'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
   "nodeHost.workerRuns.containerImage":
-    'Optional Node 22+ image for container-isolated workers (default: "node:22-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
+    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.19.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -354,11 +355,19 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "bindings[].acp.backend":
     "ACP backend override for this binding (falls back to agent runtime ACP backend, then global acp.backend).",
   broadcast:
-    "Broadcast routing map for sending the same outbound message to multiple peer IDs per source conversation. Keep this minimal and audited because one source can fan out to many destinations.",
+    "Use agent group threads to run several configured agents on one inbound conversation, each in its own session. Channel-qualified entries support bounded follow-up rounds; legacy WhatsApp peer arrays retain single-pass behavior.",
   "broadcast.strategy":
-    'Delivery order for broadcast fan-out: "parallel" sends to all targets concurrently, while "sequential" sends one-by-one. Use "parallel" for speed and "sequential" for stricter ordering/backpressure control.',
+    'Participant execution order: "parallel" (default) runs agents concurrently, while "sequential" runs them in configured order. Each round completes before the next begins.',
   "broadcast.*":
-    "Per-source broadcast destination list where each key is a source peer ID and the value is an array of destination peer IDs. Keep lists intentional to avoid accidental message amplification.",
+    'Use a channel-qualified peer ID (for example "telegram:-100123") to configure an array of agent IDs or a strict object with agents, mentionGating, maxRounds, and maxTurns. Qualified entries take precedence over legacy WhatsApp peer keys and allow at most 16 agents.',
+  "broadcast.*.agents":
+    "Participant agent IDs from agents.entries (maximum: 16). Each participant uses its own session for this channel, account, conversation, and thread.",
+  "broadcast.*.mentionGating":
+    "Select only explicitly @mentioned participants when any match; otherwise run all participants (default: true). Bare names or emoji do not select participants. Channel allowlists and admission rules still apply.",
+  "broadcast.*.maxRounds":
+    "Maximum rounds per inbound message, including the initial round (integer: 1–4, default: 1). Follow-up rounds share bounded, attributed sibling replies and stop when every participant passes.",
+  "broadcast.*.maxTurns":
+    "Maximum participant turns per inbound message across all rounds (integer: 1–32, default: agents.length). Slots are reserved before parallel dispatch; this bounds agent turns, not physical message chunks or tool sends. Budgets do not resume after restart.",
   "diagnostics.flags":
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.enabled":
@@ -404,7 +413,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
-    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+    "Controls rolling-history tool-loop detection and the post-compaction guard. Omit to keep rolling detection off and post-compaction protection on. Set true to enable both, or false to disable both.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":

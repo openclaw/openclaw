@@ -75,7 +75,11 @@ suite.define(() => {
           .filter({ hasText: "Agent configuration unavailable" });
         await expect.poll(() => error.isVisible()).toBe(true);
         await expect
-          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .poll(() =>
+            agentsPage
+              .locator(".model-picker__select .picker-select__trigger")
+              .getAttribute("disabled"),
+          )
           .not.toBeNull();
 
         await gateway.setMethodResponse("config.get", {
@@ -92,7 +96,11 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBefore });
         await expect.poll(() => error.count()).toBe(0);
         await expect
-          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .poll(() =>
+            agentsPage
+              .locator(".model-picker__select .picker-select__trigger")
+              .getAttribute("disabled"),
+          )
           .toBeNull();
       },
     );
@@ -231,7 +239,7 @@ suite.define(() => {
     });
   });
 
-  it("stages skill changes from the inherited allowlist", async () => {
+  it("config.set stages skill changes from the inherited allowlist", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const config = {
         agents: {
@@ -306,7 +314,10 @@ suite.define(() => {
         },
       });
       expect(params.baseHash).toBe("agent-config-hash-1");
-      await gateway.resolveDeferred("config.set", { hash: "agent-config-hash-2" });
+      await gateway.resolveDeferred("config.set", {
+        config: JSON.parse(String(params.raw)),
+        hash: "agent-config-hash-2",
+      });
     });
   });
 });

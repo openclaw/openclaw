@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
+import type { ConfigReplaceInput } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -10,9 +11,11 @@ import {
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
+import { persistPluginInstall } from "./install-persistence.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
+import { PluginInstallPersistedError } from "./lifecycle.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
@@ -40,8 +43,9 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
 
 const { listManagedPlugins, refreshManagedPluginMetadata } =
   await import("./management-service.js");
-const { setManagedPluginEnabled, uninstallManagedPlugin } =
+const { mutateManagedPluginEnabled, setManagedPluginEnabled } =
   await import("./management-mutations.js");
+const { uninstallManagedPlugin } = await import("./management-uninstall.js");
 const roots: string[] = [];
 
 beforeEach(() => {
@@ -132,8 +136,11 @@ it("removes an npm-pack plugin from management inventory without replacing Gatew
     },
     writeOptions: { expectedConfigPath: path.join(stateDir, "openclaw.json") },
   }));
-  configIo.write.mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-    config = nextConfig;
+  configIo.write.mockImplementation(async (params: ConfigReplaceInput) => {
+    config = params.sourceConfig ?? params.nextConfig;
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    return { path: configPath, nextConfig: config };
   });
   await writePersistedInstalledPluginIndex(
     loadInstalledPluginIndex({
@@ -210,8 +217,11 @@ it.each([undefined, "main"])(
       },
       writeOptions: { expectedConfigPath: path.join(root, "openclaw.json") },
     }));
-    configIo.write.mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-      config = nextConfig;
+    configIo.write.mockImplementation(async (params: ConfigReplaceInput) => {
+      config = params.sourceConfig ?? params.nextConfig;
+      const configPath = path.join(root, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify(config));
+      return { path: configPath, nextConfig: config };
     });
     const boot = resolveConfigWidePluginMetadataSnapshot({
       config,
@@ -235,5 +245,166 @@ it.each([undefined, "main"])(
         boot.index.plugins.find((plugin) => plugin.pluginId === fixture.pluginId)?.enabled,
       ).toBe(false);
     }
+  },
+);
+
+it.each(["cli", "management"] as const)(
+  "preserves env references across %s capability consent",
+  async (caller) => {
+    const root = makeTrackedTempDir("managed-consent-env", roots);
+    const pluginRoot = path.join(root, "plugin");
+    const configPath = path.join(root, "openclaw.json");
+    mkdirSafeDir(pluginRoot);
+    const fixture = createColdPluginFixture({
+      rootDir: pluginRoot,
+      pluginId: "consent-env",
+      manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] },
+    });
+    fs.writeFileSync(
+      fixture.runtimeSource,
+      'module.exports = { id: "consent-env", register() {} };',
+    );
+    vi.stubEnv("OPENCLAW_HOME", path.join(root, "home"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    vi.stubEnv("OPENCLAW_TEST_CONSENT_PREFIX", "before-consent");
+    const config: OpenClawConfig = {
+      messages: { responsePrefix: "${OPENCLAW_TEST_CONSENT_PREFIX}" },
+      plugins: {
+        load: { paths: [pluginRoot] },
+        entries: { [fixture.pluginId]: { enabled: false } },
+      },
+    };
+    const raw = JSON.stringify(config);
+    fs.writeFileSync(configPath, raw);
+    const actual =
+      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+    configIo.read.mockImplementation(actual.readConfigFileSnapshotForWrite);
+    configIo.write.mockImplementation(actual.replaceConfigFile);
+    await writePersistedInstalledPluginIndex(
+      loadInstalledPluginIndex({
+        config,
+        env: process.env,
+        installRecords: {
+          [fixture.pluginId]: { source: "path", sourcePath: pluginRoot, installPath: pluginRoot },
+        },
+      }),
+    );
+    let consentCalls = 0;
+    const result = await mutateManagedPluginEnabled({
+      caller,
+      pluginId: fixture.pluginId,
+      enabled: true,
+      onCapabilityConsent: async (review) => {
+        consentCalls += 1;
+        await Promise.resolve();
+        vi.stubEnv("OPENCLAW_TEST_CONSENT_PREFIX", "after-consent");
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        return { reviewToken: review.reviewToken };
+      },
+    });
+    expect(consentCalls).toBe(1);
+    expect(result.status).toBe("committed");
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+      messages: { responsePrefix: "${OPENCLAW_TEST_CONSENT_PREFIX}" },
+      plugins: { entries: { [fixture.pluginId]: { enabled: true } } },
+    });
+    const fresh = await actual.readConfigFileSnapshot();
+    expect(fresh.valid).toBe(true);
+    expect(fresh.sourceConfig.messages?.responsePrefix).toBe("after-consent");
+  },
+);
+
+it.each(["config-write", "runtime-apply", "none"] as const)(
+  "keeps desired and running inventory separate with failure=%s",
+  async (failure) => {
+    const root = makeTrackedTempDir("managed-install-inventory", roots);
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    vi.stubEnv("OPENCLAW_HOME", path.join(root, "home"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    let config: OpenClawConfig = {};
+    await writePersistedInstalledPluginIndex(
+      loadInstalledPluginIndex({ config, candidates: [], installRecords: {} }),
+    );
+    const boot = resolveConfigWidePluginMetadataSnapshot({ config, allowCurrent: false });
+    setGatewayPluginMetadataSnapshot(boot, { config });
+    expect((await listManagedPlugins({ config })).plugins).toEqual([]);
+
+    const pluginRoot = resolvePluginInstallDir(
+      "saved-candidate",
+      path.join(stateDir, "extensions"),
+    );
+    mkdirSafeDir(pluginRoot);
+    const fixture = createColdPluginFixture({
+      rootDir: pluginRoot,
+      pluginId: "saved-candidate",
+      manifest: {
+        kind: "memory",
+        providers: [],
+        channels: [],
+        channelConfigs: {},
+        providerAuthChoices: [],
+      },
+    });
+    const rejected = new Error(`intentional ${failure} failure`);
+    configIo.write.mockImplementation(async (params: ConfigReplaceInput) => {
+      if (failure === "config-write") {
+        throw rejected;
+      }
+      config = params.sourceConfig ?? params.nextConfig;
+      fs.writeFileSync(configPath, JSON.stringify(config));
+      return {
+        path: configPath,
+        nextConfig: config,
+        persistedHash: "committed",
+        persistedSourceConfig: config,
+      };
+    });
+    const applyRuntime = vi.fn(async () => {
+      if (failure === "runtime-apply") {
+        throw rejected;
+      }
+      return { operationId: "install", generation: 1, pluginIds: [fixture.pluginId] };
+    });
+    const installed = persistPluginInstall({
+      snapshot: { config, baseHash: undefined, writeOptions: {} },
+      pluginId: fixture.pluginId,
+      install: { source: "path", sourcePath: pluginRoot, installPath: pluginRoot },
+      applyRuntime,
+      invalidateRuntimeCache: false,
+      runtime: { log: vi.fn() },
+    });
+    if (failure === "none") {
+      expect(await installed).toEqual(config);
+    } else if (failure === "runtime-apply") {
+      const result = await installed.catch((error: unknown) => error);
+      expect(result).toBeInstanceOf(PluginInstallPersistedError);
+      expect(result).toMatchObject({ pluginId: fixture.pluginId });
+      if (result instanceof PluginInstallPersistedError) {
+        expect(result.cause).toBe(rejected);
+      }
+    } else {
+      await expect(installed).rejects.toBe(rejected);
+    }
+    const committed = failure !== "config-write";
+    expect(
+      (await readPersistedInstalledPluginIndex())?.installRecords[fixture.pluginId] !== undefined,
+    ).toBe(committed);
+    const listed = (await listManagedPlugins({ config })).plugins.find(
+      (plugin) => plugin.id === fixture.pluginId,
+    );
+    if (committed) {
+      expect(listed).toMatchObject({ installed: true, enabled: true });
+      expect(applyRuntime).toHaveBeenCalledOnce();
+    } else {
+      expect(listed).toBeUndefined();
+      expect(applyRuntime).not.toHaveBeenCalled();
+    }
+    expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
+    expect(boot.byPluginId.has(fixture.pluginId)).toBe(false);
+    expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
   },
 );

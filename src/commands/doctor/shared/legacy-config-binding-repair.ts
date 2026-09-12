@@ -4,7 +4,7 @@ import { AgentSelectionRequiredError, listAgentIds } from "../../../agents/agent
 import { resolveReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
 import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveNormalizedAccountEntry } from "../../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../../routing/account-lookup.js";
 import {
   listChannelAccountRouteBindings,
   resolveAgentRoute,
@@ -96,7 +96,12 @@ export function repairUnownedChannelAccountBindings(
       ...new Set(plugin.config.listAccountIds(cfg).map(normalizeAccountId)),
     ].toSorted();
     for (const accountId of accountIds) {
-      const account = resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
+      const account = resolveChannelAccountEntry(
+        accounts,
+        accountId,
+        channelId,
+        normalizeAccountId,
+      );
       if (asNullableRecord(account)?.enabled === false) {
         continue;
       }

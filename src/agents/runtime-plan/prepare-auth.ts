@@ -5,23 +5,30 @@
  */
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderResolveModelRoutesContext,
+  ProviderRouteOverridePresence,
+} from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import {
   prependAuthProfilePin,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/read-only-availability.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
-import { resolveProviderConfigSecretInput } from "../model-auth-provider-config.js";
 import {
   hasUsableCustomProviderApiKey,
+  resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
-} from "../model-auth.js";
+} from "../model-auth-provider-config.js";
+import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
+import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-model-routes.js";
 import {
   buildProviderModelAuthDirectSource,
@@ -30,7 +37,10 @@ import {
   type ProviderModelAuthDirectSource,
   type ProviderModelAuthProfileSource,
 } from "../provider-model-auth-source-plan.js";
-import { selectProviderModelAuthSources } from "../provider-model-route-auth.js";
+import {
+  selectProviderModelAuthSources,
+  resolveProviderModelRouteAuthRequirement,
+} from "../provider-model-route-auth.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
@@ -41,6 +51,8 @@ type PrepareAgentRuntimeAuthPlanParams = {
   modelBaseUrl?: unknown;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   config?: OpenClawConfig;
+  agentId?: string;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
@@ -48,6 +60,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user" | "user-link";
+  allowAuthProfileFallback?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";
@@ -155,13 +168,15 @@ function resolveProfile(
         env: params.env ?? process.env,
       })
     : undefined;
+  const pendingOAuthRefresh =
+    credential?.type === "oauth" && isPendingOAuthRefreshFence(credential);
   return {
     kind: "profile",
     profileId,
     provider: credential?.provider ?? configured?.provider,
     mode: credential?.type ?? configured?.mode,
     // Runtime materialization owns secret readiness; only proven-invalid facts are terminal here.
-    readiness: availability === false ? "unavailable" : "unknown",
+    readiness: availability === false && !pendingOAuthRefresh ? "unavailable" : "unknown",
     cooldown:
       !options.ignoreCooldown &&
       params.authProfileStore &&
@@ -206,8 +221,9 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 
 /** Selects concrete provider routes and ordered credentials as one immutable preparation. */
 export function prepareAgentRuntimeAuth(
-  params: PrepareAgentRuntimeAuthPlanParams,
+  input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
+  const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
     params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
@@ -237,9 +253,20 @@ export function prepareAgentRuntimeAuth(
           store,
           provider: authProfileSelectionProvider,
           profileId: userPinnedProfileId,
+          includePendingOAuthRefresh: true,
         })
       : { eligible: false };
     if (!eligibility.eligible) {
+      if (
+        !store?.profiles[userPinnedProfileId] &&
+        params.config?.auth?.profiles?.[userPinnedProfileId]?.mode !== "aws-sdk"
+      ) {
+        throw createSelectedAuthProfileUnavailableError({
+          profileId: userPinnedProfileId,
+          provider: authProfileSelectionProvider,
+          modelId: params.modelId,
+        });
+      }
       throw new Error(
         `Auth profile "${userPinnedProfileId}" is not configured for ${authProfileSelectionProvider}.`,
       );
@@ -288,7 +315,8 @@ export function prepareAgentRuntimeAuth(
   // Explicit auth owns the physical route; apiKey is only its bearer material.
   const selectedConfiguredAuthMode =
     configuredAuthMode ?? (providerHasDirectMaterial ? "api-key" : undefined);
-  const selectedProfileId = boundProfileId;
+  const selectedProfileId =
+    boundProfileId ?? (params.allowAuthProfileFallback === false ? userPinnedProfileId : undefined);
   const resolvedAutomaticOrder =
     !harnessAllowsAuthProfileForwarding ||
     selectedProfileId ||
@@ -307,6 +335,7 @@ export function prepareAgentRuntimeAuth(
           preferredProfile: requestedProfileId,
           forModel: params.modelId,
           readinessMode: "read-only",
+          includePendingOAuthRefresh: true,
         });
   const automaticOrderResolution = prependAuthProfilePin(
     resolvedAutomaticOrder,
@@ -391,12 +420,15 @@ export function prepareAgentRuntimeAuth(
       ? directSource(selectedConfiguredAuthMode)
       : undefined;
   const automaticRouteAuthMode =
-    fallbackDirectSource && configuredAuthMode && !providerBindingSuppressesProfiles
+    fallbackDirectSource && !providerBindingSuppressesProfiles && !configuredAuthMode
       ? undefined
       : selectedConfiguredAuthMode;
   const ownership = selectedProfileId
     ? {
-        reason: "provider-binding" as const,
+        reason:
+          selectedProfileId === userPinnedProfileId
+            ? ("runtime-binding" as const)
+            : ("provider-binding" as const),
         source: resolveProfile(params, selectedProfileId, { ignoreCooldown: true }),
       }
     : configuredAwsSdkAuth
@@ -417,6 +449,7 @@ export function prepareAgentRuntimeAuth(
       ? { preferredProfileId: userPinnedProfileId ?? providerPreferredProfileId }
       : {}),
     explicitOrder: automaticOrderResolution.hasExplicitOrder,
+    preserveProfilePriority: Boolean(userPinnedProfileId),
     ...(fallbackDirectSource ? { fallback: fallbackDirectSource } : {}),
     allowCooldown: params.allowTransientCooldownProbe,
   });
@@ -426,6 +459,24 @@ export function prepareAgentRuntimeAuth(
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
     config: params.config,
+    agentId: params.agentId,
+    primaryModel:
+      !params.routeIntent && params.config
+        ? resolveDefaultModelForAgent({
+            cfg: params.config,
+            agentId: params.agentId,
+            allowManifestNormalization: false,
+            allowPluginNormalization: false,
+          })
+        : undefined,
+    resolveProfileAuthMode: (profileId) => params.authProfileStore?.profiles[profileId]?.type,
+    routeIntent: params.routeIntent,
+    pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
+      sourcePlan.kind === "required"
+        ? sourcePlan.source.mode
+        : (sourcePlan.orderedProfiles.find((source) => source.profileId === userPinnedProfileId)
+            ?.mode ?? configuredAuthMode),
+    ),
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
   });

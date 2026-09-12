@@ -1,13 +1,13 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
-import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
-import { resolveStateDir } from "../config/paths.js";
+import {
+  resolveCanonicalWorkspacePath,
+  resolveWorkspaceStateIdentity,
+} from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasErrnoCode, isMissingPathError } from "../infra/errors.js";
-import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
-import { pathExists, root, type Root } from "../infra/fs-safe.js";
+import { pathExists } from "../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,6 +16,11 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { movePathWithCopyFallback } from "../infra/replace-file.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import {
+  isUpdateRehearsalReadOnlyPath,
+  resolveUpdateRehearsalRoot,
+} from "../infra/update-rehearsal-paths.js";
+import { transitionPendingSkillProposalToStale } from "../skills/workshop/apply-transition.js";
 import { reconcileInterruptedSkillProposalApply } from "../skills/workshop/reconcile-transition.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
@@ -24,61 +29,45 @@ import {
   updateProposal,
 } from "../skills/workshop/store-sqlite-record.js";
 import {
-  hashSkillProposalContent,
-  importLegacySkillProposal,
-  readSkillProposal,
+  SkillProposalDraftMissingError,
   readSkillProposalBundle,
   readSkillProposalRollback,
   resolveSkillProposalTarget,
-  validateSkillProposalRecord,
-  validateSkillProposalRollback,
 } from "../skills/workshop/store.js";
-import type { SkillProposalRecord, SkillProposalRollback } from "../skills/workshop/types.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
+  inspectWorkshopAutomationReferences,
+  type WorkshopAutomationReference,
+} from "./doctor-skill-workshop-automations.js";
+import {
   listPendingLegacyCollectionBackupRoots,
   migrateLegacyCollectionBackups,
+  type LegacyCollectionBackupRoot,
 } from "./doctor-skill-workshop-collection-backups.js";
 import {
   classifyWorkshopRelocation,
   inferOwnerAgentId,
+  isReadOnlyRehearsalProposal,
   planWorkshopRelocation,
   readLegacyWorkshopSourceStat,
   resolveLegacyWorkshopWorkspaceDir,
-  type LegacyWorkshopProposal,
   type WorkshopProposalUpdate,
 } from "./doctor-skill-workshop-relocation.js";
+import {
+  importLegacySkillProposalSidecars,
+  type MigrationResult,
+} from "./doctor-skill-workshop-sidecars.js";
+import { readWorkshopMigrationRecords } from "./doctor-skill-workshop-sources.js";
 import {
   finishWorkshopWorkspaceRelocations,
   prepareWorkshopWorkspaceRelocation,
 } from "./doctor-skill-workshop-workspaces.js";
-
-const WORKSHOP_DIR = "skill-workshop";
-const PROPOSALS_DIR = `${WORKSHOP_DIR}/proposals`;
-const MANIFEST_PATH = `${WORKSHOP_DIR}/proposals.json`;
-// Preserve incomplete proposal artifacts outside active discovery so Doctor
-// does not retry an impossible import on every run.
-const RECOVERY_DIR = `${WORKSHOP_DIR}/recovery`;
-const RECOVERY_PROPOSALS_DIR = `${RECOVERY_DIR}/proposals`;
-const MAX_RECORD_BYTES = 1024 * 1024;
-// Legacy rollback JSON can expand control characters sixfold across 1 MiB of
-// SKILL.md plus 64 existing 256 KiB support targets.
-const MAX_ROLLBACK_BYTES = 128 * 1024 * 1024;
-const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
-
-type MigrationResult = {
-  changes: string[];
-  warnings: string[];
-  detected: number;
-  migrated: number;
-};
 
 type WorkshopRelocationResult = {
   movedSkills: number;
@@ -86,54 +75,41 @@ type WorkshopRelocationResult = {
   staleProposals: number;
   migratedBackupRoots: number;
   warnings: string[];
+  recoverableWarningCount: number;
 };
 
 export type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
   externalProposalCountsByAgent: Record<string, number>;
+  externalProposalDetails?: string[];
   legacyBackupRootCount: number;
+  preservedLegacyBackupRootCount: number;
+  automationReferences?: WorkshopAutomationReference[];
 };
-
-async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
-  const read = await rootDir.read(relativePath, {
-    hardlinks: "reject",
-    maxBytes,
-    symlinks: "reject",
-  });
-  return JSON.parse(read.buffer.toString("utf8"));
-}
 
 export async function inspectLegacySkillWorkshopMigration(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  // Lint's private database snapshot does not change persisted filesystem targets.
+  stateEnv?: NodeJS.ProcessEnv;
 }): Promise<LegacyWorkshopMigrationInspection> {
   const env = params.env ?? process.env;
-  const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
-  let records: LegacyWorkshopProposal[] = [];
-  try {
-    if (database && tableExists(database.db, "skill_workshop_proposals")) {
-      const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
-        database.db,
-      );
-      const rows = executeSqliteQuerySync(
-        database.db,
-        kysely.selectFrom("skill_workshop_proposals").select(["record_json", "owner_agent_id"]),
-      ).rows;
-      records = rows.flatMap((row) => {
-        try {
-          const parsed = validateSkillProposalRecord(JSON.parse(row.record_json));
-          return parsed.ok ? [{ record: parsed.value, ownerAgentId: row.owner_agent_id }] : [];
-        } catch {
-          return [];
-        }
-      });
-    }
-  } finally {
-    database?.walMaintenance.close();
-  }
+  const stateEnv = params.stateEnv ?? env;
+  const { records, appliedEvents } = await readWorkshopMigrationRecords(stateEnv, true);
   // Lint needs ownership counts, not adoption verification through writable recovery readers.
-  const { external } = classifyWorkshopRelocation(records, params.config, env);
+  const { external } = classifyWorkshopRelocation(
+    records.filter(({ record }) => !isReadOnlyRehearsalProposal(record, env)),
+    params.config,
+    env,
+  );
   const backups = await listPendingLegacyCollectionBackupRoots(params.config, env);
+  const automationReferences = await inspectWorkshopAutomationReferences({
+    config: params.config,
+    env,
+    stateEnv,
+    records,
+    appliedEvents,
+  });
   return {
     externalProposalCount: external.length,
     externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
@@ -141,18 +117,37 @@ export async function inspectLegacySkillWorkshopMigration(params: {
       counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
       return counts;
     }, {}),
+    ...(external.length > 0
+      ? {
+          externalProposalDetails: external
+            .toSorted((left, right) => left.record.id.localeCompare(right.record.id))
+            .slice(0, 20)
+            .map(({ record, ownerAgentId, unconfiguredOwnerAgentId }) =>
+              truncateWithMarker(
+                `${record.id}: ${record.target.skillDir} (owner: ${ownerAgentId ?? unconfiguredOwnerAgentId ?? "unknown"})`,
+                2000,
+                { marker: "…", reserve: 1, trimEnd: true },
+              ),
+            ),
+        }
+      : {}),
     legacyBackupRootCount: backups.length,
+    preservedLegacyBackupRootCount: backups.filter((backup) => "warning" in backup).length,
+    ...(automationReferences.length > 0 ? { automationReferences } : {}),
   };
 }
 
 async function relocateLegacyWorkshopTargets(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  retireMissingDrafts: boolean,
+  backupRoots: readonly LegacyCollectionBackupRoot[],
+  unavailableWorkspaceDirs: ReadonlyMap<string, string> = new Map(),
 ): Promise<WorkshopRelocationResult> {
   const database = openOpenClawStateDatabase({ env });
-  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
-    database.db,
-  );
+  const kysely = getNodeSqliteKysely<
+    Pick<OpenClawStateDatabase, "skill_workshop_proposals" | "skill_workshop_proposal_rollbacks">
+  >(database.db);
   // Planning must not initialize optional Workshop tables or indexes on a no-op
   // startup. Actual proposal writes retain their feature-owned schema ensure.
   const readRows = () =>
@@ -163,7 +158,31 @@ async function relocateLegacyWorkshopTargets(
         ).rows
       : [];
   const deferredSources = new Set<string>();
+  const recoverableDeferredSources = new Set<string>();
+  const hasRollback = (proposalId: string) =>
+    tableExists(database.db, "skill_workshop_proposal_rollbacks") &&
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      kysely
+        .selectFrom("skill_workshop_proposal_rollbacks")
+        .select("proposal_id")
+        .where("proposal_id", "=", proposalId),
+    ) !== undefined;
   const recoveryWarnings: string[] = [];
+  const readOnlyProposalIds = new Set(
+    resolveUpdateRehearsalRoot(env) && tableExists(database.db, "skill_workshop_proposal_rollbacks")
+      ? executeSqliteQuerySync(
+          database.db,
+          kysely
+            .selectFrom("skill_workshop_proposal_rollbacks")
+            .select(["proposal_id", "target_skill_file"]),
+        )
+          .rows.filter((row) => isUpdateRehearsalReadOnlyPath(row.target_skill_file, env))
+          .map((row) => row.proposal_id)
+      : [],
+  );
+  let missingDraftsRetired = 0;
+  let recoverableWarningCount = 0;
   // Settle writes while their proposal and rollback still name the same files.
   // Recovery can establish a create's ownership or restore a partial update.
   for (const row of readRows()) {
@@ -171,7 +190,56 @@ async function relocateLegacyWorkshopTargets(
     if (!record || record.status !== "pending") {
       continue;
     }
+    if (readOnlyProposalIds.has(record.id) || isReadOnlyRehearsalProposal(record, env)) {
+      const source = resolveCanonicalWorkspacePath(record.target.skillDir);
+      deferredSources.add(source);
+      recoverableDeferredSources.add(source);
+      continue;
+    }
     const workspaceDir = resolveLegacyWorkshopWorkspaceDir(record.target.skillDir, config, env);
+    const unavailableReason =
+      workspaceDir &&
+      unavailableWorkspaceDirs.get(resolveWorkspaceStateIdentity(workspaceDir).workspacePath);
+    if (unavailableReason && hasRollback(record.id)) {
+      const source = resolveCanonicalWorkspacePath(record.target.skillDir);
+      deferredSources.add(source);
+      recoverableDeferredSources.add(source);
+      recoveryWarnings.push(
+        `Preserved Skill Workshop proposal ${record.id} and its unfinished apply recovery for manual review: ${unavailableReason}`,
+      );
+      recoverableWarningCount += 1;
+      continue;
+    }
+    if (retireMissingDrafts) {
+      try {
+        await readSkillProposalBundle(record, { config, env });
+      } catch (error) {
+        if (!(error instanceof SkillProposalDraftMissingError)) {
+          recoveryWarnings.push(
+            `Could not inspect Skill Workshop proposal ${record.id}: ${String(error)}`,
+          );
+          deferredSources.add(resolveCanonicalWorkspacePath(record.target.skillDir));
+          continue;
+        }
+        // Any rollback row can describe an interrupted write. Keep it pending
+        // for recovery rather than treating its missing draft as abandoned work.
+        if (hasRollback(record.id)) {
+          recoveryWarnings.push(
+            `Skill Workshop proposal ${record.id} has a missing draft and unfinished apply recovery; restore its draft before retrying Doctor.`,
+          );
+          deferredSources.add(resolveCanonicalWorkspacePath(record.target.skillDir));
+          continue;
+        }
+        transitionPendingSkillProposalToStale({
+          record,
+          reason:
+            "Proposal draft is missing. Metadata and remaining files were preserved for recovery.",
+          input: { config, env, eventActor: { type: "system" } },
+        });
+        missingDraftsRetired += 1;
+        continue;
+      }
+    }
     const { ownerAgentId } = inferOwnerAgentId({
       record,
       config,
@@ -188,7 +256,11 @@ async function relocateLegacyWorkshopTargets(
       continue;
     }
     try {
-      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs: [workspaceDir],
+        env,
+        operation: "doctor",
+      });
       const sourceStat = await readLegacyWorkshopSourceStat(workspaceDir, record.target.skillDir);
       if (sourceStat?.isSymbolicLink()) {
         continue;
@@ -234,17 +306,23 @@ async function relocateLegacyWorkshopTargets(
   const initialRows = new Map(rows.map((row) => [row.proposal_id, row]));
   const records = rows.flatMap((row) => {
     const record = parseSkillProposalRow(row);
-    return record ? [{ record, ownerAgentId: row.owner_agent_id }] : [];
+    return record && !readOnlyProposalIds.has(record.id)
+      ? [{ record, ownerAgentId: row.owner_agent_id }]
+      : [];
   });
+  const persistedUpdates: WorkshopProposalUpdate[] = [];
   const persistUpdates = (updates: WorkshopProposalUpdate[]): void => {
-    if (updates.length === 0) {
+    if (
+      updates.length === 0 ||
+      updates.some(({ record }) => isReadOnlyRehearsalProposal(record, env))
+    ) {
       return;
     }
     // Every proposal for one moved skill must commit together. Otherwise a
     // retry loses the create row that proves where its pending updates belong.
-    runOpenClawStateWriteTransaction(
+    const committed = runOpenClawStateWriteTransaction(
       ({ db }) => {
-        for (const update of updates) {
+        const currentUpdates = updates.map((update) => {
           const expected = initialRows.get(update.record.id);
           const current = readStoredProposal(update.record.id, { env });
           if (
@@ -254,14 +332,33 @@ async function relocateLegacyWorkshopTargets(
           ) {
             throw new Error(`Skill proposal changed during relocation: ${update.record.id}`);
           }
+          return { update, current };
+        });
+        if (
+          currentUpdates.some(({ current }) => isReadOnlyRehearsalProposal(current.record, env))
+        ) {
+          return false;
+        }
+        for (const { update, current } of currentUpdates) {
           updateProposal(db, current.row, update.record, update.ownerAgentId);
         }
+        return true;
       },
       { env },
       { operationLabel: "skill-workshop.relocation.commit" },
     );
+    if (committed) {
+      persistedUpdates.push(...updates);
+    }
   };
-  const plan = await planWorkshopRelocation(records, config, env, deferredSources);
+  const plan = await planWorkshopRelocation(
+    records,
+    config,
+    env,
+    deferredSources,
+    unavailableWorkspaceDirs,
+    recoverableDeferredSources,
+  );
   const workspaceMoves = new Map<string, typeof plan.moves>();
   for (const move of plan.moves) {
     // Adopted sources are already absent. Only pending filesystem moves can
@@ -276,10 +373,20 @@ async function relocateLegacyWorkshopTargets(
   for (const [workspaceDir, moves] of workspaceMoves) {
     await prepareWorkshopWorkspaceRelocation(workspaceDir, moves, env);
   }
+  let movedSkills = 0;
   for (const move of plan.moves) {
+    if (
+      [move.source, move.destination].some((filePath) =>
+        isUpdateRehearsalReadOnlyPath(filePath, env),
+      ) ||
+      move.updates.some(({ record }) => isReadOnlyRehearsalProposal(record, env))
+    ) {
+      continue;
+    }
     if (move.operation === "move") {
       await fs.mkdir(path.dirname(move.destination), { recursive: true });
       await movePathWithCopyFallback({ from: move.source, to: move.destination });
+      movedSkills += 1;
     } else if (move.operation === "remove-source") {
       await fs.rm(move.source, { recursive: true, force: false });
     }
@@ -287,251 +394,28 @@ async function relocateLegacyWorkshopTargets(
   }
   persistUpdates(plan.updates);
   await finishWorkshopWorkspaceRelocations(env);
-  const backupMigration = await migrateLegacyCollectionBackups(config, env);
-  const updates = [...plan.updates, ...plan.moves.flatMap((move) => move.updates)];
-  const staleProposals = updates.filter((update) => update.record.status === "stale").length;
+  const backupMigration = await migrateLegacyCollectionBackups(config, env, backupRoots);
+  const staleProposals = persistedUpdates.filter(
+    (update) => update.record.status === "stale",
+  ).length;
   return {
-    movedSkills: plan.moves.filter((move) => move.operation === "move").length,
-    retargetedProposals: updates.length - staleProposals,
-    staleProposals,
+    movedSkills,
+    retargetedProposals: persistedUpdates.length - staleProposals,
+    staleProposals: staleProposals + missingDraftsRetired,
     migratedBackupRoots: backupMigration.migrated,
     warnings: [...recoveryWarnings, ...plan.warnings, ...backupMigration.warnings],
-  };
-}
-
-async function readLegacyRollback(
-  stateRoot: Root,
-  proposalId: string,
-): Promise<SkillProposalRollback | undefined> {
-  try {
-    const rollback = validateSkillProposalRollback(
-      await readJson(stateRoot, `${PROPOSALS_DIR}/${proposalId}/rollback.json`, MAX_ROLLBACK_BYTES),
-    );
-    if (!rollback.ok) {
-      throw new Error(rollback.error.message);
-    }
-    if (rollback.value.proposalId !== proposalId) {
-      throw new Error("invalid rollback metadata");
-    }
-    return rollback.value;
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function verifyImportedProposal(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  record: SkillProposalRecord,
-  rollback?: SkillProposalRollback,
-): Promise<void> {
-  const imported = (
-    await readSkillProposal(record.id, { config, env }, {}, { config, reconcile: false })
-  )?.record;
-  if (
-    !imported ||
-    imported.draftHash !== record.draftHash ||
-    imported.target.skillFile !== record.target.skillFile
-  ) {
-    throw new Error("SQLite verification failed");
-  }
-  if (rollback && !(await readSkillProposalRollback(record.id, { env }))) {
-    throw new Error("SQLite rollback verification failed");
-  }
-}
-
-async function migrateProposal(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  proposalId: string;
-  stateRoot: Root;
-}): Promise<void> {
-  const proposalDir = `${PROPOSALS_DIR}/${params.proposalId}`;
-  const record = validateSkillProposalRecord(
-    await readJson(params.stateRoot, `${proposalDir}/proposal.json`, MAX_RECORD_BYTES),
-  );
-  if (!record.ok) {
-    throw new Error(record.error.message);
-  }
-  if (record.value.id !== params.proposalId) {
-    throw new Error("invalid proposal metadata");
-  }
-  const draft = await params.stateRoot.read(`${proposalDir}/PROPOSAL.md`, {
-    hardlinks: "reject",
-    maxBytes: MAX_RECORD_BYTES,
-    symlinks: "reject",
-  });
-  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.value.draftHash) {
-    throw new Error("proposal draft hash does not match proposal metadata");
-  }
-  const rollback = await readLegacyRollback(params.stateRoot, params.proposalId);
-  const owner = inferOwnerAgentId({
-    config: params.config,
-    env: params.env,
-    record: record.value,
-    workspaceDir: resolveLegacyWorkshopWorkspaceDir(
-      record.value.target.skillDir,
-      params.config,
-      params.env,
-    ),
-  });
-  if (!owner.ownerAgentId) {
-    throw new Error(
-      owner.unconfiguredOwnerAgentId
-        ? `owning agent "${owner.unconfiguredOwnerAgentId}" is not configured; legacy metadata was retained for manual recovery`
-        : "owning agent could not be inferred; legacy metadata was retained for manual recovery",
-    );
-  }
-  importLegacySkillProposal({
-    record: record.value,
-    rollback,
-    ownerAgentId: owner.ownerAgentId,
-    store: { env: params.env },
-  });
-  await verifyImportedProposal(params.config, params.env, record.value, rollback);
-  if (rollback) {
-    await params.stateRoot.remove(`${proposalDir}/rollback.json`);
-  }
-  await params.stateRoot.remove(`${proposalDir}/proposal.json`);
-}
-
-async function reconcileIncompleteProposal(params: {
-  proposalId: string;
-  proposalDir: string;
-  stateRoot: Root;
-}): Promise<string> {
-  const entries = await params.stateRoot.list(params.proposalDir, { withFileTypes: true });
-  if (entries.length === 0) {
-    await params.stateRoot.remove(params.proposalDir);
-    return `Removed empty legacy Skill Workshop proposal directory ${params.proposalId}.`;
-  }
-  await params.stateRoot.mkdir(RECOVERY_PROPOSALS_DIR);
-  // A unique target preserves earlier recovery artifacts without an unsafe
-  // check-then-replace window. The fs-safe move pins both directory parents.
-  const recoveryPath = `${RECOVERY_PROPOSALS_DIR}/${params.proposalId}-${randomUUID()}`;
-  await params.stateRoot.move(params.proposalDir, recoveryPath, { overwrite: true });
-  return `Quarantined incomplete Skill Workshop proposal ${params.proposalId} to ${recoveryPath} for manual recovery.`;
-}
-
-/** Import verified legacy proposal sidecars, then remove only the imported JSON metadata. */
-async function importLegacySkillProposalSidecars(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): Promise<MigrationResult> {
-  const env = params.env ?? process.env;
-  const stateDir = resolveStateDir(env);
-  if (!(await pathExists(path.join(stateDir, PROPOSALS_DIR)))) {
-    if (!(await pathExists(path.join(stateDir, MANIFEST_PATH)))) {
-      return {
-        changes: [],
-        warnings: [],
-        detected: 0,
-        migrated: 0,
-      };
-    }
-    await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH });
-    return {
-      changes: ["Removed the empty legacy Skill Workshop proposal index."],
-      warnings: [],
-      detected: 0,
-      migrated: 0,
-    };
-  }
-  const stateRoot = await root(stateDir);
-  let entries;
-  try {
-    entries = await stateRoot.list(PROPOSALS_DIR, { withFileTypes: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "not-found")) {
-      return { changes: [], warnings: [], detected: 0, migrated: 0 };
-    }
-    return {
-      changes: [],
-      warnings: [`Failed to inspect legacy Skill Workshop proposals: ${String(error)}`],
-      detected: 0,
-      migrated: 0,
-    };
-  }
-
-  const proposalIds = entries
-    .filter((entry) => entry.isDirectory && PROPOSAL_ID_PATTERN.test(entry.name))
-    .map((entry) => entry.name)
-    .toSorted((left, right) => left.localeCompare(right));
-  const warnings: string[] = [];
-  const changes: string[] = [];
-  const database = openOpenClawStateDatabase({ env });
-  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
-    database.db,
-  );
-  let migrated = 0;
-  for (const proposalId of proposalIds) {
-    const proposalDir = `${PROPOSALS_DIR}/${proposalId}`;
-    try {
-      await migrateProposal({
-        config: params.config,
-        env,
-        proposalId,
-        stateRoot,
-      });
-      migrated += 1;
-      continue;
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        warnings.push(`Failed to migrate Skill Workshop proposal ${proposalId}: ${String(error)}`);
-        continue;
-      }
-      // Modern bundles have no legacy sidecar. Recognize their durable record
-      // without entering the feature's schema-writing read facade.
-      const stored = tableExists(database.db, "skill_workshop_proposals")
-        ? executeSqliteQueryTakeFirstSync(
-            database.db,
-            kysely
-              .selectFrom("skill_workshop_proposals")
-              .selectAll()
-              .where("proposal_id", "=", proposalId)
-              .where("owner_agent_id", "is not", null),
-          )
-        : undefined;
-      if (stored && parseSkillProposalRow(stored)) {
-        continue;
-      }
-      try {
-        changes.push(await reconcileIncompleteProposal({ proposalId, proposalDir, stateRoot }));
-      } catch (reconcileError) {
-        warnings.push(
-          `Could not quarantine incomplete Skill Workshop proposal ${proposalId}: ${String(
-            reconcileError,
-          )}. Manually move ${proposalDir} to ${RECOVERY_PROPOSALS_DIR} to recover it.`,
-        );
-      }
-    }
-  }
-  await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH }).catch(
-    (error: unknown) => {
-      if (!isMissingPathError(error)) {
-        warnings.push(`Failed to remove legacy Skill Workshop proposal index: ${String(error)}`);
-      }
-    },
-  );
-  if (migrated > 0) {
-    changes.unshift(
-      `Migrated ${migrated} Skill Workshop proposal${migrated === 1 ? "" : "s"} into shared SQLite.`,
-    );
-  }
-  return {
-    changes,
-    warnings,
-    detected: proposalIds.length,
-    migrated,
+    recoverableWarningCount:
+      recoverableWarningCount +
+      plan.recoverableWarningCount +
+      backupMigration.recoverableWarningCount,
   };
 }
 
 export async function migrateLegacySkillWorkshopProposals(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  retireMissingDrafts?: boolean;
+  unavailableWorkspaceDirs?: ReadonlyMap<string, string>;
 }): Promise<MigrationResult> {
   const env = params.env ?? process.env;
   // Plain Doctor can reach automatic migration without its repair scope.
@@ -540,8 +424,15 @@ export async function migrateLegacySkillWorkshopProposals(params: {
     databasePath: resolveOpenClawStateSqlitePath(env),
   });
   try {
+    const backupRoots = await listPendingLegacyCollectionBackupRoots(params.config, env);
     const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
-    const relocation = await relocateLegacyWorkshopTargets(params.config, env);
+    const relocation = await relocateLegacyWorkshopTargets(
+      params.config,
+      env,
+      params.retireMissingDrafts === true,
+      backupRoots,
+      params.unavailableWorkspaceDirs,
+    );
     if (
       relocation.movedSkills > 0 ||
       relocation.retargetedProposals > 0 ||
@@ -552,9 +443,18 @@ export async function migrateLegacySkillWorkshopProposals(params: {
         `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and migrated ${relocation.migratedBackupRoots} legacy collection backup root${relocation.migratedBackupRoots === 1 ? "" : "s"}.`,
       );
     }
+    const warnings = [...sidecars.warnings, ...relocation.warnings];
+    const recoverableWarningCount =
+      (sidecars.warningDisposition === "recoverable" ? sidecars.warnings.length : 0) +
+      relocation.recoverableWarningCount;
     return {
-      ...sidecars,
-      warnings: [...sidecars.warnings, ...relocation.warnings],
+      changes: sidecars.changes,
+      detected: sidecars.detected,
+      migrated: sidecars.migrated,
+      warnings,
+      ...(warnings.length > 0 && warnings.length === recoverableWarningCount
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
     };
   } finally {
     coordinator.release();

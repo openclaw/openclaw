@@ -29,8 +29,10 @@ async function collectRuntimeDirectories(
       "-z",
       "--",
       "dist",
+      "dist-runtime",
       "node_modules",
       "**/dist",
+      "**/dist-runtime",
       "**/node_modules",
       ":(exclude).artifacts/**",
       ":(exclude).worktrees/**",
@@ -49,7 +51,7 @@ async function collectRuntimeDirectories(
       // Git's --directory can collapse an excluded subtree to its ignored parent.
       .filter(
         (entry) =>
-          ["dist", "node_modules"].includes(path.basename(entry)) &&
+          ["dist", "dist-runtime", "node_modules"].includes(path.basename(entry)) &&
           !entry.split("/").some((part) => part.startsWith(".")),
       )
   );
@@ -177,6 +179,17 @@ export async function prepareGitRuntimePromotion(
     throw error;
   }
   return {
+    // Source fences may hide only transaction-owned staging. The same exact
+    // paths preserve pending originals while rollback cleans unrelated files.
+    sourceTreeStagingPaths: staged.flatMap(({ temporary }) => {
+      const relative = path.relative(relocation.destinationRoot, temporary);
+      return relative &&
+        relative !== ".." &&
+        !relative.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relative)
+        ? [relative.split(path.sep).join("/")]
+        : [];
+    }),
     async activate() {
       for (const entry of staged) {
         try {

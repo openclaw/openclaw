@@ -114,7 +114,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
               input: params?.input ?? ["text", "document"],
             }) as never;
     const modelRegistry = createPdfModelRegistry(find);
-    const release = vi.fn();
+    const release = vi.fn(async () => {});
     vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
       async (input) =>
         ({
@@ -125,7 +125,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
             pluginRegistry: params?.pluginRegistry,
             createStores: () => ({ authStorage, modelRegistry }),
           }),
-          release,
+          [Symbol.asyncDispose]: release,
         }) as never,
     );
 

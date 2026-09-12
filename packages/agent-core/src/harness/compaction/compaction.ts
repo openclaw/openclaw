@@ -5,7 +5,6 @@ import {
   type StreamFn,
   type Usage,
 } from "@openclaw/llm-core";
-// Agent Core module implements compaction behavior.
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -19,7 +18,7 @@ import {
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
-import { convertToLlm, type HarnessMessage } from "../messages.js";
+import { convertToLlm, type HarnessMessage, isRuntimeContextCarrier } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import {
@@ -410,10 +409,11 @@ export function estimateTokens(message: AgentMessage): number {
 }
 function isCutPointMessage(message: AgentMessage): boolean {
   switch (message.role) {
+    case "custom":
+      return !isRuntimeContextCarrier(message);
     case "user":
     case "assistant":
     case "bashExecution":
-    case "custom":
     case "branchSummary":
     case "compactionSummary":
       return true;
@@ -426,9 +426,10 @@ function isCutPointMessage(message: AgentMessage): boolean {
 
 function isTurnStartMessage(message: AgentMessage): boolean {
   switch (message.role) {
+    case "custom":
+      return !isRuntimeContextCarrier(message);
     case "user":
     case "bashExecution":
-    case "custom":
     case "branchSummary":
     case "compactionSummary":
       return true;
@@ -726,7 +727,7 @@ async function runSummarizationCompletion(params: {
     params.thinkingLevel,
   );
   const response = params.streamFn
-    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
+    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options), params.runtime)
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
   // Usage belongs to the completed provider request even when its summary is invalid.
   params.runtime?.internalUsageSink?.(response.usage);

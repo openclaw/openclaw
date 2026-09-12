@@ -4,21 +4,19 @@ import {
   classifyRunForRevive,
   runPrCiSweeper,
 } from "../../scripts/github/pr-ci-sweeper.mjs";
-
-const NOW = Date.parse("2026-07-18T12:00:00Z");
-const MINUTES = 60 * 1000;
-const HOURS = 60 * MINUTES;
-
-function pr(overrides: Partial<Parameters<typeof classifyPrForSweep>[0]["pr"]> = {}) {
-  return {
-    draft: false,
-    created_at: new Date(NOW - 2 * HOURS).toISOString(),
-    updated_at: new Date(NOW - 30 * MINUTES).toISOString(),
-    mergeable: true,
-    auto_merge: null,
-    ...overrides,
-  };
-}
+import {
+  HOURS,
+  MINUTES,
+  NOW,
+  autoMergePr,
+  cancelledRun,
+  context,
+  core,
+  fakeGithub,
+  githubActionsCheck,
+  pr,
+  recordingCore,
+} from "./pr-ci-sweeper.test-support.js";
 
 describe("classifyPrForSweep", () => {
   const cases: Array<{
@@ -196,192 +194,6 @@ describe("classifyRunForRevive", () => {
   );
 });
 
-type FakeCall = { method: string; args: Record<string, unknown> };
-type FakeWorkflowRun = Parameters<typeof classifyRunForRevive>[0]["run"] & {
-  id: number;
-  workflow_id: number | null;
-};
-type FakeCheckRun = {
-  id: number;
-  name: string;
-  status?: string;
-  conclusion: string | null;
-  app: { slug: string } | null;
-  details_url: string | null | undefined;
-};
-
-function fakeGithub(options: {
-  prs: Array<Record<string, unknown>>;
-  runsBySha: Record<
-    string,
-    Array<{ conclusion: string | null; event?: string; id?: number; status?: string }>
-  >;
-  checksByRef?: Record<string, FakeCheckRun[] | FakeCheckRun[][]>;
-  workflowRunsById?: Record<number, FakeWorkflowRun>;
-  workflowRunErrorsById?: Record<number, Error>;
-  pullsGetByNumber?: Record<number, Record<string, unknown> | Array<Record<string, unknown>>>;
-  events?: Array<Record<string, unknown>>;
-  pageSize?: number;
-}) {
-  const calls: FakeCall[] = [];
-  const pullsGetCallCounts = new Map<number, number>();
-  const checksListCallCounts = new Map<string, number>();
-  const record = (method: string, args: Record<string, unknown>) => {
-    calls.push({ method, args });
-  };
-  const github = {
-    paginate: (
-      endpoint: { endpointName: string },
-      args: Record<string, unknown>,
-      mapFn?: (response: { data: unknown[] }, done: () => void) => unknown[],
-    ) => {
-      record(endpoint.endpointName, args);
-      // Emulate octokit's paged mapFn contract: the page where done() fires is
-      // still included in the result, and later pages are never fetched.
-      const paged = (items: unknown[]) => {
-        if (!mapFn) {
-          return Promise.resolve(items);
-        }
-        const pageSize = options.pageSize ?? Math.max(items.length, 1);
-        const collected: unknown[] = [];
-        let stopped = false;
-        for (let start = 0; start < items.length; start += pageSize) {
-          record(`${endpoint.endpointName}.page`, { start });
-          collected.push(
-            ...mapFn({ data: items.slice(start, start + pageSize) }, () => {
-              stopped = true;
-            }),
-          );
-          if (stopped) {
-            break;
-          }
-        }
-        return Promise.resolve(collected);
-      };
-      if (endpoint.endpointName === "pulls.list") {
-        return paged(options.prs);
-      }
-      if (endpoint.endpointName === "actions.listWorkflowRuns") {
-        return Promise.resolve(
-          Array.from(options.runsBySha[args.head_sha as string] ?? [], (run) => ({
-            ...run,
-            event: run.event ?? "pull_request",
-          })).filter((run) => !args.event || run.event === args.event),
-        );
-      }
-      if (endpoint.endpointName === "checks.listForRef") {
-        const ref = args.ref as string;
-        const configured = options.checksByRef?.[ref] ?? [];
-        if (Array.isArray(configured[0])) {
-          const snapshots = configured as FakeCheckRun[][];
-          const callIndex = checksListCallCounts.get(ref) ?? 0;
-          checksListCallCounts.set(ref, callIndex + 1);
-          return Promise.resolve(snapshots[Math.min(callIndex, snapshots.length - 1)] ?? []);
-        }
-        return Promise.resolve(configured as FakeCheckRun[]);
-      }
-      if (endpoint.endpointName === "issues.listEvents") {
-        return Promise.resolve(options.events ?? []);
-      }
-      throw new Error(`unexpected paginate ${endpoint.endpointName}`);
-    },
-    rest: {
-      pulls: {
-        list: { endpointName: "pulls.list" },
-        get: (args: Record<string, unknown>) => {
-          record("pulls.get", args);
-          const pullNumber = args.pull_number as number;
-          const configured = options.pullsGetByNumber?.[pullNumber];
-          const callIndex = pullsGetCallCounts.get(pullNumber) ?? 0;
-          pullsGetCallCounts.set(pullNumber, callIndex + 1);
-          const match = Array.isArray(configured)
-            ? configured[Math.min(callIndex, configured.length - 1)]
-            : (configured ?? options.prs.find((entry) => entry.number === pullNumber));
-          return Promise.resolve({ data: match });
-        },
-        update: (args: Record<string, unknown>) => {
-          record("pulls.update", args);
-          return Promise.resolve({});
-        },
-      },
-      actions: {
-        listWorkflowRuns: { endpointName: "actions.listWorkflowRuns" },
-        getWorkflowRun: (args: Record<string, unknown>) => {
-          record("actions.getWorkflowRun", args);
-          const runId = args.run_id as number;
-          const error = options.workflowRunErrorsById?.[runId];
-          if (error) {
-            return Promise.reject(error);
-          }
-          return Promise.resolve({ data: options.workflowRunsById?.[runId] });
-        },
-        reRunWorkflow: (args: Record<string, unknown>) => {
-          record("actions.reRunWorkflow", args);
-          return Promise.resolve({});
-        },
-      },
-      checks: { listForRef: { endpointName: "checks.listForRef" } },
-      issues: {
-        listEvents: { endpointName: "issues.listEvents" },
-        createComment: (args: Record<string, unknown>) => {
-          record("issues.createComment", args);
-          return Promise.resolve({});
-        },
-      },
-    },
-  };
-  return { github, calls };
-}
-
-const context = { repo: { owner: "openclaw", repo: "openclaw" } };
-const core = { info: () => {}, setFailed: () => {} };
-
-function recordingCore() {
-  const logs: string[] = [];
-  return {
-    core: {
-      info: (message: string) => logs.push(message),
-      setFailed: () => {},
-    },
-    logs,
-  };
-}
-
-function autoMergePr(number: number, headSha: string) {
-  return {
-    ...pr({ auto_merge: { merge_method: "squash" } }),
-    number,
-    state: "open",
-    head: { sha: headSha, ref: "automation/refresh" },
-  };
-}
-
-function githubActionsCheck(runId: number, overrides: Partial<FakeCheckRun> = {}): FakeCheckRun {
-  return {
-    id: runId,
-    name: "proof",
-    conclusion: "cancelled",
-    status: "completed",
-    app: { slug: "github-actions" },
-    details_url: `https://github.com/openclaw/openclaw/actions/runs/${runId}/job/456`,
-    ...overrides,
-  };
-}
-
-function cancelledRun(runId: number, overrides: Partial<FakeWorkflowRun> = {}): FakeWorkflowRun {
-  return {
-    id: runId,
-    workflow_id: 10,
-    conclusion: "cancelled",
-    event: "pull_request_target",
-    run_attempt: 1,
-    created_at: new Date(NOW - HOURS).toISOString(),
-    head_branch: "automation/refresh",
-    head_repository: { full_name: "openclaw/openclaw" },
-    ...overrides,
-  };
-}
-
 describe("runPrCiSweeper", () => {
   it("classifies a dropped-CI PR as refire in dry-run without mutating", async () => {
     const dropped = {
@@ -544,56 +356,6 @@ describe("runPrCiSweeper", () => {
     expect(
       calls.filter((call) => call.method === "pulls.get" && call.args.pull_number === 110),
     ).toEqual([]);
-  });
-
-  it("closes and reopens a dropped-CI PR without spending budget on stale heads", async () => {
-    const dropped = Array.from({ length: 11 }, (_, index) => ({
-      ...pr(),
-      number: 200 + index,
-      state: "open",
-      head: { sha: index.toString(16).padStart(2, "0").repeat(20) },
-    }));
-    const pullsGetByNumber = Object.fromEntries(
-      dropped
-        .slice(0, 10)
-        .map((candidate) => [
-          candidate.number,
-          [candidate, { ...candidate, head: { sha: "f".repeat(40) } }],
-        ]),
-    );
-    const { github, calls } = fakeGithub({ prs: dropped, runsBySha: {}, pullsGetByNumber });
-    const { core: loggedCore, logs } = recordingCore();
-
-    const results = await runPrCiSweeper({
-      github: github as never,
-      context: context as never,
-      core: loggedCore as never,
-      appSlug: "openclaw-barnacle",
-      now: NOW,
-    });
-
-    expect(results).toHaveLength(dropped.length);
-    expect(results.slice(0, 10)).toEqual(
-      dropped.slice(0, 10).map((candidate) => ({
-        number: candidate.number,
-        sha: candidate.head.sha.slice(0, 12),
-        action: "skip",
-        reason: "changed-during-sweep",
-      })),
-    );
-    expect(results.at(-1)).toEqual({
-      number: 210,
-      sha: "0a".repeat(6),
-      action: "refire",
-      reason: "ci-run-missing",
-    });
-    expect(calls.filter((call) => call.method === "pulls.update").map((call) => call.args)).toEqual(
-      [
-        { owner: "openclaw", repo: "openclaw", pull_number: 210, state: "closed" },
-        { owner: "openclaw", repo: "openclaw", pull_number: 210, state: "open" },
-      ],
-    );
-    expect(logs.at(-1)).toContain("1 re-fire");
   });
 
   it("stops listing pages once creation dates cross the lookback", async () => {

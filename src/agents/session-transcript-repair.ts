@@ -8,7 +8,6 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString as hasNonEmptyStringField,
-  normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -17,8 +16,16 @@ import {
   normalizeLegacyToolResultId,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
-import { extractToolCallsFromAssistant, extractToolResultIds } from "./tool-call-id.js";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultIds,
+  hasToolCallInput,
+} from "./tool-call-id.js";
+import {
+  createCompletedToolCallPredicate,
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -49,13 +56,6 @@ function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   }
   const type = (block as { type?: unknown }).type;
   return typeof type === "string" && RAW_TOOL_CALL_BLOCK_TYPES.has(type);
-}
-
-function hasToolCallInput(block: RawToolCallBlock): boolean {
-  const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
-  const hasArguments =
-    "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
-  return hasInput || hasArguments;
 }
 
 function hasToolCallId(block: RawToolCallBlock): boolean {
@@ -136,6 +136,7 @@ function countRawToolCallBlocks(content: unknown[]): number {
 function isReplaySafeThinkingAssistantTurn(
   content: unknown[],
   allowedToolNames: Set<string> | null,
+  isCompleted: ReturnType<typeof createCompletedToolCallPredicate>,
 ): boolean {
   let sawToolCall = false;
   const seenToolCallIds = new Set<string>();
@@ -150,7 +151,7 @@ function isReplaySafeThinkingAssistantTurn(
       hasPartialJson(block) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !isAllowedToolCallName(block.name, allowedToolNames)
+      !isAllowedToolCallName(block.name, isCompleted(block) ? null : allowedToolNames)
     ) {
       return false;
     }
@@ -256,6 +257,7 @@ function repairToolCallInputs(
   let changed = false;
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
+  const isCompleted = createCompletedToolCallPredicate(messages);
   const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
@@ -283,7 +285,7 @@ function repairToolCallInputs(
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
       const followingToolResults = collectFollowingToolResults(messages, index);
       if (
-        isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames) &&
+        isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames, isCompleted) &&
         replaySafeToolCalls.every(
           (toolCall) =>
             !preservedThinkingToolCallIds.has(toolCall.id) &&
@@ -307,19 +309,18 @@ function repairToolCallInputs(
     }
 
     const nextContent: typeof msg.content = [];
-    let droppedInMessage = 0;
     let messageChanged = false;
 
     for (const block of msg.content) {
       if (isRawToolCallBlock(block)) {
+        const rawBlock = block as RawToolCallBlock;
         // Drop genuinely incomplete streaming artifacts (missing required fields).
         if (
           !hasToolCallInput(block) ||
           !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)
+          !isAllowedToolCallName(rawBlock.name, isCompleted(rawBlock) ? null : allowedToolNames)
         ) {
           droppedToolCalls += 1;
-          droppedInMessage += 1;
           changed = true;
           messageChanged = true;
           continue;
@@ -329,7 +330,6 @@ function repairToolCallInputs(
       if (isRawToolCallBlock(block) && hasPartialJson(block)) {
         if (!isFinalizedOpenAIResponsesToolCall(msg, block)) {
           droppedToolCalls += 1;
-          droppedInMessage += 1;
           changed = true;
           messageChanged = true;
           continue;
@@ -345,55 +345,22 @@ function repairToolCallInputs(
         messageChanged = true;
       }
       if (isRawToolCallBlock(workBlock)) {
-        if (RAW_TOOL_CALL_BLOCK_TYPES.has((workBlock as { type?: string }).type ?? "")) {
-          // Only sanitize (redact) sessions_spawn blocks; all others are passed through
-          // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
-          const blockName =
-            typeof (workBlock as { name?: unknown }).name === "string"
-              ? (workBlock as { name: string }).name.trim()
-              : undefined;
-          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
-            const sanitized = sanitizeToolCallBlock(workBlock);
-            if (sanitized !== workBlock) {
-              changed = true;
-              messageChanged = true;
-            }
-            nextContent.push(sanitized as typeof block);
-          } else if (typeof (workBlock as { name?: unknown }).name === "string") {
-            const rawName = (workBlock as { name: string }).name;
-            const trimmedName = rawName.trim();
-            if (rawName !== trimmedName && trimmedName) {
-              const renamed = { ...(workBlock as object), name: trimmedName } as typeof block;
-              nextContent.push(renamed);
-              changed = true;
-              messageChanged = true;
-            } else {
-              nextContent.push(workBlock);
-            }
-          } else {
-            nextContent.push(workBlock);
-          }
-          continue;
+        const sanitized = sanitizeToolCallBlock(workBlock);
+        if (sanitized !== workBlock) {
+          changed = true;
+          messageChanged = true;
         }
+        nextContent.push(sanitized as typeof block);
+        continue;
       }
       nextContent.push(workBlock);
     }
 
-    if (droppedInMessage > 0) {
+    if (messageChanged) {
       if (nextContent.length === 0) {
         droppedAssistantMessages += 1;
-        changed = true;
         continue;
       }
-      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
-      for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
-        priorToolCallIds.add(toolCall.id);
-      }
-      out.push(nextMessage);
-      continue;
-    }
-
-    if (messageChanged) {
       const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
       for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
         priorToolCallIds.add(toolCall.id);

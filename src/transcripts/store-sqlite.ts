@@ -43,6 +43,21 @@ export function meetingTranscriptSessionQuery(
     .where("started_at", "=", session.startedAt);
 }
 
+export function transcriptSummaryInputRevisionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "next_utterance_seq" | "title" | "source_json" | "metadata_json" | "stopped_at"
+  >,
+): string {
+  return JSON.stringify({
+    next_utterance_seq: row.next_utterance_seq,
+    title: row.title,
+    source_json: row.source_json,
+    metadata_json: row.metadata_json,
+    stopped_at: row.stopped_at,
+  });
+}
+
 export function readTranscriptSummaryInputRevision(
   database: DatabaseSync,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
@@ -58,7 +73,7 @@ export function readTranscriptSummaryInputRevision(
     ]),
   );
   // Export bookkeeping is not summary input and must not invalidate a reader.
-  return row ? JSON.stringify(row) : undefined;
+  return row ? transcriptSummaryInputRevisionFromRow(row) : undefined;
 }
 
 export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
@@ -76,7 +91,7 @@ export function readRecentStoppedTranscriptSession(
   source: TranscriptSourceLocator,
   stoppedAfter: string,
   stoppedBefore: string,
-): TranscriptSessionDescriptor | undefined {
+): { session: TranscriptSessionDescriptor; inputRevision: string } | undefined {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)
@@ -102,7 +117,9 @@ export function readRecentStoppedTranscriptSession(
       .orderBy("session_id", "asc")
       .limit(1),
   );
-  return row ? sessionFromRow(row) : undefined;
+  return row
+    ? { session: sessionFromRow(row), inputRevision: transcriptSummaryInputRevisionFromRow(row) }
+    : undefined;
 }
 
 export function meetingTranscriptUtteranceQuery(

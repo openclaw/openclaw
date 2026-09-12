@@ -33,8 +33,8 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { refreshConnectedNodeSurfaceCaches } from "./nodes.read.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -314,19 +314,28 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
               },
             )
           : null;
+      const resolved = {
+        requestId,
+        nodeId: approvedNode.nodeId,
+        decision: "approved",
+        ts: Date.now(),
+      };
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode });
+        const notified = await context.nodeRegistry.sendEventForPairingIdentity({
+          nodeId: updatedNode.nodeId,
+          connId: updatedNode.connId,
+          pairingIdentity: approved.pairingIdentity,
+          event: "node.pair.resolved",
+          payload: resolved,
+        });
+        if (!notified) {
+          context.logGateway.warn(
+            `node approval refresh was not delivered for ${approvedNode.nodeId}; the current node must republish after reconnect`,
+          );
+        }
       }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId,
-          nodeId: approvedNode.nodeId,
-          decision: "approved",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
-      );
+      context.broadcast("node.pair.resolved", resolved, { dropIfSlow: true });
       respond(true, { requestId: approved.requestId, node: approvedNode }, undefined);
     });
   },

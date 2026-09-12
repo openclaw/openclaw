@@ -16,9 +16,12 @@ const SURFACE_PATTERNS = [
   ["app", /^(?:apps\/|Swabble\/|appcast\.xml$)/u],
   ["rootTest", /^test\//u],
   ["testFixture", /^test-fixtures\//u],
-  // This hidden helper only reports maintainer activity; it has no product consumers.
+  // These hidden helpers own maintainer reports and release artifact validation.
   // Match the reviewed leaf exactly so unreviewed skill executables still fail safe.
-  ["rootTooling", /^\.agents\/skills\/openclaw-pr-maintainer\/scripts\/github-activity\.sh$/u],
+  [
+    "rootTooling",
+    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs)$/u,
+  ],
   [
     "rootTooling",
     /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u,
@@ -36,13 +39,12 @@ const ROOT_TEST_SOURCE_PATH_RE = /^test\/(?!fixtures\/).*\.[cm]?tsx?$/u;
 /**
  * Normalizes a changed file path into repo-relative POSIX form.
  * @param {unknown} inputPath
+ * @param {NodeJS.Platform} [platform]
  * @returns {string}
  */
-export function normalizeChangedPath(inputPath) {
-  return (typeof inputPath === "string" ? inputPath : "")
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
+export function normalizeChangedPath(inputPath, platform = process.platform) {
+  const path = (typeof inputPath === "string" ? inputPath : "").trim();
+  return (platform === "win32" ? path.replaceAll("\\", "/") : path).replace(/^\.\/+/u, "");
 }
 
 /**
@@ -51,7 +53,7 @@ export function normalizeChangedPath(inputPath) {
  * @returns {{ path: string; surface: ChangedPathSurface; isChangedLaneTest: boolean; isRootTestSource: boolean; isTestOnly: boolean; isNativeOnly: boolean }}
  */
 export function getChangedPathFacts(inputPath) {
-  const path = typeof inputPath === "string" ? inputPath.trim() : "";
+  const path = typeof inputPath === "string" ? inputPath : "";
   const surface = SURFACE_PATTERNS.find(([, pattern]) => pattern.test(path))?.[0] ?? "unknown";
 
   return {

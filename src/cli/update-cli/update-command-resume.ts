@@ -1,5 +1,6 @@
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
 import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
@@ -15,11 +16,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
-  persistRequestedUpdateChannel,
+  preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
-  restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
+import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   readPostCorePluginInstallRecordsFile,
@@ -27,6 +28,7 @@ import {
   writePostCorePluginUpdateResultFile,
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 type ResumePostCoreUpdateParams = {
   root: string;
@@ -77,7 +79,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION =
     (await readPackageVersion(params.root)) ?? VERSION;
 
-  let configSnapshot = await readConfigFileSnapshot({
+  const configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
     suppressFutureVersionWarning: true,
   });
@@ -90,18 +92,15 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
-  const pluginUpdate = await withPluginLifecycleLease({}, async () => {
+  const producedPluginUpdate = await withPluginLifecycleLease({}, async (lease) => {
+    await completeSourceUpdateRuntime({ root: params.root, timeoutMs: params.timeoutMs, lease });
     // The core migration owner committed before activation. This fresh process
     // reads that generation and only owns plugin convergence.
-    configSnapshot = await readConfigFileSnapshot({
-      skipPluginValidation: true,
+    const preparedConfig = await preparePostCorePluginConfig({
+      requestedChannel,
+      preUpdateConfig: preUpdateSourceConfig,
       suppressFutureVersionWarning: true,
     });
-    configSnapshot = await persistRequestedUpdateChannel({
-      configSnapshot,
-      requestedChannel,
-    });
-    const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preUpdateSourceConfig);
     // The updated doctor may have repaired or removed plugin installs before this process resumed.
     const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
     const persistedPluginIndex = await readPersistedInstalledPluginIndex();
@@ -121,15 +120,28 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     return await updatePluginsAfterCoreUpdate({
       root: params.root,
       channel,
-      configSnapshot: restoredConfig.snapshot,
-      configChanged: restoredConfig.changed,
-      restoredAuthoredChannels: restoredConfig.authoredChannels,
+      ...preparedConfig,
       json: params.opts.json,
       acceptCapabilities: params.opts.acceptCapabilities,
       timeoutMs: params.timeoutMs,
       pluginInstallRecords,
     });
   });
+  // Changed plugins already require the published parent's Doctor pass. Complete
+  // the otherwise-skipped retirement before the parent consumes this result.
+  const pluginUpdate =
+    !producedPluginUpdate.changed && hasDeferredUpdateModelRetirement()
+      ? (
+          await completePostCorePluginUpdate({
+            root: params.root,
+            pluginUpdate: producedPluginUpdate,
+            freshDoctorRequired: false,
+            yes: params.opts.yes === true,
+            json: params.opts.json === true,
+            timeoutMs: params.timeoutMs,
+          })
+        ).pluginUpdate
+      : producedPluginUpdate;
   // Only the target process may restamp an unchanged downgrade config. Plugin
   // migrations that still invalidate it will write through the target Doctor later.
   await persistValidatedDowngradeConfig(await readConfigFileSnapshot());

@@ -109,7 +109,7 @@ type GatewayRequestContextRuntime = Pick<
     > & {
       configReloader: Pick<
         GatewayCoreRuntime["runtimeState"]["configReloader"],
-        "isConfigReloadSettled"
+        "isConfigReloadSettled" | "getDeferredChannelReloads"
       >;
     };
     lifecycle: Pick<GatewayCoreRuntime["lifecycle"], "closePreludeStarted">;
@@ -135,7 +135,7 @@ type GatewayRequestContextRuntime = Pick<
     readinessEventLoopHealth: Pick<GatewayCoreRuntime["readinessEventLoopHealth"], "snapshot">;
     kernel: Pick<
       GatewayCoreRuntime["kernel"],
-      "notifyPluginMetadataChanged" | "getConfigReloaderHotReloadStatus"
+      "applyPluginLifecycleChange" | "getConfigReloaderHotReloadStatus"
     >;
     workerEnvironmentStartup:
       | Pick<NonNullable<GatewayCoreRuntime["workerEnvironmentStartup"]>, "placementStore">
@@ -245,6 +245,10 @@ export function createGatewayRequestContext(
     getRuntimeConfig,
     isConfigReloadSettled: () =>
       !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
+    getDeferredChannelReloads: () =>
+      lifecycle.closePreludeStarted
+        ? []
+        : (runtimeState.configReloader.getDeferredChannelReloads?.() ?? []),
     getGatewayMethodRegistry: runtime.getAttachedGatewayMethodRegistry,
     gatewayTlsFingerprint: runtime.gatewayTls.enabled
       ? runtime.gatewayTls.fingerprintSha256
@@ -254,7 +258,7 @@ export function createGatewayRequestContext(
     sessionCompanion: runtime.sessionCompanion,
     sessionObserver,
     mentionInbox: runtime.mentionInbox,
-    notifyPluginMetadataChanged: runtime.kernel.notifyPluginMetadataChanged,
+    applyPluginLifecycleChange: runtime.kernel.applyPluginLifecycleChange,
     getMcpAppSandboxPort: runtime.transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: runtime.transportBridge.ensureSandboxHostPort,
     get portalService() {

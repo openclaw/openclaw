@@ -22,7 +22,7 @@ for results, cancel work, or inspect Gateway resources.
   guide pins the verified stable `2026.8.1` packages and explains how package and
   wire versions affect compatibility. If your
   app supervises the Gateway as a child process, also read
-  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+  [Embedding OpenClaw](/gateway/embedding).
 </Note>
 
 <Note>
@@ -35,9 +35,9 @@ for results, cancel work, or inspect Gateway resources.
 | Surface                                                       | Status          | Use it for                                                                                    |
 | ------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
 | [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
-| [Embedding guide](https://docs.openclaw.ai/gateway/embedding) | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Embedding guide](/gateway/embedding)                         | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
 | [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [Gateway protocol RPC methods](/gateway/protocol/rpc-methods) | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
 | [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
 | [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
@@ -45,7 +45,7 @@ for results, cancel work, or inspect Gateway resources.
 
 1. Run or discover a Gateway.
 2. Connect over the [Gateway protocol](/gateway/protocol).
-3. Call documented RPC methods from [Gateway RPC reference](/reference/rpc).
+3. Call documented RPC methods from [Gateway protocol RPC methods](/gateway/protocol/rpc-methods).
 4. Pin the OpenClaw version you test against.
 5. Recheck the RPC reference when upgrading OpenClaw.
 
@@ -243,7 +243,10 @@ With `drain: true`, the same suspension owner instead keeps admission closed
 and cron scheduling paused until existing work settles. Already-owned cron
 completion and reconciliation continue.
 
-Both draining and ready leases last two minutes. Repeat `prepare` before
+Both draining and ready leases share a two-minute budget starting before work
+inspection. Preparation that exhausts that budget resumes scheduling and fails
+instead of returning an expired lease. Clock rollback does not extend the budget.
+Repeat `prepare` before
 `expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
 the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
 existing lease. Use `status` for routine polling and reserve `prepare` for
@@ -270,9 +273,13 @@ transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. A `background-exec` blocker is aggregate
-only: command text, process IDs, output, and session or scope identifiers never
-cross the protocol. Channel health, maintenance, cache refresh, established
+general process-quiescence barrier. The process registry's `background-exec` entry
+is aggregate only. Durable background exec tasks also use `background-exec`
+and retain their bounded `task` metadata; other task kinds remain `task`.
+A process can contribute to both counts. This classification does not change
+`activeCount` or readiness, and adds no command text, output, operating system
+process IDs, or session or scope identifiers. Channel health, maintenance,
+cache refresh, established
 plugin WebSocket sessions, and unregistered plugin-owned background work can
 remain active.
 The hosting platform must freeze or snapshot the full process tree and its
@@ -284,7 +291,7 @@ contract.
   plugin and project idempotent full snapshots to the external host adapter.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
-  projection](/plugins/hooks#safe-external-cron-projection).
+  projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
 </Tip>
 
 ## App code vs plugin code
@@ -311,10 +318,10 @@ plugins loaded by OpenClaw.
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
+- [Building a Gateway client](/gateway/clients)
+- [Embedding OpenClaw](/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
-- [Gateway RPC reference](/reference/rpc)
+- [Gateway protocol RPC methods](/gateway/protocol/rpc-methods)
 - [CLI agent command](/cli/agent)
 - [CLI message command](/cli/message)
 - [Agent loop](/concepts/agent-loop)

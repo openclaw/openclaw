@@ -136,6 +136,9 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   });
   return {
     results: result.hits,
+    ...(result.archivedTranscriptsExcluded
+      ? { archivedTranscriptsExcluded: result.archivedTranscriptsExcluded }
+      : {}),
     ...(result.indexing ? { indexing: true } : {}),
     ...(result.truncated ? { truncated: true } : {}),
   };
@@ -210,7 +213,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
-  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
+  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const page = await rt.readChatHistoryPage({
     entry: historyEntry,
     provider: resolvedSessionModel.provider,

@@ -3,7 +3,7 @@
  *
  * Authorizes config writes by origin/target channel and account scope.
  */
-import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 
 type AccountConfigWithWrites = {
@@ -65,9 +65,14 @@ function resolveChannelConfig(
 
 function resolveChannelAccountConfig(
   channelConfig: ChannelConfigWithAccounts,
+  channelId: string,
   accountId?: string | null,
 ): AccountConfigWithWrites | undefined {
-  return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
+  return resolveChannelAccountEntry(
+    channelConfig.accounts,
+    normalizeAccountId(accountId),
+    channelId,
+  );
 }
 
 /**
@@ -79,10 +84,14 @@ export function resolveChannelConfigWritesShared(params: {
   accountId?: string | null;
 }): boolean {
   const channelConfig = resolveChannelConfig(params.cfg, params.channelId);
-  if (!channelConfig) {
+  if (!channelConfig || !params.channelId) {
     return true;
   }
-  const accountConfig = resolveChannelAccountConfig(channelConfig, params.accountId);
+  const accountConfig = resolveChannelAccountConfig(
+    channelConfig,
+    params.channelId,
+    params.accountId,
+  );
   const value = accountConfig?.configWrites ?? channelConfig.configWrites;
   return value !== false;
 }

@@ -1,5 +1,4 @@
 // Creates backup archives while filtering volatile runtime state.
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,20 +15,28 @@ import {
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
-import type { BackupManifest } from "../commands/backup-verify-manifest.js";
+import {
+  backupManifestSizeError,
+  type BackupManifest,
+} from "../commands/backup-verify-manifest.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
+import {
+  recordArchiveSymbolicLink,
+  type BackupSymbolicLink,
+} from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
   publishPreparedBackupArchive,
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
+import { stageBackupConfigCapture } from "./backup-config-capture.js";
 import {
+  appendBackupManifest,
   observeBackupTarEntryProgress,
   removePreparedBackupArchive,
   writeArchiveStreamToFile,
@@ -44,7 +51,6 @@ import {
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
 import { isErrno } from "./errors.js";
-import { writeJson } from "./json-files.js";
 import {
   createLegacyAuditBackupCapture,
   hasLegacyAuditBackupSources,
@@ -54,6 +60,7 @@ import {
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
+import { isUpdateCapturePath } from "./update-capture-paths.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -98,6 +105,7 @@ export type BackupCreateResult = {
    * Populated on real writes only; dry runs report 0.
    */
   skippedVolatileCount: number;
+  externalSymbolicLinks?: BackupSymbolicLink[];
 };
 
 async function resolveOutputPath(params: {
@@ -207,13 +215,7 @@ async function prepareBackupOutputParent(outputPath: string): Promise<void> {
   }
 }
 
-// The temp manifest is passed to `tar.c` alongside the asset source paths. If
-// the temp file lives inside any asset, recursive traversal pulls it in a
-// second time and both copies remap to `<archiveRoot>/manifest.json`, which
-// makes verify reject the archive. A `tar` filter cannot fix this in place: it
-// fires for both the explicit-arg and the traversed entry, so excluding by
-// path drops the manifest entirely. We instead place the temp dir somewhere
-// guaranteed to be outside every asset.
+// Keep staged config and database snapshots outside the tree being archived.
 async function chooseBackupTempRoot(params: {
   assets: readonly BackupAsset[];
   outputPath: string;
@@ -260,7 +262,7 @@ function buildManifest(
       onlyConfig: result.onlyConfig,
     },
     paths: {
-      stateDir: plan.stateDir,
+      stateDir: plan.inventory.stateDir,
       configPath: plan.configPath,
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
@@ -296,6 +298,11 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
       }
     }
   }
+  for (const link of result.externalSymbolicLinks ?? []) {
+    lines.push(
+      `External link preserved (target not copied through link): ${JSON.stringify(link.entryPath)} -> ${JSON.stringify(link.linkpath)}`,
+    );
+  }
   if (result.dryRun) {
     lines.push("Dry run only; archive was not written.");
   } else {
@@ -316,14 +323,10 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
 
 function remapArchiveEntryPath(params: {
   entryPath: string;
-  manifestPath: string;
   archiveRoot: string;
   sourcePathRemaps?: ReadonlyMap<string, string>;
 }): string {
   const normalizedEntry = path.resolve(params.entryPath);
-  if (normalizedEntry === params.manifestPath) {
-    return path.posix.join(params.archiveRoot, "manifest.json");
-  }
   const remappedSourcePath = params.sourcePathRemaps?.get(normalizedEntry);
   if (remappedSourcePath) {
     return buildBackupArchivePath(params.archiveRoot, remappedSourcePath);
@@ -331,34 +334,18 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
-function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
-  linkpath: string | undefined;
-  archiveEntryPath: string;
-  archiveRoot: string;
-  assets: readonly BackupAsset[];
-}): string | undefined {
-  if (!params.linkpath || !path.isAbsolute(params.linkpath) || params.linkpath.includes("\\")) {
-    return params.linkpath;
-  }
-  // Tar exposes the first link hop, while assets own the final canonical path.
-  // Resolve before containment so chains map to one portable archive target.
-  let targetSourcePath: string;
-  try {
-    targetSourcePath = realpathSync(params.linkpath);
-  } catch {
-    return params.linkpath;
-  }
-  if (!params.assets.some((asset) => isPathWithin(targetSourcePath, asset.sourcePath))) {
-    return params.linkpath;
-  }
-  return path.posix.relative(
-    path.posix.dirname(params.archiveEntryPath),
-    buildBackupArchivePath(params.archiveRoot, targetSourcePath),
-  );
-}
-
 function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
+}
+
+/**
+ * Restores the native path spelling of a node-tar stat-cache key. node-tar
+ * normalizes its absolute cache keys to forward slashes on Windows, while the
+ * snapshot source sets hold native `path.resolve` spellings with backslashes,
+ * so exact-match lookups must convert the key back first.
+ */
+function fromTarCacheKey(tarCacheKey: string): string {
+  return path.sep === "/" ? tarCacheKey : tarCacheKey.replaceAll("/", path.sep);
 }
 
 const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
@@ -482,6 +469,7 @@ export async function createBackupArchive(
 
   const createdAt = new Date(nowMs).toISOString();
   const stateAsset = plan.included.find((asset) => asset.kind === "state");
+  const stateDir = plan.inventory.stateDir;
   const result: BackupCreateResult = {
     createdAt,
     archiveRoot,
@@ -511,7 +499,6 @@ export async function createBackupArchive(
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
-  const manifestPath = path.join(tempDir, "manifest.json");
   let publication: BackupArchivePublication;
   try {
     publication = await createBackupArchivePublication(outputPath);
@@ -521,14 +508,20 @@ export async function createBackupArchive(
   }
   const tempArchivePath = publication.tempArchivePath;
   try {
+    const configRemaps = await stageBackupConfigCapture(plan.configCapture, tempDir);
     const { legacyAuditSnapshots, stateSqliteBackup } = await createConsistentStateSnapshotPlan({
       inventory: plan.inventory,
       stateDir: stateAsset?.sourcePath,
       tempDir,
       onlyConfig,
     });
-    const sourcePathRemaps = new Map<string, string>();
-    const skippedStateSourcePaths = new Set<string>();
+    const sourcePathRemaps = new Map(configRemaps);
+    const skippedStateSourcePaths = new Set(configRemaps.values());
+    if (plan.configCapture?.files.length === 0) {
+      // A config created after sealing must not introduce an uncaptured graph.
+      skippedStateSourcePaths.add(path.resolve(plan.configPath));
+      skippedStateSourcePaths.add(await canonicalizePathForContainment(plan.configPath));
+    }
     for (const snapshot of stateSqliteBackup.snapshots) {
       sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
       for (const skippedSourcePath of snapshot.skippedSourcePaths) {
@@ -542,7 +535,7 @@ export async function createBackupArchive(
       }
     }
     const manifest = buildManifest(result, plan);
-    await writeJson(manifestPath, manifest, { trailingNewline: true });
+    const externalSymbolicLinks: BackupSymbolicLink[] = [];
 
     const tar = await loadTarRuntime();
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
@@ -551,15 +544,19 @@ export async function createBackupArchive(
     // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
     let archiveSymlinkViolation: Error | undefined;
+    let archivePrivacyViolation: Error | undefined;
     const tarFilter = (
       entryPath: string,
       entryStat: import("node:fs").Stats | import("tar").ReadEntry,
     ): boolean => {
-      // The manifest is staged in a tmp dir outside any state directory and
-      // is always safe to include.
       const resolvedEntryPath = path.resolve(entryPath);
-      if (resolvedEntryPath === manifestPath) {
-        return true;
+      if (
+        isUpdateCapturePath(
+          sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath,
+          plan.stateDir,
+        )
+      ) {
+        return false;
       }
       const isDirectory =
         "isDirectory" in entryStat ? entryStat.isDirectory() : entryStat.type === "Directory";
@@ -613,75 +610,133 @@ export async function createBackupArchive(
         // attempt, so reset the closure counter here or retries would report
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
+        externalSymbolicLinks.length = 0;
         unexpectedSqliteSourcePaths.length = 0;
         archiveSymlinkViolation = undefined;
+        archivePrivacyViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           createArchiveStream: (reportProgress) =>
-            tar.c(
-              {
-                gzip: true,
-                portable: true,
-                preservePaths: true,
-                linkCache: createBackupLinkCache(),
-                statCache: createBackupVolatileStatCache(plan.inventory.isVolatile),
-                filter: (entryPath, entryStat) => {
-                  reportProgress({ phase: "traversal", entryPath });
-                  return tarFilter(entryPath, entryStat);
-                },
-                onWriteEntry: (entry) => {
-                  const sourceEntryPath = entry.path;
-                  reportProgress({ phase: "entry", entryPath: sourceEntryPath });
-                  if (entry.type === "File" && (entry.stat?.size ?? 0) > 0) {
-                    observeBackupTarEntryProgress(entry, (bytes) => {
-                      reportProgress({ phase: "raw", entryPath: sourceEntryPath, bytes });
-                    });
-                  }
-                  const archiveEntryPath = remapArchiveEntryPath({
-                    entryPath: entry.path,
-                    manifestPath,
-                    archiveRoot,
-                    sourcePathRemaps,
-                  });
-                  if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
+            appendBackupManifest(
+              tar.c(
+                {
+                  gzip: false,
+                  portable: true,
+                  preservePaths: true,
+                  linkCache: createBackupLinkCache(),
+                  statCache: createBackupVolatileStatCache(
+                    (sourcePath) =>
+                      plan.inventory.isVolatile(sourcePath) ||
+                      // node-tar lstats every enumerated entry before the tar
+                      // filter can exclude it, and a live SQLite database can
+                      // remove a transient sidecar (-wal/-shm/-journal) at any
+                      // moment. Paths already excluded by a verified snapshot
+                      // must not abort the whole archive when that happens, so
+                      // they get a synthetic stat and are filtered out without
+                      // touching the filesystem. Unsnapshotted SQLite sources
+                      // stay uncovered so the filter still rejects them.
+                      // node-tar normalizes its cache keys to forward slashes on
+                      // Windows while the snapshot sets below hold native
+                      // path.resolve spellings, so restore the native separator
+                      // spelling before the exact-match lookups.
+                      skippedStateSourcePaths.has(fromTarCacheKey(sourcePath)) ||
+                      stateSqliteBackup.discoveredSourcePaths.has(fromTarCacheKey(sourcePath)),
+                  ),
+                  filter: (entryPath, entryStat) => {
+                    reportProgress({ phase: "traversal", entryPath });
                     try {
-                      entry.linkpath = remapDeclaredAbsoluteSymbolicLinkTarget({
-                        linkpath: entry.linkpath,
-                        archiveEntryPath,
-                        archiveRoot,
-                        assets: result.assets,
-                      });
-                      assertArchiveSymbolicLinkTarget({
-                        archiveRoot,
-                        entryPath: archiveEntryPath,
-                        linkpath: entry.linkpath,
-                        assets: manifest.assets,
-                      });
+                      return tarFilter(entryPath, entryStat);
                     } catch (error) {
-                      archiveSymlinkViolation =
+                      // A malformed marker must reject publication after tar settles,
+                      // not throw out of its asynchronous traversal callback.
+                      archivePrivacyViolation =
                         error instanceof Error ? error : new Error(String(error));
+                      return false;
                     }
-                  }
-                  entry.path = archiveEntryPath;
+                  },
+                  onWriteEntry: (entry) => {
+                    const sourceEntryPath = entry.path;
+                    reportProgress({ phase: "entry", entryPath: sourceEntryPath });
+                    if (entry.type === "File" && (entry.stat?.size ?? 0) > 0) {
+                      observeBackupTarEntryProgress(entry, (bytes) => {
+                        reportProgress({ phase: "raw", entryPath: sourceEntryPath, bytes });
+                      });
+                    }
+                    const archiveEntryPath = remapArchiveEntryPath({
+                      entryPath: entry.path,
+                      archiveRoot,
+                      sourcePathRemaps,
+                    });
+                    if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
+                      try {
+                        const { external, ...link } = recordArchiveSymbolicLink({
+                          archiveRoot,
+                          entryPath: archiveEntryPath,
+                          linkpath: entry.linkpath,
+                          platform: manifest.platform,
+                          state: {
+                            sourcePath: stateDir,
+                            archivePath: buildBackupArchivePath(archiveRoot, stateDir),
+                          },
+                          hasExternalLinkReport: true,
+                          assets: manifest.assets,
+                        });
+                        if (external) {
+                          externalSymbolicLinks.push(link);
+                        }
+                      } catch (error) {
+                        archiveSymlinkViolation =
+                          error instanceof Error ? error : new Error(String(error));
+                      }
+                    }
+                    entry.path = archiveEntryPath;
+                  },
                 },
+                [
+                  ...configRemaps.keys(),
+                  ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+                  ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
+                  ...result.assets.map((asset) => asset.sourcePath),
+                ],
+              ),
+              () => {
+                manifest.externalSymbolicLinks = externalSymbolicLinks;
+                const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
+                const sizeError = backupManifestSizeError(contents.length);
+                if (sizeError) {
+                  throw sizeError;
+                }
+                const header = Buffer.alloc(512);
+                new tar.Header({
+                  path: archiveRoot + "/manifest.json",
+                  type: "File",
+                  mode: 0o644,
+                  size: contents.length,
+                }).encode(header);
+                return Buffer.concat([
+                  header,
+                  contents,
+                  Buffer.alloc(((512 - (contents.length % 512)) % 512) + 1024),
+                ]);
               },
-              [
-                manifestPath,
-                ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
-                ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
-                ...result.assets.map((asset) => asset.sourcePath),
-              ],
             ),
           onPartialArchive: (partialArchive) => {
             publication.pendingCleanupArchives.push(partialArchive);
           },
         });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
-        const archiveValidationError = unexpectedSqliteSourcePath
+        let archiveValidationError = unexpectedSqliteSourcePath
           ? new Error(
               `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
             )
-          : archiveSymlinkViolation;
+          : (archivePrivacyViolation ?? archiveSymlinkViolation);
+        if (!archiveValidationError) {
+          try {
+            await plan.configCapture?.assertRootAlias?.();
+          } catch (error) {
+            archiveValidationError = error instanceof Error ? error : new Error(String(error));
+          }
+        }
         if (archiveValidationError) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);
@@ -694,6 +749,9 @@ export async function createBackupArchive(
       throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
     result.skippedVolatileCount = skippedVolatileCount;
+    if (externalSymbolicLinks.length) {
+      result.externalSymbolicLinks = externalSymbolicLinks;
+    }
     if (skippedVolatileCount > 0) {
       opts.log?.(
         `Backup skipped ${skippedVolatileCount} volatile file${

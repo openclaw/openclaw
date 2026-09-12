@@ -23,7 +23,13 @@ title: "Usage tracking"
 - Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
-`openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
+Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
+
+`/usage cost` warns that the **Today** and **Last 30d** totals may be incomplete
+if their aggregate cache is refreshing, partial, or stale, and suggests running
+the command again later. The **Session** total is loaded separately. The CLI
+`openclaw gateway usage-cost` also reports the recorded cache state before its
+totals.
 
 ## Usage date ranges
 
@@ -111,9 +117,12 @@ With no config the prior behavior holds (footer off until `/usage`). Use
 
 ## Custom `/usage full` footer
 
-`/usage tokens` always renders a plain `Usage: X in / Y out` line (plus cache and
-estimated-cost suffixes when available). Only `/usage full` renders the richer
-footer described below.
+`/usage tokens` renders a plain `Usage: X in / Y out` line with cache counters
+when available. Missing input or output counts stay `?`; OpenClaw does not infer
+the split from a total. When neither direction is reported, a known total appears
+as `Usage: 1.3k total`. Cache counters remain visible even when input, output, and
+total counts are unavailable. This mode never estimates cost. Only `/usage full`
+renders the richer footer described below.
 
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
 context window, and cost when those fields are available. No template file is

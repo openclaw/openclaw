@@ -19,7 +19,123 @@ const fail = (message: string): never => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker deploy build plugin", () => {
-  it("preserves WebSocket transport and lazy transcription in relocated worker output", async () => {
+  it.each(["escaped.mjs", "worker/extra.mjs", "worker/native.node", "worker/runtime.wasm"])(
+    "rejects an unstaged emitted %s before publishing the worker graph",
+    (fileName) => {
+      const plugin = createWorkerDeployBuildPlugin();
+      expect(() =>
+        plugin.generateBundle.call(
+          { error: fail },
+          {},
+          {
+            "worker/worker.mjs": { type: "chunk", fileName: "worker/worker.mjs", isEntry: true },
+            [fileName]: { type: fileName.endsWith(".mjs") ? "chunk" : "asset", fileName },
+          },
+        ),
+      ).toThrow(`Worker deploy artifact emits unstaged runtime asset ${fileName}.`);
+    },
+  );
+
+  it("keeps worker bootstrap portable and defers syntax highlighting until rendering", async () => {
+    const { build } = await import("tsdown");
+    const { default: configs } = await import("../../tsdown.config.ts");
+    const config = configs.find(
+      (candidate) =>
+        typeof candidate.entry === "object" &&
+        !Array.isArray(candidate.entry) &&
+        candidate.entry?.["worker/worker"] === "src/worker/worker-deploy-entry.ts",
+    );
+    if (!config) {
+      throw new Error("Worker deploy build config is missing");
+    }
+    const root = tempDirs.make("openclaw-worker-complete-graph-");
+    const entrySource = path.resolve("src/worker/worker-deploy-entry.ts");
+    const highlightSource = fs.realpathSync(path.resolve("node_modules/highlight.js/lib/index.js"));
+    const bundles = await build({
+      ...config,
+      config: false,
+      outDir: path.join(root, "dist"),
+      dts: false,
+      logLevel: "silent",
+      plugins: [
+        config.plugins,
+        {
+          name: "test:worker-highlight-initialization",
+          transform(code, id) {
+            if (id === entrySource) {
+              return `${code}\nexport { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js";`;
+            }
+            if (id === highlightSource) {
+              return `globalThis[Symbol.for("worker-highlight-initializations")] = (globalThis[Symbol.for("worker-highlight-initializations")] ?? 0) + 1;\n${code}`;
+            }
+            return null;
+          },
+        },
+      ],
+    });
+    try {
+      // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
+      expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
+        "worker/worker.mjs",
+      ]);
+      const { collectWorkerDeployArtifactErrors } =
+        await import("../../scripts/check-cli-bootstrap-imports.mts");
+      expect(
+        collectWorkerDeployArtifactErrors({
+          rootDir: root,
+          workerDeployEntrypoints: ["dist/worker/worker.mjs"],
+        }),
+      ).toEqual([]);
+      const result = await promisify(execFile)(
+        process.execPath,
+        [
+          ...(process.versions.bun ? ["--no-install"] : []),
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+assert.throws(() => createRequire(pathToFileURL(entry)).resolve("highlight.js"), { code: "MODULE_NOT_FOUND" });
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const { highlight, supportsLanguage } = await import(pathToFileURL(entry).href);
+const initializations = () => globalThis[Symbol.for("worker-highlight-initializations")] ?? 0;
+assert.equal(initializations(), 0, "headless worker bootstrap must not initialize syntax highlighting");
+assert.equal(supportsLanguage("abnf"), true);
+assert.equal(supportsLanguage("javascript"), true);
+assert.match(highlight("const answer = 42;", {
+  language: "javascript", theme: { keyword: text => "[" + text + "]" },
+}), /\\[const\\]/);
+assert.equal(initializations(), 1, "rendering must initialize the bundled highlighter only once");
+console.log("portable worker syntax highlighting passed");
+`,
+          path.join(root, "dist/worker/worker.mjs"),
+        ],
+        {
+          cwd: root,
+          timeout: 30_000,
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            WINDIR: process.env.WINDIR,
+            HOME: root,
+            USERPROFILE: root,
+            TMPDIR: root,
+            TMP: root,
+            TEMP: root,
+          },
+        },
+      );
+      expect(result.stdout.trim()).toBe("portable worker syntax highlighting passed");
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
+  it("preserves WebSocket, desktop, and lazy transcription in relocated worker output", async () => {
     const { build } = await import("tsdown");
     const { default: buildConfigs } = await import("../../tsdown.config.ts");
     const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
@@ -40,6 +156,7 @@ describe("worker deploy build plugin", () => {
       [
         `export { WebSocket } from ${JSON.stringify(path.resolve("packages/gateway-client/src/websocket.ts"))};`,
         `export { createRealtimeTranscriptionWebSocketSession } from ${JSON.stringify(path.resolve("src/realtime-transcription/websocket-session.ts"))};`,
+        `export { runDesktopWebSocketRuntimeProbe } from ${JSON.stringify(path.resolve("src/gateway/desktop/websocket-runtime.test-support.ts"))};`,
       ].join("\n"),
     );
     const bundles = await build({
@@ -80,7 +197,10 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 const [entry, url] = process.argv.slice(1);
 assert.throws(() => createRequire(pathToFileURL(entry)).resolve("ws/package.json"), { code: "MODULE_NOT_FOUND" });
-const { WebSocket, createRealtimeTranscriptionWebSocketSession } = await import(pathToFileURL(entry).href);
+const { WebSocket, createRealtimeTranscriptionWebSocketSession, runDesktopWebSocketRuntimeProbe } = await import(pathToFileURL(entry).href);
+for (const mode of ["observer-close", "observer-backpressure", "observer-payload", "desktop", "portal"]) {
+  await runDesktopWebSocketRuntimeProbe(mode);
+}
 const socket = new WebSocket(url + "/client", { headers: { "x-worker-proof": "client-header" } });
 await once(socket, "open");
 const message = once(socket, "message");
@@ -237,6 +357,7 @@ export async function createAttachedBrowserToolRuntime(params) {
     expect(transformed).not.toContain('import { createRequire } from "node:module";');
     expect(transformed).not.toContain("const requireUndici = createRequire(import.meta.url);");
     expect(transformed).not.toContain('requireUndici("undici/index.js")');
+    expect(transformed).not.toContain("undiciModule");
   });
 
   it("leaves fs-safe native package resolution to the dependency", () => {
@@ -257,10 +378,7 @@ export async function createAttachedBrowserToolRuntime(params) {
     expect(() =>
       plugin.transform.call(
         { error: fail },
-        source.replace(
-          'return requireUndici("undici/index.js")',
-          'return changedUndici("undici/index.js")',
-        ),
+        source.replace('requireUndici("undici/index.js")', 'changedUndici("undici/index.js")'),
         dispatcherPath,
       ),
     ).toThrow("undici dispatcher bootstrap changed");

@@ -8,14 +8,14 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
@@ -43,7 +43,7 @@ type NostrOperation = {
   channels: ApplicationContext["channels"];
   formAccountId: string | null;
   accountId: string;
-  headers: Record<string, string>;
+  authCandidates: readonly string[];
 };
 
 function formatNostrProfileOperationError(error: unknown, prefix: string): string {
@@ -304,13 +304,12 @@ class ChannelsPage extends OpenClawLightDomElement {
     return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
   }
 
-  private buildGatewayHttpHeaders(gateway: ApplicationContext["gateway"]): Record<string, string> {
-    const authorization = resolveControlUiAuthHeader({
+  private resolveGatewayHttpCredentials(gateway: ApplicationContext["gateway"]): string[] {
+    return resolveControlUiAuthCandidates({
       hello: gateway.snapshot.hello,
       settings: { token: gateway.connection.token },
       password: gateway.connection.password,
     });
-    return authorization ? { Authorization: authorization } : {};
   }
 
   private clearNostrForm() {
@@ -346,7 +345,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       channels,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
-      headers: this.buildGatewayHttpHeaders(gateway),
+      authCandidates: this.resolveGatewayHttpCredentials(gateway),
     };
   }
 
@@ -414,9 +413,10 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = pendingForm;
 
     try {
-      const { data, response } = await putNostrProfile({
+      const { data, response, errorMessage } = await putNostrProfile({
         accountId: operation.accountId,
-        headers: operation.headers,
+        authCandidates: operation.authCandidates,
+        isCurrent: () => this.currentNostrForm(operation) !== null,
         values: form.values,
       });
       const currentForm = this.currentNostrForm(operation);
@@ -427,12 +427,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.updateFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
+          error: errorMessage,
           success: null,
           fieldErrors: parseValidationErrors(data?.details),
         };
@@ -489,9 +484,10 @@ class ChannelsPage extends OpenClawLightDomElement {
     };
 
     try {
-      const { data, response } = await importNostrProfile({
+      const { data, response, errorMessage } = await importNostrProfile({
         accountId: operation.accountId,
-        headers: operation.headers,
+        authCandidates: operation.authCandidates,
+        isCurrent: () => this.currentNostrForm(operation) !== null,
       });
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
@@ -501,12 +497,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           importing: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.importFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
+          error: errorMessage,
           success: null,
         };
         return;

@@ -3,12 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import * as transcriptReaders from "../gateway/session-transcript-readers.js";
 
 vi.mock("../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../version.js")>();
   return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
 });
-import { buildStatusMessage, buildStatusMessageParts } from "./status-message.js";
+import {
+  buildStatusMessage,
+  buildStatusMessageParts,
+  statusModelRefs,
+} from "./status-message.test-support.js";
 
 function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
   return {
@@ -31,6 +36,7 @@ describe("buildStatusMessage current time", () => {
     // 2025-07-03T08:00:00Z; the Reference UTC line is timezone-independent.
     const now = 1_751_529_600_000;
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now,
       config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
@@ -49,6 +55,7 @@ describe("buildStatusMessage current time", () => {
 describe("buildStatusMessageParts presentation", () => {
   it("reports the loaded build commit", () => {
     const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now: 1_751_529_600_000,
       config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
@@ -63,6 +70,7 @@ describe("buildStatusMessageParts presentation", () => {
 
   it("mirrors the text body as a titled status table with context lines", () => {
     const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now: 1_751_529_600_000,
       config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
@@ -76,6 +84,7 @@ describe("buildStatusMessageParts presentation", () => {
 
     expect(parts.text).toBe(
       buildStatusMessage({
+        modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
         now: 1_751_529_600_000,
         config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
         agent: { model: "anthropic/claude-haiku-4-5" },
@@ -125,6 +134,7 @@ describe("buildStatusMessageParts presentation", () => {
 
   it("shows a context meter and a pressure warning when the window runs hot", () => {
     const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
       now: 1_751_529_600_000,
       config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
       agent: { model: "anthropic/claude-haiku-4-5" },
@@ -198,6 +208,7 @@ describe("buildStatusMessage cost snapshot", () => {
     },
   ])("uses $name without repricing combined calls", ({ recorded, tiered, expected, tokens }) => {
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs({ provider: "fixture", model: "priced" }),
       agent: { model: "fixture/priced" },
       config: {
         models: {
@@ -248,32 +259,80 @@ describe("buildStatusMessage cost snapshot", () => {
   });
 });
 
+describe.each(["session", "transcript", "session with unreported transcript"] as const)(
+  "buildStatusMessage %s cache usage",
+  (source) => {
+    it.each([
+      { name: "reported zero reads and writes", cacheRead: 0, cacheWrite: 0, reported: true },
+      { name: "reported zero reads", cacheRead: 0, cacheWrite: undefined, reported: true },
+      { name: "unreported usage", cacheRead: undefined, cacheWrite: undefined, reported: false },
+    ])("distinguishes $name", ({ cacheRead, cacheWrite, reported }) => {
+      const usage = { inputTokens: 10_000, outputTokens: 50, cacheRead, cacheWrite };
+      const reader = vi.spyOn(transcriptReaders, "readRecentSessionUsageFromTranscript");
+      reader.mockReturnValue(
+        source === "transcript"
+          ? usage
+          : source === "session with unreported transcript"
+            ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+            : null,
+      );
+      try {
+        const parts = buildStatusMessageParts({
+          modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+          agent: { model: "anthropic/claude-haiku-4-5" },
+          sessionEntry: {
+            sessionId: "status-cache",
+            updatedAt: 0,
+            ...(source !== "transcript" ? usage : {}),
+          },
+          includeTranscriptUsage: source !== "session",
+        });
+        const table = parts.presentation.blocks.find((block) => block.type === "table");
+        if (table?.type !== "table") {
+          throw new Error("expected table block");
+        }
+        const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+        if (reported) {
+          expect(parts.text).toContain("Cache: 0% hit · 0 cached, 0 new");
+          expect(rows.get("🗄️ Cache")).toBe("0% hit · 0 cached, 0 new");
+        } else {
+          expect(parts.text).not.toContain("Cache:");
+          expect(rows.has("🗄️ Cache")).toBe(false);
+        }
+      } finally {
+        reader.mockRestore();
+      }
+    });
+  },
+);
+
 describe("buildStatusMessage context window", () => {
   it("rejects a stale runtime window after a same-model harness change", () => {
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
       config: {
         agents: {
           defaults: {
-            model: "openai/gpt-5.6-sol",
+            model: "openai/gpt-5.6-luna",
           },
         },
         models: {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              models: [statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000)],
+              models: [statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000)],
             },
           },
         },
       },
-      agent: { model: "openai/gpt-5.6-sol" },
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 1_000_000,
       resolvedHarness: "codex",
       sessionEntry: {
         sessionId: "same-model-runtime-change",
         updatedAt: 0,
         modelProvider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         agentHarnessId: "openclaw",
         contextTokens: 272_000,
         contextTokensSource: "runtime",
@@ -293,10 +352,11 @@ describe("buildStatusMessage context window", () => {
 
   it("replaces matching runtime telemetry with a newly authored effective cap", () => {
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
       config: {
         agents: {
           defaults: {
-            model: "openai/gpt-5.6-sol",
+            model: "openai/gpt-5.6-luna",
           },
         },
         models: {
@@ -305,7 +365,7 @@ describe("buildStatusMessage context window", () => {
               baseUrl: "https://api.openai.com/v1",
               models: [
                 {
-                  ...statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000),
+                  ...statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000),
                   contextTokens: 1_000_000,
                 },
               ],
@@ -313,14 +373,14 @@ describe("buildStatusMessage context window", () => {
           },
         },
       },
-      agent: { model: "openai/gpt-5.6-sol" },
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 1_000_000,
       resolvedHarness: "codex",
       sessionEntry: {
         sessionId: "authored-context-cap",
         updatedAt: 0,
         modelProvider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         agentHarnessId: "codex",
         contextTokens: 272_000,
         contextTokensSource: "runtime",
@@ -340,7 +400,8 @@ describe("buildStatusMessage context window", () => {
 
   it("preserves a locked legacy session window", () => {
     const text = buildStatusMessage({
-      agent: { model: "openai/gpt-5.6-sol" },
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 272_000,
       resolvedHarness: "codex",
       sessionEntry: {
@@ -364,14 +425,15 @@ describe("buildStatusMessage context window", () => {
 
   it("caps matching unlocked runtime telemetry to the lower current window", () => {
     const text = buildStatusMessage({
-      agent: { model: "openai/gpt-5.6-sol" },
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 272_000,
       resolvedHarness: "codex",
       sessionEntry: {
         sessionId: "unlocked-runtime-window",
         updatedAt: 0,
         modelProvider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         agentHarnessId: "codex",
         contextTokens: 1_000_000,
         contextTokensSource: "runtime",
@@ -391,6 +453,10 @@ describe("buildStatusMessage context window", () => {
 
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs(
+        { provider: "ollama-cloud", model: "glm-5.1" },
+        { provider: "ollama-cloud", model: "deepseek-v4-pro" },
+      ),
       config: {
         models: {
           providers: {
@@ -438,6 +504,7 @@ describe("buildStatusMessage context window", () => {
     // A /model switch issued during an active run stays pending until a turn
     // applies it; /status must not imply the new selection is already running.
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.5" }),
       config: {},
       agent: { model: "anthropic/claude-opus-4-6" },
       sessionEntry: {
@@ -479,6 +546,10 @@ describe("buildStatusMessage context window", () => {
     });
 
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs(
+        { provider: "anthropic", model: "claude-haiku-4-5" },
+        { provider: "claude-cli", model: "claude-haiku-4-5" },
+      ),
       config: {
         agents: {
           defaults: {},
@@ -519,6 +590,10 @@ describe("buildStatusMessage context window", () => {
 
   it("shows auto-fallback override label when model differs from configured default", () => {
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs(
+        { provider: "ollama-cloud", model: "qwen3.6-blue" },
+        { provider: "ollama-cloud", model: "deepseek-v4-pro" },
+      ),
       config: {
         models: {
           providers: {
@@ -570,6 +645,7 @@ describe("buildStatusMessage context window", () => {
 
   it("does not label a configured subagent model as auto fallback", () => {
     const text = buildStatusMessage({
+      modelRefs: statusModelRefs({ provider: "ollama-cloud", model: "qwen3.6-blue" }),
       config: {
         models: {
           providers: {

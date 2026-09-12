@@ -1,4 +1,4 @@
-import { request as httpRequest, type Server, type ServerResponse } from "node:http";
+import { request as httpRequest, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,6 +32,8 @@ import {
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import { serializeEventPayload } from "./node-registry.js";
@@ -45,16 +47,42 @@ import {
 } from "./watch-node-http.test-helpers.js";
 
 const tempDirs = createTrackedTempDirs();
-const servers: Server[] = [];
+const cleanups: Array<() => Promise<void>> = [];
+const databasePaths = new Set<string>();
 
 afterEach(async () => {
-  for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Watch node fixture cleanup failed", { cause: errors[0] });
+  }
+  // Handlers enqueue connection history; drain that writer before closing its database.
+  await withDevicePairingLock(async () => {});
+  for (const databasePath of databasePaths) {
+    closeOpenClawStateDatabaseByPath(databasePath);
   }
   await tempDirs.cleanup();
+  cleanups.length = 0;
+  databasePaths.clear();
 });
+
+async function makeWatchNodeDir(prefix: string): Promise<string> {
+  const baseDir = await tempDirs.make(prefix);
+  databasePaths.add(path.join(baseDir, "watch-identity.sqlite"));
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
+  );
+  return baseDir;
+}
 
 async function createWatchNodeFixture(
   prefix: string,
@@ -62,7 +90,7 @@ async function createWatchNodeFixture(
     bootstrapProfile?: DeviceBootstrapProfile;
   },
 ) {
-  const baseDir = await tempDirs.make(prefix);
+  const baseDir = await makeWatchNodeDir(prefix);
   const identity = loadOrCreateDeviceIdentity({
     path: path.join(baseDir, "watch-identity.sqlite"),
   });
@@ -74,7 +102,7 @@ async function createWatchNodeFixture(
     baseDir,
     identity,
     issued,
-    ...(await startWatchNodeHttpRuntime(baseDir, servers, options)),
+    ...(await startWatchNodeHttpRuntime(baseDir, cleanups, options)),
   };
 }
 
@@ -541,7 +569,7 @@ describe("watch node HTTP transport", () => {
       pruneIntervalMs: 0,
     };
 
-    const abortedBaseDir = await tempDirs.make("openclaw-watch-node-aborted-connect-");
+    const abortedBaseDir = await makeWatchNodeDir("openclaw-watch-node-aborted-connect-");
     const abortedIdentity = loadOrCreateDeviceIdentity({
       path: path.join(abortedBaseDir, "watch-identity.sqlite"),
     });
@@ -551,7 +579,7 @@ describe("watch node HTTP transport", () => {
     });
     const abortedLimiter = createAuthRateLimiter(limiterConfig);
     try {
-      const abortedRuntime = await startWatchNodeHttpRuntime(abortedBaseDir, servers, {
+      const abortedRuntime = await startWatchNodeHttpRuntime(abortedBaseDir, cleanups, {
         rateLimiter: abortedLimiter,
         abortConnectResponse: true,
       });
@@ -603,7 +631,7 @@ describe("watch node HTTP transport", () => {
       abortedLimiter.dispose();
     }
 
-    const completedBaseDir = await tempDirs.make("openclaw-watch-node-completed-connect-");
+    const completedBaseDir = await makeWatchNodeDir("openclaw-watch-node-completed-connect-");
     const completedIdentity = loadOrCreateDeviceIdentity({
       path: path.join(completedBaseDir, "watch-identity.sqlite"),
     });
@@ -613,7 +641,7 @@ describe("watch node HTTP transport", () => {
     });
     const completedLimiter = createAuthRateLimiter(limiterConfig);
     try {
-      const completedRuntime = await startWatchNodeHttpRuntime(completedBaseDir, servers, {
+      const completedRuntime = await startWatchNodeHttpRuntime(completedBaseDir, cleanups, {
         rateLimiter: completedLimiter,
       });
       const connectResponse = await connectWatchNode({
@@ -634,7 +662,7 @@ describe("watch node HTTP transport", () => {
   });
 
   it("restores an uncorrelated bootstrap token when the connect response aborts", async () => {
-    const baseDir = await tempDirs.make("openclaw-watch-node-generic-abort-");
+    const baseDir = await makeWatchNodeDir("openclaw-watch-node-generic-abort-");
     const identity = loadOrCreateDeviceIdentity({
       path: path.join(baseDir, "watch-identity.sqlite"),
     });
@@ -642,7 +670,7 @@ describe("watch node HTTP transport", () => {
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const runtime = await startWatchNodeHttpRuntime(baseDir, servers, {
+    const runtime = await startWatchNodeHttpRuntime(baseDir, cleanups, {
       abortConnectResponse: true,
     });
 

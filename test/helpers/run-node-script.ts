@@ -1,4 +1,5 @@
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
 
 export async function runNodeScript(
@@ -27,7 +28,7 @@ export async function runNodeScript(
   let error: unknown;
   try {
     status = await runManagedCommand({
-      bin: process.execPath,
+      bin: resolveTestNodeExecPath(),
       args: typeof scriptPathOrArgs === "string" ? [scriptPathOrArgs] : scriptPathOrArgs,
       cwd,
       env,

@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   SystemAgentChatResult,
-  SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
+  WizardNextResult,
+  WizardStartResult,
+  WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -19,10 +21,9 @@ import type {
   ActivateSetupInferenceParams,
   ActivateSetupInferenceResult,
   SetupInferenceDetection,
-  SetupInferenceFailureStatus,
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
-import { WizardCancelledError } from "../wizard/prompts.js";
+import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
@@ -118,41 +119,47 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
   };
 }
 
-function isSetupInferenceFailureStatus(value: unknown): value is SetupInferenceFailureStatus {
-  return (
-    value === "auth" ||
-    value === "rate_limit" ||
-    value === "billing" ||
-    value === "timeout" ||
-    value === "format" ||
-    value === "unavailable" ||
-    value === "unknown"
-  );
-}
-
-function toSetupInferenceActivationResult(
-  result: SystemAgentSetupActivateResult,
-): ActivateSetupInferenceResult {
-  if (result.ok) {
-    if (
-      !result.modelRef?.trim() ||
-      typeof result.latencyMs !== "number" ||
-      !Array.isArray(result.lines)
-    ) {
-      throw new Error("Gateway returned an invalid successful inference activation result.");
-    }
-    return {
-      ok: true,
-      modelRef: result.modelRef,
-      latencyMs: result.latencyMs,
-      lines: result.lines,
-      ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
-    };
+async function answerSetupStep(step: WizardStep, prompter: WizardPrompter): Promise<unknown> {
+  const message = step.message ?? step.title ?? "Continue";
+  if (step.externalUrl) {
+    await prompter.note(step.externalUrl, "Open this URL to continue");
   }
-  if (!isSetupInferenceFailureStatus(result.status) || !result.error?.trim()) {
-    throw new Error("Gateway returned an invalid failed inference activation result.");
+  switch (step.type) {
+    case "note":
+      await prompter.note(message, step.title);
+      return undefined;
+    case "text":
+      return await prompter.text({
+        message,
+        sensitive: step.sensitive,
+        placeholder: step.placeholder,
+        initialValue: typeof step.initialValue === "string" ? step.initialValue : undefined,
+      });
+    case "select":
+      return await prompter.select({
+        message,
+        options: step.options ?? [],
+        initialValue: step.initialValue,
+      });
+    case "multiselect":
+      return await prompter.multiselect({
+        message,
+        options: step.options ?? [],
+        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
+      });
+    case "confirm":
+    case "action":
+      if (step.executor === "gateway") {
+        return undefined;
+      }
+      return await prompter.confirm({
+        message,
+        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
+      });
+    case "progress":
+      break;
   }
-  return { ok: false, status: result.status, error: result.error };
+  return undefined;
 }
 
 function activationTimeoutMs(kind: ActivateSetupInferenceParams["kind"]): number {
@@ -175,11 +182,11 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
   };
 }
 
-function assertVerifiedActivation(params: {
-  activation: Extract<ActivateSetupInferenceResult, { ok: true }>;
+function toVerifiedActivationResult(params: {
+  activation: NonNullable<WizardNextResult["modelActivation"]>;
   requestedModelRef?: string;
   verification: SystemAgentSetupVerifyResult;
-}): void {
+}): ActivateSetupInferenceResult {
   if (
     params.requestedModelRef &&
     params.activation.modelRef.trim() !== params.requestedModelRef.trim()
@@ -196,6 +203,7 @@ function assertVerifiedActivation(params: {
       `Gateway verified ${params.verification.modelRef}, not the activated ${params.activation.modelRef}.`,
     );
   }
+  return { ok: true, ...params.activation, latencyMs: params.verification.latencyMs, lines: [] };
 }
 
 /**
@@ -250,23 +258,82 @@ export async function runRemoteGatewayInferenceOnboarding(
     params: ActivateSetupInferenceParams,
   ): Promise<ActivateSetupInferenceResult> => {
     let activationBootId: string | undefined;
-    const result = await request<SystemAgentSetupActivateResult>({
-      method: "openclaw.setup.activate",
-      params: {
-        kind: params.kind,
-        ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
-        ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
-        ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
-        ...(gatewayWorkspace ? { workspace: gatewayWorkspace } : {}),
-      },
-      timeoutMs: activationTimeoutMs(params.kind),
-      onHelloOk: (hello) => {
-        activationBootId = hello.server.bootId?.trim();
-      },
-    });
-    const activation = toSetupInferenceActivationResult(result);
-    if (!activation.ok) {
-      return activation;
+    const sessionId = randomUUID();
+    let started = false;
+    let terminal = false;
+    const prompter: WizardPrompter =
+      params.prompter ??
+      (await (deps.createPrompter?.() ??
+        import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
+          createClackPrompter(),
+        )));
+    let result: WizardNextResult;
+    try {
+      result = await request<WizardStartResult>({
+        method: "openclaw.setup.activate.start",
+        params: {
+          sessionId,
+          kind: params.kind,
+          ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
+          ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
+          ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
+          ...(gatewayWorkspace ? { workspace: gatewayWorkspace } : {}),
+        },
+        timeoutMs: activationTimeoutMs(params.kind),
+        onHelloOk: (hello) => {
+          activationBootId = hello.server.bootId?.trim();
+        },
+      });
+      started = true;
+      terminal = result.done;
+      while (!result.done) {
+        params.signal?.throwIfAborted();
+        const step = result.step;
+        let answer: { stepId: string; value: unknown } | undefined;
+        if (step) {
+          if (result.error) {
+            await prompter.note(result.error);
+          }
+          const value = await answerSetupStep(step, prompter);
+          if (step.type !== "progress" && step.executor !== "gateway") {
+            answer = { stepId: step.id, value };
+          }
+        }
+        result = await request<WizardNextResult>({
+          method: "wizard.next",
+          params: { sessionId, ...(answer ? { answer } : {}) },
+          signal: params.signal,
+          timeoutMs: activationTimeoutMs(params.kind),
+        });
+        terminal = result.done;
+      }
+    } catch (error) {
+      if (!terminal && (started || !isGatewayClientRequestError(error))) {
+        try {
+          await request({
+            method: "wizard.cancel",
+            params: { sessionId, closeInput: true },
+            timeoutMs: activationTimeoutMs(params.kind),
+          });
+        } catch (cancelError) {
+          throw new AggregateError(
+            [error, cancelError],
+            "Remote activation failed and its setup session could not be closed.",
+            { cause: cancelError },
+          );
+        }
+      }
+      throw error;
+    }
+    if (result.status === "cancelled") {
+      throw new WizardCancelledError(result.error);
+    }
+    if (result.activationRejection && result.error) {
+      return { ok: false, status: result.activationRejection.status, error: result.error };
+    }
+    const activation = result.modelActivation;
+    if (!activation) {
+      throw new Error(result.error ?? "Gateway setup ended without a verified activation.");
     }
     const restartBootId = activation.gatewayRestartRequired ? activationBootId : undefined;
     if (activation.gatewayRestartRequired && !restartBootId) {
@@ -304,12 +371,11 @@ export async function runRemoteGatewayInferenceOnboarding(
           },
         });
         if (!restartBootId || verification.ok || verification.status !== "unavailable") {
-          assertVerifiedActivation({
+          return toVerifiedActivationResult({
             activation,
             verification,
             ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
           });
-          return activation;
         }
       } catch (error) {
         if (restartWait.signal.reason === "missing-boot") {

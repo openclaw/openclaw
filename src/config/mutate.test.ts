@@ -5,11 +5,19 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
+import { setConfigValueAtPath } from "./config-paths.js";
+import {
+  collectChangedConfigPaths,
+  resolveIncludeWriteBoundary,
+} from "./include-write-boundary.js";
 import { hashConfigIncludeRaw } from "./includes.js";
+import { createConfigIO as createActualConfigIO } from "./io.factory.js";
 import type { ConfigWriteOptions } from "./io.js";
 import {
   ConfigMutationConflictError,
+  resolveConfigIncludeWriteBoundary,
   mutateConfigFile,
   replaceConfigFile,
   transformConfigFileWithRetry,
@@ -66,7 +74,10 @@ vi.mock("./io.js", async () => ({
   ...(await vi.importActual<typeof import("./io.js")>("./io.js")),
   ...ioMocks,
 }));
-vi.mock("./validation.js", () => validationMocks);
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
+  ...validationMocks,
+}));
 vi.mock("./backup-rotation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backup-rotation.js")>();
   backupMocks.maintainConfigBackups.mockImplementation(actual.maintainConfigBackups);
@@ -180,14 +191,21 @@ describe("config mutate helpers", () => {
 
   it("mutates source config with optimistic hash protection", async () => {
     const snapshot = createSnapshot({
+      path: resolveConfigPath(),
       hash: "source-hash",
       sourceConfig: { gateway: { port: 18789 } },
       runtimeConfig: { gateway: { port: 19001 } },
     });
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({ snapshot, writeOptions: { expectedConfigPath: snapshot.path } })
+      .mockResolvedValue({
+        snapshot: createSnapshot({
+          path: snapshot.path,
+          hash: "written-hash",
+          sourceConfig: { gateway: { port: 18789, auth: { mode: "token" } } },
+        }),
+        writeOptions: { expectedConfigPath: snapshot.path },
+      });
 
     const result = await mutateConfigFile({
       baseHash: snapshot.hash,
@@ -214,7 +232,12 @@ describe("config mutate helpers", () => {
           auth: { mode: "token" },
         },
       },
-      { baseSnapshot: snapshot, expectedConfigPath: snapshot.path, afterWrite: { mode: "auto" } },
+      {
+        baseSnapshot: snapshot,
+        expectedConfigPath: snapshot.path,
+        afterWrite: { mode: "auto" },
+        inputBase: "source",
+      },
     );
   });
 
@@ -273,6 +296,7 @@ describe("config mutate helpers", () => {
       },
       {
         baseSnapshot: fresh,
+        inputBase: "source",
         expectedConfigPath: fresh.path,
         ownedConfigPathForWrite: initial.path,
         afterWrite: { mode: "auto" },
@@ -410,7 +434,7 @@ describe("config mutate helpers", () => {
         snapshot: initial,
         writeOptions: { expectedConfigPath: initial.path },
       })
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         snapshot: fresh,
         writeOptions: { expectedConfigPath: fresh.path },
       });
@@ -459,7 +483,12 @@ describe("config mutate helpers", () => {
           list: [{ id: "first" }, { id: "second" }],
         },
       },
-      { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
+      {
+        baseSnapshot: fresh,
+        expectedConfigPath: fresh.path,
+        afterWrite: { mode: "auto" },
+        inputBase: "source",
+      },
     );
   });
 
@@ -487,7 +516,6 @@ describe("config mutate helpers", () => {
     });
 
     expect(result.result).toBe("created");
-    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
     expect(ioMocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
@@ -609,49 +637,53 @@ describe("config mutate helpers", () => {
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("refuses replace writes in Nix mode before touching disk", async () => {
-    process.env.OPENCLAW_NIX_MODE = "1";
-    const snapshot = createSnapshot({
-      hash: "hash-1",
-      sourceConfig: { gateway: { port: 18789 } },
-    });
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "refuses replace writes in %s before touching disk",
+    async (mode) =>
+      withEnvAsync({ [mode]: "1" }, async () => {
+        const snapshot = createSnapshot({
+          hash: "hash-1",
+          sourceConfig: { gateway: { port: 18789 } },
+        });
+        ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+          snapshot,
+          writeOptions: { expectedConfigPath: snapshot.path },
+        });
 
-    await expect(
-      replaceConfigFile({
-        nextConfig: { gateway: { port: 19001 } },
+        await expect(
+          replaceConfigFile({
+            nextConfig: { gateway: { port: 19001 } },
+          }),
+        ).rejects.toThrow(`${mode}=1`);
+
+        expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
       }),
-    ).rejects.toThrow(
-      "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
-    );
+  );
 
-    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "refuses mutate writes in %s before touching disk",
+    async (mode) =>
+      withEnvAsync({ [mode]: "1" }, async () => {
+        const snapshot = createSnapshot({
+          hash: "hash-1",
+          sourceConfig: { gateway: { port: 18789 } },
+        });
+        ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+          snapshot,
+          writeOptions: { expectedConfigPath: snapshot.path },
+        });
 
-  it("refuses mutate writes in Nix mode before touching disk", async () => {
-    process.env.OPENCLAW_NIX_MODE = "1";
-    const snapshot = createSnapshot({
-      hash: "hash-1",
-      sourceConfig: { gateway: { port: 18789 } },
-    });
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
+        await expect(
+          mutateConfigFile({
+            mutate(draft) {
+              draft.gateway = { ...draft.gateway, port: 19001 };
+            },
+          }),
+        ).rejects.toThrow(`${mode}=1`);
 
-    await expect(
-      mutateConfigFile({
-        mutate(draft) {
-          draft.gateway = { ...draft.gateway, port: 19001 };
-        },
+        expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
       }),
-    ).rejects.toThrow("OpenClaw Nix overview: https://docs.openclaw.ai/install/nix");
-
-    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
+  );
 
   it("reuses a provided snapshot and write options for replace", async () => {
     const snapshot = createSnapshot({
@@ -666,7 +698,7 @@ describe("config mutate helpers", () => {
       writeOptions: { expectedConfigPath: snapshot.path },
     });
 
-    expect(ioMocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledAfter(ioMocks.writeConfigFile);
     expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
       { gateway: { auth: { mode: "token", token: "minted" } } },
       {
@@ -689,12 +721,14 @@ describe("config mutate helpers", () => {
           path: ["plugins"],
           kind: "single" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: "/tmp/nested.json",
         },
         {
           path: [],
           kind: "multiple" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
         },
       ],
     } satisfies ConfigFileSnapshot;
@@ -711,6 +745,198 @@ describe("config mutate helpers", () => {
       expectedConfigPath: snapshot.path,
       afterWrite: { mode: "auto" },
     });
+  });
+
+  it.each(["direct", "alias", "merged"] as const)(
+    "refuses a shared fragment target with a %s sibling owner",
+    async (ownership) => {
+      const home = await suiteRootTracker.make("shared-include-owner");
+      const configPath = path.join(home, "openclaw.json");
+      const fragmentPath = path.join(home, "fragment.json5");
+      const siblingTarget = ownership === "alias" ? "./alias.json5" : "./fragment.json5";
+      if (ownership === "alias") {
+        await fs.symlink(fragmentPath, path.join(home, "alias.json5"));
+      }
+      const rootRaw = JSON.stringify({
+        plugins: {
+          entries: {
+            alpha: { $include: "./fragment.json5" },
+            beta: { $include: ownership === "merged" ? [siblingTarget] : siblingTarget },
+          },
+        },
+      });
+      const fragmentRaw = JSON.stringify({ enabled: false });
+      await fs.writeFile(configPath, rootRaw);
+      await fs.writeFile(fragmentPath, fragmentRaw);
+      const configIO = createActualConfigIO({
+        env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+        observe: false,
+        pluginValidation: "skip",
+      });
+      const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+      const nextConfig = structuredClone(snapshot.sourceConfig);
+      setConfigValueAtPath(nextConfig, ["plugins", "entries", "alpha", "enabled"], true);
+      expect(resolveConfigIncludeWriteBoundary({ snapshot, nextConfig })).toBeNull();
+      await expect(
+        replaceConfigFile({
+          snapshot,
+          baseHash: snapshot.hash,
+          nextConfig,
+          writeOptions,
+          io: {
+            readConfigFileSnapshotForWrite: () => configIO.readConfigFileSnapshotForWrite(),
+            writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+          },
+        }),
+      ).rejects.toThrow("Config write would flatten $include-owned config");
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+      await expect(fs.readFile(fragmentPath, "utf-8")).resolves.toBe(fragmentRaw);
+      expect((await configIO.readConfigFileSnapshot()).sourceConfig).toEqual(snapshot.sourceConfig);
+    },
+  );
+
+  it("rejects a nested delegate shadowed by a same-path include array", async () => {
+    const home = await suiteRootTracker.make("same-path-include-array");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const delegatePath = path.join(home, ".openclaw", "delegate.json5");
+    const nestedPath = path.join(home, ".openclaw", "nested.json5");
+    const overridePath = path.join(home, ".openclaw", "override.json5");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ plugins: { $include: ["./delegate.json5", "./override.json5"] } }),
+    );
+    await fs.writeFile(delegatePath, JSON.stringify({ $include: "./nested.json5" }));
+    const nestedRaw = JSON.stringify({ entries: { demo: { enabled: false } } });
+    await fs.writeFile(nestedPath, nestedRaw);
+    await fs.writeFile(overridePath, JSON.stringify({ entries: { demo: { enabled: false } } }));
+    const configIO = createActualConfigIO({
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      observe: false,
+      pluginValidation: "skip",
+    });
+    const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+    const nextConfig = { plugins: { entries: { demo: { enabled: true } } } };
+
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: snapshot.includeProvenance,
+        changed: collectChangedConfigPaths(snapshot.sourceConfig, nextConfig),
+      }),
+    ).toBeNull();
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions,
+        nextConfig,
+        io: {
+          readConfigFileSnapshotForWrite: () => configIO.readConfigFileSnapshotForWrite(),
+          writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+        },
+      }),
+    ).rejects.toThrow("Config write would flatten $include-owned config");
+
+    await expect(fs.readFile(nestedPath, "utf-8")).resolves.toBe(nestedRaw);
+    const reloaded = await configIO.readConfigFileSnapshot();
+    expect(reloaded.sourceConfig.plugins?.entries?.demo?.enabled).toBe(false);
+  });
+
+  it("declines a parent include when both changed children are nested includes", async () => {
+    const home = await suiteRootTracker.make("nested-sibling-includes");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const entriesPath = path.join(home, ".openclaw", "entries.json5");
+    const alphaPath = path.join(home, ".openclaw", "agent-alpha.json5");
+    const betaPath = path.join(home, ".openclaw", "agent-beta.json5");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    const rootRaw = JSON.stringify({ agents: { entries: { $include: "./entries.json5" } } });
+    await fs.writeFile(configPath, rootRaw);
+    const entriesRaw = JSON.stringify({
+      alpha: { $include: "./agent-alpha.json5" },
+      beta: { $include: "./agent-beta.json5" },
+    });
+    await fs.writeFile(entriesPath, entriesRaw);
+    const alphaRaw = JSON.stringify({ model: "alpha-old" });
+    await fs.writeFile(alphaPath, alphaRaw);
+    const betaRaw = JSON.stringify({ model: "beta-old" });
+    await fs.writeFile(betaPath, betaRaw);
+    const configIO = createActualConfigIO({
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      observe: false,
+      pluginValidation: "skip",
+    });
+    const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+    const nextConfig = structuredClone(snapshot.sourceConfig) as OpenClawConfig;
+    nextConfig.agents!.entries!.alpha!.model = "alpha-new";
+    nextConfig.agents!.entries!.beta!.model = "beta-new";
+
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: snapshot.includeProvenance,
+        changed: collectChangedConfigPaths(snapshot.sourceConfig, nextConfig),
+      }),
+    ).toBeNull();
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions,
+        nextConfig,
+        io: {
+          readConfigFileSnapshotForWrite: () => configIO.readConfigFileSnapshotForWrite(),
+          writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+        },
+      }),
+    ).rejects.toThrow("Config write would flatten $include-owned config");
+
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+    await expect(fs.readFile(entriesPath, "utf-8")).resolves.toBe(entriesRaw);
+    await expect(fs.readFile(alphaPath, "utf-8")).resolves.toBe(alphaRaw);
+    await expect(fs.readFile(betaPath, "utf-8")).resolves.toBe(betaRaw);
+  });
+
+  it("writes through an include beneath a numeric object key", async () => {
+    const home = await suiteRootTracker.make("numeric-object-key-include");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const guildPath = path.join(home, ".openclaw", "guild.json5");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        channels: {
+          discord: { guilds: { "123456789": { $include: "./guild.json5" } } },
+        },
+      }),
+    );
+    await fs.writeFile(guildPath, JSON.stringify({ requireMention: true }));
+    const configIO = createActualConfigIO({
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      observe: false,
+      pluginValidation: "skip",
+    });
+    const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+    const nextConfig = structuredClone(snapshot.sourceConfig) as OpenClawConfig;
+    nextConfig.channels!.discord!.guilds!["123456789"]!.requireMention = false;
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions,
+      nextConfig,
+      io: {
+        readConfigFileSnapshotForWrite: () => configIO.readConfigFileSnapshotForWrite(),
+        writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+      },
+    });
+
+    expect(JSON.parse(await fs.readFile(guildPath, "utf-8"))).toEqual({ requireMention: false });
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"$include":"./guild.json5"');
+    const reloaded = await configIO.readConfigFileSnapshot();
+    expect(reloaded.sourceConfig.channels?.discord?.guilds?.["123456789"]?.requireMention).toBe(
+      false,
+    );
   });
 
   it("uses skipPluginValidation for replace pre-write snapshots", async () => {
@@ -772,17 +998,28 @@ describe("config mutate helpers", () => {
     );
   });
 
-  it("returns the canonical persisted config from replace writes", async () => {
+  it("returns config and revision from the same post-write snapshot", async () => {
     const snapshot = createSnapshot({
       hash: "hash-persisted",
       sourceConfig: { gateway: { auth: { mode: "token" } } },
     });
+    const persistedSourceConfig = {
+      gateway: { auth: { mode: "token" as const, token: "${TOKEN}" } },
+    };
     ioMocks.writeConfigFile.mockResolvedValue({
+      persistedSourceConfig,
       persistedHash: "hash-after",
       persistedConfig: {
         gateway: { auth: { mode: "token", token: "minted" } },
         meta: { lastTouchedVersion: "test" },
       },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: createSnapshot({
+        hash: "newer-hash",
+        sourceConfig: { gateway: { auth: { mode: "token", token: "newer" } } },
+      }),
+      writeOptions: {},
     });
 
     const result = await replaceConfigFile({
@@ -792,10 +1029,10 @@ describe("config mutate helpers", () => {
       writeOptions: { expectedConfigPath: snapshot.path },
     });
 
-    expect(result.persistedHash).toBe("hash-after");
+    expect(result.persistedHash).toBe("newer-hash");
+    expect(result.persistedSourceConfig).toBe(persistedSourceConfig);
     expect(result.nextConfig).toEqual({
-      gateway: { auth: { mode: "token", token: "minted" } },
-      meta: { lastTouchedVersion: "test" },
+      gateway: { auth: { mode: "token", token: "newer" } },
     });
   });
 
@@ -834,6 +1071,109 @@ describe("config mutate helpers", () => {
     expect(await fs.readFile(configPath, "utf-8")).toBe(rootRaw);
     expect(await fs.readFile(pluginsPath, "utf-8")).toBe(includedRaw);
   });
+
+  it.each([false, true])(
+    "refuses custom-IO include authority before effects (revoked: %s)",
+    async (revoke) => {
+      const home = await suiteRootTracker.make("custom-include-authority");
+      const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+      const includedRaw = '{"entries":{"demo":{"enabled":false}}}\n';
+      const backupRaw = "retained include backup\n";
+      await fs.writeFile(pluginsPath, includedRaw);
+      await fs.writeFile(`${pluginsPath}.bak`, backupRaw);
+      const rootRaw = await fs.readFile(configPath, "utf8");
+      const selectedPath = path.join(home, "unrelated", "openclaw.json");
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: selectedPath }, async () => {
+        const io = createActualConfigIO({
+          configPath,
+          env: { ...process.env },
+          observe: false,
+          pluginValidation: "skip",
+        });
+        const fallbackWrite = vi.fn(io.writeConfigFile);
+        const refusal = new Error("custom authority revoked during transform");
+        let current = true;
+        const assertCurrent = vi.fn(() => {
+          if (!current) {
+            throw refusal;
+          }
+        });
+        await expect(
+          mutateConfigFile({
+            io: { ...io, writeConfigFile: fallbackWrite },
+            writeOptions: {
+              assertCurrent,
+              observe: false,
+              skipPluginValidation: true,
+              skipRuntimeSnapshotRefresh: true,
+            },
+            mutate: async (draft) => {
+              await Promise.resolve();
+              current = !revoke;
+              draft.plugins = { entries: { demo: { enabled: true } } };
+            },
+          }),
+        ).rejects.toThrow("cannot update include-owned configuration. Use a trusted shell");
+        expect(assertCurrent).toHaveBeenCalledOnce();
+        expect(fallbackWrite).not.toHaveBeenCalled();
+        expect(backupMocks.maintainConfigBackups).not.toHaveBeenCalled();
+        expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+        expect(await fs.readFile(pluginsPath, "utf8")).toBe(includedRaw);
+        expect(await fs.readFile(`${pluginsPath}.bak`, "utf8")).toBe(backupRaw);
+        await expect(fs.stat(`${pluginsPath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(path.dirname(selectedPath))).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "forwards custom-IO authority to its own root destination (revoked: %s)",
+    async (revoke) => {
+      const home = await suiteRootTracker.make("custom-root-authority");
+      const configPath = path.join(home, "owned.json");
+      const selectedPath = path.join(home, "unrelated", "openclaw.json");
+      const original = '{"gateway":{"mode":"local","port":18789}}\n';
+      await fs.writeFile(configPath, original);
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: selectedPath }, async () => {
+        const io = createActualConfigIO({
+          configPath,
+          env: { ...process.env },
+          observe: false,
+          pluginValidation: "skip",
+        });
+        const refusal = new Error("custom root authority revoked");
+        let current = true;
+        const assertCurrent = vi.fn(() => {
+          if (!current) {
+            throw refusal;
+          }
+        });
+        const operation = mutateConfigFile({
+          io,
+          writeOptions: {
+            assertCurrent,
+            observe: false,
+            skipPluginValidation: true,
+            skipRuntimeSnapshotRefresh: true,
+          },
+          mutate: async (draft) => {
+            await Promise.resolve();
+            current = !revoke;
+            draft.gateway = { ...draft.gateway, port: 19001 };
+          },
+        });
+        if (revoke) {
+          await expect(operation).rejects.toBe(refusal);
+          expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        } else {
+          await operation;
+          expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19001);
+        }
+        expect(assertCurrent.mock.calls.length).toBeGreaterThan(1);
+        await expect(fs.stat(path.dirname(selectedPath))).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
 
   it("repairs invalid config through a single-file top-level plugins include", async () => {
     const home = await suiteRootTracker.make("include");
@@ -985,6 +1325,345 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.installs).toBeUndefined();
   });
 
+  it("writes a nested single-file agent entry include through to its own file", async () => {
+    const home = await suiteRootTracker.make("nested-include");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const agentPath = path.join(home, ".openclaw", "config", "agent-alpha.json5");
+    await fs.mkdir(path.dirname(agentPath), { recursive: true });
+    const authoredRoot = {
+      agents: {
+        entries: {
+          alpha: { $include: "./config/agent-alpha.json5" },
+          beta: { model: "beta-model" },
+        },
+      },
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(authoredRoot, null, 2)}\n`, "utf-8");
+    await fs.writeFile(
+      agentPath,
+      `${JSON.stringify({ model: "old-model", workspace: "/w/alpha" }, null, 2)}\n`,
+      "utf-8",
+    );
+    const sourceConfig = {
+      agents: {
+        entries: {
+          alpha: { model: "old-model", workspace: "/w/alpha" },
+          beta: { model: "beta-model" },
+        },
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      agents: {
+        entries: {
+          alpha: { model: "new-model", workspace: "/w/alpha" },
+          beta: { model: "beta-model" },
+        },
+      },
+    } as OpenClawConfig;
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-include",
+        path: configPath,
+        parsed: authoredRoot,
+        sourceConfig,
+      }),
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: agentPath,
+        },
+      ],
+    };
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [agentPath]: await resolveIncludeTarget(agentPath) },
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot: createSnapshot({
+          hash: "hash-nested-include-refreshed",
+          path: configPath,
+          parsed: authoredRoot,
+          sourceConfig: nextConfig,
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig,
+      writeOptions: { expectedConfigPath: configPath },
+      io: {
+        readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+        writeConfigFile: ioMocks.writeConfigFile,
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
+      '"$include": "./config/agent-alpha.json5"',
+    );
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"beta-model"');
+    expect(JSON.parse(await fs.readFile(agentPath, "utf-8"))).toEqual({
+      model: "new-model",
+      workspace: "/w/alpha",
+    });
+  });
+
+  it.each(["unchanged", "preflight", "reread"] as const)(
+    "preserves delegation ownership when the intermediate file is %s",
+    async (changeAt) => {
+      const home = await suiteRootTracker.make("nested-include-chain");
+      const configPath = path.join(home, "openclaw.json");
+      const delegatePath = path.join(home, "delegate.json5");
+      const leafPath = path.join(home, "leaf.json5");
+      const otherPath = path.join(home, "other.json5");
+      const rootRaw = JSON.stringify({ plugins: { $include: "./delegate.json5" } });
+      const delegateRaw = JSON.stringify({ $include: "./leaf.json5" });
+      const changedDelegateRaw = JSON.stringify({ $include: "./other.json5" });
+      const leafRaw = JSON.stringify({ entries: { demo: { enabled: false } } });
+      await fs.writeFile(configPath, rootRaw);
+      await fs.writeFile(delegatePath, delegateRaw);
+      await fs.writeFile(leafPath, leafRaw);
+      await fs.writeFile(otherPath, leafRaw);
+      const configIO = createActualConfigIO({
+        env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+        observe: false,
+        pluginValidation: "skip",
+      });
+      const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+      const nextConfig = structuredClone(snapshot.sourceConfig);
+      setConfigValueAtPath(nextConfig, ["plugins", "entries", "demo", "enabled"], true);
+      const write = replaceConfigFile({
+        snapshot,
+        baseHash: snapshot.hash,
+        nextConfig,
+        writeOptions: {
+          ...writeOptions,
+          preCommitRuntimePreflight: async () => {
+            if (changeAt === "preflight") {
+              await fs.writeFile(delegatePath, changedDelegateRaw);
+            }
+          },
+        },
+        io: {
+          readConfigFileSnapshotForWrite: async () => {
+            if (changeAt === "reread") {
+              await fs.writeFile(delegatePath, changedDelegateRaw);
+            }
+            return configIO.readConfigFileSnapshotForWrite();
+          },
+          writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+        },
+      });
+      if (changeAt === "unchanged") {
+        await write;
+        expect(JSON.parse(await fs.readFile(leafPath, "utf-8"))).toEqual(nextConfig.plugins);
+      } else {
+        if (changeAt === "reread") {
+          await expect(write).rejects.toBeInstanceOf(Error);
+          await expect(write).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+          await expect(write).rejects.toMatchObject({
+            name: "ConfigWritePostCommitError",
+            configPath: leafPath,
+            rollbackStatus: "restored",
+            cause: expect.objectContaining({
+              name: "ConfigMutationConflictError",
+              retryable: true,
+            }),
+          });
+        } else {
+          await expect(write).rejects.toThrow(ConfigMutationConflictError);
+        }
+        await expect(fs.readFile(leafPath, "utf-8")).resolves.toBe(leafRaw);
+      }
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+      await expect(fs.readFile(delegatePath, "utf-8")).resolves.toBe(
+        changeAt === "unchanged" ? delegateRaw : changedDelegateRaw,
+      );
+      await expect(fs.readFile(otherPath, "utf-8")).resolves.toBe(leafRaw);
+    },
+  );
+
+  it("writes through a nested include when a read-time migration added keys", async () => {
+    const home = await suiteRootTracker.make("nested-include-migrated");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const agentPath = path.join(home, ".openclaw", "config", "agent-alpha.json5");
+    await fs.mkdir(path.dirname(agentPath), { recursive: true });
+    const authoredRoot = {
+      agents: { entries: { alpha: { $include: "./config/agent-alpha.json5" } } },
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(authoredRoot, null, 2)}\n`, "utf-8");
+    await fs.writeFile(
+      agentPath,
+      `${JSON.stringify({ bootstrapMaxChars: 25000 }, null, 2)}\n`,
+      "utf-8",
+    );
+    const migrated = {
+      agents: { entries: { alpha: { bootstrapMaxChars: 25000, default: true } } },
+    } as OpenClawConfig;
+    const nextConfig = {
+      agents: { entries: { alpha: { bootstrapMaxChars: 40000, default: true } } },
+    } as OpenClawConfig;
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-include-migrated",
+        path: configPath,
+        parsed: authoredRoot,
+        sourceConfig: migrated,
+      }),
+      sourceConfigBeforeMigrations: {
+        agents: { entries: { alpha: { bootstrapMaxChars: 25000 } } },
+      } as ConfigFileSnapshot["sourceConfigBeforeMigrations"],
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: agentPath,
+        },
+      ],
+    };
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [agentPath]: await resolveIncludeTarget(agentPath) },
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot: createSnapshot({
+          hash: "hash-nested-include-migrated-refreshed",
+          path: configPath,
+          parsed: authoredRoot,
+          sourceConfig: nextConfig,
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig,
+      writeOptions: { expectedConfigPath: configPath },
+      io: {
+        readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+        writeConfigFile: ioMocks.writeConfigFile,
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(agentPath, "utf-8"))).toEqual({
+      bootstrapMaxChars: 40000,
+      default: true,
+    });
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
+      '"$include": "./config/agent-alpha.json5"',
+    );
+  });
+
+  it("declines eligibility for a symlinked external include target", async () => {
+    const home = await suiteRootTracker.make("boundary-symlink");
+    const configDir = path.join(home, ".openclaw");
+    const externalDir = path.join(home, "external");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.mkdir(externalDir, { recursive: true });
+    const externalTarget = path.join(externalDir, "agent-alpha.json5");
+    await fs.writeFile(
+      externalTarget,
+      `${JSON.stringify({ model: "old-model" }, null, 2)}\n`,
+      "utf-8",
+    );
+    const linkPath = path.join(configDir, "agent-alpha.json5");
+    await fs.symlink(externalTarget, linkPath);
+    const configPath = path.join(configDir, "openclaw.json");
+    const authoredRoot = {
+      agents: { entries: { alpha: { $include: "./agent-alpha.json5" } } },
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(authoredRoot, null, 2)}\n`, "utf-8");
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-boundary-symlink",
+        path: configPath,
+        parsed: authoredRoot,
+        sourceConfig: {
+          agents: { entries: { alpha: { model: "old-model" } } },
+        } as OpenClawConfig,
+      }),
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: linkPath,
+        },
+      ],
+    };
+
+    expect(
+      resolveConfigIncludeWriteBoundary({
+        snapshot,
+        nextConfig: {
+          agents: { entries: { alpha: { model: "new-model" } } },
+        } as OpenClawConfig,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not write through when a change falls outside the nested include", async () => {
+    const authoredRoot = {
+      agents: {
+        entries: {
+          alpha: { $include: "./config/agent-alpha.json5" },
+          beta: { model: "beta-model" },
+        },
+      },
+    };
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-include-outside",
+        parsed: authoredRoot,
+        sourceConfig: {
+          agents: { entries: { alpha: { model: "old" }, beta: { model: "beta-model" } } },
+        } as OpenClawConfig,
+      }),
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: "/tmp/agent-alpha.json5",
+        },
+      ],
+    };
+    const nextConfig = {
+      agents: { entries: { alpha: { model: "new" }, beta: { model: "beta-changed" } } },
+    } as OpenClawConfig;
+
+    await replaceConfigFile({
+      snapshot,
+      nextConfig,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(nextConfig, {
+      baseSnapshot: snapshot,
+      expectedConfigPath: snapshot.path,
+      afterWrite: { mode: "auto" },
+    });
+  });
+
   it.each([
     {
       name: "repairs a malformed single-file top-level include",
@@ -1118,16 +1797,9 @@ describe("config mutate helpers", () => {
 
   it("does not overwrite a malformed include changed after its snapshot", async () => {
     const home = await suiteRootTracker.make("malformed-include-concurrent");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
     const snapshotRaw = "{ malformed";
     const concurrentRaw = "{ differently malformed";
-    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
-      "utf-8",
-    );
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     await fs.writeFile(pluginsPath, concurrentRaw, "utf-8");
 
     const snapshot: ConfigFileSnapshot = {
@@ -1172,20 +1844,13 @@ describe("config mutate helpers", () => {
 
   it("prefers mutation-start include hashes over commit-time reread hashes", async () => {
     const home = await suiteRootTracker.make("include-mutation-start-hash");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
     const initialRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
     const concurrentRaw = `${JSON.stringify(
       { entries: { concurrent: { enabled: true } } },
       null,
       2,
     )}\n`;
-    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
-      "utf-8",
-    );
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     await fs.writeFile(pluginsPath, concurrentRaw, "utf-8");
 
     const snapshot = createSnapshot({
@@ -1227,19 +1892,12 @@ describe("config mutate helpers", () => {
 
   it("uses a provided mutation-start snapshot even without write options", async () => {
     const home = await suiteRootTracker.make("include-mutation-start-snapshot");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
     const concurrentRaw = `${JSON.stringify(
       { entries: { concurrent: { enabled: true } } },
       null,
       2,
     )}\n`;
-    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
-      "utf-8",
-    );
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     await fs.writeFile(pluginsPath, concurrentRaw, "utf-8");
 
     const snapshot = createSnapshot({
@@ -1761,8 +2419,6 @@ describe("config mutate helpers", () => {
 
   it("does not overwrite concurrent include edits made during backup rotation", async () => {
     const home = await suiteRootTracker.make("include-backup-concurrent");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
     const rootConfig = { plugins: { $include: "./config/plugins.json5" } };
     const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
     const concurrentPluginsRaw = `${JSON.stringify(
@@ -1770,8 +2426,7 @@ describe("config mutate helpers", () => {
       null,
       2,
     )}\n`;
-    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
     const snapshot = createSnapshot({
       hash: "hash-include-backup-concurrent",
@@ -1790,8 +2445,6 @@ describe("config mutate helpers", () => {
 
   it("does not write an include after its root ownership changes during backup rotation", async () => {
     const home = await suiteRootTracker.make("include-root-backup-concurrent");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
     const rootConfig = { plugins: { $include: "./config/plugins.json5" } };
     const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
     const concurrentRootRaw = `${JSON.stringify(
@@ -1799,8 +2452,7 @@ describe("config mutate helpers", () => {
       null,
       2,
     )}\n`;
-    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
     const snapshot = createSnapshot({
       hash: "hash-include-root-backup-concurrent",
@@ -1820,8 +2472,6 @@ describe("config mutate helpers", () => {
 
   it("does not write an include after its root ownership changes during preflight", async () => {
     const home = await suiteRootTracker.make("include-root-preflight-concurrent");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
     const rootConfig = { plugins: { $include: "./config/plugins.json5" } };
     const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
     const concurrentRootRaw = `${JSON.stringify(
@@ -1829,8 +2479,7 @@ describe("config mutate helpers", () => {
       null,
       2,
     )}\n`;
-    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
     const snapshot = createSnapshot({
       hash: "hash-include-root-preflight-concurrent",
@@ -1943,26 +2592,37 @@ describe("config mutate helpers", () => {
       }
     };
 
-    await expect(
-      replaceConfigFile({
-        baseHash: snapshot.hash,
-        snapshot,
-        writeOptions: {
-          expectedConfigPath: snapshot.path,
-          assertConfigPathForWrite,
-          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-        },
-        nextConfig: {
-          plugins: {
-            entries: {
-              demo: { enabled: true },
-            },
+    const operation = replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions: {
+        expectedConfigPath: snapshot.path,
+        assertConfigPathForWrite,
+        includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+      },
+      nextConfig: {
+        plugins: {
+          entries: {
+            demo: { enabled: true },
           },
         },
+      },
+    });
+    await expect(operation).rejects.toBeInstanceOf(Error);
+    await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+    await expect(operation).rejects.toMatchObject({
+      name: "ConfigWritePostCommitError",
+      configPath: pluginsPath,
+      rollbackStatus: "restored",
+      cause: expect.objectContaining({
+        name: "ConfigMutationConflictError",
+        message: "config path changed since last load",
       }),
-    ).rejects.toThrow("config path changed since last load");
+    });
 
     await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
   });
 
   it.each(["active path", "refreshed snapshot path"] as const)(
@@ -2009,23 +2669,95 @@ describe("config mutate helpers", () => {
         };
       });
 
-      await expect(
-        replaceConfigFile({
-          baseHash: snapshot.hash,
-          snapshot,
-          io: { ...ioMocks, env: {} },
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            assertConfigPathForWrite,
-            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-          },
-          nextConfig,
+      const operation = replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        io: { ...ioMocks, env: {} },
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig,
+      });
+      await expect(operation).rejects.toBeInstanceOf(Error);
+      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(operation).rejects.toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath: pluginsPath,
+        rollbackStatus: "restored",
+        cause: expect.objectContaining({
+          name: "ConfigMutationConflictError",
+          message: "config path changed since last load",
         }),
-      ).rejects.toThrow("config path changed since last load");
+      });
 
       await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
     },
   );
+
+  it("does not retry a committed include write after its post-write read conflicts", async () => {
+    const home = await suiteRootTracker.make("include-post-write-retry");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const concurrentRootRaw = `${JSON.stringify(
+      {
+        plugins: { $include: "./config/plugins.json5" },
+        logging: { level: "debug" },
+      },
+      null,
+      2,
+    )}\n`;
+    const env = { ...process.env };
+    const io = createActualConfigIO({
+      configPath,
+      env,
+      observe: false,
+      pluginValidation: "skip",
+    });
+    let savedRootEdit = false;
+    const readConfigFileSnapshotForWrite: ConfigIOReadForWrite = async (options) => {
+      if (!savedRootEdit && (await fs.readFile(pluginsPath, "utf-8")) !== initialPluginsRaw) {
+        await fs.writeFile(configPath, concurrentRootRaw, "utf-8");
+        savedRootEdit = true;
+      }
+      return await io.readConfigFileSnapshotForWrite(options);
+    };
+    const transform = vi.fn((config: OpenClawConfig) => ({
+      nextConfig: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: { ...config.plugins?.entries, demo: { enabled: true } },
+        },
+      },
+    }));
+
+    const operation = transformConfigFileWithRetry({
+      io: { ...io, env, readConfigFileSnapshotForWrite },
+      writeOptions: { observe: false, skipPluginValidation: true },
+      transform,
+    });
+    await expect(operation).rejects.toBeInstanceOf(Error);
+    await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+    await expect(operation).rejects.toMatchObject({
+      name: "ConfigWritePostCommitError",
+      configPath: pluginsPath,
+      rollbackStatus: "restored",
+      cause: expect.objectContaining({
+        name: "ConfigMutationConflictError",
+        message: "config changed while preparing include write",
+      }),
+    });
+    expect(transform).toHaveBeenCalledOnce();
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRootRaw);
+    await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.stat(`${pluginsPath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it.runIf(process.platform !== "win32")(
     "does not create a missing include through a parent symlink swapped during preflight",
@@ -2322,16 +3054,9 @@ describe("config mutate helpers", () => {
 
   it("rolls back single-file top-level include writes when runtime refresh fails", async () => {
     const home = await suiteRootTracker.make("include-runtime-refresh-rollback");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
     const env = {} as NodeJS.ProcessEnv;
     const envKey = "OPENCLAW_TEST_INCLUDE_ROLLBACK_ENV";
-    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
-      "utf-8",
-    );
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
     await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
     const snapshot = createSnapshot({
@@ -2359,31 +3084,41 @@ describe("config mutate helpers", () => {
         writeOptions: { expectedConfigPath: configPath },
       };
     });
+    const refreshError = new Error("lost include secret");
 
     try {
       delete env[envKey];
       setRuntimeConfigSnapshotRefreshHandler({
         preflight: () => true,
         refresh: () => {
-          throw new Error("lost include secret");
+          throw refreshError;
         },
       });
 
-      await expect(
-        replaceConfigFile({
-          baseHash: snapshot.hash,
-          snapshot,
-          io: { ...ioMocks, env },
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            assertConfigPathForWrite: allowConfigPathWrite,
-            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-          },
-          nextConfig,
-        }),
-      ).rejects.toThrow(/runtime snapshot refresh failed: lost include secret/);
+      const operation = replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        io: { ...ioMocks, env },
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig,
+      });
+      await expect(operation).rejects.toBeInstanceOf(Error);
+      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(operation).rejects.toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath: pluginsPath,
+        rollbackStatus: "restored",
+        message: expect.stringMatching(/runtime snapshot refresh failed: lost include secret/),
+        cause: expect.objectContaining({ cause: refreshError }),
+      });
 
       await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
       expect(env[envKey]).toBeUndefined();
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
@@ -2394,7 +3129,8 @@ describe("config mutate helpers", () => {
   it("does not overwrite concurrent include edits during failed refresh rollback", async () => {
     const home = await suiteRootTracker.make("include-runtime-refresh-concurrent");
     const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
     const concurrentPluginsRaw = `${JSON.stringify(
       { entries: { concurrent: { enabled: true } } },
       null,
@@ -2422,30 +3158,40 @@ describe("config mutate helpers", () => {
       }),
       writeOptions: { expectedConfigPath: configPath },
     });
+    const refreshError = new Error("lost include secret");
 
     try {
       setRuntimeConfigSnapshotRefreshHandler({
         preflight: () => true,
         refresh: async () => {
           await fs.writeFile(pluginsPath, concurrentPluginsRaw, "utf-8");
-          throw new Error("lost include secret");
+          throw refreshError;
         },
       });
 
-      await expect(
-        replaceConfigFile({
-          baseHash: snapshot.hash,
-          snapshot,
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            assertConfigPathForWrite: allowConfigPathWrite,
-            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-          },
-          nextConfig,
-        }),
-      ).rejects.toThrow(/runtime snapshot refresh failed: lost include secret/);
+      const operation = replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig,
+      });
+      await expect(operation).rejects.toBeInstanceOf(Error);
+      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(operation).rejects.toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath: pluginsPath,
+        rollbackStatus: "not-restored",
+        message: expect.stringMatching(/runtime snapshot refresh failed: lost include secret/),
+        cause: expect.objectContaining({ cause: refreshError }),
+      });
 
       await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(concurrentPluginsRaw);
+      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }
@@ -2618,6 +3364,94 @@ describe("config mutate helpers", () => {
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }
+  });
+});
+
+describe("resolveConfigIncludeWriteBoundary", () => {
+  const nestedProvenance = [
+    {
+      path: ["agents", "entries", "alpha"],
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      hasArrayAncestor: false,
+      targetPath: "/cfg/config/agent-alpha.json5",
+    },
+  ];
+  const sourceConfig = {
+    agents: { entries: { alpha: { model: "old-model" } } },
+  } as OpenClawConfig;
+  const nestedSnapshot: ConfigFileSnapshot = {
+    ...createSnapshot({
+      hash: "hash-boundary-probe",
+      path: "/cfg/openclaw.json",
+      parsed: { agents: { entries: { alpha: { $include: "./config/agent-alpha.json5" } } } },
+      sourceConfig,
+    }),
+    includeProvenance: nestedProvenance,
+  };
+
+  it("accepts a change owned by a nested include", () => {
+    expect(
+      resolveConfigIncludeWriteBoundary({
+        snapshot: nestedSnapshot,
+        nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
+      }),
+    ).toEqual({
+      boundaryPath: ["agents", "entries", "alpha"],
+      includePath: "/cfg/config/agent-alpha.json5",
+    });
+  });
+
+  it("declines once root-level wizard metadata joins the change set", () => {
+    // Doctor consults this before stamping wizard state; adding the root key
+    // first would push the change outside the boundary and fail the write.
+    expect(
+      resolveConfigIncludeWriteBoundary({
+        snapshot: nestedSnapshot,
+        nextConfig: {
+          agents: { entries: { alpha: { model: "new-model" } } },
+          wizard: { lastRunCommand: "doctor" },
+        } as OpenClawConfig,
+      }),
+    ).toBeNull();
+  });
+
+  it("declines an include-owned change once the root roster format must persist", () => {
+    // Parity with the writer: persistCanonicalAgentRoster forces the root path,
+    // so Doctor must not skip root metadata for a write that lands at the root.
+    expect(
+      resolveConfigIncludeWriteBoundary({
+        snapshot: nestedSnapshot,
+        nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
+        persistCanonicalAgentRoster: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("declines when the candidate no longer carries the owning boundary", () => {
+    // The writer falls back to the root path for a removed section, so Doctor
+    // must not treat that write as include-owned.
+    expect(
+      resolveConfigIncludeWriteBoundary({
+        snapshot: nestedSnapshot,
+        nextConfig: { agents: { entries: {} } } as OpenClawConfig,
+      }),
+    ).toBeNull();
+  });
+
+  it("declines when nothing changed or no include owns the change", () => {
+    expect(
+      resolveConfigIncludeWriteBoundary({ snapshot: nestedSnapshot, nextConfig: sourceConfig }),
+    ).toBeNull();
+    expect(
+      resolveConfigIncludeWriteBoundary({
+        snapshot: {
+          ...nestedSnapshot,
+          includeProvenance: [],
+        },
+        nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
+      }),
+    ).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

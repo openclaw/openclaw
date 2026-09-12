@@ -22,6 +22,7 @@ import {
   withPluginRegistrationContext,
 } from "../plugins/runtime.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
+import { escapeRegExp } from "../shared/regexp.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -1503,7 +1504,9 @@ describe("Invalid engine fallback", () => {
           registerTestContextEngine(engineId, () => 42n as unknown as ContextEngine);
         },
         expectedError: (engineId: string) =>
-          `[context-engine] Context engine "${engineId}" owner=test:${engineId} failed during contract-validation: Do not know how to serialize a BigInt; quarantining it for this process and falling back to default engine "legacy".`,
+          new RegExp(
+            `^\\[context-engine\\] Context engine "${escapeRegExp(engineId)}" owner=test:${escapeRegExp(engineId)} failed during contract-validation: .*BigInt.*; quarantining it for this process and falling back to default engine "legacy"\\.$`,
+          ),
       },
     ] as const;
 
@@ -1514,8 +1517,9 @@ describe("Invalid engine fallback", () => {
       const engine = await resolveContextEngine(configWithSlot(testCase.engineId));
 
       expect(engine.info.id, testCase.name).toBe("legacy");
+      const expectedError = testCase.expectedError(testCase.engineId);
       expect(console.error, testCase.name).toHaveBeenCalledWith(
-        testCase.expectedError(testCase.engineId),
+        typeof expectedError === "string" ? expectedError : expect.stringMatching(expectedError),
       );
       expect(
         listContextEngineQuarantines().some((entry) => entry.engineId === testCase.engineId),

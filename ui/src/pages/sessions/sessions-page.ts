@@ -55,6 +55,7 @@ import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
   canDeleteSessionRows,
+  isPinnableUiSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
@@ -75,8 +76,9 @@ import {
 } from "../../plugins/control-ui-actions.ts";
 import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
-import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
+import type { SessionsRouteData } from "./route.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
@@ -99,7 +101,7 @@ type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived" | "sessionId"
 
 type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
-  query: ReturnType<typeof sessionsPageListQuery>;
+  query: ReturnType<typeof buildSessionsListQuery>;
   key: string;
   transcriptKey: string;
 };
@@ -112,6 +114,7 @@ class SessionsPage extends OpenClawLightDomElement {
 
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
+  @state() private refreshing = false;
   @state() private error: string | null = null;
   @state() private activeMinutes = "";
   @state() private limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
@@ -214,6 +217,7 @@ class SessionsPage extends OpenClawLightDomElement {
         results,
         indexing = false,
         truncated = false,
+        archivedTranscriptsExcluded = 0,
       } = await searchVisibleSessionTranscripts({
         client,
         query,
@@ -224,7 +228,7 @@ class SessionsPage extends OpenClawLightDomElement {
         resolveAgentId: (sessionKey) =>
           parseAgentSessionKey(sessionKey)?.agentId ?? this.sessionAgentId(sessionKey, context),
       });
-      return { results, indexing, truncated };
+      return { results, indexing, truncated, archivedTranscriptsExcluded };
     },
   });
 
@@ -290,6 +294,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     this.resetCheckpointTask();
     this.loading = false;
+    this.refreshing = false;
     this.checkpointBusyKey = null;
     this.sessionMutationPending = false;
     this.closeSessionMenu();
@@ -299,6 +304,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.result = null;
     this.error = null;
     this.loading = false;
+    this.refreshing = false;
     this.resetTranscriptSearchState("");
     this.selectedKeys = new Set();
     this.expandedSessionKey = null;
@@ -445,7 +451,7 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private sessionListOptions(context: ApplicationContext, search = this.searchQuery) {
-    return sessionsPageListQuery(context, {
+    return buildSessionsListQuery(context, {
       activeMinutes: parseStrictPositiveInteger(this.activeMinutes),
       // The Limit box is an explicit page size, so an unparseable entry falls
       // back to the page default rather than to the shared roster page size.
@@ -566,9 +572,11 @@ class SessionsPage extends OpenClawLightDomElement {
         return;
       }
       this.listRequest = undefined;
+      this.refreshing = false;
       this.bindSessionList();
     });
     this.listRequest = pending;
+    this.refreshing = true;
     start(binding.sessions.refreshList({ ...binding.query, ...options }));
     return pending;
   }
@@ -1457,15 +1465,17 @@ class SessionsPage extends OpenClawLightDomElement {
     const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
     const cloudWorkerStopAllowed = Boolean(
       cloudWorkerStopAction &&
-      (cloudWorkerStopAction.method !== "sessions.reclaim" || row.hasActiveRun !== true) &&
+      (!cloudWorkerStopAction.blocksActiveRun || row.hasActiveRun !== true) &&
       isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
     );
+    const pinnable = isPinnableUiSessionRow(row);
     return html`
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
           sessionId: normalizeOptionalString(row.sessionId) ?? null,
           pinned: row.pinned === true,
+          pinnable,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
@@ -1481,7 +1491,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .splitAllowed=${false}
         .actionDisabledReasons=${sessionMenuReasons({
           snapshot: gateway,
-          session: row,
+          session: { ...row, pinnable },
           cloudWorkerStopAction,
         })}
         .forkDisabled=${row.modelSelectionLocked === true}
@@ -1592,6 +1602,7 @@ class SessionsPage extends OpenClawLightDomElement {
       ${renderSettingsWorkspace(
         renderSessions({
           loading: this.loading,
+          refreshing: this.refreshing,
           result: this.result,
           error: this.error,
           activeMinutes: this.activeMinutes,

@@ -100,7 +100,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     ["success", "standalone", "credential", "completed", "stop"],
     ["success", "managed", "credential", "completed", "stop"],
   ] as const)(
-    "settles %s through the %s command with real EACCES deleting %s files",
+    "settles %s through the %s command with real permission failures deleting %s files",
     async (outcome, mode, deniedOwner, expectedStatus, stopReason) => {
       const skillDir = path.join(harness.root, "skills", "cleanup");
       await fs.mkdir(skillDir, { recursive: true });
@@ -221,7 +221,12 @@ describe("cloud worker milestone 2 fault injection", () => {
         );
         finishingGate.release.resolve();
         if (deniedOwner === "credential") {
-          await expect.soft(command).rejects.toMatchObject({ code: "EACCES" });
+          // Bun reports the containing directory's ENOTEMPTY until oven-sh/bun#42446 lands.
+          await expect.soft(command).rejects.toMatchObject({
+            code: process.versions.bun
+              ? expect.stringMatching(/^(?:EACCES|ENOTEMPTY)$/u)
+              : "EACCES",
+          });
         } else {
           await expect.soft(command).resolves.toBeUndefined();
         }
@@ -267,7 +272,7 @@ describe("cloud worker milestone 2 fault injection", () => {
           await expect.soft(fs.stat(hostsPath)).rejects.toMatchObject({ code: "ENOENT" });
           expect.soft(warning).toContain("Materialized skill cleanup failed");
           expect.soft(warning).toContain(turnDirectory);
-          expect.soft(warning).toContain("EACCES");
+          expect.soft(warning).toMatch(process.versions.bun ? /EACCES|ENOTEMPTY/u : /EACCES/u);
         } else {
           expect(await fs.readFile(hostsPath, "utf8")).toContain(
             descriptor.assignment.github.token,

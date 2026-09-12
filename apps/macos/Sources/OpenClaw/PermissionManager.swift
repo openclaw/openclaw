@@ -412,23 +412,3 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         }
     }
 }
-
-@MainActor
-final class PermissionMonitor {
-    static let shared = PermissionMonitor()
-
-    private var status: [Capability: CapabilityAuthorizationStatus] = [:]
-    private var isChecking = false
-
-    func refreshNow() async {
-        if self.isChecking { return }
-        self.isChecking = true
-        defer { self.isChecking = false }
-
-        let latest = await PermissionManager.authorizationStatus()
-        if latest != self.status {
-            self.status = latest
-            NotificationCenter.default.post(name: .openclawPermissionsChanged, object: nil)
-        }
-    }
-}

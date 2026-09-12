@@ -5,8 +5,8 @@ import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-pl
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  WORKSPACE,
   controlUiSessionPath,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   expectPastedPngImage,
@@ -61,20 +61,7 @@ suite.define(() => {
         featureMethods: ["sessions.create", "sessions.dispatch", "chat.startup"],
         workspaceGit: true,
         methodResponses: {
-          "agents.list": {
-            agents: [
-              {
-                id: "cloud",
-                identity: { name: "Cloud" },
-                name: "Cloud",
-                workspace: WORKSPACE,
-                workspaceGit: true,
-              },
-            ],
-            defaultId: "cloud",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createCloudAgentsListResponse(),
           "environments.list": {
             environments: [],
             profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -100,7 +87,7 @@ suite.define(() => {
         await page.locator("#new-session-where-trigger").click();
         await page
           .locator("wa-popover.new-session-page__where-popover")
-          .getByRole("button", { name: "Cloud · aws" })
+          .getByRole("button", { name: "aws", exact: true })
           .click();
         const composer = page.locator(".new-session-page__message");
         await composer.fill(message);

@@ -1,95 +1,22 @@
 // Nextcloud Talk type declarations define plugin contracts.
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { z } from "zod";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type {
-  ChannelDeliveryStreamingConfig,
-  MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  DmConfig,
-  DmPolicy,
-  GroupPolicy,
-  OpenClawConfig,
-  SecretInput,
-} from "../runtime-api.js";
+  NextcloudTalkAccountSchemaBase,
+  NextcloudTalkConfigSchema,
+  NextcloudTalkRoomSchema,
+} from "./config-schema.js";
 
-export type NextcloudTalkRoomConfig = {
-  requireMention?: boolean;
-  /** Optional tool policy overrides for this room. */
-  tools?: { allow?: string[]; deny?: string[] };
-  /** If specified, only load these skills for this room. Omit = all skills; empty = no skills. */
-  skills?: string[];
-  /** If false, disable the bot for this room. */
-  enabled?: boolean;
-  /** Optional allowlist for room senders (user ids). */
-  allowFrom?: string[];
-  /** Optional system prompt snippet for this room. */
-  systemPrompt?: string;
-};
-
-type NextcloudTalkNetworkConfig = {
-  /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
-  dangerouslyAllowPrivateNetwork?: boolean;
-};
-
-export type NextcloudTalkAccountConfig = {
-  /** Optional display name for this account (used in CLI/UI lists). */
-  name?: string;
-  /** If false, do not start this Nextcloud Talk account. Default: true. */
-  enabled?: boolean;
-  /** Reply-threading mode for this account. */
-  replyToMode?: ReplyToMode;
-  /** Base URL of the Nextcloud instance (e.g., "https://cloud.example.com"). */
-  baseUrl?: string;
-  /** Bot shared secret from occ talk:bot:install output. */
-  botSecret?: SecretInput;
-  /** Path to file containing bot secret (for secret managers). */
-  botSecretFile?: string;
-  /** Optional API user for room lookups (DM detection). */
-  apiUser?: string;
-  /** Optional API password/app password for room lookups. */
-  apiPassword?: SecretInput;
-  /** Path to file containing API password/app password. */
-  apiPasswordFile?: string;
-  /** Direct message policy (default: pairing). */
-  dmPolicy?: DmPolicy;
-  /** Webhook server port. Default: 8788. */
-  webhookPort?: number;
-  /** Webhook server host. Default: "0.0.0.0". */
-  webhookHost?: string;
-  /** Webhook endpoint path. Default: "/nextcloud-talk-webhook". */
-  webhookPath?: string;
-  /** Public URL for the webhook (used if behind reverse proxy). */
-  webhookPublicUrl?: string;
-  /** Optional allowlist of user IDs allowed to DM the bot. */
-  allowFrom?: string[];
-  /** Optional allowlist for Nextcloud Talk room senders (user ids). */
-  groupAllowFrom?: string[];
-  /** Group message policy (default: allowlist). */
-  groupPolicy?: GroupPolicy;
-  /** Per-room configuration (key is room token). */
+export type NextcloudTalkRoomConfig = NonNullable<z.input<typeof NextcloudTalkRoomSchema>>;
+type NextcloudTalkAccountSchemaInput = z.input<typeof NextcloudTalkAccountSchemaBase>;
+export type NextcloudTalkAccountConfig = Omit<NextcloudTalkAccountSchemaInput, "rooms"> & {
   rooms?: Record<string, NextcloudTalkRoomConfig>;
-  /** Max group messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
-  dms?: Record<string, DmConfig>;
-  /** Outbound text chunk size (chars). Default: 4000. */
-  textChunkLimit?: number;
-  /** Delivery streaming config: chunk mode plus block streaming controls. */
-  streaming?: ChannelDeliveryStreamingConfig;
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
-  /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
-  network?: NextcloudTalkNetworkConfig;
 };
-
-type NextcloudTalkConfig = {
-  /** Optional per-account Nextcloud Talk configuration (multi-account). */
+type NextcloudTalkConfig = Omit<z.input<typeof NextcloudTalkConfigSchema>, "accounts" | "rooms"> & {
   accounts?: Record<string, NextcloudTalkAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & NextcloudTalkAccountConfig;
+  rooms?: Record<string, NextcloudTalkRoomConfig>;
+};
 
 export type CoreConfig = {
   channels?: {

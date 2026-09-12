@@ -18,9 +18,24 @@ final class RemotePortTunnel: @unchecked Sendable {
         let identity: String
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
+        let preferredLocalPort: UInt16?
+
+        init(
+            target: CommandResolver.SSHParsedTarget,
+            identity: String,
+            remotePort: Int,
+            hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
+            preferredLocalPort: UInt16? = nil)
+        {
+            self.target = target
+            self.identity = identity
+            self.remotePort = remotePort
+            self.hostKeyPolicy = hostKeyPolicy
+            self.preferredLocalPort = preferredLocalPort
+        }
     }
 
-    let localPort: UInt16?
+    let localPort: UInt16
     var isRunning: Bool {
         self.process.isRunning
     }
@@ -34,7 +49,7 @@ final class RemotePortTunnel: @unchecked Sendable {
     private init(
         process: ManagedProcess,
         processIdentifier: pid_t,
-        localPort: UInt16?,
+        localPort: UInt16,
         stderrReader: PipeReadStream,
         guardianReceipt: PortGuardian.Record)
     {
@@ -61,7 +76,39 @@ final class RemotePortTunnel: @unchecked Sendable {
         await PortGuardian.shared.removeRecord(self.guardianReceipt)
     }
 
-    static func configuration(remotePort: Int) throws -> Configuration {
+    static func localPort(
+        root: [String: Any],
+        legacyPort: Int? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> Int
+    {
+        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
+              let host = url.host, LoopbackHost.isLoopbackHost(host),
+              let port = GatewayRemoteConfig.defaultPort(for: url), (1...65535).contains(port)
+        else {
+            return GatewayEnvironment.resolvedGatewayPort(
+                environment: environment,
+                configPort: OpenClawConfigFile.gatewayPort(root: root),
+                storedPort: legacyPort ?? GatewayEnvironment.gatewayPort(root: root),
+                profile: .current)
+        }
+        return port
+    }
+
+    static func ports(
+        root: [String: Any],
+        sshHost: String,
+        legacyPort: Int? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> (local: Int, remote: Int)
+    {
+        // Shipped SSH profiles without a URL use the shared port until hosting repair
+        // materializes their route. Explicit remote fields own the split configuration.
+        let legacyPort = legacyPort ?? GatewayEnvironment.gatewayPort(root: root)
+        return (
+            self.localPort(root: root, legacyPort: legacyPort, environment: environment),
+            self.resolveRemotePortOverride(defaultRemotePort: legacyPort, for: sshHost, root: root) ?? legacyPort)
+    }
+
+    static func configuration() throws -> Configuration {
         let root = OpenClawConfigFile.loadDict()
         let settings = CommandResolver.connectionSettings(configRoot: root)
         guard settings.mode == .remote,
@@ -74,15 +121,13 @@ final class RemotePortTunnel: @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not configured"])
         }
         let sshHost = target.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedRemotePort = Self.resolveRemotePortOverride(
-            defaultRemotePort: remotePort,
-            for: sshHost,
-            root: root) ?? remotePort
+        let ports = Self.ports(root: root, sshHost: sshHost)
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
-            remotePort: resolvedRemotePort,
-            hostKeyPolicy: settings.sshHostKeyPolicy)
+            remotePort: ports.remote,
+            hostKeyPolicy: settings.sshHostKeyPolicy,
+            preferredLocalPort: UInt16(ports.local))
     }
 
     static func create(
@@ -245,17 +290,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         let stderr = stderrCapture.snapshot()
         let msg = stderr.isEmpty ? "ssh tunnel did not open local port \(localPort)" : "ssh tunnel failed: \(stderr)"
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
-    }
-
-    /// Shared with MacChatTranscriptCache: the offline cache identity must key
-    /// on the same remote gateway port this tunnel actually forwards to, or two
-    /// gateways behind one SSH target would share cached transcripts.
-    static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
-        let root = OpenClawConfigFile.loadDict()
-        return self.resolveRemotePortOverride(
-            defaultRemotePort: defaultRemotePort,
-            for: sshHost,
-            root: root)
     }
 
     static func resolveRemotePortOverride(
@@ -427,10 +461,6 @@ final class RemotePortTunnel: @unchecked Sendable {
     #if SWIFT_PACKAGE
     static func _testPortIsFree(_ port: UInt16) -> Bool {
         self.portIsFree(port)
-    }
-
-    static func _testResolveRemotePortOverride(defaultRemotePort: Int, sshHost: String) -> Int? {
-        self.resolveRemotePortOverride(defaultRemotePort: defaultRemotePort, for: sshHost)
     }
 
     static func _testSSHOptions(

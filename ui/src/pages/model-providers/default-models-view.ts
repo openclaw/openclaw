@@ -1,7 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
-import type { FastMode } from "../../api/types.ts";
+import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { renderModelPicker, type ModelPickerOption } from "../../components/model-picker.ts";
 import {
@@ -11,16 +12,27 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import {
+  canonicalModelAuthProviderId,
+  listEffectiveModelAuthProviders,
+} from "../../lib/model-auth.ts";
+import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
 
 type DefaultModelsViewProps = {
   models: ModelPickerEntry[];
   selection: DefaultModelSelection;
+  authStatus?: ModelAuthStatusResult | null;
+  automaticUtilityModel?: string | null;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   loading?: boolean;
+  /** True while the Gateway is discovering additional models. */
+  catalogDiscovering?: boolean;
+  /** Retryable discovery error from the current catalog publication or explicit Retry. */
+  catalogDiscoveryError?: string | null;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   busy: Record<string, boolean>;
@@ -32,6 +44,7 @@ type DefaultModelsViewProps = {
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
+  onCatalogRetry: () => void;
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
@@ -45,7 +58,10 @@ const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
 const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 
-function modelOptions(models: ModelPickerEntry[]): ModelPickerOption[] {
+function modelOptions(
+  models: ModelPickerEntry[],
+  authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
+): ModelPickerOption[] {
   const seen = new Set<string>();
   const options: ModelPickerOption[] = [];
   for (const model of models) {
@@ -54,13 +70,30 @@ function modelOptions(models: ModelPickerEntry[]): ModelPickerOption[] {
       continue;
     }
     seen.add(ref);
-    options.push({
-      value: ref,
-      label: model.name || ref,
-      ...(model.provider ? { provider: model.provider } : {}),
-    });
+    options.push(modelOption(model, authProviders));
   }
   return options.toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+function modelOption(
+  model: ModelPickerEntry,
+  authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
+): ModelPickerOption {
+  const ref = modelCatalogRef(model);
+  const provider = authProviders.get(canonicalModelAuthProviderId(model.provider));
+  const auth = provider
+    ? describeModelProviderAuth(provider, {
+        authProfileId: splitTrailingAuthProfile(ref).profile,
+        projection: "available-credentials",
+      })
+    : undefined;
+  return {
+    value: ref,
+    label: model.name || ref,
+    ...(auth ? { detail: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
+    ...(model.available === false ? { disabled: true } : {}),
+    ...(model.provider ? { provider: model.provider } : {}),
+  };
 }
 
 function renderHelpTitle(params: {
@@ -121,6 +154,29 @@ function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
 }
 
+// Discovery progress does not change the saved selection or disable known models.
+function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult | typeof nothing {
+  if (props.catalogDiscovering) {
+    return html`
+      <div class="model-providers__catalog-progress" role="status" aria-live="polite">
+        <span class="btn__spinner" aria-hidden="true"></span>
+        <span>${t("modelProviders.defaults.discoveringMore")}</span>
+      </div>
+    `;
+  }
+  if (props.catalogDiscoveryError) {
+    return html`
+      <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
+        <span>${t("modelProviders.defaults.discoverFailed")}</span>
+        <button class="btn btn--sm" type="button" @click=${props.onCatalogRetry}>
+          ${t("modelProviders.defaults.retryDiscover")}
+        </button>
+      </div>
+    `;
+  }
+  return nothing;
+}
+
 export function renderDefaultModels(props: DefaultModelsViewProps) {
   const modelControlsDisabled = !props.canMutate || props.models.length === 0;
   const behaviorControlsDisabled = !props.canMutate;
@@ -132,6 +188,29 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       : THINKING_LEVELS;
   const fastMode = props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode);
   const fallback = props.selection.fallbacks[0] ?? "";
+  const authProviders = new Map(
+    listEffectiveModelAuthProviders(props.authStatus?.providers ?? []).map((provider) => [
+      provider.provider,
+      provider,
+    ]),
+  );
+  const options = modelOptions(props.models, authProviders);
+  const automaticRef = props.automaticUtilityModel;
+  const automaticBaseRef = automaticRef ? splitTrailingAuthProfile(automaticRef).model : "";
+  const automaticEntry = props.models.find((model) => modelCatalogRef(model) === automaticBaseRef);
+  const automaticModel = automaticRef
+    ? modelOption(
+        {
+          ...(automaticEntry ?? {
+            id: automaticBaseRef,
+            name: automaticBaseRef,
+            provider: automaticBaseRef.split("/", 1)[0] ?? "",
+          }),
+          selectionRef: automaticRef,
+        },
+        authProviders,
+      )
+    : undefined;
 
   const body = html`
     <div class="model-providers__defaults">
@@ -142,7 +221,6 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       }
       ${renderSettingsRow({
         title: t("modelProviders.defaults.primary"),
-        stackedOnNarrow: true,
         control: renderModelPicker({
           label: t("modelProviders.defaults.primary"),
           value: props.selection.primary,
@@ -152,10 +230,11 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
               label: t("modelProviders.defaults.selectModel"),
               disabled: Boolean(props.selection.primary),
             },
-            ...modelOptions(props.models),
+            ...options,
           ],
           disabled: modelControlsDisabled || saving,
           title,
+          showSelectedDetail: true,
           onChange: props.onPrimaryChange,
         }),
       })}
@@ -169,36 +248,44 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             <p>${t("modelProviders.defaults.utilityHelpAutomatic")}</p>
           `,
         }),
-        stackedOnNarrow: true,
         control: renderModelPicker({
           id: UTILITY_MODEL_PICKER_ID,
           label: t("modelProviders.defaults.utility"),
           value: props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE,
           options: [
-            { value: AUTOMATIC_UTILITY_VALUE, label: t("quickSettings.model.fastModes.auto") },
+            {
+              value: AUTOMATIC_UTILITY_VALUE,
+              label: props.automaticUtilityModel
+                ? `${t("quickSettings.model.fastModes.auto")} · ${automaticModel?.label ?? props.automaticUtilityModel}`
+                : t("quickSettings.model.fastModes.auto"),
+              provider: automaticModel?.provider,
+              detail:
+                automaticRef === null
+                  ? t("modelProviders.defaults.automaticUnavailable")
+                  : automaticModel?.detail,
+            },
             { value: "", label: t("modelProviders.defaults.disabled") },
-            ...modelOptions(props.models),
+            ...options,
           ],
           disabled: modelControlsDisabled || saving,
           title,
+          showSelectedDetail: true,
           onChange: (value) =>
             props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
         }),
       })}
       ${renderSettingsRow({
         title: t("modelProviders.defaults.fallback"),
-        stackedOnNarrow: true,
         control: renderModelPicker({
           label: t("modelProviders.defaults.fallback"),
           value: fallback,
           options: [
             { value: "", label: t("modelProviders.defaults.noFallback") },
-            ...modelOptions(
-              props.models.filter((model) => modelCatalogRef(model) !== props.selection.primary),
-            ),
+            ...options.filter((option) => option.value !== props.selection.primary),
           ],
           disabled: modelControlsDisabled || saving || !props.selection.primary,
           title,
+          showSelectedDetail: true,
           onChange: (value) => props.onFallbackChange(value || null),
         }),
       })}
@@ -209,7 +296,6 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           triggerId: THINKING_HELP_ID,
           body: html`<p>${t("modelProviders.defaults.thinkingHelp")}</p>`,
         }),
-        stackedOnNarrow: true,
         control: html`
           ${renderSettingsSegmented({
             value: props.thinkingLevel ?? "",
@@ -246,7 +332,6 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           triggerId: FAST_MODE_HELP_ID,
           body: html`<p>${t("modelProviders.defaults.fastModeHelp")}</p>`,
         }),
-        stackedOnNarrow: true,
         control: html`
           ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
             value: fastMode,
@@ -278,6 +363,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           })}
         `,
       })}
+      ${renderCatalogProgress(props)}
       ${
         props.canMutate && props.message
           ? html`<div

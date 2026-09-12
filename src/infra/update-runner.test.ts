@@ -2,18 +2,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import * as processExec from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { pathExists } from "../utils.js";
+import * as container from "./container-environment.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
@@ -35,7 +34,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
-const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
 const PNPM_VERSION = "12.0.0";
 const PNPM_PACKAGE_MANAGER = `pnpm@${PNPM_VERSION}`;
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
@@ -177,6 +175,12 @@ describe("runGatewayUpdate", () => {
       }
       if (key === `git -C ${tempDir} rev-parse HEAD`) {
         return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} remote`) {
+        return toCommandResult({ stdout: "origin\n" });
+      }
+      if (key === `git -C ${tempDir} config --get branch.main.remote`) {
+        return toCommandResult({ stdout: "origin\n" });
       }
       if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
         return { stdout: `${params.stableTag}\n`, stderr: "", code: 0 };
@@ -385,7 +389,13 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
       [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { stdout: "" },
-      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} config --get branch.main.remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} fetch --no-tags --no-prune --no-prune-tags origin +refs/tags/*:refs/tags/*`]:
+        {
+          stdout: "",
+        },
       [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
       [`git -C ${tempDir} rev-parse ${stableTag}^{commit}`]: { stdout: "b".repeat(40) },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
@@ -442,6 +452,7 @@ describe("runGatewayUpdate", () => {
   type TestCommandOptions = {
     env?: NodeJS.ProcessEnv;
     cwd?: string;
+    input?: string | Uint8Array;
     timeoutMs?: number;
   };
 
@@ -651,6 +662,7 @@ describe("runGatewayUpdate", () => {
         }
         return await runCommandWithTimeout(argv, {
           cwd: options.cwd,
+          input: options.input,
           env: options.env,
           timeoutMs: options.timeoutMs ?? 5000,
         });
@@ -760,6 +772,7 @@ describe("runGatewayUpdate", () => {
       tag?: string;
       cwd?: string;
       devTarget?: DevUpdateTarget;
+      progress?: NonNullable<Parameters<typeof runGatewayUpdate>[0]>["progress"];
       deferConfiguredPluginInstallRepair?: boolean;
       allowGatewayServiceRepair?: boolean;
       allowGatewayActivation?: boolean;
@@ -817,6 +830,7 @@ describe("runGatewayUpdate", () => {
         : { allowGatewayServiceRepair: options.allowGatewayServiceRepair }),
       ...(options?.allowGatewayActivation ? { allowGatewayActivation: true } : {}),
       ...(options?.beforeGitMutation ? { beforeGitMutation: options.beforeGitMutation } : {}),
+      ...(options?.progress ? { progress: options.progress } : {}),
     });
   }
 
@@ -839,115 +853,9 @@ describe("runGatewayUpdate", () => {
     return runWithCommand(runner, options);
   }
 
-  async function seedGlobalPackageRoot(pkgRoot: string, version = "1.0.0") {
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-      "utf-8",
-    );
-    await writeBundledRuntimeSidecars(pkgRoot);
-    await writePackageDistInventory(pkgRoot);
-  }
-
-  async function writeGlobalPackageVersion(pkgRoot: string, version = "2.0.0") {
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-      "utf-8",
-    );
-    await writeBundledRuntimeSidecars(pkgRoot);
-    await writePackageDistInventory(pkgRoot);
-  }
-
-  async function writeBundledRuntimeSidecars(pkgRoot: string) {
-    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
-      const absolutePath = path.join(pkgRoot, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-    }
-    await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf8");
-  }
-
-  async function writeGatewayEntrypoint(pkgRoot: string) {
-    const entrypoint = path.join(pkgRoot, "dist", "index.js");
-    await fs.mkdir(path.dirname(entrypoint), { recursive: true });
-    await fs.writeFile(entrypoint, "export {};\n", "utf-8");
-    await writePackageDistInventory(pkgRoot);
-    return entrypoint;
-  }
-
-  async function createGlobalPackageFixture(rootDir: string) {
-    const nodeModules = path.join(rootDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-    return { nodeModules, pkgRoot };
-  }
-
-  type InstallCommandExpectation = string | ((argv: string[]) => boolean);
-
   const npmFreshnessArg = "--min-release-age=0";
   const normalizeNpmFreshnessArgs = (argv: string[]) =>
     argv.map((arg) => (/^--before=\d{4}-\d{2}-\d{2}T/u.test(arg) ? npmFreshnessArg : arg));
-
-  const installCommandMatches = (expected: InstallCommandExpectation, argv: string[]) => {
-    const normalizedArgv = normalizeNpmFreshnessArgs(argv);
-    return typeof expected === "string"
-      ? normalizedArgv.join(" ") === expected
-      : expected(normalizedArgv);
-  };
-
-  const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) => {
-    const allowScriptsIdentity = spec.toLowerCase().startsWith("openclaw@") ? "openclaw" : spec;
-    return [
-      "npm",
-      "i",
-      "-g",
-      `--allow-scripts=${allowScriptsIdentity}`,
-      spec,
-      ...extraArgs,
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      npmFreshnessArg,
-    ].join(" ");
-  };
-
-  function createGlobalNpmUpdateRunner(params: {
-    pkgRoot: string;
-    nodeModules: string;
-    onBaseInstall?: () => Promise<CommandResult>;
-    onOmitOptionalInstall?: () => Promise<CommandResult>;
-  }) {
-    const baseInstallKey = npmGlobalInstallCommand("openclaw@latest");
-    const omitOptionalInstallKey = npmGlobalInstallCommand("openclaw@latest", ["--omit=optional"]);
-
-    return async (argv: string[]): Promise<CommandResult> => {
-      const key = normalizeNpmFreshnessArgs(argv).join(" ");
-      if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        return { stdout: params.nodeModules, stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === "npm --version") {
-        return { stdout: "12.0.0", stderr: "", code: 0 };
-      }
-      if (key === baseInstallKey) {
-        return (await params.onBaseInstall?.()) ?? { stdout: "ok", stderr: "", code: 0 };
-      }
-      if (key === omitOptionalInstallKey) {
-        return (
-          (await params.onOmitOptionalInstall?.()) ?? { stdout: "", stderr: "not found", code: 1 }
-        );
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
-  }
 
   it.each([
     {
@@ -1038,12 +946,12 @@ describe("runGatewayUpdate", () => {
     { name: "target ref", options: { devTarget: { mode: "detached", ref: "main" } } },
   ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
     await setupGitCheckout();
-    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags`;
+    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [fetchCommand]: {
         code: 1,
-        stderr: "! [rejected] v2026.5.3 -> v2026.5.3 (would clobber existing tag)",
+        stderr: "fatal: unable to access remote repository",
       },
     });
 
@@ -1070,7 +978,7 @@ describe("runGatewayUpdate", () => {
     });
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
         stdout: "refs/remotes/origin/main",
       },
@@ -1098,8 +1006,9 @@ describe("runGatewayUpdate", () => {
     expect(beforeGitMutation).toHaveBeenCalledWith({
       schemaVersions: { state: 3, agent: 11 },
     });
-    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
-    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+      `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
+    ]);
     const cleanupIndex = calls.findIndex(
       (call) =>
         call.startsWith(`git -C ${tempDir} worktree remove --force `) &&
@@ -1110,6 +1019,78 @@ describe("runGatewayUpdate", () => {
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
       calls.indexOf(`git -C ${tempDir} checkout -B main ${upstreamSha}`),
     );
+  });
+
+  it.each([
+    { channel: "stable", remotes: "origin\nupstream\n", tracked: "upstream", expected: "upstream" },
+    { channel: "beta", remotes: "upstream\norigin\n", tracked: "upstream", expected: "upstream" },
+    { channel: "stable", remotes: "fork\norigin\n", tracked: "", expected: "origin" },
+    { channel: "beta", remotes: "releases\n", tracked: "", expected: "releases" },
+  ] as const)(
+    "force-refreshes $channel tags only from $expected with tracked remote '$tracked'",
+    async ({ channel, remotes, tracked, expected }) => {
+      await setupGitPackageManagerFixture();
+      const { runner, calls } = createRunner({
+        ...buildStableTagResponses("v1.0.1"),
+        [`git -C ${tempDir} remote`]: { stdout: remotes },
+        [`git -C ${tempDir} config --get branch.main.remote`]: {
+          stdout: tracked,
+          code: tracked ? 0 : 1,
+        },
+      });
+
+      const result = await runWithRunner(runner, { channel });
+
+      expect(result.status).toBe("ok");
+      expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+        `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
+        `git -C ${tempDir} fetch --no-tags --no-prune --no-prune-tags ${expected} +refs/tags/*:refs/tags/*`,
+      ]);
+    },
+  );
+
+  it.each([
+    { name: "branch fetch", failedCommand: "fetch --all --prune --no-tags --no-prune-tags" },
+    { name: "remote enumeration", failedCommand: "remote" },
+    { name: "tracking config", failedCommand: "config --get branch.main.remote" },
+    {
+      name: "release tag fetch",
+      failedCommand: "fetch --no-tags --no-prune --no-prune-tags origin +refs/tags/*:refs/tags/*",
+    },
+  ])("stops release updates before mutation when $name fails", async ({ failedCommand }) => {
+    await setupGitCheckout();
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+    const failedKey = `git -C ${tempDir} ${failedCommand}`;
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses("v1.0.1"),
+      [failedKey]: { code: 128, stderr: "Git operation failed" },
+    });
+
+    const result = await runWithRunner(runner, { channel: "stable", beforeGitMutation });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({ exitCode: 128, stderrTail: "Git operation failed" }),
+    );
+    expect(calls.slice(calls.indexOf(failedKey) + 1)).toEqual([]);
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+  });
+
+  it("refuses release tags from ambiguous remotes before selecting a local tag", async () => {
+    await setupGitCheckout();
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses("v1.0.1"),
+      [`git -C ${tempDir} remote`]: { stdout: "fork\nupstream\n" },
+      [`git -C ${tempDir} config --get branch.main.remote`]: { code: 1 },
+    });
+
+    const result = await runWithRunner(runner, { channel: "stable" });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+      `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
+    ]);
+    expect(calls).not.toContain(`git -C ${tempDir} tag --list v* --sort=-v:refname`);
   });
 
   it("rejects target-incompatible live config before allowing git mutation", async () => {
@@ -1159,7 +1140,7 @@ describe("runGatewayUpdate", () => {
     });
     const { runner } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
         stdout: "refs/remotes/origin/main",
       },
@@ -1186,7 +1167,7 @@ describe("runGatewayUpdate", () => {
     const beforeGitMutation = vi.fn<() => Promise<void>>();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses({ branch: "feature" }),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} show-ref --verify refs/heads/main`]: { stdout: "main\n" },
       [`git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`]: {
         code: 1,
@@ -1296,78 +1277,106 @@ describe("runGatewayUpdate", () => {
     );
   });
 
-  it("rolls back when upstream setup fails after creating local main", async () => {
-    await setupGitPackageManagerFixture();
+  it.each([false, true])(
+    "finishes with a recorded warning when upstream setup fails after creating local main (interrupted=%s)",
+    async (interrupted) => {
+      await setupGitPackageManagerFixture();
 
-    const selectedSha = "upstream123";
-    const calls: string[] = [];
-    const beforeGitMutation = vi.fn(async () => {
-      calls.push("beforeGitMutation");
-    });
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      const responses = buildGitWorktreeProbeResponses({ branch: "feature" });
-      const response = responses[key];
-      if (response) {
-        return toCommandResult(response);
-      }
-      if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
-        return {
-          stdout: "",
-          stderr: "no upstream configured for branch 'main'",
-          code: 1,
-        };
-      }
-      if (key === `git -C ${tempDir} remote`) {
-        return { stdout: "origin\n", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
-        return { stdout: selectedSha, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-list --max-count=10 ${selectedSha}`) {
-        return { stdout: `${selectedSha}\n`, stderr: "", code: 0 };
-      }
-      if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
-        key.endsWith(` ${selectedSha}`) &&
-        preflightPrefixPattern.test(key)
-      ) {
-        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
-        return { stdout: `HEAD is now at ${selectedSha}`, stderr: "", code: 0 };
-      }
-      if (key === "pnpm --version") {
-        return { stdout: PNPM_VERSION, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} show-ref --verify refs/heads/main`) {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === `git -C ${tempDir} branch --set-upstream-to origin/main main`) {
-        return { stdout: "", stderr: "requested upstream does not exist", code: 1 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+      const selectedSha = "upstream123";
+      const calls: string[] = [];
+      const beforeGitMutation = vi.fn(async () => {
+        calls.push("beforeGitMutation");
+      });
+      const runCommand = async (argv: string[]) => {
+        const key = argv.join(" ");
+        calls.push(key);
+        const responses = buildGitWorktreeProbeResponses({ branch: "feature" });
+        const response = responses[key];
+        if (response) {
+          return toCommandResult(response);
+        }
+        if (key === `git -C ${tempDir} rev-parse --symbolic-full-name main@{upstream}`) {
+          return {
+            stdout: "",
+            stderr: "no upstream configured for branch 'main'",
+            code: 1,
+          };
+        }
+        if (key === `git -C ${tempDir} remote`) {
+          return { stdout: "origin\n", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
+          return { stdout: selectedSha, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-list --max-count=10 ${selectedSha}`) {
+          return { stdout: `${selectedSha}\n`, stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
+          key.endsWith(` ${selectedSha}`) &&
+          preflightPrefixPattern.test(key)
+        ) {
+          await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
+          return { stdout: `HEAD is now at ${selectedSha}`, stderr: "", code: 0 };
+        }
+        if (key === "pnpm --version") {
+          return { stdout: PNPM_VERSION, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} show-ref --verify refs/heads/main`) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (key === `git -C ${tempDir} branch --set-upstream-to origin/main main`) {
+          if (interrupted) {
+            return {
+              stdout: "",
+              stderr: "interrupted",
+              code: 143,
+              signal: "SIGTERM" as const,
+              termination: "signal" as const,
+            };
+          }
+          return { stdout: "", stderr: "requested upstream does not exist", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      };
 
-    const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
+      const onStepComplete = vi.fn();
+      const result = await runWithCommand(runCommand, {
+        channel: "dev",
+        beforeGitMutation,
+        progress: { onStepComplete },
+      });
 
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("checkout-failed");
-    expect(calls).toContain(`git -C ${tempDir} checkout -B main ${selectedSha}`);
-    expect(calls).toContain(`git -C ${tempDir} branch --set-upstream-to origin/main main`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
-    expect(calls).toContain(`git -C ${tempDir} checkout --force feature`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
-    expect(calls).toContain(`git -C ${tempDir} branch -D main`);
-    expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
-      calls.indexOf(`git -C ${tempDir} checkout -B main ${selectedSha}`),
-    );
-    expect(
-      calls.indexOf(`git -C ${tempDir} branch --set-upstream-to origin/main main`),
-    ).toBeLessThan(calls.indexOf(`git -C ${tempDir} reset --hard`));
-    expect(calls.indexOf(`git -C ${tempDir} reset --hard abc123`)).toBeLessThan(
-      calls.indexOf(`git -C ${tempDir} branch -D main`),
-    );
-  });
+      if (interrupted) {
+        expect(result.status).toBe("error");
+        expect(result.reason).toBe("checkout-failed");
+        expect(
+          result.steps.find((step) => step.name.startsWith("git branch --set-upstream-to"))
+            ?.advisory,
+        ).toBeUndefined();
+        expect(calls).toContain(`git -C ${tempDir} checkout --force feature`);
+        return;
+      }
+
+      expect(result.status).toBe("ok");
+      expect(calls).toContain(`git -C ${tempDir} checkout -B main ${selectedSha}`);
+      expect(calls).toContain(`git -C ${tempDir} branch --set-upstream-to origin/main main`);
+      expect(calls).not.toContain(`git -C ${tempDir} reset --hard`);
+      expect(calls).not.toContain(`git -C ${tempDir} checkout --force feature`);
+      expect(calls).not.toContain(`git -C ${tempDir} branch -D main`);
+      expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
+        calls.indexOf(`git -C ${tempDir} checkout -B main ${selectedSha}`),
+      );
+      const report = renderUpdateRunReport(updateRunReportInputFromResult(result));
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        }),
+      );
+      expect(report.markdown).toContain("requested upstream does not exist");
+      expect(report.markdown).toContain("branch --set-upstream-to origin/main main");
+    },
+  );
 
   it("fetches only the requested tag for explicit dev tag target refs", async () => {
     await setupGitPackageManagerFixture();
@@ -1376,7 +1385,7 @@ describe("runGatewayUpdate", () => {
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
       [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
         stdout: "",
@@ -1401,11 +1410,10 @@ describe("runGatewayUpdate", () => {
     });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
-    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
-    expect(calls).toContain(
+    expect(calls.filter((call) => call.includes(" fetch "))).toEqual([
+      `git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`,
       `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
-    );
+    ]);
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
   });
 
@@ -1413,7 +1421,7 @@ describe("runGatewayUpdate", () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
       [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
         code: 1,
@@ -1515,7 +1523,7 @@ describe("runGatewayUpdate", () => {
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [],
     });
-    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    expect(calls.some((call) => call.includes(" fetch "))).toBe(false);
     expect(calls.some((call) => call.includes("checkout"))).toBe(false);
   });
 
@@ -2197,7 +2205,7 @@ describe("runGatewayUpdate", () => {
       calls.push(key);
       const responses = {
         ...buildGitWorktreeProbeResponses(),
-        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
         [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
           stdout: "refs/remotes/origin/main",
         },
@@ -2278,7 +2286,7 @@ describe("runGatewayUpdate", () => {
       calls.push(key);
       const responses = {
         ...buildGitWorktreeProbeResponses(),
-        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} fetch --all --prune --no-tags --no-prune-tags`]: { stdout: "" },
         [`git -C ${tempDir} rev-parse --symbolic-full-name @{upstream}`]: {
           stdout: "refs/remotes/origin/main",
         },
@@ -2703,7 +2711,7 @@ describe("runGatewayUpdate", () => {
     expect(cleanupStep?.stderrTail ?? "").toContain("fallback cleanup removed preflight tree");
   });
 
-  it("stops before live mutation when preflight cleanup fails", async () => {
+  it("finishes with a recorded warning when preflight cleanup fails", async () => {
     await setupGitPackageManagerFixture();
     const remove = fs.rm.bind(fs);
     let preflightRoot: string | undefined;
@@ -2725,25 +2733,34 @@ describe("runGatewayUpdate", () => {
       },
     });
     try {
-      const result = await runWithCommand(runCommand, { channel: "dev" });
-      expect(result.status).toBe("error");
-      expect(result.reason).toBe("preflight-cleanup-failed");
-      // This checkout fixture has no built runtime identity; no mutation is not activation proof.
-      expect(result.recovery).toEqual({
-        serviceRestartSafe: false,
-        reason: "runtime-verification-failed",
+      const onStepComplete = vi.fn();
+      const result = await runWithCommand(runCommand, {
+        channel: "dev",
+        progress: { onStepComplete },
       });
-      expect(calls).not.toContain(`git -C ${tempDir} rebase upstream123`);
-      expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "deps install" }));
+      expect(result.status).toBe("ok");
+      expect(calls).toContain(`git -C ${tempDir} checkout -B main upstream123`);
       expect(result.steps).toContainEqual(
         expect.objectContaining({
           name: "preflight cleanup",
           exitCode: 1,
           stderrTail: "error: failed to delete worktree: Permission denied",
+          advisory: expect.objectContaining({
+            message: expect.stringContaining("Permission denied"),
+          }),
         }),
       );
       expect(calls).toContain(`git -C ${tempDir} worktree prune`);
       expect(preflightRoot && (await pathExists(preflightRoot))).toBe(true);
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "preflight cleanup",
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        }),
+      );
+      expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+        "cleanup",
+      );
     } finally {
       rmSpy.mockRestore();
       if (preflightRoot) {
@@ -3042,6 +3059,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("skips update when no git root", async () => {
+    vi.spyOn(container, "isContainerEnvironment").mockReturnValueOnce(false);
     await fs.writeFile(
       path.join(tempDir, "package.json"),
       JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
@@ -3057,600 +3075,40 @@ describe("runGatewayUpdate", () => {
     const result = await runWithRunner(runner);
 
     expect(result.status).toBe("skipped");
-    expect(result.reason).toBe("not-git-install");
+    expect(result.reason).toBe("unmanaged-package-install");
+    expect(result.recovery).toBeUndefined();
     const pnpmGlobalInstallCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
     const npmGlobalInstallCalls = calls.filter((call) => call.startsWith("npm i -g"));
     expect(pnpmGlobalInstallCalls).toStrictEqual([]);
     expect(npmGlobalInstallCalls).toStrictEqual([]);
   });
 
-  async function runNpmGlobalUpdateCase(params: {
-    expectedInstallCommand: InstallCommandExpectation;
-    channel?: "stable" | "beta";
-    tag?: string;
-  }): Promise<{ calls: string[]; result: Awaited<ReturnType<typeof runGatewayUpdate>> }> {
+  it("leaves package-manager updates to the CLI transaction owner", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: params.expectedInstallCommand,
-      onInstall: async () => {
-        await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-          "utf-8",
-        );
-      },
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+    );
+    const { runner, calls } = createRunner({
+      [`git -C ${pkgRoot} rev-parse --show-toplevel`]: { code: 128 },
+      "npm root -g": { stdout: nodeModules },
+      "pnpm root -g": { code: 1 },
     });
 
-    const result = await runWithCommand(runCommand, {
-      cwd: pkgRoot,
-      channel: params.channel,
-      tag: params.tag,
-    });
-
-    return { calls, result };
-  }
-
-  const createGlobalInstallHarness = (params: {
-    pkgRoot: string;
-    npmRootOutput?: string;
-    npmVersion?: string;
-    pnpmRootOutput?: string;
-    installCommand: InstallCommandExpectation;
-    gitRootMode?: "not-git" | "missing";
-    onInstall?: (options?: {
-      env?: NodeJS.ProcessEnv;
-      installPrefix?: string;
-      packageRoot?: string;
-    }) => Promise<void>;
-  }) => {
-    const calls: string[] = [];
-    const runCommand = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
-      const key = normalizeNpmFreshnessArgs(argv).join(" ");
-      calls.push(key);
-      if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
-        if (params.gitRootMode === "missing") {
-          throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
-        }
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        if (params.npmRootOutput) {
-          return { stdout: params.npmRootOutput, stderr: "", code: 0 };
-        }
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === "npm --version") {
-        return { stdout: params.npmVersion ?? "12.0.0", stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        if (params.pnpmRootOutput) {
-          return { stdout: params.pnpmRootOutput, stderr: "", code: 0 };
-        }
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (argv[0] === "npm" && argv[1] === "pack") {
-        const destination = argv[argv.indexOf("--pack-destination") + 1];
-        if (!destination) {
-          return { stdout: "", stderr: "missing pack destination", code: 1 };
-        }
-        await fs.writeFile(path.join(destination, "openclaw-2.0.0.tgz"), "packed\n", "utf-8");
-        return {
-          stdout: JSON.stringify([{ filename: "openclaw-2.0.0.tgz" }]),
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (installCommandMatches(params.installCommand, argv)) {
-        await params.onInstall?.(options);
-        return { stdout: "ok", stderr: "", code: 0 };
-      }
-      const prefixIndex = argv.indexOf("--prefix");
-      const installPrefix = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
-      if (installPrefix) {
-        const normalizedInstallCommand = normalizeNpmFreshnessArgs([
-          ...argv.slice(0, prefixIndex),
-          ...argv.slice(prefixIndex + 2),
-        ]);
-        if (installCommandMatches(params.installCommand, normalizedInstallCommand)) {
-          const packageRoot =
-            process.platform === "win32"
-              ? path.join(installPrefix, "node_modules", "openclaw")
-              : path.join(installPrefix, "lib", "node_modules", "openclaw");
-          await params.onInstall?.({
-            ...options,
-            installPrefix,
-            packageRoot,
-          });
-          return { stdout: "ok", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
-    return { calls, runCommand };
-  };
-
-  it.each([
-    {
-      title: "updates global npm installs when detected",
-      expectedInstallCommand: npmGlobalInstallCommand("openclaw@latest"),
-    },
-    {
-      title: "uses update channel for global npm installs when tag is omitted",
-      expectedInstallCommand: npmGlobalInstallCommand("openclaw@beta"),
-      channel: "beta" as const,
-    },
-    {
-      title: "updates global npm installs with tag override",
-      expectedInstallCommand: npmGlobalInstallCommand("openclaw@beta"),
-      tag: "beta",
-    },
-  ])("$title", async ({ expectedInstallCommand, channel, tag }) => {
-    const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand,
-      channel,
-      tag,
-    });
-
-    expect(result.status).toBe("ok");
-    expect(result.mode).toBe("npm");
-    expect(result.before?.version).toBe("1.0.0");
-    expect(result.after?.version).toBe("2.0.0");
-    expect(calls).toContain(expectedInstallCommand);
-  });
-
-  it("updates global npm installs from the GitHub main package spec", async () => {
-    const sourceSpec = "github:openclaw/openclaw#main";
-    const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand: (argv) =>
-        argv[0] === "npm" &&
-        argv[1] === "i" &&
-        argv[2] === "-g" &&
-        argv[3] === `--allow-scripts=${argv[4]}` &&
-        path.basename(argv[4] ?? "") === "openclaw-2.0.0.tgz" &&
-        argv.slice(5).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
-      tag: "main",
-    });
-
-    expect(result.status).toBe("ok");
-    expect(result.mode).toBe("npm");
-    expect(result.after?.version).toBe("2.0.0");
-    expect(result.steps.map((step) => step.name)).toContain("global update pack");
-    expect(
-      calls.some((call) => call.startsWith(`npm pack ${sourceSpec} --pack-destination `)),
-    ).toBe(true);
-    const installCall = calls.find((call) => call.includes("openclaw-2.0.0.tgz"));
-    expect(installCall).toContain("--no-fund --no-audit --loglevel=error --min-release-age=0");
-    expect(installCall).not.toContain(sourceSpec);
-  });
-
-  it("keeps service repair external during staged global npm Doctor", async () => {
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-
-    let doctorEnv: NodeJS.ProcessEnv | undefined;
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-      onInstall: async () => {
-        await writeGlobalPackageVersion(pkgRoot, "2026.5.1");
-        await writeGatewayEntrypoint(pkgRoot);
-      },
-    });
-    const doctorNodePath = await resolveStableNodePath(process.execPath);
-    const doctorCommand = `${doctorNodePath} ${path.join(
-      pkgRoot,
-      "dist",
-      "index.js",
-    )} doctor --non-interactive --fix`;
-    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
-      const key = argv.join(" ");
-      if (key === doctorCommand) {
-        calls.push(key);
-        doctorEnv = options?.env;
-        return { stdout: "doctor repaired config", stderr: "", code: 0 };
-      }
-      return runCommand(argv, options);
-    };
-
-    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
-
-    expect(result.status).toBe("ok");
-    expect(calls).toContain(doctorCommand);
-    expect(result.steps.map((step) => step.name)).toContain("openclaw doctor");
-    expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
-    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
-    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART).toBe("1");
-    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("0");
-    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("0");
-    expect(doctorEnv?.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
-    expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.5.1");
-  });
-
-  it("fails global npm updates when post-update doctor fails", async () => {
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-      onInstall: async () => {
-        await writeGlobalPackageVersion(pkgRoot, "2026.5.1");
-        await writeGatewayEntrypoint(pkgRoot);
-      },
-    });
-    const doctorNodePath = await resolveStableNodePath(process.execPath);
-    const doctorCommand = `${doctorNodePath} ${path.join(
-      pkgRoot,
-      "dist",
-      "index.js",
-    )} doctor --non-interactive --fix`;
-    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
-      const key = argv.join(" ");
-      if (key === doctorCommand) {
-        calls.push(key);
-        return { stdout: "", stderr: "doctor refused migration", code: 1 };
-      }
-      return runCommand(argv, options);
-    };
-
-    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("doctor-failed");
-    expect(result.recovery).toEqual({
-      serviceRestartSafe: false,
-      reason: "runtime-verification-failed",
-    });
-    expect(calls).toContain(doctorCommand);
-    const lastStep = result.steps.at(-1);
-    expect(lastStep?.name).toBe("openclaw doctor");
-    expect(lastStep?.exitCode).toBe(1);
-    expect(lastStep?.stderrTail).toBe("doctor refused migration");
-  });
-
-  it("falls back to global npm update when git is missing from PATH", async () => {
-    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-      gitRootMode: "missing",
-      onInstall: async () => writeGlobalPackageVersion(pkgRoot),
-    });
-
-    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-    expect(result.status).toBe("ok");
-    expect(result.mode).toBe("npm");
-    expect(calls).toContain(npmGlobalInstallCommand("openclaw@latest"));
-  });
-
-  it("rejects a tag override for the extended-stable global package channel", async () => {
-    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-    });
-
-    const result = await runWithCommand(runCommand, {
-      cwd: pkgRoot,
-      channel: "extended-stable",
-      tag: "latest",
-    });
+    const result = await runWithCommand(runner, { cwd: pkgRoot });
 
     expect(result).toMatchObject({
-      status: "error",
-      mode: "npm",
+      status: "skipped",
+      mode: "unknown",
       root: pkgRoot,
-      reason: "extended-stable-tag-unsupported",
+      reason: "package-update-requires-cli",
+      before: { version: "1.0.0" },
       steps: [],
     });
-    expect(calls).not.toContain(npmGlobalInstallCommand("openclaw@latest"));
+    expect(calls.some((call) => /^npm (?:i|install|pack) /u.test(call))).toBe(false);
   });
-
-  it("cleans stale npm rename dirs before global update", async () => {
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    const staleDir = path.join(nodeModules, ".openclaw-stale");
-    await fs.mkdir(staleDir, { recursive: true });
-    await seedGlobalPackageRoot(pkgRoot);
-
-    let stalePresentAtInstall = true;
-    const runCommand = createGlobalNpmUpdateRunner({
-      nodeModules,
-      pkgRoot,
-      onBaseInstall: async () => {
-        stalePresentAtInstall = await pathExists(staleDir);
-        return { stdout: "ok", stderr: "", code: 0 };
-      },
-    });
-
-    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-    expect(result.status).toBe("ok");
-    expect(stalePresentAtInstall).toBe(false);
-    expect(await pathExists(staleDir)).toBe(false);
-  });
-
-  it("retries global npm update with --omit=optional when initial install fails", async () => {
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-
-    let firstAttempt = true;
-    const runCommand = createGlobalNpmUpdateRunner({
-      nodeModules,
-      pkgRoot,
-      onBaseInstall: async () => {
-        firstAttempt = false;
-        return { stdout: "", stderr: "node-gyp failed", code: 1 };
-      },
-      onOmitOptionalInstall: async () => {
-        await writeGlobalPackageVersion(pkgRoot);
-        return { stdout: "ok", stderr: "", code: 0 };
-      },
-    });
-
-    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-    expect(firstAttempt).toBe(false);
-    expect(result.status).toBe("ok");
-    expect(result.mode).toBe("npm");
-    expect(result.steps.map((s) => s.name)).toEqual([
-      "global update",
-      "global update (omit optional)",
-      "openclaw doctor",
-    ]);
-  });
-
-  it("fails global npm update when the installed version misses the requested correction", async () => {
-    const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand: npmGlobalInstallCommand("openclaw@2026.3.23-2"),
-      tag: "2026.3.23-2",
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("global-install-failed");
-    expect(result.after?.version).toBe("2.0.0");
-    expect(result.steps.at(-1)?.stderrTail).toContain(
-      "expected installed version 2026.3.23-2, found 2.0.0",
-    );
-    expect(calls).toContain(npmGlobalInstallCommand("openclaw@2026.3.23-2"));
-  });
-
-  it("fails global npm update when bundled runtime sidecars are missing after install", async () => {
-    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const expectedInstallCommand = npmGlobalInstallCommand("openclaw@latest");
-    const { runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: expectedInstallCommand,
-      onInstall: async () => {
-        await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-          "utf-8",
-        );
-        await writeBundledRuntimeSidecars(pkgRoot);
-        const inventory = await writePackageDistInventory(pkgRoot);
-        expect(inventory).toContain(TELEGRAM_RUNTIME_API);
-        const telegramRuntimeApiPath = path.join(pkgRoot, TELEGRAM_RUNTIME_API);
-        await expect(pathExists(telegramRuntimeApiPath)).resolves.toBe(true);
-        await fs.rm(telegramRuntimeApiPath);
-      },
-    });
-
-    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("global-install-failed");
-    expect(result.steps.at(-1)?.stderrTail).toContain(
-      `missing packaged dist file ${TELEGRAM_RUNTIME_API}`,
-    );
-  });
-
-  it("prepends portable Git PATH for global Windows npm updates", async () => {
-    const localAppData = path.join(tempDir, "local-app-data");
-    const portableGitMingw = path.join(
-      localAppData,
-      "OpenClaw",
-      "deps",
-      "portable-git",
-      "mingw64",
-      "bin",
-    );
-    const portableGitUsr = path.join(
-      localAppData,
-      "OpenClaw",
-      "deps",
-      "portable-git",
-      "usr",
-      "bin",
-    );
-    await fs.mkdir(portableGitMingw, { recursive: true });
-    await fs.mkdir(portableGitUsr, { recursive: true });
-
-    let installEnv: NodeJS.ProcessEnv | undefined;
-    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const { runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-      onInstall: async (options) => {
-        installEnv = options?.env;
-        await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
-      },
-    });
-
-    await withMockedWindowsPlatform(async () => {
-      await withEnvAsync({ LOCALAPPDATA: localAppData }, async () => {
-        const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-        expect(result.status).toBe("ok");
-      });
-    });
-
-    const mergedPath = installEnv?.Path ?? installEnv?.PATH ?? "";
-    expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
-      portableGitMingw,
-      portableGitUsr,
-    ]);
-    expect(installEnv?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
-  });
-
-  it("reports staged npm swap failures as global install failures", async () => {
-    const prefix = path.join(tempDir, "npm-prefix");
-    const nodeModules = path.join(prefix, "lib", "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-    await fs.writeFile(path.join(prefix, "bin"), "not a directory", "utf-8");
-
-    const { runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-      onInstall: async (options) => {
-        await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
-        if (options?.installPrefix) {
-          const binDir = path.join(options.installPrefix, "bin");
-          await fs.mkdir(binDir, { recursive: true });
-          await fs.writeFile(path.join(binDir, "openclaw"), "#!/bin/sh\n", "utf-8");
-        }
-      },
-    });
-
-    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("global-install-failed");
-    expect(result.root).toBe(pkgRoot);
-    expect(result.after?.version).toBe("1.0.0");
-    expect(result.steps.at(-1)?.name).toBe("global install swap");
-    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
-      '"version":"1.0.0"',
-    );
-  });
-
-  it("uses clean staged npm swaps for pnpm installs that resolve to an npm global root", async () => {
-    const prefix = path.join(tempDir, "npm-prefix");
-    const nodeModules = path.join(prefix, "lib", "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    const staleInstallChunk = path.join(pkgRoot, "dist", "install-C_GuuNz6.js");
-    await seedGlobalPackageRoot(pkgRoot);
-    await fs.writeFile(
-      staleInstallChunk,
-      'const pluginRuntime = () => import("./install.runtime-Xom5hOHq.js");\n',
-      "utf-8",
-    );
-
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      pnpmRootOutput: nodeModules,
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-      onInstall: async (options) => {
-        await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
-      },
-    });
-
-    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-    expect(result.status).toBe("ok");
-    expect(result.mode).toBe("pnpm");
-    expect(result.after?.version).toBe("2.0.0");
-    const npmPrefixedGlobalInstallCalls = calls.filter((call) =>
-      call.startsWith("npm i -g --allow-scripts=openclaw --prefix "),
-    );
-    const pnpmAddGlobalCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
-    expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
-    expect(pnpmAddGlobalCalls).toStrictEqual([]);
-    expect(result.steps.map((step) => step.name)).toEqual([
-      "global update",
-      "global install swap",
-      "openclaw doctor",
-    ]);
-    await expect(fs.access(staleInstallChunk)).rejects.toHaveProperty("code", "ENOENT");
-  });
-
-  it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {
-    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const expectedInstallCommand = npmGlobalInstallCommand(
-      "http://10.211.55.2:8138/openclaw-next.tgz",
-    );
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: expectedInstallCommand,
-      onInstall: async () => writeGlobalPackageVersion(pkgRoot),
-    });
-
-    await withEnvAsync(
-      { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
-      async () => {
-        const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-        expect(result.status).toBe("ok");
-      },
-    );
-
-    expect(calls).toContain(expectedInstallCommand);
-  });
-
-  it.each(["present", "missing", "conflicting"] as const)(
-    "updates global bun installs with %s BUN_INSTALL ownership context",
-    async (ownerEnv) => {
-      const bunInstall = path.join(tempDir, "bun-install");
-      const unrelatedBunInstall = path.join(tempDir, "unrelated-bun");
-      const unrelatedGlobalProject = path.join(tempDir, "unrelated-global");
-      const owningBin = path.join(tempDir, "custom-bun-bin");
-      await withEnvAsync(
-        {
-          BUN_INSTALL:
-            ownerEnv === "present"
-              ? bunInstall
-              : ownerEnv === "conflicting"
-                ? unrelatedBunInstall
-                : undefined,
-          BUN_INSTALL_GLOBAL_DIR: ownerEnv === "conflicting" ? unrelatedGlobalProject : undefined,
-          BUN_INSTALL_BIN: owningBin,
-        },
-        async () => {
-          const { pkgRoot } = await createGlobalPackageFixture(
-            path.join(bunInstall, "install", "global"),
-          );
-
-          const { calls, runCommand } = createGlobalInstallHarness({
-            pkgRoot,
-            npmRootOutput: path.join(tempDir, "shell", "lib", "node_modules"),
-            installCommand: "bun add -g --trust openclaw@latest",
-            onInstall: async (options) => {
-              expect(options?.env).toMatchObject({
-                BUN_INSTALL: bunInstall,
-                BUN_INSTALL_GLOBAL_DIR: path.join(bunInstall, "install", "global"),
-                BUN_INSTALL_BIN: owningBin,
-              });
-              await writeGlobalPackageVersion(pkgRoot);
-            },
-          });
-
-          const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-          expect(result.status).toBe("ok");
-          expect(result.mode).toBe("bun");
-          expect(result.before?.version).toBe("1.0.0");
-          expect(result.after?.version).toBe("2.0.0");
-          expect(calls).toContain("bun add -g --trust openclaw@latest");
-        },
-      );
-    },
-  );
 
   it("rejects git roots that are not a openclaw checkout", async () => {
     await fs.mkdir(path.join(tempDir, ".git"));

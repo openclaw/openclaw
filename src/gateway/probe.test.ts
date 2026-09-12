@@ -200,7 +200,7 @@ vi.mock("../infra/device-auth-store.js", () => ({
   },
 }));
 
-vi.mock("./event-loop-ready.js", () => ({
+vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
   waitForEventLoopReady: vi.fn((params?: { maxWaitMs?: number }) => {
     eventLoopReadyState.calls.push(params);
     return Promise.resolve(eventLoopReadyState.result);

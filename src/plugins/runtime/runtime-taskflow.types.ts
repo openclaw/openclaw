@@ -73,10 +73,15 @@ export type BoundTaskFlowRuntime = {
   readonly requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   createManaged: (params: ManagedTaskFlowCreateParams) => ManagedTaskFlowRecord;
   tryCreateManaged: (params: ManagedTaskFlowCreateParams) => ManagedTaskFlowRecord | null;
+  /** @deprecated Use the same method on api.runtime.tasks.async.managedFlows. */
   get: (flowId: string) => TaskFlowRecord | undefined;
+  /** @deprecated Use the same method on api.runtime.tasks.async.managedFlows. */
   list: () => TaskFlowRecord[];
+  /** @deprecated Use the same method on api.runtime.tasks.async.managedFlows. */
   findLatest: () => TaskFlowRecord | undefined;
+  /** @deprecated Use the same method on api.runtime.tasks.async.managedFlows. */
   resolve: (token: string) => TaskFlowRecord | undefined;
+  /** @deprecated Use the same method on api.runtime.tasks.async.managedFlows. */
   getTaskSummary: (flowId: string) => TaskRegistrySummary | undefined;
   setWaiting: (params: {
     flowId: string;

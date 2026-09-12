@@ -17,12 +17,14 @@ describe("configured transcript occupancy diagnostics", () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied: true }] } });
       const gate = createDeferred();
+      const startCalled = createDeferred();
       const watch = vi.fn(async (request: TranscriptOccupancyWatchRequest) => {
         request.onOccupied();
         return { ok: true as const, value: { stop: vi.fn() } };
       });
       f.provider.watchOccupancy = watch;
       const start = vi.fn(async (request: TranscriptStartRequest) => {
+        startCalled.resolve();
         if (start.mock.calls.length === 1) {
           if (mode === "retrying") {
             return { ok: false as const, error: "temporary capture failure" };
@@ -35,7 +37,8 @@ describe("configured transcript occupancy diagnostics", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         service.start();
-        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        await startCalled.promise;
+        expect(start).toHaveBeenCalledOnce();
         await vi.waitFor(async () =>
           expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe(
             mode === "retrying" ? "retrying" : "starting",

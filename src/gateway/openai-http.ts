@@ -2,6 +2,7 @@
 // Translates OpenAI chat requests to OpenClaw agent runs and SSE/JSON responses.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -14,7 +15,6 @@ import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
@@ -43,6 +43,7 @@ import {
   resolveAssistantResultText,
   resolveAssistantTextCompletion,
   resolveAssistantTextInput,
+  resolveAssistantTextStreamDelta,
   type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import {
@@ -308,7 +309,7 @@ function writeAssistantContentChunk(
 
 function writeAssistantFinishChunk(
   res: ServerResponse,
-  params: ChatCompletionStreamIdentity & { finishReason: "stop" | "tool_calls" },
+  params: ChatCompletionStreamIdentity & { finishReason: "stop" | "length" | "tool_calls" },
 ) {
   writeChatCompletionChunk(res, params, {
     choices: [
@@ -1099,7 +1100,7 @@ export async function handleOpenAiHttpRequest(
           {
             index: 0,
             message: { role: "assistant", content },
-            finish_reason: "stop",
+            finish_reason: stopReason === "length" ? "length" : "stop",
           },
         ],
         usage,
@@ -1128,10 +1129,11 @@ export async function handleOpenAiHttpRequest(
   setSseHeaders(res);
 
   let wroteStopChunk = false;
-  let streamedAssistantText = "";
   let assistantText: AssistantTextSnapshot = { text: "" };
+  let streamedAssistantText = assistantText;
   let pendingAssistantText: AssistantTextSnapshot | undefined;
   let finalResultText: string | undefined;
+  let finalFinishReason: "stop" | "length" = "stop";
   let finalToolCalls: ReturnType<typeof resolveStopReasonAndPendingToolCalls>["pendingToolCalls"];
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
@@ -1167,21 +1169,20 @@ export async function handleOpenAiHttpRequest(
         assistantText,
         pending: pendingAssistantText,
         resultText: finalResultText,
-        streamedText: streamedAssistantText,
+        streamedText: streamedAssistantText.text,
         fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
       });
-      if (!text.startsWith(streamedAssistantText)) {
+      if (!text.startsWith(streamedAssistantText.text)) {
         finishStreamWithError({
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         });
         return;
       }
-      const content = text.slice(streamedAssistantText.length);
+      const content = text.slice(streamedAssistantText.text.length);
       if (content) {
         writeAssistantContentChunk(res, { ...streamIdentity, content });
       }
-      streamedAssistantText = text;
       if (finalToolCalls) {
         writeAssistantToolCallsIncrementalChunks(res, {
           ...streamIdentity,
@@ -1193,7 +1194,7 @@ export async function handleOpenAiHttpRequest(
       if (!wroteStopChunk) {
         writeAssistantFinishChunk(res, {
           ...streamIdentity,
-          finishReason: finalToolCalls ? "tool_calls" : "stop",
+          finishReason: finalToolCalls ? "tool_calls" : finalFinishReason,
         });
         wroteStopChunk = true;
       }
@@ -1233,24 +1234,26 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      assistantText = mergeAssistantText(assistantText, input, "append-only");
+      const previous = assistantText;
+      const merged = mergeAssistantText(previous, input, "append-only");
+      assistantText = merged;
       // Hold prose until the run proves the requested client-tool call exists.
       if (toolChoiceConstraint) {
         return;
       }
       // SSE cannot retract bytes already delivered, even for an item correction.
-      if (!assistantText.text.startsWith(streamedAssistantText)) {
+      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
+      if (content === undefined) {
         terminalStreamError ??= {
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         };
         return;
       }
-      const content = assistantText.text.slice(streamedAssistantText.length);
+      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }
-      streamedAssistantText = assistantText.text;
       writeAssistantContentChunk(res, { ...streamIdentity, content });
       return;
     }
@@ -1351,6 +1354,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       finalResultText = resolveAssistantResultText(result);
+      finalFinishReason = stopReason === "length" ? "length" : "stop";
       finalToolCalls =
         stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       requestFinalize();

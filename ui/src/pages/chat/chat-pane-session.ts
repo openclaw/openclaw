@@ -15,6 +15,7 @@ import {
   summarizeSessionPullRequests,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
+  sessionGitHubRepository,
 } from "../../lib/session-pull-requests.ts";
 import {
   lookupCatalogSession,
@@ -39,6 +40,7 @@ import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
+import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
@@ -63,6 +65,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubRepo = null;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return false;
@@ -72,6 +75,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubRepo = null;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return false;
@@ -95,16 +99,20 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubRepo = null;
       this.sessionPullRequestsRateLimited = false;
       this.dismissedSessionPullRequestIds = new Set();
       this.requestUpdate();
       return refreshAdmitted;
     }
-    if (result.status === "unavailable") {
-      return refreshAdmitted;
-    }
+    const repository = sessionGitHubRepository(result);
+    const repositoryChanged =
+      this.githubRepo != null &&
+      repository !== null &&
+      (this.githubRepo.owner !== repository.owner || this.githubRepo.repo !== repository.repo);
+    this.githubRepo = repository;
     this.sessionPullRequests = result.pullRequests;
-    if (!result.rateLimited || result.pullRequests.length > 0) {
+    if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
@@ -143,6 +151,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
+    this.githubRepo = null;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
     this.githubPublication?.detach();
@@ -198,8 +207,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.pendingDeferredSessionHydration = null;
       // These affordances do not shape the transcript. Start them together only
-      // after the authoritative history has committed so they cannot delay chat paint.
-      state.renderLifecycle.afterCommit((complete) => {
+      // after the transcript paints; a DOM commit still runs before the browser can paint.
+      scheduleControlUiAfterPaint(state, () => {
         if (isCurrent() && this.presented) {
           this.deferredSessionHydrationActive = false;
           if (historyCommitted) {
@@ -214,7 +223,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         } else {
           retireIfCurrent();
         }
-        complete();
       });
     };
     void transcriptLoad.then(scheduleHydration, () => scheduleHydration(false));
@@ -257,6 +265,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     // not an operation failure and should not latch the unread retry guard.
     if (
       !access.allowed ||
+      this.sessionParticipationTracker.resolve({
+        catalog: parseCatalogSessionKey(state.sessionKey) !== null,
+        listLoading: state.sessionsLoading,
+        sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
+        session: row,
+      }) ||
       !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
     ) {
       return;

@@ -16,6 +16,7 @@ import {
   getMaybeRepairPluginOpenClawHostLinksMock,
   makePreflightConfigSnapshot,
   makeStartupConvergenceResult,
+  makeQuarantinedPluginRepairConvergence,
   makeStateMigrationResult,
   queueConfigSnapshot,
   stateCheckpointOptions,
@@ -398,7 +399,6 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(readMigrationCheckpointStatus).not.toHaveBeenCalled();
     expect(acquireStartupMigrationLeaseWithWait).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
   it("releases the startup lease when the fresh config guard rejects", async () => {
@@ -701,7 +701,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      "plugin migration inputs changed during startup convergence",
+      "migration inputs changed during startup",
     );
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
@@ -719,7 +719,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     );
 
     await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      "plugin migration inputs changed during startup convergence",
+      "migration inputs changed during startup",
     );
 
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
@@ -818,14 +818,10 @@ describe("runDoctorConfigPreflight state migration", () => {
 
   it("keeps ownerless install-record failures blocking", async () => {
     readMigrationCheckpointStatus.mockReturnValue("stale");
-    queueConfigSnapshot(
-      readConfigFileSnapshot,
-      makePreflightConfigSnapshot({
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      }),
-      3,
-    );
+    const snapshot = makePreflightConfigSnapshot({
+      gateway: { mode: "local", port: 19091 },
+      plugins: { entries: { discord: { enabled: true } } },
+    });
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
         errored: true,
@@ -847,8 +843,12 @@ describe("runDoctorConfigPreflight state migration", () => {
       }),
     );
 
-    await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      'Plugin "discord" has no install path.',
+    await readConfigFileSnapshot.withImplementation(
+      async () => snapshot,
+      () =>
+        expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
+          'Plugin "discord" has no install path.',
+        ),
     );
 
     expect(listActiveDegradedPlugins()).toEqual([]);
@@ -890,9 +890,8 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyPluginDoctorState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
-    expect(beforeStateMigrations).toHaveBeenNthCalledWith(1);
     expect(beforeStateMigrations).toHaveBeenNthCalledWith(
-      2,
+      1,
       expect.objectContaining({ valid: true }),
     );
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
@@ -996,74 +995,53 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("blocks gateway readiness when plugin repair warnings remain", async () => {
-    readMigrationCheckpointStatus.mockReturnValue("stale");
-    runPostCorePluginConvergence.mockResolvedValueOnce(
-      makeStartupConvergenceResult({
-        warnings: [
-          {
-            reason: "Configured plugin discord is not installed.",
-            message: "Configured plugin discord is not installed.",
-            guidance: ["Run `openclaw update repair` to retry plugin repair."],
-          },
-        ],
-      }),
-    );
-
-    await expect(
-      runDoctorConfigPreflight({
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStartupMigrationCheckpoint: true,
-      }),
-    ).rejects.toThrow("Configured plugin discord is not installed");
-
-    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(
-      "- Configured plugin discord is not installed. Run `openclaw update repair` to retry plugin repair.",
-      "Doctor warnings",
-    );
-    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
-  });
-
-  it("quarantines a plugin payload verification failure and checkpoints readiness", async () => {
-    readMigrationCheckpointStatus.mockReturnValue("stale");
-    queueConfigSnapshot(
-      readConfigFileSnapshot,
-      makePreflightConfigSnapshot({
+  it.each([undefined, "discord"])(
+    "blocks a repair warning outside quarantine (plugin=%s)",
+    async (pluginId) => {
+      readMigrationCheckpointStatus.mockReturnValue("stale");
+      const snapshot = makePreflightConfigSnapshot({
         gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      }),
-      5,
-    );
+        plugins: { entries: { slack: { enabled: true } } },
+      });
+      runPostCorePluginConvergence.mockResolvedValueOnce(
+        makeQuarantinedPluginRepairConvergence("slack", pluginId),
+      );
+
+      await expect(
+        readConfigFileSnapshot.withImplementation(
+          async () => snapshot,
+          () => runDoctorConfigPreflight(startupCheckpointOptions),
+        ),
+      ).rejects.toThrow("npm package not found");
+
+      expect(listActiveDegradedPlugins()).toEqual([
+        expect.objectContaining({ pluginId: "slack", state: "configured-unavailable" }),
+      ]);
+      expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+      expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
+      expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("npm package not found"),
+        "Doctor warnings",
+      );
+      expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps an unavailable repair nonblocking for its quarantined plugin", async () => {
+    readMigrationCheckpointStatus.mockReturnValue("stale");
+    const snapshot = makePreflightConfigSnapshot({
+      gateway: { mode: "local", port: 19091 },
+      plugins: { entries: { discord: { enabled: true } } },
+    });
     runPostCorePluginConvergence.mockResolvedValueOnce(
-      makeStartupConvergenceResult({
-        errored: true,
-        warnings: [
-          {
-            pluginId: "discord",
-            reason: "missing-main-entry: index.js",
-            message: 'Plugin "discord" failed post-core payload smoke check (missing): index.js',
-            guidance: [
-              "Run `openclaw update repair` to retry plugin repair.",
-              "Run `openclaw plugins inspect discord --runtime --json` for details.",
-            ],
-          },
-        ],
-        smokeFailures: [
-          {
-            pluginId: "discord",
-            installPath: "/plugins/discord",
-            reason: "missing-main-entry",
-            detail: "index.js",
-          },
-        ],
-      }),
+      makeQuarantinedPluginRepairConvergence("discord", "discord"),
     );
 
-    await runDoctorConfigPreflight(startupCheckpointOptions);
+    await readConfigFileSnapshot.withImplementation(
+      async () => snapshot,
+      () => runDoctorConfigPreflight(startupCheckpointOptions),
+    );
 
     expect(listActiveDegradedPlugins()).toEqual([
       {
@@ -1071,40 +1049,50 @@ describe("runDoctorConfigPreflight state migration", () => {
         state: "configured-unavailable",
         diagnostic: {
           kind: "plugin-verification",
-          reason: "missing-main-entry",
-          detail: "index.js",
+          reason: "missing-package-json",
+          detail: "package.json is missing",
           installPath: "/plugins/discord",
         },
       },
     ]);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
-        '- Plugin "discord" failed post-core payload smoke check (missing): index.js',
+        '- Plugin "discord" failed post-core payload smoke check (missing): package.json is missing',
       ),
       "Doctor warnings",
     );
     expect(note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toHaveLength(1);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to update discord: npm package not found."),
+      "Doctor warnings",
+    );
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("does not checkpoint startup migrations when the config snapshot is invalid", async () => {
+  it("refuses invalid config before acquiring the startup lease or running migrations", async () => {
     readMigrationCheckpointStatus.mockReturnValue("stale");
-    queueConfigSnapshot(
-      readConfigFileSnapshot,
-      {
-        ...makePreflightConfigSnapshot({ gateway: { mode: "local", port: "bad" } }),
-        valid: false,
-        issues: [{ path: "gateway.port", message: "invalid" }],
-      },
-      3,
+    const snapshot = {
+      ...makePreflightConfigSnapshot({ gateway: { mode: "local", port: "bad" } }),
+      valid: false,
+      issues: [{ path: "gateway.port", message: "invalid" }],
+    };
+    await readConfigFileSnapshot.withImplementation(
+      async () => snapshot,
+      () =>
+        expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
+          "OpenClaw config is invalid",
+        ),
     );
 
-    await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      "OpenClaw config is invalid",
-    );
-
+    expect(acquireStartupMigrationLeaseWithWait).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
+    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyPluginDoctorState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
+    expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+    expect(startupMigrationLeaseRelease).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,10 @@
  */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as agentScope from "../agents/agent-scope.js";
 import * as sessionsConfig from "../config/sessions.js";
+import { canPrewarmCombinedSessionStoresForGateway } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -78,6 +81,38 @@ test("sessions.list reuses prepared store targets for sharing", async () => {
   } finally {
     discoverySpy.mockRestore();
   }
+});
+
+test("sessions.list keeps roster enumeration bounded as ordinary rows grow", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const rosterReads: number[] = [];
+  for (const rows of [20, 200]) {
+    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
+      main: sessionStoreEntry("sess-main", { updatedAt: 1_781_000_000_001 }),
+    };
+    for (let index = 0; index < rows; index++) {
+      entries[`agent:main:ordinary-${index}`] = sessionStoreEntry(`ordinary-${index}`, {
+        updatedAt: 1_781_000_000_000 - index,
+      });
+    }
+    await writeSessionStore({ entries });
+    expect((await directSessionReq("sessions.list", LIST_PARAMS)).ok).toBe(true);
+    const roster = vi.spyOn(agentScope, "listAgentIds");
+    try {
+      const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
+      expect(result.ok).toBe(true);
+      expect(result.payload?.totalCount).toBe(rows + 1);
+      expect(result.payload?.sessions.map(({ key }) => key)).toEqual([
+        "agent:main:main",
+        ...Array.from({ length: Math.min(rows, 99) }, (_, index) => `agent:main:ordinary-${index}`),
+      ]);
+      rosterReads.push(roster.mock.calls.length);
+    } finally {
+      roster.mockRestore();
+    }
+  }
+  expect(rosterReads[1]).toBeLessThanOrEqual(rosterReads[0]!);
 });
 
 test("sessions.list keeps cold and warm transcript title batches valid beyond the database handle cap", async () => {
@@ -165,7 +200,7 @@ test("startup prewarm reuses requested durable targets when no incognito store i
   const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
   try {
     expect(
-      sessionsConfig.canPrewarmCombinedSessionStoresForGateway(
+      canPrewarmCombinedSessionStoresForGateway(
         {
           agents: { list: [{ id: "main", default: true }] },
           session: { store: storeTemplate },
@@ -207,10 +242,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
       agents: { list: [{ id: "main", default: true }] },
       session: { store: storePath },
     } as never;
-    let resolveSessionPrewarm!: () => void;
-    const sessionPrewarm = new Promise<void>((resolve) => {
-      resolveSessionPrewarm = resolve;
-    });
+    const { promise: sessionPrewarm, resolve: resolveSessionPrewarm } = createDeferred();
     sidecar = scheduleGatewayHandlerPrewarm({
       cfgAtStart: cfg,
       log: { warn: vi.fn() },
@@ -282,10 +314,7 @@ test("startup skips a large session prewarm while request-time listing remains a
   let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
   try {
-    let resolveSessionPrewarm!: () => void;
-    const sessionPrewarm = new Promise<void>((resolve) => {
-      resolveSessionPrewarm = resolve;
-    });
+    const { promise: sessionPrewarm, resolve: resolveSessionPrewarm } = createDeferred();
     sidecar = scheduleGatewayHandlerPrewarm({
       cfgAtStart: {
         agents: { list: [{ id: "main", default: true }] },

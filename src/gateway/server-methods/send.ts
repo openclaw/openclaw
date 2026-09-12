@@ -83,7 +83,6 @@ import {
   resolveSandboxedSessionCreation,
 } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -703,9 +702,7 @@ async function resolveRequestedChannel(params: {
     };
   }
   const sourceCfg = params.context.getRuntimeConfig();
-  const cfg = resolveGatewayPluginConfig({
-    config: sourceCfg,
-  });
+  const cfg = sourceCfg;
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -793,7 +790,7 @@ function resolveMessageActionRuntimeConfig(params: {
   });
   // Message actions must use the hot runtime snapshot when it matches the caller's source config.
   if (selected === runtimeConfig && selected !== params.cfg) {
-    return resolveGatewayPluginConfig({ config: selected });
+    return selected;
   }
   return params.cfg;
 }
@@ -950,6 +947,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       requestedOrigin: request.conversationReadOrigin,
     });
     const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const assertDirectAdapterHandoff = agentRuntimeAuthority.commitGuard;
+    const onPlatformSendDispatch = assertDirectAdapterHandoff
+      ? async () => assertDirectAdapterHandoff()
+      : undefined;
     await withMessageOperationRoute({
       context,
       prefix: "message.action",
@@ -1150,6 +1151,14 @@ export const sendHandlers: GatewayRequestHandlers = {
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
+            ...(request.action === "send"
+              ? {
+                  onPlatformSendDispatch,
+                  assertDirectAdapterHandoff,
+                  // Recovery cannot retain a live run's closure-bound send authority.
+                  skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
+                }
+              : {}),
           };
           let payload: unknown;
           if (canonicalAction) {
@@ -1165,8 +1174,6 @@ export const sendHandlers: GatewayRequestHandlers = {
                     actionOrigin: trustedContext.runtimeAgentId
                       ? ("message-tool" as const)
                       : undefined,
-                    skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
-                    onPlatformSendDispatch: async () => agentRuntimeAuthority.commitGuard?.(),
                   }
                 : {}),
               params: {
@@ -1504,6 +1511,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             // Runtime-bound sends cannot outlive their operational run. Keep
             // recovery from replaying them after the live authority closes.
             onPlatformSendDispatch,
+            assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
             skipQueue: hasAgentRuntimeAuthority,
             mirror: outboundSessionKey
               ? {

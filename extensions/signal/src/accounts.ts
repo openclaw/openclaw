@@ -3,12 +3,12 @@ import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-  resolveAccountEntry,
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import type { SignalAccountConfig, SignalTransportConfig } from "./account-types.js";
 import {
   allocateSignalManagedNativePort,
@@ -74,6 +74,7 @@ export function resolveSignalAccountConfig(
       | Record<string, Partial<SignalAccountConfig>>
       | undefined,
     accountId,
+    channelId: "signal",
     nestedObjectKeys: ["aliases"],
   });
   if (accountId === DEFAULT_ACCOUNT_ID && channelConfig?.transport) {
@@ -288,7 +289,7 @@ export function resolveSignalReplyToMode(params: {
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
   const signalConfig = params.cfg.channels?.signal;
-  const accountConfig = resolveAccountEntry(
+  const accountConfig = resolveSignalAccountEntry(
     signalConfig?.accounts as Record<string, SignalAccountConfig> | undefined,
     accountId,
   );

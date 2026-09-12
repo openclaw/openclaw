@@ -13,11 +13,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import {
-  createHeartbeatToolResponsePayload,
-  resolveHeartbeatScratchProposalFromReplyResult,
-  resolveHeartbeatToolResponseFromReplyResult,
-} from "../heartbeat-tool-response.js";
+import { selectHeartbeatToolResponse } from "../heartbeat-tool-response.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -25,8 +21,9 @@ import {
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
-import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
@@ -56,9 +53,8 @@ type ReplyRouteDedupeCase = {
 
 type DirectBlockDedupeCase = {
   name: string;
-  keyPayloads: Array<Parameters<typeof createBlockReplyContentKey>[0]>;
   payloads: TestReplyPayloadParams["payloads"];
-  directlySentBlockPayloads?: TestReplyPayloadParams["directlySentBlockPayloads"];
+  directBlockPayloads: ReplyPayload[];
   params?: Partial<TestReplyPayloadParams>;
   expected?: Record<string, unknown>;
 };
@@ -69,25 +65,54 @@ function buildTestReplyPayloads(overrides: TestReplyPayloadParams) {
 
 describe("heartbeat reply scratch", () => {
   it.each([
-    { proposals: ["private replacement"], expected: "private replacement" },
-    { proposals: ["old proposal", "new proposal"], expected: "new proposal" },
-    { proposals: ["old proposal", undefined], expected: undefined },
+    { notify: false, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
+    { notify: true, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
+    { notify: false, proposals: [""] },
+    { notify: true, proposals: [""] },
+    { notify: false, proposals: ["old proposal", "new proposal"] },
+    { notify: false, proposals: ["old proposal", undefined] },
   ])(
-    "preserves the latest decision through final reply construction: $proposals",
-    async ({ proposals, expected }) => {
-      const response = { outcome: "done" as const, notify: false, summary: "Monitor checked." };
-      const { replyPayloads } = await buildTestReplyPayloads({
-        isHeartbeat: true,
-        payloads: proposals.map((scratch) =>
-          createHeartbeatToolResponsePayload({ ...response, scratch }),
-        ),
-      });
+    "preserves the latest private decision through embedded and final payloads: %j",
+    async ({ notify, proposals }) => {
+      const responses = proposals.map((scratch, index) => ({
+        outcome: "done" as const,
+        notify,
+        summary: `Monitor checked ${index + 1}.`,
+        ...(scratch !== undefined ? { scratch } : {}),
+      }));
+      const payloads = responses.flatMap((heartbeatToolResponse) =>
+        buildEmbeddedRunPayloads({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          sessionKey: "agent:main:main",
+          isHeartbeatTrigger: true,
+          heartbeatToolResponse,
+        }),
+      );
+      const expected = proposals.at(-1);
+      const embedded = expectDefined(
+        selectHeartbeatToolResponse(payloads),
+        "expected the embedded heartbeat response",
+      );
+      expect(getReplyPayloadMetadata(embedded.payload)?.heartbeatScratchProposal).toBe(expected);
+      const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
 
-      expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBe(expected);
-      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual(response);
+      expect(replyPayloads).toHaveLength(proposals.length);
+      const selected = expectDefined(
+        selectHeartbeatToolResponse(replyPayloads),
+        "expected the final heartbeat response",
+      );
+      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(expected);
+      expect(selected.response).toEqual({
+        outcome: "done",
+        notify,
+        summary: `Monitor checked ${proposals.length}.`,
+      });
+      const serialized = JSON.stringify(replyPayloads);
+      expect(serialized).not.toContain('"scratch"');
       for (const scratch of proposals) {
-        if (scratch !== undefined) {
-          expect(JSON.stringify(replyPayloads)).not.toContain(scratch);
+        if (scratch) {
+          expect(serialized).not.toContain(JSON.stringify(scratch));
         }
       }
     },
@@ -941,6 +966,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => ["file:///tmp/voice.ogg"],
     };
 
@@ -979,6 +1005,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => ["file:///tmp/outbound/voice.ogg"],
     };
 
@@ -1001,6 +1028,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     // The pipeline streamed some partial content, but the final text payload was
@@ -1028,6 +1056,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     // The final text-only payload matches what the pipeline already sent,
@@ -1052,6 +1081,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -1074,6 +1104,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     const presentation = {
@@ -1103,6 +1134,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -1128,6 +1160,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => ["/tmp/generated.png"],
     };
 
@@ -1174,6 +1207,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasRetryBlockedDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -1357,22 +1391,32 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it.each<DirectBlockDedupeCase>([
+    ...[false, true].map((blockStreamingEnabled) => ({
+      name: `drops a final caption already sent with direct media (streaming: ${blockStreamingEnabled})`,
+      directBlockPayloads: [
+        setReplyPayloadMetadata(
+          { text: "response", mediaUrl: "/tmp/fetched.png" },
+          { assistantMessageIndex: 1 },
+        ),
+      ],
+      payloads: [setReplyPayloadMetadata({ text: "response" }, { assistantMessageIndex: 1 })],
+      params: { blockStreamingEnabled },
+    })),
     {
-      name: "deduplicates final payloads against directly sent block keys regardless of replyToId",
-      keyPayloads: [{ text: "response", replyToId: "post-1" }],
-      payloads: [{ text: "response" }],
-      params: { blockStreamingEnabled: false, blockReplyPipeline: null, replyToMode: "off" },
+      name: "preserves the same caption from a different assistant message",
+      directBlockPayloads: [
+        setReplyPayloadMetadata(
+          { text: "response", mediaUrl: "/tmp/fetched.png" },
+          { assistantMessageIndex: 1 },
+        ),
+      ],
+      payloads: [setReplyPayloadMetadata({ text: "response" }, { assistantMessageIndex: 2 })],
+      expected: { text: "response" },
     },
-    {
-      name: "deduplicates final payloads against directly sent block keys when streaming is enabled without a pipeline",
-      keyPayloads: [{ text: "response", replyToId: "post-1" }],
-      payloads: [{ text: "response" }],
-      params: { blockStreamingEnabled: true, blockReplyPipeline: null, replyToMode: "off" },
-    },
+
     {
       name: "keeps only final media when the text was sent as a direct block",
-      keyPayloads: [{ text: "response" }],
-      directlySentBlockPayloads: [{ text: "response" }],
+      directBlockPayloads: [{ text: "response" }],
       payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
       expected: {
         text: undefined,
@@ -1382,8 +1426,7 @@ describe("buildReplyPayloads media filter integration", () => {
     },
     {
       name: "keeps only final media after a direct block without a streaming pipeline",
-      keyPayloads: [{ text: "response" }],
-      directlySentBlockPayloads: [{ text: "response" }],
+      directBlockPayloads: [{ text: "response" }],
       payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
       expected: {
@@ -1392,17 +1435,10 @@ describe("buildReplyPayloads media filter integration", () => {
         mediaUrls: ["/tmp/generated.png"],
       },
     },
-    {
-      name: "keeps unmatched text finals when unrelated direct blocks were sent",
-      keyPayloads: [{ mediaUrl: "/tmp/other.png" }],
-      payloads: [{ text: "new final response" }],
-      params: { blockStreamingEnabled: true },
-      expected: { text: "new final response" },
-    },
+
     {
       name: "keeps only final media after multiple direct text blocks",
-      keyPayloads: [{ text: "Preview" }, { text: " below" }],
-      directlySentBlockPayloads: [{ text: "Preview" }, { text: " below" }],
+      directBlockPayloads: [{ text: "Preview" }, { text: " below" }],
       payloads: [{ text: "Preview below\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
       expected: {
@@ -1413,8 +1449,7 @@ describe("buildReplyPayloads media filter integration", () => {
     },
     {
       name: "keeps only final media after repeated identical direct text blocks",
-      keyPayloads: [{ text: "ha" }],
-      directlySentBlockPayloads: [{ text: "ha" }, { text: "ha" }],
+      directBlockPayloads: [{ text: "ha" }, { text: "ha" }],
       payloads: [{ text: "haha\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
       expected: {
@@ -1425,24 +1460,24 @@ describe("buildReplyPayloads media filter integration", () => {
     },
     {
       name: "keeps only media not already sent with a direct block",
-      keyPayloads: [{ text: "response", mediaUrl: "/tmp/already.png" }],
-      directlySentBlockPayloads: [{ text: "response", mediaUrl: "/tmp/already.png" }],
+      directBlockPayloads: [{ text: "response", mediaUrl: "/tmp/already.png" }],
       payloads: [{ text: "response", mediaUrls: ["/tmp/already.png", "/tmp/new.png"] }],
       params: { blockStreamingEnabled: true },
       expected: { text: undefined, mediaUrl: undefined, mediaUrls: ["/tmp/new.png"] },
     },
     {
       name: "ignores direct status notices when matching final text",
-      keyPayloads: [{ text: "Compacting", isStatusNotice: true }, { text: "response" }],
-      directlySentBlockPayloads: [{ text: "response" }],
+      directBlockPayloads: [{ text: "Compacting", isStatusNotice: true }, { text: "response" }],
       payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
       params: { blockStreamingEnabled: true },
       expected: { text: undefined, mediaUrls: ["/tmp/generated.png"] },
     },
-  ])("$name", async ({ keyPayloads, payloads, directlySentBlockPayloads, params, expected }) => {
+  ])("$name", async ({ payloads, directBlockPayloads, params, expected }) => {
     const { replyPayloads } = await buildTestReplyPayloads({
-      directlySentBlockKeys: new Set(keyPayloads.map(createBlockReplyContentKey)),
-      ...(directlySentBlockPayloads ? { directlySentBlockPayloads } : {}),
+      directBlockDeliveries: directBlockPayloads.map((payload): DirectBlockDelivery => ({
+        payload,
+        outcome: "delivered",
+      })),
       payloads,
       ...params,
     });
@@ -1454,8 +1489,11 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("preserves final text when internal whitespace changed", async () => {
-    const directlySentBlockPayloads = [
-      setReplyPayloadMetadata({ text: "constx=1" }, { assistantMessageIndex: 1 }),
+    const directBlockDeliveries: DirectBlockDelivery[] = [
+      {
+        payload: setReplyPayloadMetadata({ text: "constx=1" }, { assistantMessageIndex: 1 }),
+        outcome: "delivered",
+      },
     ];
     const finalPayload = setReplyPayloadMetadata(
       { text: "const x = 1\n\nMEDIA:/tmp/generated.png" },
@@ -1464,7 +1502,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     const { replyPayloads } = await buildTestReplyPayloads({
       blockStreamingEnabled: true,
-      directlySentBlockPayloads,
+      directBlockDeliveries,
       payloads: [finalPayload],
     });
 
@@ -1488,7 +1526,10 @@ describe("buildReplyPayloads media filter integration", () => {
 
     const { replyPayloads } = await buildTestReplyPayloads({
       blockStreamingEnabled: true,
-      directlySentBlockPayloads: [firstDirect, secondDirect],
+      directBlockDeliveries: [
+        { payload: firstDirect, outcome: "delivered" },
+        { payload: secondDirect, outcome: "delivered" },
+      ],
       payloads: [firstFinal, secondFinal],
     });
 

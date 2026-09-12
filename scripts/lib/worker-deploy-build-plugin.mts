@@ -23,7 +23,8 @@ export function getPlaywrightUserAgent() { return getUserAgent(); }`;
 const UNDICI_REQUIRE_BOOTSTRAP = [
   'import { createRequire } from "node:module";',
   "const requireUndici = createRequire(import.meta.url);\n",
-  'return requireUndici("undici/index.js") as typeof import("undici");',
+  'let undiciModule: typeof import("undici") | undefined;\n',
+  'return (undiciModule ??= requireUndici("undici/index.js") as typeof import("undici"));',
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
 const WS_REQUIRE_BOOTSTRAP = `require(
@@ -40,6 +41,14 @@ export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   ] as const;
 }
 
+/** The worker archive stages entry files only; emitted runtime auxiliaries have no owner. */
+export function isUnstagedWorkerDeployRuntimeArtifact(
+  fileName: string,
+  entrypoints: ReadonlySet<string>,
+): boolean {
+  return !entrypoints.has(fileName) && /\.(?:mjs|node|wasm)$/u.test(fileName);
+}
+
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
@@ -54,9 +63,12 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
   );
   const websocketRuntimePaths = new Set(
-    ["packages/gateway-client/src/websocket.ts", "src/gateway/server-runtime-state.ts"].map(
-      (source) => fs.realpathSync(path.resolve(source)),
-    ),
+    [
+      "packages/gateway-client/src/websocket.ts",
+      "src/gateway/desktop/node-stream-broker.ts",
+      "src/gateway/desktop/observe-bridge.ts",
+      "src/gateway/server-runtime-state.ts",
+    ].map((source) => fs.realpathSync(path.resolve(source))),
   );
   const transcriptionWebsocketPath = fs.realpathSync(
     path.resolve("src/realtime-transcription/websocket-session.ts"),
@@ -73,6 +85,22 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
 
   return {
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
+    generateBundle(
+      this: { error(message: string): never },
+      _options: unknown,
+      bundle: Record<string, { type: string; fileName: string; isEntry?: boolean }>,
+    ) {
+      const files = Object.values(bundle);
+      const entrypoints = new Set(
+        files.filter((file) => file.type === "chunk" && file.isEntry).map((file) => file.fileName),
+      );
+      // Check the complete emitted graph: a root facade is outside the later worker-directory scan.
+      for (const file of files) {
+        if (isUnstagedWorkerDeployRuntimeArtifact(file.fileName, entrypoints)) {
+          this.error(`Worker deploy artifact emits unstaged runtime asset ${file.fileName}.`);
+        }
+      }
+    },
     load(id: string) {
       return id === WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID
         ? 'throw new Error("optional host-native dependency unavailable in portable worker runtime");'
@@ -112,7 +140,8 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         return code
           .replace(UNDICI_REQUIRE_BOOTSTRAP[0], WORKER_UNDICI_IMPORT)
           .replace(UNDICI_REQUIRE_BOOTSTRAP[1], "")
-          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "return bundledUndici;");
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "")
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[3], "return bundledUndici;");
       }
       if (
         resolvedId !== coreBundlePath ||
