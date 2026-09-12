@@ -14,7 +14,7 @@ import {
 } from "../infra/push-web-preferences.js";
 import {
   deleteWebPushApprovalDeliveryTargets,
-  listBoundWebPushSubscriptions,
+  hasBoundWebPushSubscriptions,
   listTerminalWebPushApprovalDeliveryIds,
   listWebPushApprovalDeliveryTargets,
   prepareWebPushApprovalDeliveries,
@@ -357,7 +357,7 @@ export function createApprovalWebPushDelivery(params: {
   return {
     /** Sends a request notification only when at least one browser has a durable binding. */
     handleRequested<TPayload>(record: ExecApprovalRecord<TPayload>): boolean | Promise<boolean> {
-      if (listBoundWebPushSubscriptions(params.stateDir).length === 0) {
+      if (!hasBoundWebPushSubscriptions(params.stateDir)) {
         return false;
       }
       const deliveryState: ApprovalWebPushDeliveryState = {

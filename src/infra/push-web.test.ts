@@ -21,6 +21,7 @@ import {
   deleteWebPushApprovalDeliveryTargets,
   findBoundWebPushSubscriptionByEndpoint,
   hashWebPushEndpoint,
+  hasBoundWebPushSubscriptions,
   listBoundWebPushSubscriptions,
   listTerminalWebPushApprovalDeliveryIds,
   listWebPushApprovalDeliveryTargets,
@@ -302,8 +303,16 @@ describe("subscription CRUD", () => {
   });
 
   it("keeps legacy unbound rows test-only until browser reconciliation", async () => {
+    expect(hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
     await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
     expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([]);
+    expect(hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
+    });
+    db.exec("UPDATE web_push_subscriptions SET device_id = ''");
+    expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([]);
+    expect(hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
 
     const rebound = await registerWebPushSubscription({
       endpoint,
@@ -311,6 +320,7 @@ describe("subscription CRUD", () => {
       binding: { deviceId: "browser-device", userProfileId: null },
       baseDir: tmpDir,
     });
+    expect(hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
     expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([
       {
         ...rebound,

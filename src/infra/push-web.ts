@@ -11,6 +11,7 @@ import {
   deleteBoundWebPushSubscription,
   deleteWebPushSubscriptionIfCurrent,
   hashWebPushEndpoint,
+  hasBoundWebPushSubscriptions,
   insertVapidKeyPairIfAbsent,
   isValidWebPushEndpoint,
   isValidWebPushKey,
@@ -49,6 +50,7 @@ export {
   WebPushSubscriptionBindingError,
   findBoundWebPushSubscriptionByEndpoint,
   listBoundWebPushSubscriptions,
+  hasBoundWebPushSubscriptions,
   setWebPushSubscriptionPreferences,
 };
 export type { BoundWebPushSubscription } from "./push-web-store.js";

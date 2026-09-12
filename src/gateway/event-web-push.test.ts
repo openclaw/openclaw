@@ -11,6 +11,7 @@ import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 const {
   listDevicePairingMock,
   listBoundWebPushSubscriptionsMock,
+  hasBoundWebPushSubscriptionsMock,
   prepareWebPushNotificationSenderMock,
   preparedWebPushSendMock,
   resolveUserProfileIdMock,
@@ -22,6 +23,7 @@ const {
 } = vi.hoisted(() => ({
   listDevicePairingMock: vi.fn(),
   listBoundWebPushSubscriptionsMock: vi.fn(),
+  hasBoundWebPushSubscriptionsMock: vi.fn(),
   prepareWebPushNotificationSenderMock: vi.fn(),
   preparedWebPushSendMock: vi.fn(),
   resolveUserProfileIdMock: vi.fn(),
@@ -59,6 +61,7 @@ vi.mock("../infra/device-pairing-store-readonly.js", async () => {
 
 vi.mock("../infra/push-web.js", () => ({
   listBoundWebPushSubscriptions: listBoundWebPushSubscriptionsMock,
+  hasBoundWebPushSubscriptions: hasBoundWebPushSubscriptionsMock,
   prepareWebPushNotificationSender: prepareWebPushNotificationSenderMock,
 }));
 
@@ -141,6 +144,7 @@ describe("event Web Push classification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listBoundWebPushSubscriptionsMock.mockReturnValue([boundSubscription("browser-device")]);
+    hasBoundWebPushSubscriptionsMock.mockReturnValue(true);
     listDevicePairingMock.mockReturnValue({
       pending: [],
       paired: [pairedOperator("browser-device")],
@@ -415,21 +419,22 @@ describe("event Web Push classification", () => {
 
     await vi.waitFor(() => expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce();
+    expect(listBoundWebPushSubscriptionsMock).not.toHaveBeenCalled();
     listBoundWebPushSubscriptionsMock.mockReturnValue([]);
     preparation.resolve(preparedWebPushSendMock);
-    await vi.waitFor(() => expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).toHaveBeenCalledOnce();
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
   it("skips transport preparation when no subscriptions exist", async () => {
     listBoundWebPushSubscriptionsMock.mockReturnValue([]);
+    hasBoundWebPushSubscriptionsMock.mockReturnValue(false);
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
 
     delivery.handleEvent("chat", { state: "final", runId: "run-1" });
 
-    await vi.waitFor(() => expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(hasBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce());
     expect(prepareWebPushNotificationSenderMock).not.toHaveBeenCalled();
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });

@@ -253,6 +253,22 @@ export function listWebPushSubscriptions(stateDir?: string): WebPushSubscription
   ).rows.map(webPushSubscriptionFromRow);
 }
 
+export function hasBoundWebPushSubscriptions(stateDir?: string): boolean {
+  ensureWebPushSubscriptionBindingSchema(stateDir);
+  const { db } = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<WebPushDatabase>(db)
+        .selectFrom("web_push_subscriptions")
+        .select("subscription_id")
+        .where("device_id", "is not", null)
+        .where("device_id", "!=", "")
+        .limit(1),
+    ),
+  );
+}
+
 /** Lists only subscriptions reconciled by an authenticated browser device. */
 export function listBoundWebPushSubscriptions(stateDir?: string): BoundWebPushSubscription[] {
   ensureWebPushSubscriptionBindingSchema(stateDir);

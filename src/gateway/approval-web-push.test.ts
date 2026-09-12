@@ -6,6 +6,7 @@ import { createTestApprovalManager } from "./exec-approval-manager.test-support.
 
 const listDevicePairingMock = vi.fn();
 const listBoundWebPushSubscriptionsMock = vi.fn();
+const hasBoundWebPushSubscriptionsMock = vi.fn();
 const prepareWebPushNotificationSenderMock = vi.fn();
 const preparedWebPushSendMock = vi.fn();
 const prepareWebPushApprovalDeliveriesMock = vi.fn();
@@ -34,6 +35,7 @@ vi.mock("../infra/device-pairing-store-readonly.js", async () => {
 vi.mock("../infra/push-web.js", () => ({
   deleteWebPushApprovalDeliveryTargets: deleteWebPushApprovalDeliveryTargetsMock,
   listBoundWebPushSubscriptions: listBoundWebPushSubscriptionsMock,
+  hasBoundWebPushSubscriptions: hasBoundWebPushSubscriptionsMock,
   listTerminalWebPushApprovalDeliveryIds: listTerminalWebPushApprovalDeliveryIdsMock,
   listWebPushApprovalDeliveryTargets: listWebPushApprovalDeliveryTargetsMock,
   prepareWebPushApprovalDeliveries: prepareWebPushApprovalDeliveriesMock,
@@ -113,6 +115,7 @@ describe("approval Web Push delivery", () => {
     vi.useRealTimers();
     listDevicePairingMock.mockReturnValue({ pending: [], paired: [] });
     listBoundWebPushSubscriptionsMock.mockReturnValue([]);
+    hasBoundWebPushSubscriptionsMock.mockReturnValue(true);
     prepareWebPushNotificationSenderMock.mockResolvedValue(preparedWebPushSendMock);
     preparedWebPushSendMock.mockResolvedValue([]);
     approvalDeliveryTargets.clear();
@@ -370,9 +373,8 @@ describe("approval Web Push delivery", () => {
   it("prepares the transport before rereading current approval authority", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:authority-race");
-    const stale = boundSubscription("stale-device", "profile-stale");
     const current = boundSubscription("current-device", "profile-current");
-    listBoundWebPushSubscriptionsMock.mockReturnValueOnce([stale]).mockReturnValueOnce([current]);
+    listBoundWebPushSubscriptionsMock.mockReturnValue([current]);
     listDevicePairingMock.mockReturnValue({
       pending: [],
       paired: [pairedOperator("current-device", ["operator.approvals", "operator.read"])],
@@ -394,7 +396,18 @@ describe("approval Web Push delivery", () => {
     ).toBeLessThan(
       expectDefined(listDevicePairingMock.mock.invocationCallOrder[0], "pairing read call order"),
     );
-    expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledTimes(2);
+    expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce();
+    expect(
+      expectDefined(
+        prepareWebPushNotificationSenderMock.mock.invocationCallOrder[0],
+        "transport preparation call order",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        listBoundWebPushSubscriptionsMock.mock.invocationCallOrder[0],
+        "subscription read call order",
+      ),
+    );
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({ subscriptions: [current] }),
     );

@@ -14,7 +14,7 @@ import {
   webPushCategoryEnabled,
 } from "../infra/push-web-preferences.js";
 import {
-  listBoundWebPushSubscriptions,
+  hasBoundWebPushSubscriptions,
   prepareWebPushNotificationSender,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
@@ -164,7 +164,7 @@ export function createEventWebPushDelivery(params: {
     mention?: HumanMentionWebPush,
   ): void => {
     void (async () => {
-      if (listBoundWebPushSubscriptions(params.stateDir).length === 0) {
+      if (!hasBoundWebPushSubscriptions(params.stateDir)) {
         return;
       }
       const sender = await prepareWebPushNotificationSender(params.stateDir);
