@@ -35,6 +35,7 @@ interface LineAccountBaseConfig {
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
+  textChunkLimit?: number;
   /** Nothing marks a LINE turn as coalesced, so "batched" has nothing to select. */
   replyToMode?: Exclude<ReplyToMode, "batched">;
   streaming?: ChannelDeliveryStreamingConfig;

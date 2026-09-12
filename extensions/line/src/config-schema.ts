@@ -42,6 +42,7 @@ const LineCommonConfigSchemaBase = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   responsePrefix: z.string().optional(),
+  textChunkLimit: z.number().int().positive().optional(),
   replyToMode: LineReplyToModeSchema.optional(),
   // LINE cannot edit a sent message, so it has no preview streaming mode and takes
   // the delivery-only shape this shared schema is written for.
@@ -78,6 +79,10 @@ export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema
     joinIntro: {
       label: "LINE Group Join Introduction",
       help: "Post one brief introduction when the bot joins an allowed LINE group or multi-person room (default: true). Account settings override the channel-wide setting.",
+    },
+    textChunkLimit: {
+      label: "LINE Text Chunk Limit",
+      help: "Maximum characters per outbound LINE message before OpenClaw splits a long reply (default and maximum: 5000, the limit LINE itself enforces). A smaller value makes shorter bubbles but sends more messages, and messages beyond the five a reply token covers are pushes that count against the monthly quota.",
     },
   },
 });

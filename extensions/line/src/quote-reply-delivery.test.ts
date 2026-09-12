@@ -275,7 +275,6 @@ describe("the push delivery path", () => {
     });
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
-    mocks.resolveTextChunkLimit.mockReturnValue(5000);
     mocks.chunkMarkdownText.mockImplementation((text: string) =>
       chunkMarkdownTextForLine(text, 5000),
     );

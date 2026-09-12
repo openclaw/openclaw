@@ -60,7 +60,6 @@ describe("line outbound sendPayload", () => {
   ])("sends oversized tables in their source position $name", async ({ quickReplies }) => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
-    mocks.resolveTextChunkLimit.mockReturnValue(5000);
     mocks.chunkMarkdownText.mockImplementation((text: string) =>
       chunkMarkdownTextForLine(text, 5000),
     );
@@ -701,9 +700,6 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(cfg, "line", "primary", {
-      fallbackLimit: 5000,
-    });
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
   });
 

@@ -14,7 +14,6 @@ type LineRuntimeMocks = {
   sendMessageLine: ReturnType<typeof vi.fn>;
   chunkMarkdownText: ReturnType<typeof vi.fn>;
   resolveLineAccount: ReturnType<typeof vi.fn>;
-  resolveTextChunkLimit: ReturnType<typeof vi.fn>;
 };
 
 export function lineResult(messageId: string, chatId = "c1") {
@@ -49,7 +48,6 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
   }));
   const sendMessageLine = vi.fn(async () => lineResult("m-media"));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
-  const resolveTextChunkLimit = vi.fn(() => 123);
   const resolveLineAccount = vi.fn(
     ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
       const resolved = accountId ?? "default";
@@ -80,7 +78,6 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
       },
       text: {
         chunkMarkdownText,
-        resolveTextChunkLimit,
       },
     },
   } as unknown as PluginRuntime;
@@ -99,7 +96,6 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
       sendMessageLine,
       chunkMarkdownText,
       resolveLineAccount,
-      resolveTextChunkLimit,
     },
   };
 }

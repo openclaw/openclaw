@@ -38,6 +38,7 @@ import {
   showLoadingAnimation,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import { resolveLineTextChunkLimit } from "./text-chunk-limit.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import {
   createLineNodeWebhookHandler,
@@ -59,7 +60,6 @@ interface MonitorLineProviderOptions {
   runtime: RuntimeEnv;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   abortSignal?: AbortSignal;
-  webhookUrl?: string;
   webhookPath?: string;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }
@@ -218,7 +218,7 @@ export async function monitorLineProvider(
           : undefined;
 
       try {
-        const textLimit = 5000;
+        const textLimit = resolveLineTextChunkLimit({ cfg: turnConfig, accountId: ctx.accountId });
         const core = getLineRuntime();
         const turnResult = await core.channel.inbound.run({
           channel: "line",
