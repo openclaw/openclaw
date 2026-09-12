@@ -111,6 +111,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
 type BrowserTabLike = {
   suggestedTargetId?: unknown;
   tabId?: unknown;
+  webExtensionTabId?: unknown;
   label?: unknown;
   title?: unknown;
   url?: unknown;
@@ -127,11 +128,18 @@ function formatAgentTab(tab: unknown): Record<string, unknown> {
   const source = tab as BrowserTabLike;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
+  const webExtensionTabId =
+    typeof source.webExtensionTabId === "number" &&
+    Number.isSafeInteger(source.webExtensionTabId) &&
+    source.webExtensionTabId >= 0
+      ? source.webExtensionTabId
+      : undefined;
   const label = readStringValue(source.label);
   const suggestedTargetId = readStringValue(source.suggestedTargetId) ?? label ?? tabId ?? targetId;
   return {
     ...(suggestedTargetId ? { suggestedTargetId } : {}),
     ...(tabId ? { tabId } : {}),
+    ...(webExtensionTabId !== undefined ? { webExtensionTabId } : {}),
     ...(label ? { label } : {}),
     title: source.title,
     url: source.url,
