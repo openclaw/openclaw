@@ -74,7 +74,6 @@ describe("owner-held SQLite source reads", () => {
     },
   );
 
-
   it("reads a private SQLite copy under current physical exclusion", async () => {
     await withOpenClawTestState({ label: "excluded-checkpoint" }, async (state) => {
       const pathname = populate(state.env);
