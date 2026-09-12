@@ -15,6 +15,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: mocks.resolveAgentDir,
 }));
 
+vi.mock("../../agents/auth-profiles/sqlite.js", () => ({
+  assertAuthProfileStoreAgentOwner: vi.fn(),
+}));
+
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
 }));
@@ -53,20 +57,5 @@ describe("prepareLocalCapabilityAccountSecrets", () => {
       allowUnavailableSecretOwners: true,
     });
     expect(mocks.activateSecretsRuntimeSnapshot).toHaveBeenCalledWith({ marker: "snapshot" });
-  });
-
-  it("does not replace an already active secrets runtime snapshot", async () => {
-    const cfg: OpenClawConfig = {};
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
-      config: cfg,
-      sourceConfig: cfg,
-      configRefsPrepared: true,
-    });
-
-    await prepareLocalCapabilityAccountSecrets({ cfg, agentId: "main" });
-
-    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
-    expect(mocks.prepareSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-    expect(mocks.activateSecretsRuntimeSnapshot).not.toHaveBeenCalled();
   });
 });

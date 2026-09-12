@@ -115,13 +115,13 @@ function buildRawCfg(agentDir: string): OpenClawConfig {
   };
 }
 
-async function runLocalCapability(argv: string[]): Promise<void> {
+async function runLocalCapability(argv: string[], agent = "ops"): Promise<void> {
   const capability = new Command();
   registerImageCapabilityCommands(capability);
   registerEmbeddingCapabilityCommands(capability);
   registerAudioCapabilityCommands(capability);
   registerVideoCapabilityCommands(capability);
-  await capability.parseAsync([...argv, "--agent", "ops", "--json"], { from: "user" });
+  await capability.parseAsync([...argv, "--agent", agent, "--json"], { from: "user" });
 }
 
 describe("local capability runners saved-account SecretRefs", () => {
@@ -163,7 +163,7 @@ describe("local capability runners saved-account SecretRefs", () => {
     ["audio transcribe", ["audio", "transcribe", "--file", "input.wav"]],
     ["video generate", ["video", "generate", "--prompt", "a red square"]],
     ["video describe", ["video", "describe", "--file", "input.mp4"]],
-  ])("%s resolves the saved account credential", async (_name, argv) => {
+  ])("infer %s uses only the durable owner’s saved credential", async (_name, argv) => {
     await runLocalCapability(argv);
 
     expect(hoisted.egressAuth).toHaveLength(1);
@@ -171,5 +171,21 @@ describe("local capability runners saved-account SecretRefs", () => {
       source: "profile:customacct:saved",
       apiKey: ACCOUNT_KEY_VALUE,
     });
+    hoisted.rawCfg = {
+      ...hoisted.rawCfg,
+      agents: {
+        ...hoisted.rawCfg.agents,
+        entries: { restored: { agentDir: state.agentDir("ops") } },
+      },
+    };
+    for (const activeSnapshot of [true, false]) {
+      if (!activeSnapshot) {
+        clearSecretsRuntimeSnapshotState();
+      }
+      await expect(runLocalCapability(argv, "restored")).rejects.toThrow(
+        "belongs to agent ops; requested agent restored",
+      );
+      expect(hoisted.egressAuth).toHaveLength(1);
+    }
   });
 });
