@@ -3423,7 +3423,7 @@ describe("createBackupArchive", () => {
             const restored = state.path("restored");
             await backupRestoreCommand(runtime, { archive: result.archivePath, target: restored });
             const asset = expectDefined(
-              result.assets.find((asset) => asset.kind === "state"),
+              result.assets.find((candidate) => candidate.kind === "state"),
               "state asset",
             );
             await expect(
