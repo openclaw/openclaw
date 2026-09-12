@@ -16,7 +16,7 @@ import {
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
 } from "../../config/sessions/lifecycle.js";
-import { loadSessionEntryWithDatabase } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -256,7 +256,7 @@ export async function admitReplyTurn(
     if (
       admittedDatabaseClaim &&
       (!admittedDatabaseClaim.isCurrent() ||
-        (nextClaim && nextClaim.database.db !== admittedDatabaseClaim.database.db))
+        (nextClaim && nextClaim.incarnation !== admittedDatabaseClaim.incarnation))
     ) {
       nextClaim?.release();
       rejectLifecycleInvalidatedWork({
@@ -322,7 +322,7 @@ export async function admitReplyTurn(
               },
               assertAllowed: () => {
                 assertDatabaseOwnerCurrent();
-                const current = loadSessionEntryWithDatabase({
+                const current = loadSessionEntryForAdmission({
                   agentId: params.agentId,
                   storePath,
                   sessionKey: params.sessionKey,

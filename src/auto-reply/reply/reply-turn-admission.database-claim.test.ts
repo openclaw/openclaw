@@ -72,7 +72,7 @@ it.each(
         owner.completeWithAfterClearBarrier(release.promise);
       }
     }
-    const loaded = vi.spyOn(sessionEntries, "loadSessionEntryWithDatabase");
+    const loaded = vi.spyOn(sessionEntries, "loadSessionEntryForAdmission");
     const waiting =
       wait === "active"
         ? vi.spyOn(registry.replyRunRegistry, "waitForIdle")
@@ -96,11 +96,11 @@ it.each(
       if (observed?.type !== "return") {
         throw new Error("fixture requires a completed authoritative row read");
       }
-      const database = observed.value.databaseClaim.database;
-      expect(database.db.isOpen).toBe(true);
+      const claim = observed.value.databaseClaim;
+      expect(claim.isCurrent()).toBe(true);
       if (replacement !== "unchanged") {
-        expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        expect(database.db.isOpen).toBe(false);
+        expect(closeOpenClawAgentDatabaseByPath(storePath)).toBe(true);
+        expect(claim.isCurrent()).toBe(false);
         if (replacement === "other-inode") {
           fs.unlinkSync(storePath);
           fs.symlinkSync(replacementPath, storePath);
@@ -112,7 +112,7 @@ it.each(
       if (replacement === "unchanged") {
         expect(result.status).toBe("owned");
         if (result.status === "owned") {
-          expect(result.databaseClaim?.database.db).toBe(database.db);
+          expect(result.databaseClaim?.incarnation).toBe(claim.incarnation);
           result.operation.complete();
         }
       } else {

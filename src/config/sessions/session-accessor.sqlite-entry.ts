@@ -149,7 +149,7 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
 }
 
 /** Admission retains the exact owner that supplied its row across asynchronous policy work. */
-export function loadSessionEntryWithDatabase(scope: SessionAccessScope): {
+export function loadSessionEntryForAdmission(scope: SessionAccessScope): {
   entry: SessionEntry | undefined;
   databaseClaim: OpenClawAgentDatabaseClaim;
 } {
