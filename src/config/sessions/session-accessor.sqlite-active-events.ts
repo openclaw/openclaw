@@ -8,7 +8,6 @@ import {
 import {
   getActiveTranscriptKysely,
   parseActiveTranscriptMessageRow,
-  readTranscriptProjectionGeneration,
   withCurrentProjectionSnapshot,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-active-projection.js";
@@ -257,7 +256,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
       database: projection.database,
       ...projection.resolved,
     });
-    const generation = readTranscriptProjectionGeneration(projection);
+    const generation = projection.generation;
     if (!generation) {
       return { kind: "missing" };
     }
@@ -496,7 +495,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
     const snapshot = {
-      generation: readTranscriptProjectionGeneration(projection),
+      generation: projection.generation,
       indexedSeq: projection.state.indexedSeq,
     };
     const totalMessages = visible.total;

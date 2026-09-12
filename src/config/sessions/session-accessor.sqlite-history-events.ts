@@ -11,7 +11,6 @@ import type {
 } from "./session-accessor.sqlite-active-events.js";
 import {
   getActiveTranscriptKysely,
-  readTranscriptProjectionGeneration,
   withCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
@@ -69,14 +68,33 @@ function resolveVisibleHistoryProjection(
   }
   const visibleMessages = resolveVisibleMessagePositions(projection);
   const db = getActiveTranscriptKysely(projection.database);
+  const lastMessagePosition = db
+    .selectFrom("session_transcript_active_events")
+    .select("active_position")
+    .where("session_id", "=", projection.resolved.sessionId)
+    .where("message_position", "is not", null)
+    .orderBy("message_position", "desc")
+    .limit(1);
   const rows = executeSqliteQuerySync(
     projection.database.db,
     db
       .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
+      .innerJoin(
+        db
+          .selectFrom("transcript_event_identities")
+          .select(["session_id", "event_id", "seq", "event_type"])
+          .modifyEnd(
+            // Whole-session reads select marker types; reset windows join their bounded active rows.
+            /* kysely-allow-raw: preserve selective canonical index access after ANALYZE. */
+            visibleMessages.boundaryActivePosition === undefined
+              ? sql`INDEXED BY idx_agent_transcript_event_sequence`
+              : sql`INDEXED BY idx_agent_transcript_event_identity_sequence`,
+          )
+          .as("identity"),
+        (join) =>
+          join
+            .onRef("identity.session_id", "=", "active.session_id")
+            .onRef("identity.seq", "=", "active.event_seq"),
       )
       .innerJoin("transcript_events as event", (join) =>
         join
@@ -91,13 +109,21 @@ function resolveVisibleHistoryProjection(
       ])
       .select((eb) =>
         eb
-          .selectFrom("session_transcript_active_events as next")
-          .select("next.message_position")
-          .whereRef("next.session_id", "=", "active.session_id")
-          .whereRef("next.active_position", ">", "active.active_position")
-          .where("next.message_position", "is not", null)
-          .orderBy("next.active_position", "asc")
-          .limit(1)
+          .case()
+          // Resolve the last message once so trailing markers cannot rescan an empty suffix.
+          .when("active.active_position", "<", lastMessagePosition)
+          .then(
+            eb
+              .selectFrom("session_transcript_active_events as next")
+              .select("next.message_position")
+              .whereRef("next.session_id", "=", "active.session_id")
+              .whereRef("next.active_position", ">", "active.active_position")
+              .where("next.message_position", "is not", null)
+              .orderBy("next.active_position", "asc")
+              .limit(1),
+          )
+          .else(null)
+          .end()
           .as("next_message_position"),
       )
       .where("active.session_id", "=", projection.resolved.sessionId)
@@ -466,7 +492,7 @@ export function readRecentSessionTranscriptHistoryEvents(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
-    const generation = readTranscriptProjectionGeneration(projection);
+    const generation = projection.generation;
     const deltaCursor = generation
       ? createTranscriptRawDeltaCursor({
           agentId: projection.resolved.agentId,

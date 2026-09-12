@@ -396,7 +396,6 @@ async function handleChatHistoryRequest({
     ? loadGatewaySessionEntryReadOnly(sessionKey, {
         agentId: sessionAgentId,
         clone: false,
-        includeStoreChildEntries: true,
         projection: "list",
       })
     : null;

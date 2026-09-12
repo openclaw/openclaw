@@ -8,7 +8,6 @@ import {
 } from "../../sessions/transcript-display-position.js";
 import {
   getActiveTranscriptKysely,
-  readTranscriptProjectionGeneration,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-active-projection.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -17,7 +16,7 @@ import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-re
 export function readTranscriptDisplaySource(
   projection: CurrentTranscriptProjection,
 ): string | undefined {
-  const generation = readTranscriptProjectionGeneration(projection);
+  const generation = projection.generation;
   return generation
     ? createTranscriptDisplaySource([
         "sqlite",

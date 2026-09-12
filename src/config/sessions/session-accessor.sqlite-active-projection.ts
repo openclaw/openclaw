@@ -31,6 +31,7 @@ type ActiveTranscriptDatabase = Pick<
 
 export type CurrentTranscriptProjection = {
   database: OpenClawAgentDatabase;
+  generation: string | undefined;
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
 };
@@ -72,28 +73,41 @@ export function parseActiveTranscriptMessageRow(row: {
   };
 }
 
-export function readTranscriptProjectionGeneration(
-  projection: CurrentTranscriptProjection,
+function readEmptyTranscriptGeneration(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
 ): string | undefined {
   return executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    getActiveTranscriptKysely(projection.database)
+    database.db,
+    getActiveTranscriptKysely(database)
       .selectFrom("transcript_rewrite_watermarks")
       .select("generation")
-      .where("session_id", "=", projection.resolved.sessionId),
+      .where("session_id", "=", sessionId),
   )?.generation;
 }
 
 function readProjectionSnapshot(
   database: OpenClawAgentDatabase,
   sessionId: string,
-): { latestSeq: number; state?: SessionTranscriptProjectionState } | undefined {
+):
+  | {
+      generation: string | undefined;
+      latestSeq: number;
+      state?: SessionTranscriptProjectionState;
+    }
+  | undefined {
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getActiveTranscriptKysely(database)
       .selectFrom("transcript_events as latest")
       .leftJoin("session_transcript_index_state as state", "state.session_id", "latest.session_id")
+      .leftJoin(
+        "transcript_rewrite_watermarks as watermark",
+        "watermark.session_id",
+        "latest.session_id",
+      )
       .select([
+        "watermark.generation",
         "latest.seq as latest_seq",
         "state.active_event_count",
         "state.active_message_count",
@@ -109,6 +123,7 @@ function readProjectionSnapshot(
     return undefined;
   }
   return {
+    generation: row.generation ?? undefined,
     latestSeq: row.latest_seq,
     ...(typeof row.indexed_seq === "number"
       ? {
@@ -139,7 +154,12 @@ export function withCurrentProjectionSnapshot<T>(
       if (!snapshot) {
         return {
           kind: "value" as const,
-          value: read({ database, resolved, state: EMPTY_PROJECTION_STATE }),
+          value: read({
+            database,
+            generation: readEmptyTranscriptGeneration(database, resolved.sessionId),
+            resolved,
+            state: EMPTY_PROJECTION_STATE,
+          }),
         };
       }
       if (
@@ -150,7 +170,12 @@ export function withCurrentProjectionSnapshot<T>(
       ) {
         return {
           kind: "value" as const,
-          value: read({ database, resolved, state: snapshot.state }),
+          value: read({
+            database,
+            generation: snapshot.generation,
+            resolved,
+            state: snapshot.state,
+          }),
         };
       }
       return { kind: "unavailable" as const };
