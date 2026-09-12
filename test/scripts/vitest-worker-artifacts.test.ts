@@ -24,6 +24,7 @@ import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import {
   createWorkerArtifactTest,
   preparationClient,
+  workerBorrowingProbe,
   workerProbe,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
@@ -791,7 +792,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         ["separate", "equals"].map((configForm) =>
           workerArtifacts.fixtureLifetime.run(async () => {
             const directory = workerArtifacts.fixtureDirectory();
-            const { config } = workerProbe(directory);
+            const { config } = workerBorrowingProbe(directory);
             const budgetReceipt = path.join(directory, "compiler-budget.json");
             const preload = writeFixture(
               directory,
@@ -1078,7 +1079,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
-      const { config } = workerProbe(directory);
+      const { config } = workerBorrowingProbe(directory);
       const reporter = writeFixture(
         directory,
         "tamper-reporter.mjs",
@@ -1296,7 +1297,7 @@ export default class {
              assert.equal(getFsSafeNativeConfig().mode,'auto');
              await import(pathToFileURL(process.argv[1]));
              assert.equal(getFsSafeNativeConfig().mode,'off');`,
-            path.join(initialDirectory, "dist/infra/sqlite-readonly-location.js"),
+            path.join(initialDirectory, "dist/infra/sqlite-snapshot-source.js"),
           ],
           fixture,
           {
@@ -1376,9 +1377,8 @@ export default class {
         fs.writeFileSync(
           dependency,
           `import { fixtureMajor } from "../../${privatePackage}/src/index.js";\n` +
-            fs
-              .readFileSync(dependency, "utf8")
-              .replace("major: 3, minor: 51", "major: fixtureMajor, minor: 51"),
+            'import { isSqliteWalResetSafeVersion as isSafeVersion } from "../../node-sqlite.mjs";\n' +
+            "export function isSqliteWalResetSafeVersion(value: string) { return fixtureMajor === 3 && isSafeVersion(value); }\n",
         );
         const compilerUrl = pathToFileURL(path.join(fixture, compilerModule)).href;
         const client = `

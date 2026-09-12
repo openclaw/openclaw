@@ -88,6 +88,78 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
+## Cyber safety notices
+
+The Control UI shows a notice above the composer when Codex reports cyber
+safety buffering, a cyber-policy refusal, or a provider model reroute for
+high-risk cyber activity. These notices use structured app-server events;
+OpenClaw does not infer classifier activity from the assistant's wording.
+
+Buffering means the provider is still processing the request. Its notice clears
+when assistant output starts or the turn ends. A blocked notice remains until
+the next turn or a session reset. A reroute notice reports the model selected
+by the provider.
+
+Gateway agent-event consumers receive these updates on the `notice` stream
+with `phase: "provider_policy"`, `provider: "openai"`, `category: "cyber"`, and
+a `state` of `buffering`, `blocked`, `fallback`, `escalated`, `unavailable`, or
+`cleared`. Model fields are present when the upstream event provides them. A
+suggested fallback model is informational and does not prove that the account
+can use it.
+
+## Automatic Daybreak escalation
+
+OpenAI declines some defensive-cyber work on its general models and directs
+approved workspaces to a Daybreak model instead. When a turn ends in a
+cyber-policy refusal, OpenClaw retries it once on the configured Daybreak model
+so the refused work reaches the tier allowed to answer it. This is on by
+default and is configured under
+`plugins.entries.codex.config.appServer.cyberFailover`.
+
+Daybreak trails the general models in capability, so escalation stays scoped to
+work that was actually refused:
+
+- At most one escalated attempt per turn. A second refusal under Daybreak keeps
+  the block and stops.
+- A turn already running on the configured Daybreak model is never escalated.
+- A turn that already acted is never retried. Escalation requires the attempt's
+  own replay-safe verdict, so a turn refused after it sent a message, added a
+  cron entry, spawned a session, started a native continuation, or generated
+  media keeps its result. Cancellation, timeout, or a later failure also prevents
+  escalation even if the result retains a refusal diagnostic.
+- Only a refused turn is ever routed to Daybreak. Every turn starts on the model
+  the session selected, and a turn that was not refused never reaches the weaker
+  tier.
+- The retry does not mirror the prompt into the transcript a second time. The
+  refused attempt's own terminal row is discarded with its result rather than
+  staged, so a successful escalation returns the Daybreak answer; the refused
+  turn still exists upstream in the native Codex thread, which OpenClaw does not
+  rewrite.
+- Only OpenAI's own cyber refusal on the current attempt escalates. Another
+  provider's refusal, another category, and a refusal inherited from an earlier
+  turn all leave the result untouched.
+- Escalation never changes the session's stored model selection, and the only
+  retained state is the unauthorized-target record below, which is process-local
+  rather than persisted.
+
+Authorization stays server-owned. `model/list` advertises Daybreak to every
+client, so catalog presence does not prove entitlement: an unentitled workspace
+still receives `401`/`403` on use, and each such attempt costs the transport's
+full reconnect ladder. OpenClaw therefore treats the retry itself as the only
+evidence and reports an `unavailable` notice rather than a silent block. If the
+fallback target is denied without tool activity, side effects, native
+continuation, or interruption, OpenClaw keeps the original refusal even when
+the fallback produced no assistant message. Otherwise, its result is preserved
+so those facts reach the runner.
+
+Because entitlement belongs to the authenticated workspace and the target model
+rather than to any one conversation, an unauthorized target is remembered once
+for every session under that workspace and cannot be displaced by session churn.
+A separate workspace that is entitled keeps escalating normally, and the record
+releases on its own once `cooloffMs` elapses. Only one probe runs at a time for a
+given workspace and target, so sibling sessions refused at the same moment do not
+each pay the reconnect ladder before the first result lands.
+
 ## Parallel chats and thread ownership
 
 Independent chats can share a Codex app-server and run concurrently. Resuming
@@ -98,10 +170,10 @@ A closed, replaced, or retired client still cannot complete a stale handoff.
 
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including
-for `/codex resume` of that chat's already-bound thread. Provider policy refusals
-end the current request without automatic retry or model fallback. A later user
-message is a separate turn; it does not supply a native policy override or user
-confirmation.
+for `/codex resume` of that chat's already-bound thread. Native provider policy refusals
+end the current attempt without a native retry. OpenClaw's configured cyber
+fallback described above is a separate attempt. A later user message is a
+separate turn; it does not supply a native policy override or user confirmation.
 
 With Codex app-server `0.153.4`, first-time adoption or changed configuration of a
 loaded failed thread still requires native unloading. OpenClaw preserves the

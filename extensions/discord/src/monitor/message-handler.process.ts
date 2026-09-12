@@ -382,6 +382,7 @@ async function processDiscordMessageInner(
       draftStream &&
       draftPreview.isProgressMode &&
       info.kind === "block" &&
+      !deliverablePayload.isCommentary &&
       !options?.allowProgressBlock
     ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
@@ -712,7 +713,7 @@ async function processDiscordMessageInner(
   } finally {
     activeThreadRoute.end();
     endDeliveryCorrelation();
-    await draftPreview.cleanup();
+    await draftPreview.cleanup({ finalDeliveryFailed: userFacingFinalDeliveryFailed });
     dispatchError ||= readAgentRunTerminalOutcome(dispatchResult) === "failed";
     const finalReceipt = dispatchResult?.settledReceipt?.counts.final;
     const finalDeliveryFailed =

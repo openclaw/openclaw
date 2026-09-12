@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createSourceRuntime,
@@ -9,6 +9,14 @@ import {
 } from "../../commands/doctor-config-preflight.process.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const runtimeParent = fs.realpathSync(tempDirs.make("openclaw-selection-runtime-"));
+const childTempDir = fs.realpathSync(tempDirs.make("openclaw-selection-tmp-"));
+
+beforeEach(() => {
+  // TSX keys transforms by source path. Reuse that path, but recreate package
+  // assets after the previous child has joined; scenario state stays private.
+  fs.rmSync(path.join(runtimeParent, "runtime"), { recursive: true, force: true });
+});
 
 function stateManifest(root: string): Record<string, string> {
   return Object.fromEntries(
@@ -36,7 +44,7 @@ describe("Gateway config selection before migration admission", () => {
     "prepares recovery safely for $name",
     async ({ name, code }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-recovery-selection-"));
-      const runtimeRoot = createSourceRuntime(root);
+      const runtimeRoot = createSourceRuntime(runtimeParent);
       const stateDir = path.join(root, "state");
       fs.mkdirSync(stateDir);
       const configPath = path.join(stateDir, "openclaw.json");
@@ -72,6 +80,9 @@ describe("Gateway config selection before migration admission", () => {
       const result = await runIsolatedModuleScript(
         {
           ...process.env,
+          TMPDIR: childTempDir,
+          TEMP: childTempDir,
+          TMP: childTempDir,
           HOME: root,
           USERPROFILE: root,
           OPENCLAW_HOME: root,
@@ -123,7 +134,7 @@ describe("Gateway config selection before migration admission", () => {
     "preserves every state artifact with backup=%s",
     async (withBackup) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-readonly-bootstrap-"));
-      const runtimeRoot = createSourceRuntime(root);
+      const runtimeRoot = createSourceRuntime(runtimeParent);
       const stateDir = path.join(root, "state");
       fs.mkdirSync(stateDir);
       const configPath = path.join(stateDir, "openclaw.json");
@@ -145,6 +156,9 @@ describe("Gateway config selection before migration admission", () => {
       const before = stateManifest(stateDir);
       const env = {
         ...process.env,
+        TMPDIR: childTempDir,
+        TEMP: childTempDir,
+        TMP: childTempDir,
         HOME: root,
         USERPROFILE: root,
         OPENCLAW_HOME: root,
@@ -193,7 +207,7 @@ describe("Gateway config selection before migration admission", () => {
     "passes $flag through $dispatch startup admission without config",
     async ({ flag, suffix, dev, allowUnconfigured }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-startup-allowance-"));
-      const runtimeRoot = createSourceRuntime(root);
+      const runtimeRoot = createSourceRuntime(runtimeParent);
       const stateDir = path.join(root, "state");
       fs.mkdirSync(stateDir);
       const configPath = path.join(stateDir, "openclaw.json");
@@ -214,7 +228,9 @@ describe("Gateway config selection before migration admission", () => {
         XDG_STATE_HOME: path.join(root, "xdg-state"),
         XDG_CACHE_HOME: path.join(root, "cache"),
         NPM_CONFIG_USERCONFIG: path.join(root, "npmrc"),
-        TMPDIR: root,
+        TMPDIR: childTempDir,
+        TEMP: childTempDir,
+        TMP: childTempDir,
         NO_COLOR: "1",
       };
       // Keep parsing, environment selection, preaction, and config admission real.

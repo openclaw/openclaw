@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -28,11 +29,15 @@ export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: st
 export function assertSessionStoreMigrationComplete(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  targets?: readonly { storePath: string }[];
+  targets?: readonly { agentId?: string; storePath: string }[];
   operation?: "doctor";
 }): void {
   const env = params.env ?? process.env;
-  const targets = params.targets ?? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const targets = (
+    params.targets ?? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })
+  ).filter(
+    (target) => !target.agentId || !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
+  );
   const legacyStore = [
     path.join(resolveStateDir(env), "sessions", "sessions.json"),
     ...targets.map((target) => target.storePath),
@@ -64,7 +69,11 @@ export async function runSessionStartupMigration(params: {
   const env = params.env ?? process.env;
   const resolveTargets =
     params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
-  let targets = resolveTargets(params.cfg, { env });
+  const admittedTargets = () =>
+    resolveTargets(params.cfg, { env }).filter(
+      (target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
+    );
+  let targets = admittedTargets();
   // Stable installations may still have file-backed history. Only Doctor imports it;
   // do not serve an empty SQLite history or rewrite those files during startup.
   assertSessionStoreMigrationComplete({ cfg: params.cfg, env, targets });
@@ -83,7 +92,7 @@ export async function runSessionStartupMigration(params: {
   }
   if (result.armed) {
     // A partial move can create the destination before source cleanup succeeds.
-    targets = resolveTargets(params.cfg, { env });
+    targets = admittedTargets();
   }
 
   const databases = new Set<string>();

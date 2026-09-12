@@ -197,6 +197,8 @@ export type EmbeddedAgentRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  /** Producer-owned terminal cause; the fallback owner decides whether a chain was stopped. */
+  modelFallbackStopReason?: "agent_run_terminal_timeout" | "idle_timeout_circuit_breaker";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */

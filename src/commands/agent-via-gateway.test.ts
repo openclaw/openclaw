@@ -2464,6 +2464,58 @@ describe("agentCliCommand", () => {
     }, remoteGatewayConfig);
   });
 
+  it.each([
+    {
+      label: "timed out",
+      createError: createGatewayTimeoutError,
+      expectTimeoutAdvice: true,
+    },
+    {
+      label: "connection closed",
+      createError: createGatewayClosedError,
+      expectTimeoutAdvice: false,
+    },
+  ])(
+    "names the accepted run in the transport-loss hint after the Gateway $label",
+    async ({ createError, expectTimeoutAdvice }) => {
+      await withTempStore(async () => {
+        const error = createError();
+        const signal = createSignalProcess();
+        callGateway.mockImplementation(
+          async (request: { onAccepted?: (payload: unknown) => void }) => {
+            request.onAccepted?.({ status: "accepted", runId: "gateway-accepted" });
+            throw error;
+          },
+        );
+
+        await expect(
+          agentCliCommand(
+            { message: "hi", sessionKey: "agent:ops:run-proof", json: true },
+            jsonRuntime,
+            { process: signal.processLike },
+          ),
+        ).rejects.toBe(error);
+
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(agentCommand).not.toHaveBeenCalled();
+        const hint = mockMessages(jsonRuntime.error).join("\n");
+        expect(hint).toContain("Gateway agent call");
+        expect(hint).toContain("accepted run gateway-accepted");
+        if (expectTimeoutAdvice) {
+          expect(hint).toContain("--timeout <seconds>");
+        }
+        // The documented JSON failure envelope keeps ok:false and error.type/message
+        // alongside the accepted run provenance for the shared failure renderer.
+        expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+          ok: false,
+          runId: "gateway-accepted",
+          origin: "gateway",
+          error: { type: "cli_error", message: error.message },
+        });
+      }, remoteGatewayConfig);
+    },
+  );
+
   it("rejects gateway timeout errors unchanged with a local retry hint", async () => {
     await withTempStore(async () => {
       const error = createGatewayTimeoutError();

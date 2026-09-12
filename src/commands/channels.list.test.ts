@@ -186,6 +186,7 @@ describe("channels list", () => {
     };
     expect(payload.chat?.telegram).toEqual({
       accounts: ["alerts", "default"],
+      label: "Telegram",
       installed: true,
       origin: "configured",
     });
@@ -560,6 +561,7 @@ describe("channels list", () => {
     };
     expect(payload.chat.discord).toEqual({
       accounts: [],
+      label: "Discord",
       installed: false,
       origin: "configured",
     });
@@ -622,9 +624,10 @@ describe("channels list", () => {
       enabled: false,
     });
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
-      createCatalogEntry("qqbot", "QQ Bot"),
+      { ...createCatalogEntry("qqbot", "QQ Bot"), officialDocsPath: "/channels/qqbot" },
+      { ...createCatalogEntry("telegram", "Telegram"), officialDocsPath: "/channels/telegram" },
     ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["telegram"]));
     mocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
         channels: {
@@ -644,6 +647,13 @@ describe("channels list", () => {
     expect(payload.chat.discord?.installed).toBe(true);
     expect(payload.chat.qqbot?.origin).toBe("installable");
     expect(payload.chat.qqbot?.installed).toBe(false);
+    expect(payload.chat.telegram).toMatchObject({
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+    });
+    expect(payload.chat.qqbot).toMatchObject({ label: "QQ Bot", docsPath: "/channels/qqbot" });
+    expect(payload.chat.discord).toMatchObject({ label: "Discord" });
+    expect(payload.chat.discord).not.toHaveProperty("docsPath");
   });
 
   it("resolves installed manifest channels once for the whole catalog", async () => {

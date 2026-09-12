@@ -37,7 +37,11 @@ const createKillableChild = () => {
     kill: vi.fn(),
   });
   child.kill.mockImplementation((signal: NodeJS.Signals = "SIGTERM") => {
-    queueMicrotask(() => child.emit("exit", null, signal));
+    // A native run-node owner that completes requested cleanup acknowledges
+    // SIGTERM with a code. Raw signal death is covered independently below.
+    queueMicrotask(() =>
+      signal === "SIGTERM" ? child.emit("exit", 143, null) : child.emit("exit", null, signal),
+    );
     return true;
   });
   return child;
@@ -109,6 +113,92 @@ function requireSpawnEnv(spawn: ReturnType<typeof vi.fn>, callIndex: number) {
 }
 
 describe("watch-node script", () => {
+  it.each(["SIGTERM", "SIGKILL", "SIGHUP"] as const)(
+    "preserves raw Unix runner %s without doctor or restart",
+    async (signal) => {
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const spawn = vi.fn(() => child);
+      const fakeProcess = Object.assign(createFakeProcess(), { platform: "linux" });
+      const run = runWatch({
+        args: ["gateway"],
+        env: {},
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+        createWatcher: () => ({ on: () => {}, close: async () => {} }),
+      });
+      child.emit("exit", null, signal);
+      await expect(run).resolves.toBe(signal);
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
+
+  it.each(["restart", "shutdown", "doctor", "startup-error"] as const)(
+    "does not hide raw Unix signal loss during %s",
+    async (phase) => {
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const spawn = vi.fn().mockReturnValueOnce(child).mockReturnValueOnce(doctor);
+      const watcher = Object.assign(new EventEmitter(), { close: vi.fn(async () => {}) });
+      const fakeProcess = Object.assign(createFakeProcess(), { platform: "linux" });
+      const startupError = new Error("watcher dependency failed");
+      const run = runWatch({
+        args: ["gateway"],
+        env: {},
+        fs: { existsSync: () => true },
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+        ...(phase === "startup-error"
+          ? {
+              loadChokidar: async () => {
+                throw startupError;
+              },
+            }
+          : { createWatcher: () => watcher }),
+      });
+      if (phase === "restart") {
+        watcher.emit("change", "src/index.ts");
+      } else if (phase === "shutdown") {
+        fakeProcess.emit("SIGTERM");
+      } else if (phase === "doctor") {
+        child.emit("exit", 1, null);
+      } else {
+        await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith("SIGTERM"));
+      }
+      (phase === "doctor" ? doctor : child).emit("exit", null, "SIGKILL");
+      await expect(run).resolves.toBe("SIGKILL");
+      expect(spawn).toHaveBeenCalledTimes(phase === "doctor" ? 2 : 1);
+      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
+
+  it("preserves requested Windows SIGTERM rebuilds and shutdown", async () => {
+    const first = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const second = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn(async () => {}) });
+    const fakeProcess = Object.assign(createFakeProcess(), { platform: "win32" });
+    const run = runWatch({
+      args: ["gateway"],
+      env: {},
+      fs: { existsSync: () => true },
+      lockDisabled: true,
+      process: fakeProcess,
+      spawn,
+      createWatcher: () => watcher,
+    });
+    watcher.emit("change", "src/index.ts");
+    expect(first.kill).toHaveBeenCalledWith("SIGTERM");
+    first.emit("exit", null, "SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(2);
+    fakeProcess.emit("SIGTERM");
+    second.emit("exit", null, "SIGTERM");
+    await expect(run).resolves.toBe(143);
+    expect(second.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
     await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {

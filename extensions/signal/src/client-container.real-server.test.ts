@@ -70,34 +70,38 @@ describe("signal REST real-server deadline", () => {
     });
   });
 
-  it("aborts a slow-drip body that never idles, at the request deadline", async () => {
-    // Drip a byte every 50ms: below the 300ms idle guard, so only the total request
-    // deadline can stop it. This is the exact slow-drip case the fix bounds.
-    let dripCount = 0;
+  it("aborts an unfinished streaming body at the request deadline and closes the connection", async () => {
+    // Deterministic repeated-chunk timing lives in client-container.test.ts. Real sockets
+    // prove that a started response is cancelled by the deadline, regardless of tick cadence.
+    let firstChunkFlushed = false;
+    let connectionClosed = false;
     const server = await startServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
-      res.write("{");
+      res.write("{", (error) => {
+        firstChunkFlushed = !error;
+      });
       const drip = setInterval(() => {
         try {
-          dripCount += 1;
           res.write(" ");
         } catch {
           clearInterval(drip);
         }
       }, 50);
-      res.on("close", () => clearInterval(drip));
+      res.on("close", () => {
+        clearInterval(drip);
+        connectionClosed = true;
+      });
     });
 
     const startedAt = Date.now();
     await expect(
       containerRpcRequest("version", undefined, { baseUrl: server.baseUrl, timeoutMs: 300 }),
-    ).rejects.toThrow(/Signal REST request timed out|stalled/);
+    ).rejects.toThrow("Signal REST request timed out");
     const elapsedMs = Date.now() - startedAt;
 
-    // Multiple chunks arrived below the idle threshold, yet the absolute deadline
-    // still bounded the call. Without it, this response would continue indefinitely.
-    expect(dripCount).toBeGreaterThan(1);
+    expect(firstChunkFlushed).toBe(true);
     expect(elapsedMs).toBeLessThan(2_000);
+    await expect.poll(() => connectionClosed).toBe(true);
   });
 
   it("aborts a response whose body stalls immediately after headers", async () => {

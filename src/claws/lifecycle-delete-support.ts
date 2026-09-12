@@ -294,7 +294,7 @@ export async function cleanupClawAgentFilesystem(params: {
           params.runtime.log(warning);
         }
         params.assertCurrent();
-        deleteWorkspaceState(statePlan);
+        await deleteWorkspaceState(statePlan, { assertCurrent: params.assertCurrent });
       } catch (error) {
         errors.push(coerceErrorMessage(error));
       }
@@ -397,7 +397,7 @@ export async function inspectClawBootstrap(
   options: OpenClawStateDatabaseOptions,
 ): Promise<ClawBootstrapStatus> {
   const nativeState = await resolveWorkspaceBootstrapStatus(install.workspace, options);
-  const setupState = readWorkspaceStateSnapshot(install.workspace, options).setup;
+  const setupState = (await readWorkspaceStateSnapshot(install.workspace, options)).setup;
   const base = {
     workspace: install.workspace,
     path: DEFAULT_BOOTSTRAP_FILENAME,

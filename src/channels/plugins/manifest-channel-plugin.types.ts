@@ -14,6 +14,8 @@ export type ManifestChannelPlugin = {
     id: string;
     label: string;
     selectionLabel: string;
+    detailLabel?: string;
+    systemImage?: string;
     docsPath: string;
     blurb: string;
     preferOver?: readonly string[];

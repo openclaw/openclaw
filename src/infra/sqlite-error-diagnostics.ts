@@ -1,5 +1,5 @@
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const STORAGE_ERRORS = [
   ["SQLITE_BUSY", "database is locked", 5],
@@ -55,4 +55,44 @@ export function formatSqliteErrorCodeSuffix(error: unknown): string {
     current = current.cause;
   }
   return details.size > 0 ? ` (${[...details].join(", ")})` : "";
+}
+
+// Native snapshot coordination needs classification without loading transaction logging.
+const SQLITE_LOCK_ERROR_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
+// Node reports SQLite failures with a generic string code and the extended
+// SQLite result in `errcode`; the low byte identifies BUSY or LOCKED.
+const SQLITE_BUSY_RESULT_CODE = 5;
+const SQLITE_LOCKED_RESULT_CODE = 6;
+const SQLITE_CORRUPT_RESULT_CODE = 11;
+const SQLITE_NOTADB_RESULT_CODE = 26;
+const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
+
+export function sqliteErrorCode(error: unknown): string | undefined {
+  const code = asOptionalObjectRecord(error)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+export function sqliteExtendedResultCode(error: unknown): number | undefined {
+  const errcode = asOptionalObjectRecord(error)?.errcode;
+  return typeof errcode === "number" && Number.isInteger(errcode) ? errcode : undefined;
+}
+
+export function sqlitePrimaryResultCode(error: unknown): number | undefined {
+  const errcode = sqliteExtendedResultCode(error);
+  return errcode === undefined ? undefined : errcode & SQLITE_PRIMARY_RESULT_CODE_MASK;
+}
+
+export function isSqliteLockError(error: unknown): boolean {
+  const code = sqliteErrorCode(error);
+  if (code !== undefined && SQLITE_LOCK_ERROR_CODES.has(code)) {
+    return true;
+  }
+  const primaryCode = sqlitePrimaryResultCode(error);
+  return primaryCode === SQLITE_BUSY_RESULT_CODE || primaryCode === SQLITE_LOCKED_RESULT_CODE;
+}
+
+/** Report proven file damage (corrupt page or non-database header), not transient failure. */
+export function isSqliteCorruptionError(error: unknown): boolean {
+  const primaryCode = sqlitePrimaryResultCode(error);
+  return primaryCode === SQLITE_CORRUPT_RESULT_CODE || primaryCode === SQLITE_NOTADB_RESULT_CODE;
 }

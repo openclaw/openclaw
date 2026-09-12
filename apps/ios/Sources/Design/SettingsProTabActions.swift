@@ -496,13 +496,8 @@ extension SettingsProTab {
             port: port,
             contextPath: self.manualGatewayContextPath)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
-        if GatewayStableIdentifier.matches(
-            self.appModel.activeGatewayConnectConfig?.effectiveStableID,
-            stableID),
-            self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
-        {
-            self.pendingManualAuthOverride = nil
-        }
+        self.manualConnectGeneration &+= 1
+        let generation = self.manualConnectGeneration
         let fieldsMatchTarget = GatewayStableIdentifier.matches(
             self.gatewayCredentialFieldStableID,
             stableID)
@@ -526,25 +521,25 @@ extension SettingsProTab {
                 suppressStoredDeviceAuth: authOverride?.suppressStoredDeviceAuth == true,
                 instanceId: instanceId)
         }
-        await self.gatewayController.connectManual(
+        let result = await self.gatewayController.connectManual(
             host: host,
             port: port,
             useTLS: self.manualGatewayTLS,
             contextPath: self.manualGatewayContextPath,
             authOverride: authOverride)
-        // The controller now owns this attempt's immutable override. A later retry must reload
-        // durable state so a spent bootstrap token cannot be resurrected from the live view.
-        self.pendingManualAuthOverride = nil
+        guard !Task.isCancelled,
+              generation == self.manualConnectGeneration,
+              GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID)
+        else { return }
+        self.pendingManualAuthOverride = authOverride?.unconsumed
+        if case let .failed(message) = result {
+            self.setupStatusText = message
+        }
     }
 
     func preflightGateway(host: String) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
-            self.setupStatusText = String(
-                localized: "Tailscale is off on this device. Turn it on, then try again.")
-            return false
-        }
         self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
         return true
     }
@@ -570,6 +565,7 @@ extension SettingsProTab {
 
     func beginGatewaySetupAttempt() -> UUID? {
         guard self.connectingGateway == nil else { return nil }
+        self.manualConnectGeneration &+= 1
         let attemptID = UUID()
         self.setupAttemptID = attemptID
         self.connectingGateway = .setupCode
@@ -582,6 +578,7 @@ extension SettingsProTab {
     }
 
     func invalidateGatewaySetupAttempt() {
+        self.manualConnectGeneration &+= 1
         self.setupAttemptID = nil
         self.connectingGateway = nil
     }
@@ -766,6 +763,14 @@ extension SettingsProTab {
             self.gatewayCredentialFieldStableID = stableID
             self.gatewayToken = credentials.token ?? ""
             self.gatewayPassword = credentials.password ?? ""
+        } else if let fields = self.pendingManualAuthOverride?.refreshedFieldsAfterHandoff(
+            token: self.gatewayToken,
+            password: self.gatewayPassword,
+            instanceId: instanceId,
+            targetStableID: stableID)
+        {
+            self.gatewayToken = fields.token
+            self.gatewayPassword = fields.password
         }
         self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
             current: self.pendingManualAuthOverride,
@@ -810,13 +815,6 @@ extension SettingsProTab {
             || self.stagedGatewaySetupLink != nil
     }
 
-    var tailnetWarningText: String? {
-        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty, Self.isTailnetHostOrIP(host), !Self.hasTailnetIPv4() else { return nil }
-        return String(
-            localized: "This gateway is on your tailnet. Turn on Tailscale on this device, then tap Connect.")
-    }
-
     func friendlyGatewayMessage(from raw: String) -> String? {
         let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if lower.contains("pairing required") {
@@ -824,7 +822,7 @@ extension SettingsProTab {
                 localized: "Pairing required. Run /pair approve in your OpenClaw chat, then connect again.")
         }
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
-            return String(localized: "Secure handshake failed. Check Tailscale, then connect again.")
+            return String(localized: "Secure handshake failed. Connect again.")
         }
         if lower.contains("tls fingerprint verification timed out")
             || lower.contains("no tls endpoint detected")
@@ -833,7 +831,7 @@ extension SettingsProTab {
         }
         if lower.contains("timed out") {
             return String(
-                localized: "Connection timed out. Make sure Tailscale is connected, then try again.")
+                localized: "Connection timed out. Check the gateway and your network, then try again.")
         }
         if lower.contains("unauthorized role") {
             return String(

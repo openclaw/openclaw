@@ -23,7 +23,7 @@ export async function appendMemoryHostEvent(
   event: MemoryHostEventRecord,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
-  registerMemoryHostEvent({
+  await registerMemoryHostEvent({
     workspaceDir,
     event,
     ...(options.env ? { env: options.env } : {}),
@@ -35,7 +35,7 @@ async function readMemoryHostEventRecordsRaw(params: {
   limit?: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<MemoryHostEventRecord[]> {
-  const events = listStoredMemoryHostEvents(params).map((entry) => entry.value.event);
+  const events = (await listStoredMemoryHostEvents(params)).map((entry) => entry.value.event);
   return applyMemoryHostEventLimit(events, params.limit);
 }
 

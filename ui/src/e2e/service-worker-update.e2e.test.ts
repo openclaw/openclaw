@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +47,21 @@ type InstallGate = {
 let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eServer;
+let buildBPromise: Promise<void> | undefined;
+
+async function stageBuildB(destination: string): Promise<void> {
+  const pristineDir = `${outDir}-build-b`;
+  buildBPromise ??= buildProductionControlUiE2e(pristineDir, buildB);
+  await buildBPromise;
+  await rm(destination, { force: true, recursive: true });
+  try {
+    // Each deployment owns its bytes; the terminal case modifies its worker.
+    await cp(pristineDir, destination, { recursive: true, dereference: true });
+  } catch (error) {
+    await rm(destination, { force: true, recursive: true });
+    throw error;
+  }
+}
 
 async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
   const assetsDir = path.join(buildDir, "assets");
@@ -270,14 +285,20 @@ describe("Control UI service-worker production update E2E", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-    if (outDir) {
-      await Promise.all(
-        [outDir, `${outDir}-next`, `${outDir}-previous`].map((dir) =>
-          rm(dir, { force: true, recursive: true }),
-        ),
-      );
+    try {
+      await browser?.close();
+    } finally {
+      try {
+        await server?.close();
+      } finally {
+        if (outDir) {
+          await Promise.all(
+            ["", "-build-b", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
+              rm(`${outDir}${suffix}`, { force: true, recursive: true }),
+            ),
+          );
+        }
+      }
     }
   });
 
@@ -357,7 +378,7 @@ describe("Control UI service-worker production update E2E", () => {
         const draft =
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
         await editor.fill(draft);
-        await buildProductionControlUiE2e(nextDir, buildB);
+        await stageBuildB(nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await rename(outDir, previousDir);
         await rename(nextDir, outDir);
@@ -439,25 +460,22 @@ describe("Control UI service-worker production update E2E", () => {
       defaultAgentId: "research",
       serverBuildId: buildA,
       serverVersion: "2026.7.10",
-      featureMethods: ["terminal.open"],
+      featureMethods: ["terminal.open", "terminal.attach"],
       methodResponses: {
-        "terminal.open": {
+        "terminal.attach": {
           agentId: "research",
           confined: false,
           cwd: "/workspace/research",
           sessionId: "terminal-after-worker-refresh",
           shell: "/bin/bash",
+          buffer: "restored terminal output",
+          seq: 24,
+          owner: "agent:research:main",
         },
       },
       terminalEnabled: true,
     });
-    const getCatalogOpens = async () =>
-      (await gateway.getRequests("terminal.open")).filter(
-        (request) =>
-          typeof request.params === "object" &&
-          request.params !== null &&
-          "catalog" in request.params,
-      );
+    const getTerminalAttaches = () => gateway.getRequests("terminal.attach");
     let installGate: InstallGate | null = null;
 
     try {
@@ -507,7 +525,7 @@ describe("Control UI service-worker production update E2E", () => {
       const nextOutDir = `${outDir}-next`;
       const previousOutDir = `${outDir}-previous`;
       installGate = await createInstallGate();
-      await buildProductionControlUiE2e(nextOutDir, buildB);
+      await stageBuildB(nextOutDir);
       await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB.path).not.toBe(assetA.path);
@@ -553,22 +571,18 @@ describe("Control UI service-worker production update E2E", () => {
           new CustomEvent("openclaw:terminal-toggle", {
             detail: {
               open: true,
-              catalog: {
-                catalogId: "codex",
-                hostId: "gateway:local",
-                threadId: "thread-during-worker-refresh",
-              },
+              terminalSessionId: "terminal-after-worker-refresh",
             },
           }),
         );
       });
       await expect
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
-        .toContain("thread-during-worker-refresh");
+        .toContain("terminal-after-worker-refresh");
       await page.waitForTimeout(300);
-      const catalogOpensBeforeWorkerActivation = await getCatalogOpens();
-      expect(catalogOpensBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
-      if (catalogOpensBeforeWorkerActivation.length > 0) {
+      const attachesBeforeWorkerActivation = await getTerminalAttaches();
+      expect(attachesBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
+      if (attachesBeforeWorkerActivation.length > 0) {
         const currentConnect = (await gateway.getRequests("connect")).at(-1);
         expect(currentConnect?.params).toMatchObject({ client: { buildId: buildB } });
       }
@@ -599,22 +613,14 @@ describe("Control UI service-worker production update E2E", () => {
         .toEqual({ agentId: "research", available: true, open: true });
       // Panel visibility precedes asynchronous terminal boot and RPC dispatch.
       // Observe the request and finish its intent before counting exactly once.
-      await expect.poll(getCatalogOpens).toHaveLength(1);
+      await expect.poll(getTerminalAttaches).toHaveLength(1);
       await expect
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
         .toBeNull();
-      const catalogOpens = await getCatalogOpens();
-      expect(catalogOpens).toHaveLength(1);
-      const [terminalOpen] = catalogOpens;
-      expect(terminalOpen?.params).toMatchObject({
-        agentId: "research",
-        cols: expect.any(Number),
-        rows: expect.any(Number),
-        catalog: {
-          catalogId: "codex",
-          hostId: "gateway:local",
-          threadId: "thread-during-worker-refresh",
-        },
+      const terminalAttaches = await getTerminalAttaches();
+      expect(terminalAttaches).toHaveLength(1);
+      expect(terminalAttaches[0]?.params).toEqual({
+        sessionId: "terminal-after-worker-refresh",
       });
 
       await expect

@@ -112,7 +112,7 @@ describe("browser screencast WebSocket upgrade", () => {
   });
 
   it("pings viewers and terminates a missed pong", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
     const ws = connect(mintBrowserScreencastToken(screencastParams()).token, false);
     await once(ws, "open");
     const ping = once(ws, "ping");

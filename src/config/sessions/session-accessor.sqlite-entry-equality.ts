@@ -1,6 +1,15 @@
+import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type { SessionEntry } from "./types.js";
 
-export type SqliteLifecycleTargetSnapshot = Array<{ entry: SessionEntry; sessionKey: string }>;
+export type SqliteLifecycleTargetSnapshot = Array<{
+  entry: SessionEntry;
+  sessionKey: string;
+  /** Complete rows from preparation; absent snapshots require a hydrated commit read. */
+  persistedRows?: {
+    lookupKeys: readonly string[];
+    rows: readonly ResolvedSessionEntryRow["row"][];
+  };
+}>;
 
 class SqliteSessionMutationConflictError extends Error {
   constructor(operationLabel: string) {

@@ -2,15 +2,11 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer as createHttpServer,
+  type ServerResponse,
   type IncomingHttpHeaders,
   type IncomingMessage,
-  type ServerResponse,
 } from "node:http";
-import {
-  Agent as HttpsAgent,
-  createServer as createHttpsServer,
-  request as httpsRequest,
-} from "node:https";
+import { Agent as HttpsAgent, createServer as createHttpsServer } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex, Readable, Writable } from "node:stream";
@@ -29,15 +25,20 @@ import {
   type SecretEgressTlsContext,
 } from "./certificates.js";
 import {
-  createSecretEgressBodyTransform,
+  forwardSecretEgressRequest,
+  handleUpgradeRequest,
+  REFUSAL_BODY,
+  sendHttpRefusal,
+  type RequestHandler,
+  type UpgradeRequest,
+} from "./proxy-forward.js";
+import {
   SecretEgressSubstitutionError,
   type SecretEgressRefusalReason,
 } from "./stream-substitution.js";
 
 const PROXY_AUTH_USERNAME = "openclaw";
 const PROXY_AUTH_REALM = "OpenClaw secret egress";
-const REFUSAL_BODY = "Secret egress proxy refused the request.\n";
-const UPSTREAM_ERROR_BODY = "Secret egress proxy could not reach the upstream host.\n";
 
 type SecretEgressProxyAuditEvent = {
   kind: "forwarded" | "refused";
@@ -133,22 +134,6 @@ function sendProxyAuthRequired(socket: Duplex): void {
   socket.end(
     `HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="${PROXY_AUTH_REALM}"\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(REFUSAL_BODY)}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${REFUSAL_BODY}`,
   );
-}
-
-function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSAL_BODY): void {
-  if (res.destroyed || res.writableEnded) {
-    return;
-  }
-  if (res.headersSent) {
-    res.destroy();
-    return;
-  }
-  res.writeHead(status, {
-    Connection: "close",
-    "Content-Length": Buffer.byteLength(body),
-    "Content-Type": "text/plain; charset=utf-8",
-  });
-  res.end(body);
 }
 
 function resolveRegisteredSentinel(params: {
@@ -361,10 +346,22 @@ export async function startSecretEgressProxyServer(params: {
     target: URL;
     host: string;
     registered: RegisteredRun;
+    upgrade?: UpgradeRequest;
   }) => {
     ownResource(forward.registered, forward.request);
     ownResource(forward.registered, forward.response);
+    if (forward.upgrade) {
+      ownResource(forward.registered, forward.upgrade.stream);
+    }
     if (!forward.registered.isActive()) {
+      return;
+    }
+    if (
+      forward.upgrade &&
+      (forward.request.method !== "GET" ||
+        forward.request.headers.upgrade?.toLowerCase() !== "websocket")
+    ) {
+      sendHttpRefusal(forward.response, 400);
       return;
     }
     const { host } = forward;
@@ -417,78 +414,24 @@ export async function startSecretEgressProxyServer(params: {
       return;
     }
 
-    const bodyTransform = ownResource(
-      forward.registered,
-      createSecretEgressBodyTransform({
-        onSubstitution: () => {
-          substituted = true;
-        },
-        resolveSentinel: (sentinel) =>
-          resolveRegisteredSentinel({ sentinel, host, registered: forward.registered }),
-      }),
-    );
-    let refused = false;
-    const upstream = ownResource(
-      forward.registered,
-      httpsRequest(
-        {
-          hostname: target.hostname,
-          port: target.port || 443,
-          path: `${target.pathname}${target.search}`,
-          method: forward.request.method,
-          headers,
-          agent: upstreamTlsAgent,
-        },
-        (upstreamResponse) => {
-          ownResource(forward.registered, upstreamResponse);
-          if (refused || !forward.registered.isActive()) {
-            upstreamResponse.destroy();
-            return;
-          }
-          upstreamResponse.once("error", () => forward.response.destroy());
-          forward.response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-          upstreamResponse.pipe(forward.response);
-        },
-      ),
-    );
-    forward.request.once("error", () => forward.response.destroy());
-    forward.response.once("close", () => {
-      refused = true;
-      forward.request.unpipe(bodyTransform);
-      bodyTransform.destroy();
-      upstream.destroy();
+    forwardSecretEgressRequest({
+      request: forward.request,
+      response: forward.response,
+      upgrade: forward.upgrade,
+      target,
+      headers,
+      host,
+      substituted,
+      upstreamTlsAgent,
+      isActive: forward.registered.isActive,
+      ownResource: (resource) => ownResource(forward.registered, resource),
+      releaseResponse: () => {
+        forward.registered.resources.delete(forward.response);
+      },
+      resolveSentinel: (sentinel) =>
+        resolveRegisteredSentinel({ sentinel, host, registered: forward.registered }),
+      audit,
     });
-    bodyTransform.once("finish", () => {
-      if (!refused && forward.registered.isActive()) {
-        audit({ kind: "forwarded", host, substituted });
-      }
-    });
-    bodyTransform.once("error", (error) => {
-      if (refused || !forward.registered.isActive()) {
-        return;
-      }
-      refused = true;
-      forward.request.unpipe(bodyTransform);
-      forward.request.resume();
-      upstream.destroy();
-      const reason =
-        error instanceof SecretEgressSubstitutionError ? error.reason : "unresolved-sentinel";
-      audit({ kind: "refused", host, substituted, reason });
-      sendHttpRefusal(
-        forward.response,
-        502,
-        error instanceof SecretEgressSubstitutionError ? `${error.message}\n` : REFUSAL_BODY,
-      );
-    });
-    upstream.once("error", () => {
-      if (refused || !forward.registered.isActive()) {
-        return;
-      }
-      refused = true;
-      audit({ kind: "refused", host, substituted, reason: "upstream-error" });
-      sendHttpRefusal(forward.response, 502, UPSTREAM_ERROR_BODY);
-    });
-    forward.request.pipe(bodyTransform).pipe(upstream);
   };
 
   const tlsServerFor = (target: ConnectTarget, registered: RegisteredRun) => {
@@ -498,24 +441,30 @@ export async function startSecretEgressProxyServer(params: {
       context = certificates.createContext({
         hostname: target.hostname,
         isActive: registered.isActive,
-        createServer: (leaf) =>
-          createHttpsServer(leaf, (request, response) => {
+        createServer: (leaf) => {
+          const handleRequest: RequestHandler = (request, response, upgrade) => {
             const parsed = parseRequestTarget(
               request,
               response,
               `https://${target.hostname}${target.port === 443 ? "" : `:${target.port}`}`,
             );
             if (parsed) {
-              forwardRequest({ request, response, ...parsed, registered });
+              forwardRequest({ request, response, ...parsed, registered, upgrade });
             }
-          }).on("secureConnection", (socket) => ownResource(registered, socket)),
+          };
+          return createHttpsServer(leaf, handleRequest)
+            .on("upgrade", (request, _socket, head) =>
+              handleUpgradeRequest(handleRequest, request, head),
+            )
+            .on("secureConnection", (socket) => ownResource(registered, socket));
+        },
       });
       registered.tlsServers.set(key, context);
     }
     return context.get();
   };
 
-  const proxy = createHttpServer((request, response) => {
+  const handleProxyRequest: RequestHandler = (request, response, upgrade) => {
     const parsed = parseRequestTarget(request, response);
     if (!parsed) {
       return;
@@ -534,8 +483,11 @@ export async function startSecretEgressProxyServer(params: {
       request.resume();
       return;
     }
-    forwardRequest({ request, response, ...parsed, registered: authorization });
-  });
+    forwardRequest({ request, response, ...parsed, registered: authorization, upgrade });
+  };
+  const proxy = createHttpServer(handleProxyRequest).on("upgrade", (request, _socket, head) =>
+    handleUpgradeRequest(handleProxyRequest, request, head),
+  );
 
   proxy.on("connection", (socket) => {
     sockets.add(socket);

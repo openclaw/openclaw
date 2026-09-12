@@ -55,6 +55,32 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun pendingPickerImportBlocksOnlyItsComposerAndCancellationRestoresSend() {
+    val owner = ChatComposerOwner("gateway", "main", "agent:main:first")
+    val sibling = owner.copy(sessionKey = "agent:main:second")
+    val state = ChatComposerStateStore()
+    state.textDrafts[owner] = "Caption waiting for a picked file"
+    state.textDrafts[sibling] = "Independent caption"
+    val authorization = requireNotNull(state.beginMediaAcquisition(owner))
+    val importId = requireNotNull(state.beginMediaImport(owner, authorization, "agent:main:first"))
+    val secondAuthorization = requireNotNull(state.beginMediaAcquisition(owner))
+    val secondImportId = requireNotNull(state.beginMediaImport(owner, secondAuthorization, "agent:main:first"))
+
+    assertEquals(ChatComposerSendStartResult.Unavailable, state.beginSend(owner).result)
+    assertEquals("Caption waiting for a picked file", state.textDrafts[owner])
+    val independent = requireNotNull(state.beginSend(sibling).request)
+    assertEquals("Independent caption", independent.message)
+    state.completeSend(independent, accepted = false)
+
+    state.cancelMediaImport(importId)
+    assertEquals(ChatComposerSendStartResult.Unavailable, state.beginSend(owner).result)
+    state.cancelMediaImport(secondImportId)
+    val afterCancel = requireNotNull(state.beginSend(owner).request)
+    assertEquals("Caption waiting for a picked file", afterCancel.message)
+    assertTrue(afterCancel.attachments.isEmpty())
+  }
+
+  @Test
   fun sendPayloadReadsCurrentOwnerStoresAfterEditsAndRemovals() {
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
     val state = ChatComposerStateStore()

@@ -4,15 +4,49 @@ import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
 } from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   connectChatMetadataAccount,
+  createChatMetadataHarness,
   createDraftChatMetadataScope,
   createPersonalChatMetadataFixture,
 } from "./chat-metadata-runtime.test-support.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
+  test("reuses published catalogs for authenticated drafts until personal defaults are selected", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "personal-chat-metadata-cache-" },
+      async () => {
+        const harness = createChatMetadataHarness();
+        const alice = ensureProfileForEmail("alice@example.test");
+        const bob = ensureProfileForEmail("bob@example.test");
+        const request = { agentId: "main", requesterProfileId: alice.id };
+        try {
+          await harness.runtime.refresh();
+          const published = await harness.runtime.read({ agentId: "main" });
+          expect(await harness.runtime.read(request)).toEqual(published);
+          expect(await harness.runtime.read({ ...request, requesterProfileId: bob.id })).toEqual(
+            published,
+          );
+          expect(harness.buildProjection).toHaveBeenCalledOnce();
+
+          connectChatMetadataAccount(alice.id);
+          await harness.runtime.read(request);
+          expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+          await harness.runtime.read(request);
+          expect(harness.buildProjection).toHaveBeenCalledTimes(3);
+          clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
+          expect(await harness.runtime.read(request)).toEqual(published);
+          expect(harness.buildProjection).toHaveBeenCalledTimes(3);
+        } finally {
+          await harness.runtime.stop();
+        }
+      },
+    );
+  });
+
   test.each(["metadata", "startup"] as const)(
     "keeps persisted-session %s separate from personal defaults and draft previews",
     async (surface) => {

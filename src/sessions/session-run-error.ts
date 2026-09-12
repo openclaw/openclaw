@@ -36,7 +36,7 @@ export async function recordGatewaySessionRunFailure(params: {
       }
       return {
         customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-        content: `This turn did not run: ${error}.`,
+        content: `This turn ended before a reply: ${error}`,
         display: true,
         details: { runId, error },
       };

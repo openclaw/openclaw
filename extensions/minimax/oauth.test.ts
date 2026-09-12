@@ -4,31 +4,10 @@ import type { Socket } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { loginMiniMaxPortalOAuth } from "./oauth.js";
 
 const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 function timeoutResult<T>(value: T, timeoutMs: number): Promise<T> {
   return new Promise((resolve) => {
@@ -278,6 +257,23 @@ afterEach(() => {
 });
 
 describe("loginMiniMaxPortalOAuth", () => {
+  it("delivers the pairing code before polling for credentials", async () => {
+    const deviceCode = vi.fn(async () => {});
+    stubOAuthFetch(
+      (_input, init) => authorizationResponse(init),
+      () => {
+        expect(deviceCode).toHaveBeenCalledExactlyOnceWith({
+          title: "MiniMax OAuth",
+          code: "CODE",
+          expiresInMinutes: 1,
+          message: "Open https://example.com/device to approve access.",
+        });
+        return tokenResponse();
+      },
+    );
+    await loginMiniMax({ deviceCode });
+  });
+
   it.each([
     [3600, 1_700_003_600_000],
     [1_700_000_000, 1_700_000_000_000],
@@ -361,7 +357,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   );
 
   it("bounds authorization error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(
+    const tracked = cancelTrackedTextResponse(
       `${"minimax authorization unavailable ".repeat(1024)}tail`,
       {
         status: 503,
@@ -383,7 +379,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   });
 
   it("bounds token error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"minimax token unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"minimax token unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "Content-Type": "text/plain" },
     });
@@ -400,7 +396,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   });
 
   it("bounds HTTP 200 token bodies before app-level parsing", async () => {
-    const tracked = cancelTrackedResponse(`${'{"status":"error","detail":"'.repeat(512)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${'{"status":"error","detail":"'.repeat(512)}tail`, {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

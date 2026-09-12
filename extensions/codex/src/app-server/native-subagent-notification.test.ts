@@ -99,13 +99,13 @@ describe("Codex native subagent notifications", () => {
         agentPath: "null-child",
         status: "succeeded",
         statusLabel: "completed_without_final_message",
-        result: "Codex native subagent completed without a final assistant message.",
+        result: "Subagent completed without a final assistant message.",
       },
       {
         agentPath: "empty-child",
         status: "succeeded",
         statusLabel: "completed_without_final_message",
-        result: "Codex native subagent completed without a final assistant message.",
+        result: "Subagent completed without a final assistant message.",
       },
     ]);
   });

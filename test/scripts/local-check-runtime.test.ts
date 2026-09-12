@@ -160,6 +160,27 @@ describe("local-check-runtime", () => {
     expect(args).toEqual(["--declaration", "false"]);
   });
 
+  it("throttles tsgo on constrained CI hosts when local safeguards are disabled", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      ["-b", "tsconfig.projects.json"],
+      makeEnv({ CI: "true", OPENCLAW_LOCAL_CHECK: "0" }),
+      CONSTRAINED_HOST,
+    );
+
+    expect(args).toEqual([
+      "-b",
+      "tsconfig.projects.json",
+      "--declaration",
+      "false",
+      "--singleThreaded",
+      "--checkers",
+      "1",
+    ]);
+    expect(env.GOMAXPROCS).toBe("2");
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
   it("keeps explicit tsgo flags and Go env overrides intact when throttled", () => {
     const { args, env } = applyLocalTsgoPolicy(
       ["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"],

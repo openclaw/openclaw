@@ -52,6 +52,16 @@ describe("shared ip helpers", () => {
     ["fe80::1%eth0", "fe80::1%eth0", true],
     ["fe80::1%eth0", "fe80::1%eth1/128", true],
     ["::ffff:127.0.0.1", "::ffff:127.0.0.1/128", true],
+    ["10.1.2.3", "::ffff:10.0.0.0/104", true],
+    ["::ffff:10.1.2.3", "::ffff:10.0.0.0/104", true],
+    ["11.1.2.3", "::ffff:10.0.0.0/104", false],
+    ["10.42.0.59", "::ffff:10.42.0.0/120", true],
+    ["10.42.1.59", "::ffff:10.42.0.0/120", false],
+    ["10.0.0.1", "::ffff:10.0.0.0/128", false],
+    ["203.0.113.9", "::ffff:0:0/96", true],
+    ["::ffff:203.0.113.9", "::ffff:0:0/96", true],
+    ["203.0.113.9", "::ffff:10.0.0.0/64", true],
+    ["2001:db8::1", "::ffff:0:0/96", false],
   ])("matches %s against %s: %s", (ip, range, expected) => {
     expect(isIpInCidr(ip, range)).toBe(expected);
   });
@@ -202,8 +212,10 @@ describe("shared ip helpers", () => {
     // benchmark range. Operators using those proxies need both ranges
     // exempted to keep web_fetch working.
     const ula = parseCanonicalIpAddress("fc00::1");
+    const metadata = parseCanonicalIpAddress("fd00:ec2::254");
     expect(ula?.kind()).toBe("ipv6");
-    if (!ula || !isIpv6Address(ula)) {
+    expect(metadata?.kind()).toBe("ipv6");
+    if (!ula || !isIpv6Address(ula) || !metadata || !isIpv6Address(metadata)) {
       throw new Error("expected ipv6 fixture");
     }
 
@@ -215,6 +227,7 @@ describe("shared ip helpers", () => {
     // Opt-in flag — the only path the SSRF policy uses to thread fake-ip
     // proxy intent through to the address classifier.
     expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: true })).toBe(false);
+    expect(isBlockedSpecialUseIpv6Address(metadata, { allowUniqueLocalRange: true })).toBe(true);
   });
 
   it("opt-in unique-local exemption does NOT bleed into other special-use IPv6 ranges (#74351)", () => {

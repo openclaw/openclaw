@@ -1,6 +1,6 @@
 // Subagent announce flow tests cover the seam-level orchestration between wait
 // outcomes, requester lookup, delivery, and cleanup.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
@@ -20,8 +20,10 @@ const agentSpy = vi.fn(async (_req: AgentCallRequest): Promise<AgentCallResponse
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
-const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
-  return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
+const resolveAgentIdFromSessionKeyMock = vi.fn<
+  typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey
+>((sessionKey, configuredDefaultAgentId) => {
+  return sessionKey?.match(/^agent:([^:]+)/)?.[1] ?? configuredDefaultAgentId ?? "main";
 });
 const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp/sessions.json");
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
@@ -219,6 +221,7 @@ vi.mock("../registry/subagent-registry-read.js", () => subagentRegistryRuntimeMo
 vi.mock("../registry/subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
 import { defaultRuntime } from "../../../runtime.js";
 import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
+import { testing as outputTesting } from "./subagent-announce-output.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 function requireQueuedMessageCall() {
@@ -319,6 +322,24 @@ describe("subagent announce seam flow", () => {
     subagentRegistryRuntimeMock.replaceSubagentRunAfterSteer.mockReturnValue(true);
     subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReset();
     subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReturnValue(null);
+    outputTesting.setDepsForTest({
+      callGateway: callGatewayMock as typeof import("./subagent-announce.runtime.js").callGateway,
+      getRuntimeConfig: () => mockConfig,
+      readSubagentSessionEntry: (storePath, sessionKey) =>
+        (
+          loadSessionStoreMock(storePath) as Record<
+            string,
+            ReturnType<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>
+          >
+        )[sessionKey],
+      readSessionMessagesAsync: async () => [],
+      resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
+      resolveSessionStorePathCore: resolveStorePathMock,
+    });
+  });
+
+  afterEach(() => {
+    outputTesting.setDepsForTest();
   });
 
   it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {

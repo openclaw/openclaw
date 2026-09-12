@@ -556,7 +556,6 @@ export async function installSkill(
       name,
       installId,
       dangerouslyForceUnsafeInstall,
-      timeoutMs: 120000,
     });
     return {
       kind: "success",

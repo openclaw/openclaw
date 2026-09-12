@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     pluginIds: [],
     index: { plugins: [{ pluginId: "openai", enabled: true }] },
     manifestRegistry: { plugins: [], diagnostics: [] },
+    registryDiagnostics: [],
     declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
@@ -142,6 +143,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
       const catalog = await mocks.runPreparedModelCatalogWorker();
       // Real worker replies pair every catalog with its observed auth generation.
       setPreparedModelFullCatalogAuth(catalog, {
+        providerAuthLabels: new Map(),
         authStore: { version: 1, profiles: {} },
         authModes: {},
       });
@@ -231,13 +233,10 @@ const {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } = await import("./prepared-model-runtime.js");
-const { getAvailablePreparedModelCatalogSnapshot, loadPreparedModelCatalogSnapshot } =
+const { getPreparedModelCatalogSnapshot, loadPreparedModelCatalogSnapshot } =
   await import("./prepared-model-catalog.js");
-const {
-  prepareScopedReadOnlyLiveModelCatalog,
-  prepareScopedReadOnlyModelAuthModes,
-  prepareScopedReadOnlyModelCatalog,
-} = await import("./prepared-model-runtime.scoped-catalog.js");
+const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
+  await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
@@ -246,75 +245,15 @@ beforeEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   mocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
-    .mockReturnValue(createEmptyPluginRegistry());
+    .mockImplementation(() => createEmptyPluginRegistry());
   vi.clearAllMocks();
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
   mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
 });
 
-describe("prepareScopedReadOnlyModelAuthModes", () => {
-  function usePreparedSyntheticAuth() {
-    mocks.resolveAmbientCredentials.mockImplementationOnce(async (...args: unknown[]) => {
-      const params = args[0] as {
-        syntheticAuthProviderRefs: string[];
-        resolveSyntheticAuth: (provider: string) => Promise<{ apiKey?: string } | undefined>;
-      };
-      return Object.fromEntries(
-        (
-          await Promise.all(
-            params.syntheticAuthProviderRefs.map(async (provider) => {
-              const key = (await params.resolveSyntheticAuth(provider))?.apiKey;
-              return key ? [[provider, { type: "api_key", key }]] : [];
-            }),
-          )
-        ).flat(),
-      );
-    });
-  }
-
-  it("returns a verified provider-owned auth mode", async () => {
-    usePreparedSyntheticAuth();
-
-    await expect(
-      prepareScopedReadOnlyModelAuthModes(
-        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
-        ["openai"],
-        mocks.metadataSnapshot as never,
-      ),
-    ).resolves.toEqual({ openai: "api_key" });
-  });
-
-  it("keeps a missing native login unknown", async () => {
-    mocks.resolveSyntheticAuth.mockReturnValueOnce(undefined);
-    usePreparedSyntheticAuth();
-
-    await expect(
-      prepareScopedReadOnlyModelAuthModes(
-        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
-        ["openai"],
-        mocks.metadataSnapshot as never,
-      ),
-    ).resolves.toEqual({});
-  });
-
-  it("does not resolve auth for a disabled provider", async () => {
-    mocks.prepareStaticCatalog.mockResolvedValueOnce({ providers: [], entries: [] });
-    usePreparedSyntheticAuth();
-
-    await expect(
-      prepareScopedReadOnlyModelAuthModes(
-        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
-        ["openai"],
-        mocks.metadataSnapshot as never,
-      ),
-    ).resolves.toEqual({});
-    expect(mocks.resolveSyntheticAuth).not.toHaveBeenCalled();
-  });
-});
-
 describe("prepared model runtime Gateway catalog mode", () => {
-  it("initializes cold inventory once on ordinary demand while prepared reads stay static", async () => {
+  it("initializes cold inventory once on explicit refresh while prepared reads stay static", async () => {
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     const params = { agentId: "default", config, readOnly: true };
     const discovery = createDeferred<ModelCatalogSnapshot>();
@@ -329,8 +268,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(prepared.entries.map(({ id }) => id)).toEqual(["gpt-5.5"]);
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
 
-    const first = loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: "stale" });
-    const second = loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: "stale" });
+    const first = loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: true });
+    const second = loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: true });
     try {
       await vi.waitFor(() => expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce());
       await expect(loadPreparedModelCatalogSnapshot(params)).resolves.toBe(prepared);
@@ -339,7 +278,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       expect(firstCatalog.entries.map(({ id }) => id)).toEqual(["discovered-model", "gpt-5.5"]);
       expect(secondCatalog).toBe(firstCatalog);
       await expect(
-        loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: "stale" }),
+        loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: true }),
       ).resolves.toBe(firstCatalog);
       expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     } finally {
@@ -357,7 +296,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       gatewayLifecycle: true,
       catalogMode: "static",
     });
-    const first = loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: "stale" });
+    const first = loadPreparedModelCatalogSnapshot({ ...params, refreshFullCatalog: true });
     let replacement: Promise<void> | undefined;
     const publications: string[] = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) =>
@@ -469,6 +408,57 @@ describe("prepared model runtime Gateway catalog mode", () => {
       expect(project(fullCatalog, snapshot!.pluginRegistry)).toEqual(expected);
       expect(project(configuredCatalog)).toEqual(expected);
       expect(project(configuredCatalog, snapshot!.pluginRegistry)).toEqual(expected);
+    },
+  );
+
+  it.each([
+    { live: false, mode: "merge" },
+    { live: true, mode: "merge" },
+    { live: false, mode: "replace" },
+    { live: true, mode: "replace" },
+  ] as const)(
+    "projects current static rows in scoped $mode catalogs (live=$live)",
+    async ({ live, mode }) => {
+      mocks.resolveStaticCatalogModel.mockReturnValue({
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "Configured model",
+        api: "openai-responses",
+        baseUrl: "https://configured.example.test/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+      });
+      const prepare = live
+        ? prepareScopedReadOnlyLiveModelCatalog
+        : prepareScopedReadOnlyModelCatalog;
+      const catalog = await prepare(
+        {
+          config: {
+            agents: { defaults: { model: "openai/gpt-5.5" } },
+            models: { mode },
+          },
+          agentDir: "/tmp/prepared-scoped-static-projection",
+          env: {},
+          readOnly: true,
+        },
+        ["openai"],
+      );
+      expect(catalog.staticEntries).toEqual(
+        mode === "replace"
+          ? []
+          : [
+              expect.objectContaining({
+                provider: "openai",
+                id: "gpt-5.5",
+                name: "Configured model",
+                baseUrl: "https://configured.example.test/v1",
+              }),
+            ],
+      );
+      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     },
   );
 
@@ -677,7 +667,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     // published metadata generation without starting catalog discovery.
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
     expect(configuredRuntimeModelCount).toBe(1);
-    expect(generatedCatalogReadCount).toBe(0);
+    expect(generatedCatalogReadCount).toBe(1);
     const snapshot = getPreparedModelRuntimeSnapshot({
       agentId: "default",
       config,
@@ -686,7 +676,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       workspaceDir: "/tmp/prepared-static-workspace",
     });
     expect(
-      getAvailablePreparedModelCatalogSnapshot({
+      getPreparedModelCatalogSnapshot({
         agentId: "default",
         config,
         agentDir: "/tmp/prepared-static-agent",
@@ -718,7 +708,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(snapshot?.readFullModelCatalog?.()).toBe(fullCatalog);
     expect(
-      getAvailablePreparedModelCatalogSnapshot({
+      getPreparedModelCatalogSnapshot({
         agentId: "default",
         config,
         agentDir: "/tmp/prepared-static-agent",

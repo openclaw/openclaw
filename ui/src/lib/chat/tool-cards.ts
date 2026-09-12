@@ -1,8 +1,11 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import {
   asNullableObjectRecord as readRecord,
   asNullableRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
 import {
@@ -11,6 +14,8 @@ import {
 } from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
+  isToolErrorOutput,
+  readToolErrorFlag,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
@@ -95,11 +100,6 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined {
-  const raw = value.isError ?? value.is_error;
-  return typeof raw === "boolean" ? raw : undefined;
-}
-
 function readToolExitCode(...values: unknown[]): number | undefined {
   for (const value of values) {
     const record = readRecord(value);
@@ -109,60 +109,6 @@ function readToolExitCode(...values: unknown[]): number | undefined {
     }
   }
   return undefined;
-}
-
-const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
-const MAX_ERROR_DETECT_CHARS = 20_000;
-const TOOL_ERROR_STATUSES = new Set(["error", "failed", "timeout"]);
-
-function hasToolErrorStatus(value: unknown): boolean {
-  return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
-}
-
-function isToolErrorOutput(outputText: string | undefined): boolean {
-  if (!outputText) {
-    return false;
-  }
-  const trimmed = outputText.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (TOOL_NOT_FOUND_PATTERN.test(trimmed)) {
-    return true;
-  }
-  if (trimmed.length > MAX_ERROR_DETECT_CHARS) {
-    return false;
-  }
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return false;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return false;
-  }
-  if (!isRecord(parsed)) {
-    return false;
-  }
-  const obj = parsed;
-  const explicitErrorFlag = readToolErrorFlag(obj);
-  if (explicitErrorFlag !== undefined) {
-    return explicitErrorFlag;
-  }
-  if ("error" in obj) {
-    const value = obj.error;
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
-    if (typeof value === "boolean") {
-      return value;
-    }
-    if (value && typeof value === "object") {
-      return true;
-    }
-  }
-  return hasToolErrorStatus(obj.status);
 }
 
 export function isToolCardError(card: ToolCard): boolean {
@@ -197,30 +143,36 @@ export function extractToolPreview(
     : undefined;
 }
 
-function extractToolDetailsPreview(
+function extractToolPresentation(
   details: unknown,
   text: string | undefined,
   name: string,
   browserToolName = name,
-): ToolCard["preview"] | undefined {
+): Pick<ToolCard, "preview" | "browserTab"> {
   const preview = extractCanvasFromDetails(details);
   const canvas =
     preview?.surface === "assistant_message"
       ? { ...preview, surface: "assistant_message" }
       : extractToolPreview(text, name);
   if (canvas) {
-    return { ...canvas, surface: "assistant_message" };
+    return { preview: { ...canvas, surface: "assistant_message" } };
   }
   const tab = asNullableRecord(asNullableRecord(details)?.browserTab);
   const target = readBrowserTabTarget(tab);
   if (browserToolName !== "browser" || !tab || !target) {
-    return undefined;
+    return {};
   }
+  const url = typeof tab.url === "string" ? truncateUtf16Safe(tab.url, 2_048) : "";
   return {
-    kind: "browser-tab",
-    ...target,
-    ...(typeof tab.url === "string" ? { url: truncateUtf16Safe(tab.url, 2_048) } : {}),
-    ...(typeof tab.title === "string" ? { title: truncateUtf16Safe(tab.title, 512) } : {}),
+    browserTab: target,
+    preview: isHttpUrl(url)
+      ? {
+          kind: "browser-tab",
+          ...target,
+          url,
+          ...(typeof tab.title === "string" ? { title: truncateUtf16Safe(tab.title, 512) } : {}),
+        }
+      : undefined,
   };
 }
 
@@ -345,6 +297,20 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
 
 let nextPreviewRevision = 0;
 
+export function isToolCallContentBlock(item: {
+  type?: unknown;
+  name?: unknown;
+  arguments?: unknown;
+  args?: unknown;
+  input?: unknown;
+}): boolean {
+  return (
+    isToolCallContentType(item.type) ||
+    (typeof item.name === "string" &&
+      (item.arguments != null || item.args != null || item.input != null))
+  );
+}
+
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
@@ -370,20 +336,21 @@ function extractToolCards(message: unknown): ToolCard[] {
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
+  const messageRunId = readSessionMessageIdentity(m)?.runId ?? readNonBlankString(m.runId);
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
-    const isToolCall =
-      isToolCallContentType(item.type) ||
-      (typeof item.name === "string" &&
-        (item.arguments != null || item.args != null || item.input != null));
-    if (isToolCall) {
+    const runId = readNonBlankString(item.runId) ?? messageRunId;
+    const parentToolCallId = readNonBlankString(item.parentToolCallId);
+    if (isToolCallContentBlock(item)) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       const callId = resolveToolCallId(item, m);
       const details = item.details ?? m.details;
       cards.push({
         id: resolveToolCardId(item, m, index),
         ...(callId ? { callId } : {}),
+        ...(runId ? { runId } : {}),
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         name: resolveToolName(item, m),
         args,
         inputText: serializeToolInput(args),
@@ -420,12 +387,14 @@ function extractToolCards(message: unknown): ToolCard[] {
         envelopeName && envelopeName !== "browser"
           ? envelopeName
           : (existing?.name ?? envelopeName ?? name);
-      const preview = extractToolDetailsPreview(details, text, name, browserToolName);
+      const presentation = extractToolPresentation(details, text, name, browserToolName);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       const exitCode = readToolExitCode(item, details, text ? parseJsonRecord(text) : undefined, m);
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
+        existing.runId ??= runId;
+        existing.parentToolCallId ??= parentToolCallId;
         // Live tool-stream messages emit a toolresult block for partial
         // `update` output too; completion there is owned by the stream's
         // resultReceived marker (set at card creation), not block presence —
@@ -434,7 +403,8 @@ function extractToolCards(message: unknown): ToolCard[] {
           existing.completed = true;
         }
         existing.outputText = text;
-        existing.preview = preview;
+        existing.preview = presentation.preview;
+        existing.browserTab = presentation.browserTab;
         if (details !== undefined) {
           existing.details = details;
         }
@@ -449,6 +419,8 @@ function extractToolCards(message: unknown): ToolCard[] {
       cards.push({
         id: cardId,
         ...(callId ? { callId } : {}),
+        ...(runId ? { runId } : {}),
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         name,
         completed: true,
         outputText: text,
@@ -456,7 +428,7 @@ function extractToolCards(message: unknown): ToolCard[] {
         messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}),
-        preview,
+        ...presentation,
       });
     }
   }
@@ -472,6 +444,7 @@ function extractToolCards(message: unknown): ToolCard[] {
     cards.push({
       id: resolveToolCardId({}, m, 0),
       ...(callId ? { callId } : {}),
+      ...(messageRunId ? { runId: messageRunId } : {}),
       name,
       completed: isToolResultMessage(message) || role === "tool" || role === "function",
       outputText: text,
@@ -479,13 +452,13 @@ function extractToolCards(message: unknown): ToolCard[] {
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      preview: extractToolDetailsPreview(m.details, text, name),
+      ...extractToolPresentation(m.details, text, name),
     });
   }
 
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
-    if (card.preview?.kind !== "browser-tab" || card.callId || card.messageId) {
+    if (!card.browserTab || card.callId || card.messageId) {
       continue;
     }
     revision ??= ++nextPreviewRevision;

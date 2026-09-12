@@ -17,6 +17,7 @@ export type RunPluginInstallCommandParams = {
   opts: InstallSafetyOverrides & {
     acceptCapabilities?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
+    dangerouslyForceUnsafeInstall?: boolean;
     expectedIntegrity?: string;
     expectedPluginId?: string;
     force?: boolean;

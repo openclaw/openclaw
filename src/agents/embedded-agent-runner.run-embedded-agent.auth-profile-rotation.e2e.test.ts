@@ -59,6 +59,7 @@ const installRunEmbeddedMocks = () => {
     resolveModelAsync: async (provider: string, modelId: string) => {
       const subscriptionModel = modelId === "chatgpt-mock";
       return {
+        logicalRef: { provider, model: modelId },
         model: {
           id: modelId,
           name: modelId,

@@ -31,7 +31,9 @@ import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
@@ -276,9 +278,57 @@ class CommandPaletteLogicTest {
   @Test
   fun inactiveQueuedSidebarRowsDoNotShowQueuedActivity() = verifyThreadActivity(queued = true, sidebar = true)
 
+  @Test
+  fun matchingThreadsReplaceEmptyActionsWithoutLosingQueryFocus() =
+    verifyThreadActivity(queued = false) { model ->
+      val query = composeRule.onNode(hasSetTextAction())
+      val searchResults = hasScrollAction() and hasAnyDescendant(hasSetTextAction())
+      val actions = composeRule.onNodeWithText(nativeString("Quick actions"), ignoreCase = true)
+      val emptyActions = composeRule.onNodeWithText(nativeString("No actions found"))
+      query.assertIsFocused().assertTextEquals("Activity")
+      emptyActions.assertDoesNotExist()
+      actions.assertDoesNotExist()
+
+      assertTrue(model.isConnected.value)
+      query.performTextReplacement("no-matching-result")
+      emptyActions.assertIsDisplayed()
+      actions.assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("No matching threads yet.")).assertIsDisplayed()
+      query.assertIsFocused().assertTextEquals("no-matching-result")
+
+      query.performTextReplacement(nativeString("Appearance"))
+      emptyActions.assertDoesNotExist()
+      actions.assertIsDisplayed()
+      composeRule.onNode(hasText(nativeString("Appearance")) and hasClickAction() and hasSetTextAction().not() and hasAnyAncestor(searchResults)).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("No matching threads yet.")).assertIsDisplayed()
+
+      query.performTextReplacement("")
+      actions.assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Open Chat")).assertIsDisplayed()
+      query.performTextReplacement("Activity")
+      query.assertIsFocused().assertTextEquals("Activity")
+      emptyActions.assertDoesNotExist()
+      actions.assertDoesNotExist()
+      composeRule.onNodeWithText("Activity idle").assertIsDisplayed()
+      assertEquals("agent:main:selected-elsewhere", model.chatSessionKey.value)
+    }
+
+  @Test
+  fun emptyOfflineSearchRetainsConnectionGuidance() {
+    withShell(HomeDestination.Settings) { _, assertRuntimeUnchanged ->
+      composeRule.onNodeWithContentDescription(nativeString("Search settings")).performClick()
+      composeRule.onNode(hasSetTextAction()).performTextReplacement("no-matching-result")
+      composeRule.onNodeWithText(nativeString("No actions found")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Connect the Gateway to search threads.")).assertIsDisplayed()
+      composeRule.onNode(hasSetTextAction()).assertIsFocused()
+      assertRuntimeUnchanged()
+    }
+  }
+
   private fun verifyThreadActivity(
     queued: Boolean,
     sidebar: Boolean = false,
+    verifySearch: (MainViewModel) -> Unit = {},
   ) {
     val selectedKey = "agent:main:selected-elsewhere"
     val activeKey = "agent:main:activity-active"
@@ -433,6 +483,7 @@ class CommandPaletteLogicTest {
         }
         assertResultActivity()
         assertEquals(0, controller.pendingRunCount.value)
+        verifySearch(model)
       }
     } finally {
       restoreRequest()

@@ -75,6 +75,7 @@ enum class WearProxyCapability(
   GatewayControls(wireValue = "gateway-controls"),
   ModelControls(wireValue = "model-controls"),
   ModelCatalogSearch(wireValue = "model-catalog-search"),
+  SessionScopedModelCatalog(wireValue = "session-scoped-model-catalog"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
   SessionSearchPagination(wireValue = "session-search-pagination"),
   AgentPulse(wireValue = "agent-pulse"),

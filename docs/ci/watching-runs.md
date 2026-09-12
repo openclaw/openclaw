@@ -64,6 +64,14 @@ rollup observation before deciding. Each poll reads at most 32 missing run recor
 excess references stay pending and resume from the cache on the next poll. Known
 missing or foreign associations remain blocking, as do independent failed checks.
 
+`STATUS` lines report progress. In rollup mode, `rollup` is the effective check
+verdict and `github_rollup` is GitHub's raw aggregate. Superseded checks can leave
+`github_rollup=FAILURE` while `rollup=pending` or `rollup=green`. A green rollup
+still waits for the attached CI run to succeed. Terminal `GREEN` exits 0,
+`FAILING` exits 15, and `TIMEOUT` exits 16. Rollup timeouts include the last raw
+aggregate and pending count; `ci-run` timeouts identify that completion mode
+because it does not inspect the rollup.
+
 GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after
 verifying the successful exact-head attempt, its complete same-name job group,
@@ -102,7 +110,14 @@ regular UTF-8 file before verification. Empty files are valid. It preserves
 operator-provided text and trailers, appending any missing co-authors from the
 current GitHub preview and reviewed source commits. This option requires squash
 and a non-queue PR; all review, CI, exact-head, and admission checks still apply.
-Without the option, the existing GitHub preview behavior is unchanged.
+Without the option, the wrapper composes the message from the GitHub preview:
+it keeps credit backed by a non-merge PR commit author or a reviewed source
+trailer, appends human `Co-authored-by` trailers from the PR's commits that the
+preview omitted, and drops machine credit (Claude, Codex, Cursor, Copilot, Amp,
+Trae, and GitHub App `[bot]` accounts) wherever GitHub replayed it, including
+inside per-commit bullets. A reviewed body that still contains machine credit
+is rejected, and a merge-queue PR whose preview needs such edits stops before
+admission.
 
 `merge-recover` accepts the same option after its required outcome ID and
 `--confirmed-operator-recovery`. Repeating `merge-run` with a retained outcome

@@ -12,6 +12,7 @@ import {
   commandNameVariants,
   completionFlags,
   visibleCompletionCommands,
+  type ShellCompletionCommandTree,
   type ShellCompletionContext,
 } from "./completion-command-tree.js";
 import {
@@ -28,21 +29,30 @@ import {
   type CompletionShell,
 } from "./completion-runtime.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
-import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry-core.js";
+import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
-import { getSubCliEntries, registerSubCliByNameCore } from "./program/register.subclis-core.js";
+import { removeCommandGroupNames } from "./program/register-command-groups.js";
+import { getSubCliCompletionGroups } from "./program/register.subclis-core.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
-  if (shell === "zsh") {
-    return generateZshCompletion(program);
-  }
-  if (shell === "bash") {
-    return generateBashCompletion(program);
-  }
-  if (shell === "powershell") {
-    return generatePowerShellCompletion(program);
-  }
-  return generateFishCompletion(program);
+  return createCompletionScriptGenerator(program)(shell);
+}
+
+function createCompletionScriptGenerator(program: Command): (shell: CompletionShell) => string {
+  let tree: ShellCompletionCommandTree | undefined;
+  return (shell) => {
+    if (shell === "zsh") {
+      return generateZshCompletion(program);
+    }
+    tree ??= collectShellCompletionCommandTree(program);
+    if (shell === "bash") {
+      return generateBashCompletion(tree);
+    }
+    if (shell === "powershell") {
+      return generatePowerShellCompletion(tree);
+    }
+    return generateFishCompletion(tree);
+  };
 }
 
 function preferredCompletionFlag(option: Option): string {
@@ -134,8 +144,9 @@ async function writeCompletionCache(params: {
   shells: CompletionShell[];
   binName: string;
 }): Promise<void> {
+  const generateScript = createCompletionScriptGenerator(params.program);
   for (const shell of params.shells) {
-    const script = getCompletionScript(shell, params.program);
+    const script = generateScript(shell);
     await publishOutputFileAtomically({
       filePath: resolveCompletionCachePath(shell, params.binName),
       tempPrefix: ".openclaw-completion-cache",
@@ -152,16 +163,13 @@ function writeCompletionRegistrationWarning(message: string): void {
 }
 
 async function registerSubcommandsForCompletion(program: Command): Promise<void> {
-  const entries = getSubCliEntries();
-  for (const entry of entries) {
-    if (entry.name === "completion") {
-      continue;
-    }
+  for (const { name, entry } of getSubCliCompletionGroups()) {
     try {
-      await registerSubCliByNameCore(program, entry.name, process.argv, { purpose: "completion" });
+      removeCommandGroupNames(program, entry);
+      await entry.register(program);
     } catch (error) {
       writeCompletionRegistrationWarning(
-        `skipping subcommand \`${entry.name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
+        `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -207,8 +215,9 @@ export function registerCompletionCli(program: Command) {
       // Our CLI defaults to lazy registration for perf; force-register core commands here.
       const ctx = getProgramContext(program);
       if (ctx) {
-        for (const name of getCoreCliCommandNames()) {
-          await registerCoreCliByName(program, ctx, name);
+        for (const entry of getCoreCliCompletionGroups(ctx)) {
+          removeCommandGroupNames(program, entry);
+          await entry.register(program);
         }
       }
 
@@ -397,14 +406,14 @@ ${funcName}() {
   return segments.join("");
 }
 
-function generatePowerShellCompletion(program: Command): string {
-  const rootCmd = program.name();
+function generatePowerShellCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants: contexts } = tree;
+  const rootCmd = root.command.name();
   const completionBodies: string[] = [];
   const formatPowerShellArray = (entries: string[]) =>
     entries.length > 0
       ? `@(${entries.map((entry) => `'${entry.replaceAll("'", "''")}'`).join(",")})`
       : "@()";
-  const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
   const rootValueOptions = root.valueOptions;
   const commandPathCases = contexts
     .flatMap((context) =>
@@ -553,9 +562,9 @@ ${choiceCompletion}
 `;
 }
 
-function generateFishCompletion(program: Command): string {
-  const rootCmd = program.name();
-  const { root, descendants } = collectShellCompletionCommandTree(program);
+function generateFishCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants } = tree;
+  const rootCmd = root.command.name();
   const segments: string[] = [generateFishPathHelper(rootCmd, descendants)];
 
   for (const context of [root, ...descendants]) {

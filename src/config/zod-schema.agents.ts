@@ -6,6 +6,8 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
+export { BroadcastSchema } from "./zod-schema.messages.js";
+
 const AgentEntryConfigSchema = z.preprocess(
   (value, ctx) => {
     if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -152,12 +154,3 @@ const AcpBindingSchema = z
   });
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
-
-const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
-
-export const BroadcastSchema = z
-  .object({
-    strategy: BroadcastStrategySchema.optional(),
-  })
-  .catchall(z.array(z.string()))
-  .optional();

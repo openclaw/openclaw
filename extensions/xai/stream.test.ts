@@ -11,13 +11,9 @@ import {
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
+import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
-import {
-  createXaiPayloadCaptureStream,
-  expectXaiFastToolStreamShaping,
-  runXaiGrok4ResponseStream,
-} from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
 
@@ -123,6 +119,25 @@ function runXaiToolPayloadWrapper(params: {
   );
 }
 
+it.each([
+  { modelId: "grok-3", target: "grok-3-fast", supported: true },
+  { modelId: "grok-4-0709", target: "grok-4-fast", supported: true },
+  { modelId: "grok-4.3", target: "grok-4.3", supported: false },
+  { modelId: "grok-3-fast", target: "grok-3-fast", supported: false },
+])("publishes the actual Fast mapping for $modelId", ({ modelId, target, supported }) => {
+  expect(
+    resolveFastModeSupport({
+      modelId,
+      provider: "xai",
+      api: "openai-responses",
+      runtimeId: "openclaw",
+      requestCapabilities: { endpointClass: "xai-native", allowsAnthropicServiceTier: false },
+    }),
+  ).toBe(supported);
+  expect(captureWrappedModelId({ modelId, fastMode: true })).toBe(target);
+  expect(captureWrappedModelId({ modelId, fastMode: false })).toBe(modelId);
+});
+
 async function captureXaiResponsesPayloadWithThinking(
   reasoning: ModelThinkingLevel = "low",
   modelId = "grok-4.5",
@@ -169,7 +184,7 @@ async function captureXaiResponsesPayloadWithThinking(
 
 describe("xai stream wrappers", () => {
   it.each(
-    ["grok-4.5", "auto"].flatMap((id) =>
+    ["grok-4.5", "grok-4.6"].flatMap((id) =>
       ["https://cli-chat-proxy.grok.com/v1", "https://CLI-CHAT-PROXY.GROK.COM:443/v1/"].map(
         (baseUrl) => ({ id, baseUrl }),
       ),
@@ -201,18 +216,18 @@ describe("xai stream wrappers", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 500_000,
         maxTokens: 64_000,
-        params: { canonicalModelId: "grok-4.5" },
+        params: { canonicalModelId: "grok-fixture-unselected" },
         baseUrl,
       },
       { messages: [] },
       { headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" } },
     );
 
-    expect(capturedModelId).toBe("grok-4.5");
+    expect(capturedModelId).toBe(id);
     expect(capturedHeaders).toEqual({
       "x-existing": "kept",
       "x-grok-client-version": "2026.7.2",
-      "x-grok-model-override": "grok-4.5",
+      "x-grok-model-override": id,
       "x-xai-token-auth": "xai-grok-cli",
     });
   });
@@ -273,11 +288,6 @@ describe("xai stream wrappers", () => {
     );
   });
 
-  it("leaves unsupported or disabled models unchanged", () => {
-    expect(captureWrappedModelId({ modelId: "grok-3-fast", fastMode: true })).toBe("grok-3-fast");
-    expect(captureWrappedModelId({ modelId: "grok-3", fastMode: false })).toBe("grok-3");
-  });
-
   it("resolves dynamic fast mode for each xai stream call", () => {
     const capturedModelIds: string[] = [];
     const baseStreamFn: StreamFn = (model) => {
@@ -303,18 +313,6 @@ describe("xai stream wrappers", () => {
     void wrapped?.(model, { messages: [] } as Context, {});
 
     expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
-  });
-
-  it("composes the xai provider stream chain from extra params", () => {
-    const capture = createXaiPayloadCaptureStream();
-
-    const wrapped = wrapXaiProviderStream({
-      streamFn: capture.streamFn,
-      extraParams: { fastMode: true },
-    } as never);
-
-    runXaiGrok4ResponseStream(wrapped);
-    expectXaiFastToolStreamShaping(capture);
   });
 
   it("leaves tool-call argument html entities untouched, delegating decode to the core path", async () => {

@@ -34,6 +34,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -428,6 +429,7 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
   return isInvalidConfigError(err) ||
     isTailscaleRouteOwnershipConflictError(err) ||
+    isGatewayEffectiveConfigConflictError(err) ||
     resolveGatewayStartupMaintenanceReason(err)
     ? EXIT_CONFIG_ERROR
     : 1;
@@ -707,6 +709,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
+    if (process.platform === "darwin") {
+      const { warnAboutGatewayRestartStorm } = await import("../../daemon/restart-storm.js");
+      await warnAboutGatewayRestartStorm(process.env, (message) => gatewayLog.warn(message));
+    }
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
   const portOverride = parsePort(opts.port);
@@ -1011,6 +1017,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       isGatewayLockError(error) ||
       isInvalidConfigError(error) ||
       isTailscaleRouteOwnershipConflictError(error) ||
+      isGatewayEffectiveConfigConflictError(error) ||
       collectNestedErrorCandidates(error).some(
         (candidate) => candidate instanceof GatewayStartupCleanupError,
       ) ||

@@ -51,6 +51,7 @@ vi.mock("../../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
     changes: [],
     warnings: [],
     installRecords: {},
+    smokeFailures: [],
     errored: false,
   }),
 }));

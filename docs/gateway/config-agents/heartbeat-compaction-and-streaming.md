@@ -135,6 +135,12 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
     defaults: {
       contextPruning: {
         mode: "cache-ttl", // off (default) | cache-ttl
+        ttl: "1h", // duration string; bare numbers are minutes (default 5m)
+        tools: { allow: [], deny: [] }, // tool names eligible for / excluded from pruning
+        hardClear: {
+          enabled: true, // false skips the hard-clear step
+          placeholder: "[Old tool result content cleared]",
+        },
       },
     },
   },
@@ -144,6 +150,9 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 <Accordion title="cache-ttl mode behavior">
 
 - `mode: "cache-ttl"` enables pruning passes.
+- `ttl` sets how long a cache entry is considered fresh before a new pruning round can start. It is a duration string whose bare numbers are minutes; the built-in default is 5 minutes, and the bundled Anthropic plugin seeds `1h`.
+- `tools.allow` and `tools.deny` scope which tool names are prunable.
+- `hardClear.enabled: false` skips the hard-clear step, and `hardClear.placeholder` replaces the default `[Old tool result content cleared]` text.
 - Pruning soft-trims oversized tool results first, then hard-clears older tool results if needed.
 
 **Soft-trim** keeps beginning + end and inserts `...` in the middle.

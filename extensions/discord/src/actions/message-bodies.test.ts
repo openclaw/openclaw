@@ -5,7 +5,22 @@ import { RequestClient } from "../internal/rest.js";
 import { sendPollDiscord, sendStickerDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordAction } from "./runtime.js";
-import { discordMessagingActionRuntime as runtime } from "./runtime.messaging.runtime.js";
+import * as runtime from "./runtime.messaging.runtime.js";
+
+vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime.messaging.runtime.js")>();
+  return {
+    ...actual,
+    editMessageDiscord: vi.fn(actual.editMessageDiscord),
+    deleteMessageDiscord: vi.fn(actual.deleteMessageDiscord),
+    fetchChannelInfoDiscord: vi.fn(actual.fetchChannelInfoDiscord),
+    fetchGuildInfoDiscord: vi.fn(actual.fetchGuildInfoDiscord),
+    sendMessageDiscord: vi.fn(actual.sendMessageDiscord),
+    sendDiscordComponentMessage: vi.fn(actual.sendDiscordComponentMessage),
+    sendStickerDiscord: vi.fn(actual.sendStickerDiscord),
+    createThreadDiscord: vi.fn(actual.createThreadDiscord),
+  };
+});
 
 const channelId = "123456789012345678";
 const messageId = "223456789012345678";
@@ -15,7 +30,9 @@ const attachment = { id: "423456789012345678", filename: "example.txt", size: 4 
 const cfg: OpenClawConfig = {
   channels: { discord: { token, groupPolicy: "open" } },
 };
-const original = { ...runtime };
+const original = await vi.importActual<typeof import("./runtime.messaging.runtime.js")>(
+  "./runtime.messaging.runtime.js",
+);
 const originalFetch = globalThis.fetch;
 let server: Server;
 let rest: RequestClient;
@@ -72,28 +89,28 @@ beforeAll(async () => {
     return originalFetch(input, init);
   });
   rest = new RequestClient(token, { baseUrl, timeout: 5000 });
-  vi.spyOn(runtime, "editMessageDiscord").mockImplementation((channel, id, payload, opts) =>
+  vi.mocked(runtime.editMessageDiscord).mockImplementation((channel, id, payload, opts) =>
     original.editMessageDiscord(channel, id, payload, { ...opts, rest }),
   );
-  vi.spyOn(runtime, "deleteMessageDiscord").mockImplementation((channel, id, opts) =>
+  vi.mocked(runtime.deleteMessageDiscord).mockImplementation((channel, id, opts) =>
     original.deleteMessageDiscord(channel, id, { ...opts, rest }),
   );
-  vi.spyOn(runtime, "fetchChannelInfoDiscord").mockImplementation((channel, opts) =>
+  vi.mocked(runtime.fetchChannelInfoDiscord).mockImplementation((channel, opts) =>
     original.fetchChannelInfoDiscord(channel, { ...opts, rest }),
   );
-  vi.spyOn(runtime, "fetchGuildInfoDiscord").mockImplementation((guild, opts) =>
+  vi.mocked(runtime.fetchGuildInfoDiscord).mockImplementation((guild, opts) =>
     original.fetchGuildInfoDiscord(guild, { ...opts, rest }),
   );
-  vi.spyOn(runtime, "sendMessageDiscord").mockImplementation((to, content, opts) =>
+  vi.mocked(runtime.sendMessageDiscord).mockImplementation((to, content, opts) =>
     original.sendMessageDiscord(to, content, { ...opts, rest }),
   );
-  vi.spyOn(runtime, "sendDiscordComponentMessage").mockImplementation((to, spec, opts) =>
+  vi.mocked(runtime.sendDiscordComponentMessage).mockImplementation((to, spec, opts) =>
     original.sendDiscordComponentMessage(to, spec, { ...opts, rest }),
   );
-  vi.spyOn(runtime, "sendStickerDiscord").mockImplementation((to, ids, opts) =>
+  vi.mocked(runtime.sendStickerDiscord).mockImplementation((to, ids, opts) =>
     original.sendStickerDiscord(to, ids, { ...opts, rest }),
   );
-  vi.spyOn(runtime, "createThreadDiscord").mockImplementation((channel, payload, opts) =>
+  vi.mocked(runtime.createThreadDiscord).mockImplementation((channel, payload, opts) =>
     original.createThreadDiscord(channel, payload, { ...opts, rest }),
   );
 });
@@ -109,6 +126,18 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  for (const mock of [
+    runtime.editMessageDiscord,
+    runtime.deleteMessageDiscord,
+    runtime.fetchChannelInfoDiscord,
+    runtime.fetchGuildInfoDiscord,
+    runtime.sendMessageDiscord,
+    runtime.sendDiscordComponentMessage,
+    runtime.sendStickerDiscord,
+    runtime.createThreadDiscord,
+  ]) {
+    vi.mocked(mock).mockReset();
+  }
   vi.restoreAllMocks();
   rest?.abortAllRequests();
   server?.closeAllConnections();

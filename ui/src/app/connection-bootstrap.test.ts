@@ -1,13 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 describe("connection bootstrap coordinator", () => {
   it("deduplicates bootstrap work and caps its connection concurrency", async () => {
@@ -15,10 +8,10 @@ describe("connection bootstrap coordinator", () => {
     coordinator.synchronize({ client: {}, connected: true });
     let active = 0;
     let maximum = 0;
-    const first = deferred();
-    const second = deferred();
-    const third = deferred();
-    const run = (completion: ReturnType<typeof deferred>) => async () => {
+    const first = createDeferred();
+    const second = createDeferred();
+    const third = createDeferred();
+    const run = (completion: ReturnType<typeof createDeferred<void>>) => async () => {
       active += 1;
       maximum = Math.max(maximum, active);
       await completion.promise;
@@ -45,12 +38,12 @@ describe("connection bootstrap coordinator", () => {
     async (boundary) => {
       const coordinator = createConnectionBootstrapCoordinator();
       coordinator.synchronize({ client: {}, connected: true });
-      const first = deferred();
-      const second = deferred();
+      const first = createDeferred();
+      const second = createDeferred();
       let boundaryReturned = false;
       let startedAfterBoundary = false;
       let staleStarted = false;
-      const block = (completion: ReturnType<typeof deferred>) => async () => {
+      const block = (completion: ReturnType<typeof createDeferred<void>>) => async () => {
         startedAfterBoundary ||= boundaryReturned;
         await completion.promise;
       };
@@ -81,8 +74,8 @@ describe("connection bootstrap coordinator", () => {
   it("keeps a new connection's active task deduplicated after the old task finishes", async () => {
     const coordinator = createConnectionBootstrapCoordinator();
     coordinator.synchronize({ client: {}, connected: true });
-    const previous = deferred();
-    const current = deferred();
+    const previous = createDeferred();
+    const current = createDeferred();
     const runPrevious = vi.fn(async () => await previous.promise);
     const runCurrent = vi.fn(async () => await current.promise);
     const runDuplicate = vi.fn(async () => {});

@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import {
@@ -182,7 +184,7 @@ describe("PDF tool native provider paths", () => {
         input: ["text", "document"],
       });
       const modelRegistry = createPdfModelRegistry(find);
-      const release = vi.fn();
+      const release = vi.fn(async () => {});
       vi.mocked(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).mockResolvedValueOnce({
         snapshot: withPreparedRuntimeFacts({
           agentDir: "/tmp/committed-pdf-agent",
@@ -190,7 +192,7 @@ describe("PDF tool native provider paths", () => {
           config: withPdfModel(GOOGLE_PDF_MODEL),
           createStores: () => ({ authStorage, modelRegistry }),
         }),
-        release,
+        [Symbol.asyncDispose]: release,
       } as never);
       const geminiSpy = vi
         .spyOn(pdfNativeProviders, "geminiAnalyzePdf")
@@ -203,10 +205,18 @@ describe("PDF tool native provider paths", () => {
         }),
       );
 
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
+      const work = new AsyncWorkScope();
+      let result: Awaited<ReturnType<typeof tool.execute>>;
+      try {
+        result = await work.track(() =>
+          tool.execute("t1", {
+            prompt: "summarize",
+            pdf: "/tmp/doc.pdf",
+          }),
+        );
+      } finally {
+        await work.drain();
+      }
 
       expect(geminiSpy).toHaveBeenCalledWith(
         expect.objectContaining({ modelId: "gemini-2.5-pro" }),
@@ -216,36 +226,73 @@ describe("PDF tool native provider paths", () => {
     });
   });
 
-  it("releases the prepared runtime when store creation fails", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, {
-        provider: "anthropic",
-        input: ["text", "document"],
-      });
-      const release = vi.fn();
-      vi.mocked(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).mockResolvedValueOnce({
-        snapshot: {
-          agentDir,
-          config: withPdfModel(ANTHROPIC_PDF_MODEL),
-          createStores: () => {
-            throw new Error("store fork failed");
+  it.each([false, true])(
+    "preserves store failure when runtime disposal fails: %s",
+    async (cleanupFails) => {
+      await withTempPdfAgentDir(async (agentDir) => {
+        await stubPdfToolInfra(agentDir, {
+          provider: "anthropic",
+          input: ["text", "document"],
+        });
+        const storeError = new Error("store fork failed");
+        const cleanupError = new Error("runtime disposal failed");
+        const cleanupStarted = createDeferredCore();
+        const finishCleanup = createDeferredCore();
+        const release = vi.fn(async () => {
+          cleanupStarted.resolve();
+          await finishCleanup.promise;
+          if (cleanupFails) {
+            throw cleanupError;
+          }
+        });
+        vi.mocked(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).mockResolvedValueOnce({
+          snapshot: {
+            agentDir,
+            config: withPdfModel(ANTHROPIC_PDF_MODEL),
+            createStores: () => {
+              throw storeError;
+            },
           },
-        },
-        release,
-      } as never);
-      const tool = requirePdfTool(
-        (await loadCreatePdfTool())({
-          config: withPdfModel(ANTHROPIC_PDF_MODEL),
-          agentDir,
-        }),
-      );
+          [Symbol.asyncDispose]: release,
+        } as never);
+        const tool = requirePdfTool(
+          (await loadCreatePdfTool())({
+            config: withPdfModel(ANTHROPIC_PDF_MODEL),
+            agentDir,
+          }),
+        );
 
-      await expect(
-        tool.execute("t1", { prompt: "summarize", pdf: "/tmp/doc.pdf" }),
-      ).rejects.toThrow("store fork failed");
-      expect(release).toHaveBeenCalledOnce();
-    });
-  });
+        const work = new AsyncWorkScope();
+        let drained = false;
+        const execution = work.track(() =>
+          tool.execute("t1", { prompt: "summarize", pdf: "/tmp/doc.pdf" }),
+        );
+        let drain: Promise<void> | undefined;
+        try {
+          await expect(execution).rejects.toBe(storeError);
+          await cleanupStarted.promise;
+          drain = work.drain().then(() => {
+            drained = true;
+          });
+          await Promise.resolve();
+          expect(drained).toBe(false);
+          expect(release).toHaveBeenCalledOnce();
+          finishCleanup.resolve();
+          await drain;
+          expect(drained).toBe(true);
+          if (cleanupFails) {
+            await expect(release.mock.results[0]!.value).rejects.toBe(cleanupError);
+          } else {
+            await expect(release.mock.results[0]!.value).resolves.toBeUndefined();
+          }
+        } finally {
+          finishCleanup.resolve();
+          await drain;
+          await work.drain();
+        }
+      });
+    },
+  );
 
   it("rejects pages parameter for native PDF providers", async () => {
     await withTempPdfAgentDir(async (agentDir) => {

@@ -72,6 +72,7 @@ import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -921,11 +922,10 @@ export function registerSkillsCli(program: Command) {
           }
         } catch (err) {
           reportError(formatErrorMessage(err));
-          defaultRuntime.exit(1);
-          return;
+          exitCode = 1;
         }
         if (exitCode) {
-          defaultRuntime.exit(exitCode);
+          exitCliAfterOutput(defaultRuntime, exitCode);
         }
       },
     );

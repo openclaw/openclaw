@@ -2,6 +2,17 @@
    provider-usage-* styles from usage.css and .provider-brand-icon from
    components.css. Structural surfaces come from settings.css. */
 
+.model-providers__catalog-progress {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
 .model-providers__head {
   display: flex;
   align-items: center;
@@ -95,7 +106,8 @@
 }
 
 .model-providers__profiles-heading-actions,
-.model-providers__profile-actions {
+.model-providers__profile-actions,
+.model-providers__profile-order {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -112,16 +124,17 @@
 
 .model-providers__profile {
   display: grid;
-  grid-template-columns: 44px 28px minmax(0, 1fr) max-content max-content;
+  grid-template-columns: max-content 28px minmax(0, 1fr) max-content max-content;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-1) var(--space-3);
   min-width: 0;
   padding-block: var(--space-3);
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 
 .model-providers__profile-grip,
-.model-providers__profile-logout {
+.model-providers__profile-logout,
+.model-providers__account-refresh {
   display: inline-grid;
   width: 44px;
   min-width: 44px;
@@ -133,13 +146,15 @@
   color: var(--muted);
 }
 
-.model-providers__profile-logout:disabled {
+.model-providers__profile-logout:disabled,
+.model-providers__account-refresh:disabled {
   color: color-mix(in srgb, var(--muted) 24%, transparent);
   cursor: default;
 }
 
 .model-providers__profile-grip svg,
-.model-providers__profile-logout svg {
+.model-providers__profile-logout svg,
+.model-providers__account-refresh svg {
   width: 16px;
   height: 16px;
 }
@@ -225,8 +240,8 @@
 
 @container provider-profiles (max-width: 640px) {
   .model-providers__profile {
-    grid-template-columns: 44px minmax(0, 1fr) max-content;
-    gap: var(--space-2);
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    gap: var(--space-1) var(--space-2);
   }
 
   .model-providers__profile-avatar {
@@ -459,5 +474,81 @@
 
   .model-providers__credentials strong {
     text-align: left;
+  }
+}
+
+openclaw-model-account-usage,
+.model-providers__account-usage {
+  display: contents;
+}
+
+.model-providers__profile:has(.model-providers__account-refresh) {
+  --account-action-gap: var(--space-3);
+
+  grid-template-columns: max-content 28px minmax(0, max-content) minmax(0, 1fr) max-content calc(
+      44px - var(--account-action-gap)
+    ) max-content;
+
+  .model-providers__profile-status {
+    grid-column: 5;
+    grid-row: 1;
+    padding-inline-end: calc((44px - 16px) / 2 - var(--account-action-gap));
+  }
+
+  .model-providers__profile-actions {
+    grid-column: 7;
+    grid-row: 1;
+  }
+}
+
+.model-providers__account-refresh {
+  grid-column: 6;
+  grid-row: 1;
+}
+
+.model-providers__account-usage > :not(button) {
+  grid-column: 1 / -1;
+  margin: var(--space-3) var(--space-4);
+  min-width: 0;
+  font-size: var(--control-ui-text-sm);
+}
+
+.model-providers__account-usage > strong {
+  text-transform: capitalize;
+  grid-column: 4;
+  grid-row: 1;
+  justify-self: start;
+  margin: 0;
+  font-weight: 600;
+}
+
+@container provider-profiles (max-width: 640px) {
+  .model-providers__profile:has(.model-providers__account-refresh) {
+    --account-action-gap: var(--space-2);
+
+    grid-template-columns: max-content minmax(0, 1fr) max-content calc(
+        44px - var(--account-action-gap)
+      ) max-content;
+
+    .model-providers__profile-status {
+      grid-column: 3;
+      grid-row: 2;
+    }
+
+    .model-providers__profile-actions {
+      grid-column: 5;
+      grid-row: 2;
+    }
+  }
+
+  .model-providers__account-refresh {
+    grid-column: 4;
+    grid-row: 2;
+  }
+
+  .model-providers__account-usage > strong {
+    grid-column: 1 / 3;
+    grid-row: 2;
+    margin-left: var(--space-4);
   }
 }

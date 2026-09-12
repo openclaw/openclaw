@@ -280,6 +280,15 @@ async function callInProcessGatewayToolBound<T>(
   fallback: (scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>) => Promise<T>,
 ): Promise<T> {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const caller = getGatewayToolCallerIdentity();
+  const agentToolCaller =
+    options.sessionCreation?.via === "spawn" && caller && assertCallerCurrent
+      ? {
+          agentId: caller.agentId,
+          sessionKey: caller.sessionKey,
+          assertCurrent: assertCallerCurrent,
+        }
+      : undefined;
   assertCallerCurrent?.();
   const sessionMutationCommitGuard = assertCallerCurrent
     ? () => {
@@ -300,6 +309,7 @@ async function callInProcessGatewayToolBound<T>(
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" as const },
           syntheticScopes: scopes,
+          ...(agentToolCaller ? { agentToolCaller } : {}),
           ...(options.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
           ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
           ...(options.signal ? { signal: options.signal } : {}),

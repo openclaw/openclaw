@@ -242,6 +242,7 @@ export function retryAssistantAttachmentAvailability(
   resource.abortController = undefined;
   resource.pending = undefined;
   resource.value = undefined;
+  resource.retainUntil = undefined;
   resource.retryAttempted = false;
   scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
   if (allowImage) {
@@ -268,20 +269,20 @@ function createUnavailableAssistantAttachment(
 }
 
 function observeAssistantAttachment(source: string, options: ImageRenderOptions) {
-  // Identical paths can have different project/protection policy in different sessions.
-  const cacheKey = JSON.stringify([
+  const cacheScope = JSON.stringify([
+    options.connectionEpoch ?? 0,
     options.resourceBasePath ?? "",
     options.authToken?.trim() ?? "",
     options.sessionKey,
     options.agentId,
-    options.policyKey,
     source,
   ]);
   return observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
-    cacheKey,
+    JSON.stringify([cacheScope, options.policyKey]),
     options.onRequestUpdate,
     source,
+    cacheScope,
   );
 }
 
@@ -293,6 +294,10 @@ function setAssistantAttachmentAvailability(
     return;
   }
   resource.value = availability;
+  resource.retainUntil =
+    availability.status === "available"
+      ? (availability.mediaTicketExpiresAt ?? Number.POSITIVE_INFINITY)
+      : undefined;
   scheduleAssistantAttachmentRefresh(resource, availability);
 }
 

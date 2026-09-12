@@ -6,11 +6,14 @@
   "include": [
     "../../src/agents/tools/**/*.test.ts",
     "../../src/agents/tools/**/*.test.tsx",
-    "../../src/agents/bash-tools.exec-runtime*.test.ts",
-    "../../src/agents/bash-tools.exec-runtime*.test.tsx",
+    "../../src/agents/sandbox/**/*.test.ts",
+    "../../src/agents/sandbox/**/*.test.tsx",
+    "../../src/agents/bash-tools*.test.ts",
+    "../../src/agents/bash-tools*.test.tsx",
     "../../src/agents/code-mode*.test.ts",
     "../../src/agents/code-mode*.test.tsx",
-    "../../src/agents/tool-search*.test.ts",
-    "../../src/agents/tool-search*.test.tsx"
+    "../../src/agents/model-catalog-view.test.ts",
+    "../../src/agents/tool-*.test.ts",
+    "../../src/agents/tool-*.test.tsx"
   ]
 }

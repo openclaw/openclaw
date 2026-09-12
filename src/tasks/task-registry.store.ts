@@ -14,7 +14,7 @@ export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = {
   loadSnapshot: () => TaskRegistryStoreSnapshot;
-  listTasksForOwnerKey?: (ownerKey: string) => TaskRecord[];
+  listTasksForOwnerKey?: (ownerKey: string) => Promise<TaskRecord[]>;
   upsertTaskWithDeliveryState: (params: {
     task: TaskRecord;
     deliveryState?: TaskDeliveryState;
@@ -24,20 +24,21 @@ export type TaskRegistryStore = {
   close?: () => void;
 };
 
+type TaskRegistryObserverRecord = Omit<TaskRecord, "detail">;
+
 export type TaskRegistryObserverEvent =
   | {
       kind: "restored";
-      tasks: TaskRecord[];
     }
   | {
       kind: "upserted";
-      task: TaskRecord;
-      previous?: TaskRecord;
+      task: TaskRegistryObserverRecord;
+      previous?: TaskRegistryObserverRecord;
     }
   | {
       kind: "deleted";
       taskId: string;
-      previous: TaskRecord;
+      previous: TaskRegistryObserverRecord;
     };
 
 type TaskRegistryObservers = {

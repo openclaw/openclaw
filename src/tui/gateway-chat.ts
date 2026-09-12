@@ -18,6 +18,10 @@ import {
   type CommandEntry,
   type CommandsListParams,
   type CommandsListResult,
+  type QuestionGetResult,
+  type QuestionListResult,
+  type QuestionResolveParams,
+  type QuestionResolveResult,
   type SessionsListParams,
   type SessionsResolveParams,
   type SessionsResolveResult,
@@ -26,6 +30,7 @@ import {
   type TaskSuggestionsAcceptResult,
   type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -442,8 +447,18 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listModels(opts?: { agentId?: string }): Promise<GatewayModelChoice[]> {
-    const res = await this.client.request("models.list", opts ?? {});
-    return Array.isArray(res?.models) ? res.models : [];
+    const published = this.hello?.features.capabilities?.includes(
+      GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
+    );
+    const res = await this.client.request("models.list", {
+      ...opts,
+      ...(published ? { includeDetails: true } : {}),
+    });
+    const models: GatewayModelChoice[] = Array.isArray(res?.models) ? res.models : [];
+    // Released Gateways reject includeDetails and collapse unknown availability to false.
+    return published
+      ? models
+      : models.map(({ available: _available, unavailableReason: _reason, ...model }) => model);
   }
 
   async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {
@@ -453,6 +468,18 @@ export class GatewayChatClient implements TuiBackend {
 
   async listPluginApprovals() {
     return await this.client.request("plugin.approval.list", {});
+  }
+
+  async listQuestions(): Promise<QuestionListResult> {
+    return await this.client.request("question.list", {});
+  }
+
+  async getQuestion(id: string): Promise<QuestionGetResult> {
+    return await this.client.request("question.get", { id });
+  }
+
+  async resolveQuestion(params: QuestionResolveParams): Promise<QuestionResolveResult> {
+    return await this.client.request("question.resolve", params);
   }
 
   async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {

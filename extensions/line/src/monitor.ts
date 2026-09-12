@@ -2,6 +2,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -14,8 +15,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeWebhookRouteKey,
-  normalizePluginHttpPath,
-  normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
   resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
@@ -23,7 +22,7 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
-import { resolveDefaultLineAccountId } from "./accounts.js";
+import { resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -46,7 +45,11 @@ import {
   rejectLineWebhookRequest,
 } from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
-import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
+import {
+  parseLineWebhookBody,
+  resolveLineWebhookPath,
+  validateLineSignature,
+} from "./webhook-utils.js";
 
 interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -191,11 +194,26 @@ export async function monitorLineProvider(
       // A group's configured skill scope only applies if the turn answering it carries it.
       // An empty filter is a real scope ("no skills"), so presence decides, not length.
       const skillFilter = ctx.skillFilter;
+      // Read this turn's own config: LINE resolves it per event so a hot-applied
+      // change reaches the next turn, and the streaming choice must too.
+      // Ask each scope separately. Core reads coalescing that way and lets an account
+      // override only the fields it names; an account config is merged shallowly, so
+      // reading the merged view alone would let an account that tunes nothing but
+      // coalescing erase the channel's explicit enable or disable.
+      const blockStreaming =
+        resolveChannelStreamingBlockEnabled(
+          resolveLineAccount({ cfg: turnConfig, accountId: route.accountId }).config,
+        ) ?? resolveChannelStreamingBlockEnabled(turnConfig.channels?.line);
+      // Only an explicit channel choice may speak here. Left unset the field stays
+      // undefined, which is how core reads "no opinion" and keeps the agent default.
+      const disableBlockStreaming =
+        typeof blockStreaming === "boolean" ? !blockStreaming : undefined;
       const replyOptions =
-        turnAbortSignal || skillFilter
+        turnAbortSignal || skillFilter || disableBlockStreaming !== undefined
           ? {
               ...(turnAbortSignal ? { abortSignal: turnAbortSignal } : {}),
               ...(skillFilter ? { skillFilter } : {}),
+              ...(disableBlockStreaming !== undefined ? { disableBlockStreaming } : {}),
             }
           : undefined;
 
@@ -236,7 +254,7 @@ export async function monitorLineProvider(
               delivery: {
                 // Core renders presentations inside the outbound send pipeline only,
                 // so this path resolves them before either branch reads channelData.
-                preparePayload: prepareLineReplyPayload,
+                preparePayload: (payload) => prepareLineReplyPayload(payload, ctxPayload.From),
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
                     payload,
@@ -318,9 +336,7 @@ export async function monitorLineProvider(
     },
   });
 
-  const normalizedPath = normalizeWebhookPath(
-    normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
-  );
+  const normalizedPath = resolveLineWebhookPath(webhookPath);
   const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({

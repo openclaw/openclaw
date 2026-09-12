@@ -182,7 +182,7 @@ test("sessions.delete removes the session board from its agent database", async 
     }),
     env: process.env,
   });
-  store.putWidget({
+  await store.putWidget({
     sessionKey,
     name: "status",
     content: { kind: "html", html: "ok" },
@@ -194,7 +194,7 @@ test("sessions.delete removes the session board from its agent database", async 
 
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
-  expect(store.getSnapshot({ sessionKey })).toEqual({
+  expect(await store.getSnapshot({ sessionKey })).toEqual({
     sessionKey,
     revision: 0,
     tabs: [],

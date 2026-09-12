@@ -87,6 +87,7 @@ data class Question(
   val questionId: String,
   val header: String,
   val question: String,
+  val url: String? = null,
   val options: List<QuestionOption>,
   val multiSelect: Boolean? = null,
   val isOther: Boolean? = null,
@@ -157,6 +158,7 @@ data class WorkerDesktopObserveResult(
   val wsPath: String,
   val expiresAtMs: Long,
   val control: Boolean,
+  val canResize: Boolean? = null,
   val vncPassword: String? = null,
 )
 
@@ -927,6 +929,16 @@ enum class GatewayMethod(
   SkillsWorkshopRead("skills.workshop.read"),
   SessionPublicShareSet("session.publicShare.set"),
   ClawsMonitors("claws.monitors"),
+  PluginsCatalogBrowse("plugins.catalog.browse"),
+  PluginsCatalogCategories("plugins.catalog.categories"),
+  PluginsCatalogGet("plugins.catalog.get"),
+  TasksHistory("tasks.history"),
+  EnvironmentsPrepare("environments.prepare"),
+  ModelsAuthRefresh("models.authRefresh"),
+  ModelsAuthLogin("models.authLogin"),
+  ModelsAuthSetApiKey("models.authSetApiKey"),
+  SessionsStorageStatus("sessions.storage.status"),
+  SessionsStorageRun("sessions.storage.run"),
 }
 
 enum class GatewayEvent(

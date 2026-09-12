@@ -60,6 +60,7 @@ function resolveStaticSettingsBlock(
 // dead-end.
 const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
   memory: memoryVisibleSchemaKeys,
+  "plugin-settings": () => ["enabled", "allow", "deny", "load", "slots"],
   updates: () => ["channel", "checkOnStart", "auto"],
 };
 
@@ -194,12 +195,19 @@ export function findSettingsSearchBlocks(params: {
             pathname: pathForMemoryTab("settings", params.basePath),
             hash: destination.hash,
           }
-        : {
-            routeId,
-            label: meta?.label ?? sectionSchema.title ?? key,
-            search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
-            hash: destination.hash,
-          },
+        : routeId === "plugin-settings"
+          ? {
+              routeId,
+              label: meta?.label ?? sectionSchema.title ?? key,
+              search: "?tab=advanced",
+              hash: "#plugin-settings-advanced",
+            }
+          : {
+              routeId,
+              label: meta?.label ?? sectionSchema.title ?? key,
+              search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
+              hash: destination.hash,
+            },
     );
   }
   return matches;

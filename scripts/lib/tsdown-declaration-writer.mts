@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   prepareTsdownBuildExecution,
+  resolveStagedSdkDeclarationConcurrency,
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_UNIFIED_CACHE_ENV,
 } from "../tsdown-build.mts";
@@ -18,6 +19,7 @@ import {
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { publishStagedDeclarations } from "./declaration-stage.mts";
 import { withDistArtifactOwnership } from "./dist-artifact-ownership.mts";
+import { hasUnjoinedWork } from "./managed-child-process.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "./tsdown-declaration-generator-inputs.mts";
 import {
   createDeclarationStage,
@@ -163,13 +165,19 @@ export async function writeTsdownDeclarations(
           throw new Error("Declaration cache changed before restoration; rerun the build");
         }
       }
-      // Keep the existing bounded, sequential executor. Hits never enter a
-      // compiler; misses cannot publish or refresh caches before every group joins.
+      // Empty partitions still produce receipts, but only two nonempty SDK misses
+      // may overlap. All other plans retain dependency-ordered serial execution.
+      const misses = prepared.filter((group) => !group.state?.fresh);
+      const concurrency = misses.every(
+        (group) => group.required.length > 0 && group.plan.invocations.length === 1,
+      )
+        ? resolveStagedSdkDeclarationConcurrency(
+            misses.map((group) => ({ name: group.name, maxOldSpaceMb: group.plan.maxOldSpaceMb })),
+          )
+        : 1;
       const plan = {
         ...prepared[0]!.plan,
-        invocations: prepared.flatMap((group) =>
-          group.state?.fresh ? [] : group.plan.invocations,
-        ),
+        invocations: misses.flatMap((group) => group.plan.invocations),
       };
       await publishStagedDeclarations(
         plan,
@@ -198,6 +206,7 @@ export async function writeTsdownDeclarations(
             }
           }
         },
+        concurrency,
       );
       for (const group of prepared) {
         if (group.state && !group.state.fresh) {
@@ -211,7 +220,9 @@ export async function writeTsdownDeclarations(
   } catch (error) {
     failures.push(error);
   }
-  for (const stage of stages) {
+  // An unjoined child may still be writing a stage; retain its inputs and error
+  // under the checkout's existing fail-closed ownership until explicit recovery.
+  for (const stage of failures.some(hasUnjoinedWork) ? [] : stages) {
     try {
       fs.rmSync(stage, { recursive: true, force: true });
     } catch (error) {

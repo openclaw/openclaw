@@ -18,11 +18,10 @@ import {
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
-type InlineImageCandidate =
+type InlineImageReference =
   | {
       kind: "data";
-      data: Buffer;
-      contentType?: string;
+      src: string;
       sourceId?: string;
     }
   | {
@@ -33,11 +32,6 @@ type InlineImageCandidate =
       sourceId?: string;
     }
   | { kind: "unavailable"; sourceId?: string };
-
-type InlineImageLimitOptions = {
-  maxInlineBytes?: number;
-  maxInlineTotalBytes?: number;
-};
 
 const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
@@ -309,77 +303,6 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function canonicalizeInlineBase64Payload(value: string): string | undefined {
-  let cleaned = "";
-  let padding = 0;
-  let sawPadding = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x20) {
-      continue;
-    }
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      cleaned += "=";
-      continue;
-    }
-    const isDataChar =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (sawPadding || !isDataChar) {
-      return undefined;
-    }
-    cleaned += value[index];
-  }
-  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
-}
-
-function decodeDataImageWithLimits(
-  src: string,
-  opts: { maxInlineBytes?: number },
-): { candidate: InlineImageCandidate | null; estimatedBytes: number } {
-  const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
-  if (!match) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
-  const isBase64 = Boolean(match[2]);
-  if (!isBase64) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  const payload = match[3] ?? "";
-  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
-  if (!canonicalPayload) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-
-  // Validation above guarantees whitespace-free base64 for this allocation-free size check.
-  const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
-  if (estimatedBytes <= 0) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  if (typeof opts.maxInlineBytes === "number" && estimatedBytes > opts.maxInlineBytes) {
-    return { candidate: null, estimatedBytes };
-  }
-
-  try {
-    const data = Buffer.from(canonicalPayload, "base64");
-    return {
-      candidate: { kind: "data", data, contentType },
-      estimatedBytes,
-    };
-  } catch {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-}
-
 function fileHintFromUrl(src: string): string | undefined {
   try {
     const url = new URL(src);
@@ -390,11 +313,10 @@ function fileHintFromUrl(src: string): string | undefined {
   }
 }
 
-export function extractInlineImageCandidates(
+export function extractInlineImageReferences(
   attachments: MSTeamsAttachmentLike[],
-  limits?: InlineImageLimitOptions,
-): InlineImageCandidate[] {
-  const out: InlineImageCandidate[] = [];
+): InlineImageReference[] {
+  const out: InlineImageReference[] = [];
   const seenReferences = new Set<string>();
   const representedAttachmentIds = new Set(
     attachments.flatMap((attachment) => {
@@ -402,7 +324,6 @@ export function extractInlineImageCandidates(
       return id && !extractHtmlFromAttachment(attachment) ? [id] : [];
     }),
   );
-  let totalEstimatedInlineBytes = 0;
   for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
@@ -414,23 +335,7 @@ export function extractInlineImageCandidates(
       const src = match[1]?.trim();
       if (src) {
         if (src.startsWith("data:")) {
-          const { candidate: decoded, estimatedBytes } = decodeDataImageWithLimits(src, {
-            maxInlineBytes: limits?.maxInlineBytes,
-          });
-          if (decoded) {
-            const nextTotal = totalEstimatedInlineBytes + estimatedBytes;
-            if (
-              typeof limits?.maxInlineTotalBytes === "number" &&
-              nextTotal > limits.maxInlineTotalBytes
-            ) {
-              out.push({ kind: "unavailable" });
-            } else {
-              totalEstimatedInlineBytes = nextTotal;
-              out.push(decoded);
-            }
-          } else {
-            out.push({ kind: "unavailable" });
-          }
+          out.push({ kind: "data", src });
         } else if (!seenReferences.has(src)) {
           seenReferences.add(src);
           if (src.startsWith("cid:")) {

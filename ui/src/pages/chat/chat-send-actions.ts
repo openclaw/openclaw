@@ -11,6 +11,7 @@ import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
@@ -39,7 +40,7 @@ import {
   resolveDisplayedLeafEntryId,
 } from "./chat-send-request.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost } from "./chat-state-contract.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
@@ -50,7 +51,11 @@ import {
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
 
-function applyChatSendError(state: ChatState, err: unknown, canApplyError: () => boolean): string {
+function applyChatSendError(
+  state: ChatHistoryHost,
+  err: unknown,
+  canApplyError: () => boolean,
+): string {
   const error = isActiveLeafChangedError(err)
     ? t("chat.sendErrors.activeLeafChanged")
     : formatConnectError(err);
@@ -64,7 +69,7 @@ function applyChatSendError(state: ChatState, err: unknown, canApplyError: () =>
 }
 
 export async function sendChatMessageWithGeneratedRunId(
-  state: ChatState,
+  state: ChatHistoryHost,
   message: string,
   attachments?: ChatAttachment[],
   options: {
@@ -132,6 +137,9 @@ const resetRetryState = (
 };
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
+  if (isInitialChatHistoryUnavailable(host)) {
+    return;
+  }
   if (readQueuedMessageById(host, id)?.intent) {
     setChatError(host, t("chat.goals.admissionImmutable"));
     return;
@@ -231,6 +239,9 @@ export function moveQueuedChatMessage(
 }
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
+  if (isInitialChatHistoryUnavailable(host)) {
+    return;
+  }
   const item = host.chatQueue.find((entry) => entry.id === id);
   const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
   const retriesUnconfirmed =

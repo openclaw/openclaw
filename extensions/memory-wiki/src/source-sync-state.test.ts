@@ -353,19 +353,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       group: "bridge",
       activeKeys: new Set(),
-      state: {
-        version: 1,
-        entries: {
-          "sync-key": {
-            group: "bridge",
-            pagePath,
-            sourcePath: "/tmp/source.md",
-            sourceUpdatedAtMs: 0,
-            sourceSize: 0,
-            renderFingerprint: "fp",
-          },
-        },
-      },
+      state: createImportedSourceState(pagePath),
     });
 
     expect(removed).toBe(1);
@@ -412,19 +400,7 @@ describe("memory wiki source sync state", () => {
         vaultRoot,
         group: "bridge",
         activeKeys: new Set(),
-        state: {
-          version: 1,
-          entries: {
-            "sync-key": {
-              group: "bridge",
-              pagePath,
-              sourcePath: "/tmp/source.md",
-              sourceUpdatedAtMs: 0,
-              sourceSize: 0,
-              renderFingerprint: "fp",
-            },
-          },
-        },
+        state: createImportedSourceState(pagePath),
       });
 
       expect(removed).toBe(1);
@@ -691,19 +667,7 @@ describe("memory wiki source sync state", () => {
           vaultRoot,
           group: "bridge",
           activeKeys: new Set(),
-          state: {
-            version: 1,
-            entries: {
-              "sync-key": {
-                group: "bridge",
-                pagePath,
-                sourcePath: "/tmp/source.md",
-                sourceUpdatedAtMs: 0,
-                sourceSize: 0,
-                renderFingerprint: "fp",
-              },
-            },
-          },
+          state: createImportedSourceState(pagePath),
         }),
       ).resolves.toBe(1);
     }
@@ -722,19 +686,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       group: "bridge",
       activeKeys: new Set(),
-      state: {
-        version: 1,
-        entries: {
-          "sync-key": {
-            group: "bridge",
-            pagePath,
-            sourcePath: "/tmp/source.md",
-            sourceUpdatedAtMs: 0,
-            sourceSize: 0,
-            renderFingerprint: "fp",
-          },
-        },
-      },
+      state: createImportedSourceState(pagePath),
     });
 
     const salvageDir = path.join(vaultRoot, ".salvage");
@@ -771,19 +723,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       group: "bridge",
       activeKeys: new Set(),
-      state: {
-        version: 1,
-        entries: {
-          "sync-key": {
-            group: "bridge",
-            pagePath,
-            sourcePath: "/tmp/source.md",
-            sourceUpdatedAtMs: 0,
-            sourceSize: 0,
-            renderFingerprint: "fp",
-          },
-        },
-      },
+      state: createImportedSourceState(pagePath),
     });
 
     expect(removed).toBe(1);
@@ -802,19 +742,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       group: "bridge",
       activeKeys: new Set(),
-      state: {
-        version: 1,
-        entries: {
-          "sync-key": {
-            group: "bridge",
-            pagePath,
-            sourcePath: "/tmp/source.md",
-            sourceUpdatedAtMs: 0,
-            sourceSize: 0,
-            renderFingerprint: "fp",
-          },
-        },
-      },
+      state: createImportedSourceState(pagePath),
     });
 
     expect(removed).toBe(1);
@@ -943,19 +871,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       group: "bridge",
       activeKeys: new Set(),
-      state: {
-        version: 1,
-        entries: {
-          "sync-key": {
-            group: "bridge",
-            pagePath,
-            sourcePath: "/tmp/source.md",
-            sourceUpdatedAtMs: 0,
-            sourceSize: 0,
-            renderFingerprint: "fp",
-          },
-        },
-      },
+      state: createImportedSourceState(pagePath),
     });
 
     // Salvage write failed — the page must NOT be removed.
@@ -992,19 +908,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       group: "bridge",
       activeKeys: new Set(),
-      state: {
-        version: 1,
-        entries: {
-          "sync-key": {
-            group: "bridge",
-            pagePath,
-            sourcePath: "/tmp/source.md",
-            sourceUpdatedAtMs: 0,
-            sourceSize: 0,
-            renderFingerprint: "fp",
-          },
-        },
-      },
+      state: createImportedSourceState(pagePath),
     });
 
     // Restore permission so cleanup can proceed.

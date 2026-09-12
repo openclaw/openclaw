@@ -1,9 +1,10 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
 import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
 import { isContextOverflowError } from "../agents/failover/classify.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { renderAssistantFormatFailureCopy } from "../agents/failover/user-copy.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import {
@@ -146,6 +147,7 @@ function getAssistantErrorFallbackText(message: Record<string, unknown>): string
       storageFailure: classifyGatewayStorageFailure(message),
       code: typeof message.errorCode === "string" ? message.errorCode : undefined,
     }) ??
+    renderAssistantFormatFailureCopy(message) ??
     (isContextOverflowAssistantError(message)
       ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
       : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT)
@@ -192,9 +194,10 @@ function sanitizeAssistantErrorDisplayMessage(
   if (typeof next.text === "string" && next.text.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
     next.text = next.text.slice(STREAM_ERROR_FALLBACK_TEXT.length);
   }
-  const terminalCopy = renderAssistantRequestFailureCopy({
-    code: typeof message.errorCode === "string" ? message.errorCode : undefined,
-  });
+  const terminalCopy =
+    renderAssistantRequestFailureCopy({
+      code: typeof message.errorCode === "string" ? message.errorCode : undefined,
+    }) ?? renderAssistantFormatFailureCopy(message);
   if (terminalCopy) {
     // Apply the normal visibility rules before adding host-owned failure copy.
     // Put it first in surviving text so phase filtering and display caps retain it.

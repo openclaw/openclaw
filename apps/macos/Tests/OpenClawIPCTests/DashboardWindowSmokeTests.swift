@@ -316,7 +316,7 @@ struct DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
         #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
 
-        try controller.nativeBrowser.open(tabId: "mac-focused", url: readerServer.url("/docs/"))
+        try controller.nativeBrowser.open(tabId: "mac-focused", url: readerServer.url("/docs/"), sessionKey: "")
         let readingWebView = try #require(controller.nativeBrowser.webView(for: "mac-focused"))
         try controller.nativeBrowser.present(
             scope: "focus-test", tabId: "mac-focused",
@@ -355,7 +355,7 @@ struct DashboardWindowSmokeTests {
         #expect(requestCount == 0)
 
         let link = readerServer.url("/docs/")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where firstRequestContinuation == nil {
             await Task.yield()
         }
@@ -372,7 +372,7 @@ struct DashboardWindowSmokeTests {
         #expect(requestCount == 2)
 
         try controller.nativeBrowser.close(tabId: "mac-import")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<10 {
             await Task.yield()
         }
@@ -397,7 +397,7 @@ struct DashboardWindowSmokeTests {
         manager._testSetController(controller)
 
         let link = readerServer.url("/docs/")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where gate.requestCount == 0 {
             await Task.yield()
         }
@@ -445,7 +445,7 @@ struct DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
 
         let link = readerServer.url("/docs/")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where firstRequestContinuation == nil {
             await Task.yield()
         }
@@ -458,7 +458,7 @@ struct DashboardWindowSmokeTests {
         }
         #expect(firstRequestApplied == false)
 
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where requestCount == 1 {
             await Task.yield()
         }
@@ -487,9 +487,9 @@ struct DashboardWindowSmokeTests {
         defer { other.closeDashboard() }
         #expect(!controller.nativeBrowser.hasTabs)
         let url = server.url("/reader/first")
-        try controller.nativeBrowser.open(tabId: "mac-first", url: url)
-        try controller.nativeBrowser.open(tabId: "mac-second", url: server.url("/reader/second"))
-        try other.nativeBrowser.open(tabId: "mac-first", url: url)
+        try controller.nativeBrowser.open(tabId: "mac-first", url: url, sessionKey: "")
+        try controller.nativeBrowser.open(tabId: "mac-second", url: server.url("/reader/second"), sessionKey: "")
+        try other.nativeBrowser.open(tabId: "mac-first", url: url, sessionKey: "")
         let first = try #require(controller.nativeBrowser.webView(for: "mac-first"))
         let second = try #require(controller.nativeBrowser.webView(for: "mac-second"))
         let otherTab = try #require(other.nativeBrowser.webView(for: "mac-first"))

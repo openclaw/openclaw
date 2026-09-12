@@ -1166,17 +1166,6 @@ exit 99
     expect(script).toContain('exec "$base" merge-run "$pr"');
   });
 
-  it("defaults to squash and allows commit-preserving merge methods", () => {
-    const script = readScript("scripts/pr-lib/merge.sh");
-
-    expect(script).toContain("OPENCLAW_PR_MERGE_METHOD:-squash");
-    expect(script).toContain("--squash");
-    expect(script).toContain("--merge");
-    expect(script).toContain("--rebase");
-    expect(script).toContain("--auto");
-    expect(script).toContain('--match-head-commit "$PREP_HEAD_SHA"');
-  });
-
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {
     const script = readScript("scripts/pr-prepare");
 

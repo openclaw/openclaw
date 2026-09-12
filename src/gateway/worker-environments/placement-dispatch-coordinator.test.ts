@@ -12,6 +12,7 @@ import {
   createCoordinatorTestService,
   MOVE_REQUEST,
   preparedReclaim,
+  PROVISIONING_PLACEMENT,
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
@@ -351,6 +352,9 @@ describe("worker placement dispatch coordinator", () => {
       coordinated.dispatch({ ...REQUEST, profileId: "another-profile" }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
     await expect(coordinated.dispatch({ ...REQUEST, machineClass: "beast" })).rejects.toThrow(
+      `Session ${REQUEST.sessionKey} is already dispatching another request`,
+    );
+    await expect(coordinated.dispatch({ ...REQUEST, os: "os-a" })).rejects.toThrow(
       `Session ${REQUEST.sessionKey} is already dispatching another request`,
     );
     await expect(
@@ -956,7 +960,7 @@ describe("worker placement dispatch coordinator", () => {
     const fullSweep = coordinated.reconcile();
     await sweepStarted.promise;
     const destroying = coordinated.forceDestroyEnvironment("worker-exclusive");
-    const joinedRecovery = coordinated.resumeProvisioning({} as never, async () => {
+    const joinedRecovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
       joinedRecoveryStarted.resolve();
       await releaseJoinedRecovery.promise;
     });
@@ -964,7 +968,15 @@ describe("worker placement dispatch coordinator", () => {
     releaseSweep.resolve();
     await setImmediatePromise();
 
-    const lateRecovery = coordinated.resumeProvisioning({} as never, async () => {});
+    const lateRecovery = coordinated.resumeProvisioning(
+      {
+        ...PROVISIONING_PLACEMENT,
+        sessionId: "late-session",
+        sessionKey: "agent:main:late-session",
+        environmentId: "worker-late",
+      },
+      async () => {},
+    );
     await setImmediatePromise();
     expect(resumeProvisioning).toHaveBeenCalledOnce();
     expect(forceDestroyEnvironment).not.toHaveBeenCalled();

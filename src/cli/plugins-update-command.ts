@@ -20,6 +20,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import { resolveSourceCheckoutBundledPluginIds } from "../plugins/bundled-sources.js";
 import {
   resolveCombinedPluginAndHookConfigMutationPreflight,
   resolveInstallConfigMutationPreflights,
@@ -61,6 +62,7 @@ import {
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { formatCliCommand } from "./command-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
@@ -252,6 +254,10 @@ async function runPluginUpdateCommandUnlocked(
     config: cfgWithPluginInstallRecords,
     installRecords: pluginInstallRecords,
   });
+  const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
+    config: cfgWithPluginInstallRecords,
+    installRecords: pluginInstallRecords,
+  });
   const installOwnerByPluginId = new Map<string, string>();
   const rejectedPluginIds = new Map<string, string>();
   const ownershipResolver = createInstalledPluginOwnershipResolver(installedPluginIndex);
@@ -259,6 +265,9 @@ async function runPluginUpdateCommandUnlocked(
     ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
     ...Object.keys(pluginInstallRecords),
   ])) {
+    if (sourceBundledIds.has(pluginId)) {
+      continue;
+    }
     const ownership = ownershipResolver.resolveLifecycle(pluginId);
     if (!ownership.ok) {
       rejectedPluginIds.set(pluginId, ownership.error);
@@ -290,9 +299,11 @@ async function runPluginUpdateCommandUnlocked(
     defaultRuntime.error(pluginSelection.error);
     return defaultRuntime.exit(1);
   }
+  // Dormant records still reach the updater for notices, but no package mutation.
+  const packageUpdateIds = pluginSelection.pluginIds.filter((id) => !sourceBundledIds.has(id));
   const packageUpdateSnapshotResult = capturePluginPackageUpdateSnapshot({
     index: installedPluginIndex,
-    installOwners: pluginSelection.pluginIds,
+    installOwners: packageUpdateIds,
   });
   if (!packageUpdateSnapshotResult.ok) {
     defaultRuntime.error(packageUpdateSnapshotResult.error);
@@ -319,7 +330,7 @@ async function runPluginUpdateCommandUnlocked(
     }
     defaultRuntime.error(
       params.id
-        ? `No tracked plugin or hook pack found for "${params.id}". Run "openclaw plugins list" or "openclaw hooks list" to inspect installed packages.`
+        ? `No tracked plugin or hook pack found for "${params.id}". Run "${formatCliCommand("openclaw plugins list")}" or "${formatCliCommand("openclaw hooks list")}" to inspect installed packages.`
         : "Provide a plugin or hook-pack id, or use --all.",
     );
     return defaultRuntime.exit(1);
@@ -327,7 +338,7 @@ async function runPluginUpdateCommandUnlocked(
 
   const pluginUpdateMayMutate =
     !params.opts.dryRun &&
-    pluginSelection.pluginIds.some((pluginId) => {
+    packageUpdateIds.some((pluginId) => {
       return mayMutatePluginInstallRecord(
         pluginInstallRecords[pluginId],
         pluginSelection.specOverrides?.[pluginId],
@@ -360,7 +371,7 @@ async function runPluginUpdateCommandUnlocked(
     const pluginReferencesMayBeUnresolved =
       Object.hasOwn(parsedConfig, "$include") ||
       containsConfigIncludeDirective(mutationSnapshot.snapshot.sourceConfig.plugins);
-    const pluginIdMigrationMayMutate = pluginSelection.pluginIds.some((pluginId) => {
+    const pluginIdMigrationMayMutate = packageUpdateIds.some((pluginId) => {
       return (
         pluginInstallRecordMayMigrateConfigId({
           pluginId,
@@ -371,7 +382,7 @@ async function runPluginUpdateCommandUnlocked(
           pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
       );
     });
-    const pluginLoadPathMayMutate = pluginSelection.pluginIds.some((pluginId) =>
+    const pluginLoadPathMayMutate = packageUpdateIds.some((pluginId) =>
       configReferencesNpmInstallPath({
         config: cfg,
         install: pluginInstallRecords[pluginId],
@@ -418,7 +429,6 @@ async function runPluginUpdateCommandUnlocked(
 
   const installPolicyWarningAcknowledgement = resolveInstallPolicyWarningAcknowledgementCliOptions({
     acknowledgeInstallPolicyWarning: params.opts.acknowledgeInstallPolicyWarning,
-    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
     allowPrompt: !params.opts.dryRun,
   });
   const deferredInstallTransactions: PluginInstallTransaction[] = [];
@@ -538,7 +548,7 @@ async function runPluginUpdateCommandUnlocked(
         const currentInstallRecords = await loadInstalledPluginIndexInstallRecords();
         const currentSnapshot = capturePluginPackageUpdateSnapshot({
           index: installedPluginIndex,
-          installOwners: pluginSelection.pluginIds,
+          installOwners: packageUpdateIds,
         });
         if (
           !isDeepStrictEqual(currentInstallRecords, persistedPluginInstallRecords) ||

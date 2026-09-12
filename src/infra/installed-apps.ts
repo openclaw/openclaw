@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import pLimit from "p-limit";
-import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 const PLIST_READ_CONCURRENCY = 8;
@@ -27,12 +26,6 @@ const SYSTEM_APP_NAMES = new Set([
   "Shortcuts",
 ]);
 
-const InfoPlistSchema = z
-  .object({
-    CFBundleIdentifier: z.string().trim().min(1).optional(),
-  })
-  .passthrough();
-
 export type InstalledApp = {
   label: string;
   bundleId?: string;
@@ -53,7 +46,6 @@ type InstalledAppRoots = {
 type ScanInstalledAppsOptions = {
   platform?: NodeJS.Platform;
   roots?: InstalledAppRoots;
-  readBundleId?: (appPath: string) => Promise<string | undefined>;
 };
 
 function defaultRoots(): InstalledAppRoots {
@@ -110,12 +102,13 @@ async function listAppPaths(
 
 async function readBundleIdWithPlutil(appPath: string): Promise<string | undefined> {
   try {
+    const plistPath = path.join(appPath, "Contents", "Info.plist");
     const { stdout } = await execFileAsync(
       "/usr/bin/plutil",
-      ["-convert", "json", "-o", "-", path.join(appPath, "Contents", "Info.plist")],
+      ["-extract", "CFBundleIdentifier", "raw", "-expect", "string", plistPath],
       { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: PLIST_READ_TIMEOUT_MS },
     );
-    return InfoPlistSchema.parse(JSON.parse(stdout)).CFBundleIdentifier;
+    return stdout.trim() || undefined;
   } catch {
     return undefined;
   }
@@ -137,12 +130,11 @@ export async function scanInstalledApps(
       listAppPaths(roots.systemApplications, true),
     ])
   ).flat();
-  const readBundleId = options.readBundleId ?? readBundleIdWithPlutil;
   const limit = pLimit(PLIST_READ_CONCURRENCY);
   const apps = await Promise.all(
     appPaths.map((entry) =>
       limit(async (): Promise<InstalledApp> => {
-        const bundleId = await readBundleId(entry.path);
+        const bundleId = await readBundleIdWithPlutil(entry.path);
         return {
           label: path.basename(entry.path, ".app"),
           ...(bundleId ? { bundleId } : {}),

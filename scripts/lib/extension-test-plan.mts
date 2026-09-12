@@ -7,6 +7,7 @@ import { isActiveMemoryExtensionRoot } from "../../test/vitest/vitest.extension-
 import { isBrowserExtensionRoot } from "../../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isCodexExtensionRoot } from "../../test/vitest/vitest.extension-codex-paths.mjs";
+import { isDatabaseWorkerExtensionRoot } from "../../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { isDiffsExtensionRoot } from "../../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../../test/vitest/vitest.extension-irc-paths.mjs";
@@ -145,6 +146,7 @@ const EXTENSION_TEST_CONFIG_ROUTES: Array<[(root: string) => boolean, string]> =
   [isMiscExtensionRoot, "test/vitest/vitest.extension-misc.config.ts"],
   [isMsTeamsExtensionRoot, "test/vitest/vitest.extension-msteams.config.ts"],
   [isQaExtensionRoot, "test/vitest/vitest.extension-qa.config.ts"],
+  [isDatabaseWorkerExtensionRoot, "test/vitest/vitest.extension-database-workers.config.ts"],
   [isTelegramExtensionRoot, "test/vitest/vitest.extension-telegram.config.ts"],
   [isVoiceCallExtensionRoot, "test/vitest/vitest.extension-voice-call.config.ts"],
   [isWhatsAppExtensionRoot, "test/vitest/vitest.extension-whatsapp.config.ts"],

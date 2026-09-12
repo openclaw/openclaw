@@ -1,6 +1,6 @@
 // Voice Call plugin module implements timers behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { TerminalStates, type CallId, type CallRecord } from "../types.js";
+import { TerminalStates, type CallId } from "../types.js";
 import type { CallEndResult, CallManagerContext } from "./context.js";
 import {
   resolveVoiceCallSecondsTimerDelayMs,
@@ -11,9 +11,17 @@ import {
 
 type TimerContext = Pick<
   CallManagerContext,
-  "activeCalls" | "maxDurationTimers" | "config" | "transcriptWaiters"
+  | "activeCalls"
+  | "maxDurationTimers"
+  | "config"
+  | "transcriptWaiters"
+  | "trackCallWork"
+  | "isStopping"
 >;
-type MaxDurationTimerContext = Pick<TimerContext, "activeCalls" | "maxDurationTimers" | "config">;
+type MaxDurationTimerContext = Pick<
+  TimerContext,
+  "activeCalls" | "maxDurationTimers" | "config" | "trackCallWork" | "isStopping"
+>;
 type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
 
 /** Clear and forget the max-duration timer for a call. */
@@ -46,10 +54,10 @@ export function startMaxDurationTimer(params: {
   );
 
   const timer = setTimeout(() => {
-    void (async () => {
+    const work = (async () => {
       params.ctx.maxDurationTimers.delete(params.callId);
       const call = params.ctx.activeCalls.get(params.callId);
-      if (call && !TerminalStates.has(call.state)) {
+      if (!params.ctx.isStopping() && call && !TerminalStates.has(call.state)) {
         console.log(
           `[voice-call] Max duration reached (${Math.ceil(maxDurationMs / 1000)}s), ending call ${params.callId}`,
         );
@@ -67,31 +75,10 @@ export function startMaxDurationTimer(params: {
         }
       }
     })();
+    params.ctx.trackCallWork(work);
   }, maxDurationMs);
 
   params.ctx.maxDurationTimers.set(params.callId, timer);
-}
-
-/** Backfill max-duration enforcement from the first live conversation signal. */
-export function ensureMaxDurationTimerForLiveCall(params: {
-  ctx: MaxDurationTimerContext;
-  call: CallRecord;
-  liveAt: number;
-  onTimeout: (callId: CallId) => Promise<CallEndResult>;
-}): void {
-  if (params.call.answeredAt) {
-    return;
-  }
-
-  // Realtime streams can prove the call is live before an answered callback;
-  // use that first live signal so stale cleanup can skip it without losing
-  // maxDurationSeconds enforcement.
-  params.call.answeredAt = params.liveAt;
-  startMaxDurationTimer({
-    ctx: params.ctx,
-    callId: params.call.callId,
-    onTimeout: params.onTimeout,
-  });
 }
 
 /** Clear and forget a pending final-transcript waiter. */

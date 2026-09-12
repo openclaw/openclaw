@@ -1,4 +1,4 @@
-// Msteams tests cover graph upload plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
@@ -45,13 +45,6 @@ function bodyOnlyErrorResponse(body: string, status = 500): Response {
   } as unknown as Response;
 }
 
-function jsonResponse(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 type GraphRoute = {
   includes: string;
   respond: (init?: RequestInit) => Response | Promise<Response>;
@@ -71,7 +64,9 @@ function fixedGraphRoute(includes: string, value: unknown, status = 200): GraphR
   return {
     includes,
     respond: () =>
-      typeof value === "string" ? new Response(value, { status }) : jsonResponse(value, status),
+      typeof value === "string"
+        ? new Response(value, { status })
+        : Response.json(value, { status }),
   };
 }
 
@@ -169,7 +164,7 @@ function createDelayedUploadFetch(value: unknown, delayMs: number): ReturnType<t
     }
     return await new Promise<Response>((resolve, reject) => {
       signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
-      setTimeout(() => resolve(jsonResponse(value)), delayMs);
+      setTimeout(() => resolve(Response.json(value)), delayMs);
     });
   });
 }
@@ -190,7 +185,7 @@ async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
   const fetchFn: typeof fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url.endsWith("/createLink")) {
-      return jsonResponse({ link: { webUrl: "https://example.com/share" } });
+      return Response.json({ link: { webUrl: "https://example.com/share" } });
     }
     return await uploadFetch(input, init);
   };
@@ -234,15 +229,12 @@ describe("graph upload helpers", () => {
       const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
       const buffer = backing.subarray(2, 5);
       const expectedBytes = Buffer.from([0, 0x80, 0xff]);
-      let finishToken: (token: string) => void = () => {};
-      const tokenReady = new Promise<string>((resolve) => {
-        finishToken = resolve;
-      });
+      const { promise: tokenReady, resolve: finishToken } = createDeferred<string>();
       const delayedTokenProvider = { getAccessToken: vi.fn(async () => await tokenReady) };
       const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
         backing.fill(0);
         expect(Buffer.from(await new Response(init?.body).arrayBuffer())).toEqual(expectedBytes);
-        return jsonResponse({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" });
+        return Response.json({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" });
       });
 
       const upload = uploadToSharePoint({
@@ -276,7 +268,7 @@ describe("graph upload helpers", () => {
     // replace overwrote the prior file and Teams (caching cards by driveItem URL) showed the
     // stale image; rename mints a distinct item, so callers use the returned name, not the request.
     const fetchFn = vi.fn(async () =>
-      jsonResponse({ id: "item-9", webUrl: "https://example.com/9", name: "image-1 1.png" }),
+      Response.json({ id: "item-9", webUrl: "https://example.com/9", name: "image-1 1.png" }),
     );
 
     const result = await uploadToSharePoint({
@@ -293,7 +285,7 @@ describe("graph upload helpers", () => {
   });
 
   it("rejects upload responses missing required fields", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse({ id: "item-3" }));
+    const fetchFn = vi.fn(async () => Response.json({ id: "item-3" }));
 
     await expect(
       uploadToSharePoint({

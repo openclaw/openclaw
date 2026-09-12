@@ -1,0 +1,611 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.9.2",
+    "migrations": {
+      "modelPolicyAllowlist": true
+    }
+  },
+  "env": {
+    "vars": {
+      "MINIMAX_API_KEY": "FAKE_CONFIG_CORPUS_CREDENTIAL",
+      "OPENROUTER_API_KEY": "FAKE_CONFIG_CORPUS_CREDENTIAL",
+      "BH_CONFIG_DIR": "/home/fixture/path0-0/path1-0/path2-0/path3-0"
+    }
+  },
+  "wizard": {
+    "lastRunAt": "2026-01-01T00:00:00.000Z",
+    "lastRunVersion": "2026.9.2",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
+  "browser": {
+    "enabled": true,
+    "noSandbox": true
+  },
+  "auth": {
+    "profiles": {
+      "openrouter:default": {
+        "provider": "openrouter",
+        "mode": "api_key"
+      },
+      "xai:fixture2@example.invalid": {
+        "provider": "xai",
+        "mode": "oauth"
+      },
+      "openai:fixture3@example.invalid": {
+        "provider": "openai",
+        "mode": "oauth"
+      },
+      "openai:fixture4@example.invalid": {
+        "provider": "openai",
+        "mode": "oauth"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "xai": {
+        "baseUrl": "https://fixture-5.invalid/v1",
+        "api": "openai-responses",
+        "models": [
+          {
+            "id": "grok-4.3",
+            "name": "fixture-6",
+            "api": "openai-responses",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1.25,
+              "output": 2.5,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "grok-4.20-beta-latest-reasoning",
+            "name": "fixture-7",
+            "api": "openai-responses",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1.25,
+              "output": 2.5,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 30000
+          },
+          {
+            "id": "grok-4.20-beta-latest-non-reasoning",
+            "name": "fixture-8",
+            "api": "openai-responses",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1.25,
+              "output": 2.5,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 30000
+          },
+          {
+            "id": "grok-build-0.1",
+            "name": "fixture-9",
+            "api": "openai-responses",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1,
+              "output": 2,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            },
+            "contextWindow": 256000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "grok-4.5",
+            "name": "fixture-10",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 2,
+              "output": 6,
+              "cacheRead": 0.5,
+              "cacheWrite": 0
+            },
+            "contextWindow": 500000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "grok-4.20-0309-reasoning",
+            "name": "fixture-11",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1.25,
+              "output": 2.5,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 30000
+          },
+          {
+            "id": "grok-4.20-0309-non-reasoning",
+            "name": "fixture-12",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1.25,
+              "output": 2.5,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 30000
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-5.4"
+      },
+      "models": {
+        "openai/gpt-5.4-mini": {
+          "agentRuntime": {
+            "id": "openclaw"
+          }
+        },
+        "openai/gpt-5.4-nano": {
+          "alias": "fixture-13",
+          "agentRuntime": {
+            "id": "openclaw"
+          }
+        },
+        "openai/gpt-5.4-pro": {
+          "alias": "fixture-14",
+          "agentRuntime": {
+            "id": "openclaw"
+          }
+        },
+        "openai/gpt-5.4": {
+          "alias": "fixture-15",
+          "params": {
+            "responsesServerCompaction": true,
+            "responsesCompactEndpoint": true
+          }
+        },
+        "xai/grok-4.3": {
+          "alias": "fixture-16"
+        },
+        "anthropic/fixture-model-5": {
+          "alias": "fixture-17",
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/fixture-model-6": {
+          "alias": "fixture-18",
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/fixture-model-7": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/fixture-model-8": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "xai/auto": {
+          "alias": "fixture-19"
+        }
+      },
+      "modelPolicy": {
+        "allow": [
+          "openai/*"
+        ]
+      },
+      "thinkingDefault": "medium",
+      "reasoningDefault": "stream",
+      "typingMode": "instant",
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8,
+        "archiveAfterMinutes": 60
+      },
+      "heartbeat": {
+        "target": "telegram",
+        "to": "900000020"
+      }
+    },
+    "entries": {
+      "main": {
+        "models": {
+          "openai/gpt-5.4": {}
+        },
+        "model": "openai/gpt-5.4"
+      }
+    }
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "grok",
+        "openaiCodex": {}
+      },
+      "fetch": {
+        "enabled": true
+      }
+    },
+    "toolSearch": false,
+    "exec": {
+      "mode": "full"
+    }
+  },
+  "messages": {
+    "visibleReplies": "automatic",
+    "groupChat": {
+      "unmentionedInbound": "room_event"
+    },
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerAllowFrom": [
+      "telegram:900000020"
+    ]
+  },
+  "cron": {
+    "triggers": {
+      "enabled": true
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "richMessages": true,
+      "dmPolicy": "allowlist",
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": [
+        "*"
+      ],
+      "allowFrom": [
+        "900000020"
+      ],
+      "groups": {
+        "-9000000000021": {
+          "requireMention": false
+        },
+        "-9000000022": {
+          "requireMention": false
+        },
+        "-9000000023": {
+          "requireMention": false
+        },
+        "-9000000000024": {
+          "requireMention": false
+        }
+      },
+      "botToken": "9000000000:FAKE_TOKEN_FOR_CONFIG_CORPUS_ONLY",
+      "streaming": {
+        "mode": "progress",
+        "progress": {
+          "commentary": true
+        }
+      },
+      "replyToMode": "first",
+      "ackReaction": "👀"
+    }
+  },
+  "discovery": {
+    "mdns": {
+      "mode": "off"
+    }
+  },
+  "talk": {
+    "interruptOnSpeech": true,
+    "providers": {
+      "microsoft": {
+        "voiceId": "en-US-AvaMultilingualNeural"
+      }
+    },
+    "provider": "microsoft"
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://fixture-25.invalid:18789/",
+        "http://fixture-26.invalid:18789/",
+        "http://fixture-27.invalid:18789/",
+        "http://fixture-28.invalid:18789/",
+        "http://fixture-29.invalid:18789/",
+        "https://fixture-30.invalid/"
+      ]
+    },
+    "auth": {
+      "mode": "token",
+      "token": "FAKE_CONFIG_CORPUS_CREDENTIAL"
+    },
+    "tailscale": {
+      "mode": "off"
+    }
+  },
+  "memory": {
+    "search": {
+      "provider": "none"
+    }
+  },
+  "skills": {
+    "entries": {
+      "1password": {
+        "enabled": false
+      },
+      "apple-notes": {
+        "enabled": false
+      },
+      "apple-reminders": {
+        "enabled": false
+      },
+      "bear-notes": {
+        "enabled": false
+      },
+      "blogwatcher": {
+        "enabled": false
+      },
+      "blucli": {
+        "enabled": false
+      },
+      "bluebubbles": {
+        "enabled": false
+      },
+      "camsnap": {
+        "enabled": false
+      },
+      "clawhub": {
+        "enabled": false
+      },
+      "coding-agent": {
+        "enabled": false
+      },
+      "discord": {
+        "enabled": false
+      },
+      "eightctl": {
+        "enabled": false
+      },
+      "gemini": {
+        "enabled": false
+      },
+      "gifgrep": {
+        "enabled": false
+      },
+      "gog": {
+        "enabled": false
+      },
+      "goplaces": {
+        "enabled": false
+      },
+      "himalaya": {
+        "enabled": false
+      },
+      "imsg": {
+        "enabled": false
+      },
+      "mcporter": {
+        "enabled": false
+      },
+      "model-usage": {
+        "enabled": false
+      },
+      "nano-pdf": {
+        "enabled": false
+      },
+      "notion": {
+        "enabled": false
+      },
+      "obsidian": {
+        "enabled": false
+      },
+      "openai-whisper": {
+        "enabled": false
+      },
+      "openai-whisper-api": {
+        "enabled": false
+      },
+      "openhue": {
+        "enabled": false
+      },
+      "oracle": {
+        "enabled": false
+      },
+      "ordercli": {
+        "enabled": false
+      },
+      "peekaboo": {
+        "enabled": false
+      },
+      "sag": {
+        "enabled": false
+      },
+      "session-logs": {
+        "enabled": false
+      },
+      "sherpa-onnx-tts": {
+        "enabled": false
+      },
+      "slack": {
+        "enabled": false
+      },
+      "songsee": {
+        "enabled": false
+      },
+      "sonoscli": {
+        "enabled": false
+      },
+      "spotify-player": {
+        "enabled": false
+      },
+      "things-mac": {
+        "enabled": false
+      },
+      "trello": {
+        "enabled": false
+      },
+      "video-frames": {
+        "enabled": false
+      },
+      "voice-call": {
+        "enabled": false
+      },
+      "wacli": {
+        "enabled": false
+      },
+      "xurl": {
+        "enabled": false
+      },
+      "gh-issues": {
+        "enabled": false
+      },
+      "github": {
+        "enabled": false
+      },
+      "summarize": {
+        "enabled": false
+      },
+      "tmux": {
+        "enabled": false
+      }
+    }
+  },
+  "plugins": {
+    "load": {
+      "paths": [
+        "/home/fixture/external-plugin"
+      ]
+    },
+    "entries": {
+      "telegram": {
+        "enabled": true,
+        "config": {}
+      },
+      "memory-core": {
+        "enabled": true,
+        "config": {
+          "dreaming": {
+            "enabled": true,
+            "frequency": "0 3 * * *",
+            "phases": {
+              "deep": {
+                "minScore": 0.7,
+                "minRecallCount": 0,
+                "minUniqueQueries": 1
+              }
+            }
+          }
+        }
+      },
+      "browser": {
+        "enabled": true,
+        "config": {}
+      },
+      "anthropic": {
+        "enabled": true,
+        "config": {}
+      },
+      "openai": {
+        "enabled": true,
+        "config": {
+          "personality": "friendly"
+        }
+      },
+      "codex": {
+        "enabled": true,
+        "config": {
+          "codexDynamicToolsLoading": "searchable",
+          "codexDynamicToolsExclude": [],
+          "appServer": {
+            "transport": "stdio",
+            "homeScope": "agent",
+            "codeModeOnly": false,
+            "requestTimeoutMs": 60000
+          }
+        }
+      },
+      "xai": {
+        "enabled": true,
+        "config": {}
+      },
+      "diagnostics-otel": {
+        "enabled": true
+      },
+      "microsoft": {
+        "enabled": true
+      },
+      "fixture-extension": {
+        "enabled": true,
+        "hooks": {
+          "allowPromptInjection": true,
+          "allowConversationAccess": true
+        },
+        "config": {}
+      }
+    }
+  },
+  "diagnostics": {
+    "enabled": true,
+    "otel": {
+      "enabled": true,
+      "endpoint": "http://fixture-32.invalid:4318/",
+      "protocol": "http/protobuf",
+      "serviceName": "fixture-33",
+      "traces": true,
+      "metrics": false,
+      "logs": false,
+      "logsExporter": "otlp",
+      "sampleRate": 1,
+      "flushIntervalMs": 60000,
+      "captureContent": false
+    }
+  }
+}

@@ -2653,6 +2653,33 @@ describe("handleFeishuMessage command authorization", () => {
     expect(parseFeishuMessageEvent(event).content).toBe("Direct task\nStatus\nOpen");
   });
 
+  it("preserves native post inline styles in the agent body", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const event = createFeishuTestEvent({
+      messageId: "msg-post-styles",
+      senderOpenId: "ou-styles",
+      messageType: "post",
+      content: JSON.stringify({
+        content: [
+          [
+            { tag: "text", text: "Urgent", style: ["bold"] },
+            { tag: "text", text: " " },
+            { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
+            { tag: "text", text: " " },
+            { tag: "at", user_name: "Bob", user_id: "ou_bob", style: ["underline"] },
+          ],
+        ],
+      }),
+    });
+
+    await dispatchMessage({ cfg: createFeishuTestConfig({ dmPolicy: "open" }), event });
+
+    const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.BodyForAgent).toContain(
+      "ou-styles: **Urgent** *[Docs](https://example.com)* <u>@Bob</u>",
+    );
+  });
+
   it("expands merge_forward content from API sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockGetMessageFeishu.mockResolvedValueOnce({

@@ -18,6 +18,20 @@ import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 import { applyChannelAccountState, resolveChannelAccountState } from "./status/account-state.js";
 
+/** Projects an admitted lifetime without resolving its potentially stale account configuration. */
+export function buildChannelAccountSnapshotFromRuntime(
+  runtime: ChannelAccountSnapshot,
+): ChannelAccountSnapshot {
+  return {
+    ...buildRuntimeAccountStatusSnapshot({ runtime }),
+    ...projectSafeChannelAccountSnapshotFields(runtime),
+    accountId: runtime.accountId,
+    enabled: runtime.enabled,
+    configured: runtime.configured,
+    stateReason: runtime.stateReason,
+  };
+}
+
 /** Projects diagnostic inspection metadata without treating it as a runtime account. */
 export function buildChannelAccountSnapshotFromInspection(params: {
   account: unknown;

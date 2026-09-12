@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
+import { sqliteTestAuxStores } from "./test/sqlite-store.js";
 
 const SESSION_KEY = "agent:main:subagent:workboard-cleanup-recovery";
 const RUN_ID = "run-cleanup-recovery";
@@ -14,7 +15,7 @@ const SOURCE_PATH = "/repo";
 
 function openStore(dbPath: string) {
   const stores = createWorkboardSqliteStores({ dbPath });
-  return { store: new WorkboardStore(stores.cards), stores };
+  return { store: new WorkboardStore(stores.cards, sqliteTestAuxStores(stores)), stores };
 }
 
 function execution(

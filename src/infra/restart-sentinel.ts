@@ -21,7 +21,6 @@ import {
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
   type RestartSentinel,
-  type RestartSentinelContinuation,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 import {
@@ -417,9 +416,16 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
 export async function markUpdateRestartSentinelFailure(
   reason: string,
   env: NodeJS.ProcessEnv = process.env,
+  expectedOwner?: { runId?: string; handoffId?: string },
 ): Promise<RestartSentinel | null> {
   return await rewriteRestartSentinel((payload) => {
-    if (payload.kind !== "update") {
+    // Match within the existing atomic read/rewrite, not a racy preflight read.
+    if (
+      payload.kind !== "update" ||
+      (expectedOwner?.runId !== undefined && payload.stats?.runId !== expectedOwner.runId) ||
+      (expectedOwner?.handoffId !== undefined &&
+        payload.stats?.handoffId !== expectedOwner.handoffId)
+    ) {
       return null;
     }
     const payloadWithoutContinuation = { ...payload };
@@ -451,17 +457,6 @@ export async function clearRestartSentinelIfRevision(
     { env },
     { operationLabel: "restart-sentinel.clear-if-revision" },
   );
-}
-
-export function buildRestartSuccessContinuation(params: {
-  sessionKey?: string;
-  continuationMessage?: string | null;
-}): RestartSentinelContinuation | null {
-  const message = params.continuationMessage?.trim();
-  if (message) {
-    return { kind: "agentTurn", message };
-  }
-  return null;
 }
 
 export async function readRestartSentinel(

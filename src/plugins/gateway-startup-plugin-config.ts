@@ -377,22 +377,19 @@ export function addConfiguredSlotPluginIds(
 }
 
 export function collectConfiguredStartupChannelIds(params: {
-  activationSourceConfig: OpenClawConfig;
-  config: OpenClawConfig;
+  configs: readonly OpenClawConfig[];
   env: NodeJS.ProcessEnv;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   includePersistedAuthState?: boolean;
 }): string[] {
-  return sortUniquePluginIds([
-    ...listPotentialEnabledChannelIds(params.config, params.env, {
-      ambientEnvTriggers: params.ambientEnvTriggers,
-      includePersistedAuthState: params.includePersistedAuthState,
-    }),
-    ...listPotentialEnabledChannelIds(params.activationSourceConfig, params.env, {
-      ambientEnvTriggers: params.ambientEnvTriggers,
-      includePersistedAuthState: params.includePersistedAuthState,
-    }),
-  ]);
+  return sortUniquePluginIds(
+    params.configs.flatMap((config) =>
+      listPotentialEnabledChannelIds(config, params.env, {
+        ambientEnvTriggers: params.ambientEnvTriggers,
+        includePersistedAuthState: params.includePersistedAuthState,
+      }),
+    ),
+  );
 }
 
 export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
@@ -412,7 +409,7 @@ export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
   ]);
 }
 
-export function collectValidationConfiguredProviderIds(config: OpenClawConfig): string[] {
+export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   const providerIds: string[] = [];
   const pushProviderId = (value: unknown) => {
     if (typeof value !== "string") {
@@ -437,23 +434,24 @@ export function collectValidationConfiguredProviderIds(config: OpenClawConfig): 
       pushProviderId(providerId);
     }
   }
+  const shorthandModelRefs: string[] = [];
   for (const ref of collectConfiguredModelRefs(config)) {
     const slashIndex = ref.value.indexOf("/");
     if (slashIndex > 0) {
       pushProviderId(ref.value.slice(0, slashIndex));
+    } else if (slashIndex < 0) {
+      shorthandModelRefs.push(ref.value);
     }
   }
   pushProviderId(config.tools?.web?.search?.provider);
   pushProviderId(config.tools?.web?.fetch?.provider);
-  return sortUniquePluginIds(providerIds);
+  return { providerIds: sortUniquePluginIds(providerIds), shorthandModelRefs };
 }
 
-export function collectValidationConfiguredShorthandModelIds(config: OpenClawConfig): string[] {
+export function collectValidationConfiguredShorthandModelIds(
+  modelRefs: readonly string[],
+): string[] {
   return sortUniquePluginIds(
-    collectConfiguredModelRefs(config)
-      .map((ref) => ref.value)
-      .filter((ref) => !ref.includes("/"))
-      .map((ref) => splitTrailingAuthProfile(ref).model.trim())
-      .filter(Boolean),
+    modelRefs.map((ref) => splitTrailingAuthProfile(ref).model.trim()).filter(Boolean),
   );
 }

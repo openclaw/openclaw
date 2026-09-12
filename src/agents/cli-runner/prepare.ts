@@ -53,6 +53,7 @@ import {
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillUsagePath } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -67,6 +68,7 @@ import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-c
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
@@ -88,7 +90,11 @@ import {
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import {
+  buildCliSessionDriftNote,
+  hashCliSessionText,
+  resolveCliSessionReuse,
+} from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -270,7 +276,7 @@ function prependCliSessionDriftUserContext(
   if (reusableCliSession.mode !== "reuse-with-drift") {
     return context;
   }
-  const note = `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
+  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
   if (!context) {
     return { text: note };
   }
@@ -287,9 +293,19 @@ async function resolveCliSkillsPrompt(params: {
   sessionKey: string;
   skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
   workspaceDir: string;
+  executionWorkspaceDir: string;
 }): Promise<{ prompt: string; usagePaths?: SkillUsagePath[] }> {
+  const skillsSnapshot =
+    params.skillsSnapshot ??
+    resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: params.workspaceDir,
+      executionWorkspaceDir: params.executionWorkspaceDir,
+      config: params.config ?? {},
+      agentId: params.agentId,
+      watch: false,
+    }).snapshot;
   const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
-    skillsSnapshot: params.skillsSnapshot,
+    skillsSnapshot,
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -299,13 +315,14 @@ async function resolveCliSkillsPrompt(params: {
     const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
       resolveEmbeddedRunSkillEntries({
         workspaceDir: params.workspaceDir,
+        executionWorkspaceDir: params.executionWorkspaceDir,
         config: params.config,
         agentId: params.agentId,
-        skillsSnapshot: params.skillsSnapshot,
+        skillsSnapshot,
       });
     return {
       prompt: resolveSkillsPrompt({
-        skillsSnapshot: params.skillsSnapshot,
+        skillsSnapshot,
         entries: shouldLoadSkillEntries ? skillEntries : undefined,
         loadEntries: loadSkillEntries,
         workspaceDir: params.workspaceDir,
@@ -342,7 +359,7 @@ async function resolveCliSkillsPrompt(params: {
         : {}),
     },
     skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
-    skillsSnapshot: params.skillsSnapshot,
+    skillsSnapshot,
   });
   const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
     resolveEmbeddedRunSkillEntries({
@@ -466,6 +483,11 @@ function buildCliAuthProfileResolutionError(params: {
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
+  if (!inputParams.sessionManager && inputParams.sessionTarget) {
+    const { restoreSessionColdTranscript } =
+      await import("../../config/sessions/session-cold-storage.js");
+    await restoreSessionColdTranscript(inputParams.sessionTarget);
+  }
   // Fallbacks may already have admitted this user turn; recover only prior history.
   return runWithSessionTranscriptReadFence(
     inputParams.sessionManager
@@ -810,10 +832,22 @@ async function prepareCliRunContextWithinReadFence(
         cfg: params.config,
         store: authStore,
         provider: params.provider,
+        includePendingOAuthRefresh: true,
       })[0]?.trim() || undefined;
     if (effectiveAuthProfileId) {
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
+  }
+  if (
+    effectiveAuthProfileId &&
+    authCredential &&
+    !isSetupCredentialAccessible({
+      profileId: effectiveAuthProfileId,
+      credential: authCredential,
+      agentDir,
+    })
+  ) {
+    throw new Error("This saved sign-in is inactive. Test and activate it in Model Setup.");
   }
   // Claude owns its native login and single-use refresh-token family. Never
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude
@@ -994,6 +1028,7 @@ async function prepareCliRunContextWithinReadFence(
     modelProviderId: params.provider,
     modelId,
     trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
     ...buildAgentHookContextChannelFields(params),
   };
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
@@ -1937,6 +1972,7 @@ async function prepareCliRunContextWithinReadFence(
         : await resolveCliSkillsPrompt({
             skillsSnapshot: params.skillsSnapshot,
             workspaceDir,
+            executionWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd,
             config: params.config,
             agentId: sessionAgentId,
             sessionKey: params.sessionKey?.trim() || params.sessionId,
@@ -2042,16 +2078,15 @@ async function prepareCliRunContextWithinReadFence(
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
+        const mediaTaskContext = await buildMediaTaskRuntimeContext({
+          capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
+          sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
+        });
         const appendContext = [
           hookResult?.appendContext,
           authorizedPromptBuildResult?.appendContext,
-          buildRuntimeContextCustomMessage(
-            buildMediaTaskRuntimeContext({
-              capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
-              sessionKey: params.sessionKey,
-              agentId: sessionAgentId,
-            }),
-          )?.content,
+          buildRuntimeContextCustomMessage(mediaTaskContext)?.content,
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
@@ -2082,6 +2117,8 @@ async function prepareCliRunContextWithinReadFence(
       } catch (error) {
         cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
       }
+      params.assertCurrent?.();
+      params.abortSignal?.throwIfAborted();
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
@@ -2290,7 +2327,7 @@ async function prepareCliRunContextWithinReadFence(
       fallbackReason: params.modelRoutingProvenance?.fallbackReason,
     });
 
-    const note = claimHeartbeatContextForUserRun({
+    const note = await claimHeartbeatContextForUserRun({
       ...preparedParams,
       agentId: sessionAgentId,
       storePath: params.sessionTarget?.storePath ?? params.storePath,

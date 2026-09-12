@@ -27,7 +27,7 @@ import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { recordCliGatewayRunFailure } from "../cli/failure-output.js";
+import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import { withProgress } from "../cli/progress.js";
 import {
   readGatewayDispatchConfig,
@@ -524,6 +524,26 @@ function resolveGatewayAgentFailureHint(
   // callGateway's wrapper timer gives this CLI path typed transport errors.
   // Legacy request-timeout strings belong to lower-level and in-process callers.
   return err.kind === "timeout" ? "timed out" : "connection closed";
+}
+
+function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
+  const failureHint = resolveGatewayAgentFailureHint(err);
+  if (!failureHint) {
+    return undefined;
+  }
+  // Transport loss is ambiguous: the Gateway may have accepted and may still
+  // finish this turn. Recommending a blind retry or --local here could
+  // double-execute the message, so point at verification first.
+  const acceptedRun = readCliGatewayRunFailure(err);
+  const acceptedNote = acceptedRun
+    ? ` (accepted run ${acceptedRun.runId}` +
+      (failureHint === "timed out" ? "; use --timeout <seconds> to extend the CLI wait" : "") +
+      ")"
+    : "";
+  return (
+    `Gateway agent call ${failureHint}; the Gateway may still be running this turn${acceptedNote}. ` +
+    "Check `openclaw gateway status` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice."
+  );
 }
 
 function isTransientGatewayAgentConnectClose(err: unknown): boolean {
@@ -1305,14 +1325,9 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      const failureHint = resolveGatewayAgentFailureHint(err);
+      const failureHint = formatGatewayAgentTransportLossHint(err);
       if (failureHint) {
-        // Transport loss is ambiguous: the Gateway may have accepted and may still
-        // finish this turn. Recommending a blind retry or --local here could
-        // double-execute the message, so point at verification first.
-        runtime.error?.(
-          `Gateway agent call ${failureHint}; the Gateway may still be running this turn. Check \`openclaw gateway status\` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.`,
-        );
+        runtime.error?.(failureHint);
       }
       throw err;
     }

@@ -85,7 +85,7 @@ export async function loadCostUsageSummary(params: {
     refreshing:
       result === "busy" ||
       isUsageCostRefreshQueued(databasePath) ||
-      isSessionCostUsageRefreshRunning(params.agentId, databasePath),
+      (await isSessionCostUsageRefreshRunning(params.agentId, databasePath)),
   });
 }
 
@@ -130,7 +130,7 @@ export async function loadCostUsageSummaryFromCache(params: {
     dayBucket: params.dayBucket,
     refreshing:
       isUsageCostRefreshQueued(databasePath) ||
-      isSessionCostUsageRefreshRunning(params.agentId, databasePath),
+      (await isSessionCostUsageRefreshRunning(params.agentId, databasePath)),
   });
 }
 
@@ -189,7 +189,7 @@ export async function loadSessionCostSummariesFromCache(params: {
       sessionFiles: [...staleFiles],
     });
   }
-  const refreshRunning = isSessionCostUsageRefreshRunning(params.agentId, databasePath);
+  const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
   return {
     summaries,
     cacheStatus: {

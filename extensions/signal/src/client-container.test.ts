@@ -684,9 +684,9 @@ describe("containerRestRequest", () => {
         observedSignal = init.signal ?? undefined;
         return new Response(
           delayedBodyStream([
-            { delayMs: 10, text: "{" },
-            { delayMs: 20, text: '"ok"' },
-            { delayMs: 20, text: ":true" },
+            { delayMs: 5, text: "{" },
+            { delayMs: 5, text: '"ok"' },
+            { delayMs: 5, text: ":true" },
             { delayMs: 20, text: "}" },
           ]).body,
           {

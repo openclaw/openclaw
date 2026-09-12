@@ -6,6 +6,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { renderQuestionFreeText, renderQuestionOptions } from "./chat-question-answer-controls.ts";
+import { renderQuestionExternalStep } from "./chat-question-external-step.ts";
 
 type QuestionPanelQuestion = QuestionPrompt["questions"][number];
 
@@ -17,6 +18,7 @@ type QuestionPanelViewModel = {
   sessionKey?: string;
   secretStoreAllowedHostsDraft?: string;
   collapsed: boolean;
+  autoFocus?: boolean;
   disabled: boolean;
   submitting?: boolean;
   answersById?: Record<string, string[]>;
@@ -210,7 +212,7 @@ class ChatQuestionPanel extends LitElement {
       this.pendingAction = null;
       this.syncedAnswersSignature = null;
       this.collapsed = nextCollapsed;
-      this.focusAfterUpdate = !nextCollapsed;
+      this.focusAfterUpdate = !nextCollapsed && model?.autoFocus !== false;
     } else if (this.props?.onCollapsedChange) {
       if (this.collapsed && !nextCollapsed) {
         this.focusAfterUpdate = true;
@@ -392,6 +394,10 @@ class ChatQuestionPanel extends LitElement {
     if (event.metaKey || event.ctrlKey || event.altKey) {
       return;
     }
+    // Activating an external step must never also submit the pending question.
+    if (event.target instanceof HTMLAnchorElement) {
+      return;
+    }
     if (event.target instanceof HTMLInputElement) {
       if (event.key === "Enter" && this.answerValues(question).length > 0) {
         event.preventDefault();
@@ -541,6 +547,7 @@ class ChatQuestionPanel extends LitElement {
           <span class="chat-question-panel__prompt">${question.question}</span>
         </div>
 
+        ${renderQuestionExternalStep(question.url)}
         ${renderQuestionOptions({
           question,
           selected: this.selectedById.get(question.questionId) ?? [],

@@ -2,11 +2,16 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { devNull } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const seedDirs = createTempDirTracker();
+let source: string;
+let eventBase: string;
+let mainBase: string;
 const workflows = [
   ".github/workflows/ci-check-testbox.yml",
   ".github/workflows/ci-check-arm-testbox.yml",
@@ -25,6 +30,37 @@ type Step = {
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
+
+beforeAll(() => {
+  source = seedDirs.make("openclaw-testbox-source-");
+  git(source, "init", "-q", "--initial-branch=main");
+  git(source, "config", "user.name", "Test User");
+  git(source, "config", "user.email", "test@example.com");
+  for (const action of ["git-owner", "ensure-base-commit", "prepare-testbox-shell"]) {
+    fs.cpSync(`.github/actions/${action}`, path.join(source, ".github/actions", action), {
+      recursive: true,
+    });
+  }
+  fs.mkdirSync(path.join(source, "scripts/lib"), { recursive: true });
+  for (const helper of ["merge-head-diff-base.mjs", "arg-utils.runtime.mjs"]) {
+    fs.copyFileSync(`scripts/lib/${helper}`, path.join(source, "scripts/lib", helper));
+  }
+  git(source, "add", ".");
+  git(source, "commit", "-qm", "base");
+  eventBase = git(source, "rev-parse", "HEAD");
+  git(source, "switch", "-q", "-c", "feature");
+  fs.writeFileSync(path.join(source, "feature.txt"), "feature\n");
+  git(source, "add", ".");
+  git(source, "commit", "-qm", "feature");
+  git(source, "switch", "-q", "main");
+  fs.writeFileSync(path.join(source, "main.txt"), "main\n");
+  git(source, "add", ".");
+  git(source, "commit", "-qm", "main advanced");
+  mainBase = git(source, "rev-parse", "HEAD");
+  git(source, "merge", "--no-ff", "feature", "-m", "synthetic merge");
+});
+
+afterAll(() => seedDirs.cleanup());
 
 function runBasePreparation(
   repo: string,
@@ -114,32 +150,6 @@ describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
       eventName: "workflow_dispatch",
     },
   ])("pins the correct base in a $shape checkout", ({ branch, depth, passes, eventName }) => {
-    const source = createTempDir("openclaw-testbox-source-");
-    git(source, "init", "-q", "--initial-branch=main");
-    git(source, "config", "user.name", "Test User");
-    git(source, "config", "user.email", "test@example.com");
-    for (const action of ["git-owner", "ensure-base-commit", "prepare-testbox-shell"]) {
-      fs.cpSync(`.github/actions/${action}`, path.join(source, ".github/actions", action), {
-        recursive: true,
-      });
-    }
-    fs.mkdirSync(path.join(source, "scripts/lib"), { recursive: true });
-    for (const helper of ["merge-head-diff-base.mjs", "arg-utils.runtime.mjs"]) {
-      fs.copyFileSync(`scripts/lib/${helper}`, path.join(source, "scripts/lib", helper));
-    }
-    git(source, "add", ".");
-    git(source, "commit", "-qm", "base");
-    const eventBase = git(source, "rev-parse", "HEAD");
-    git(source, "switch", "-q", "-c", "feature");
-    fs.writeFileSync(path.join(source, "feature.txt"), "feature\n");
-    git(source, "add", ".");
-    git(source, "commit", "-qm", "feature");
-    git(source, "switch", "-q", "main");
-    fs.writeFileSync(path.join(source, "main.txt"), "main\n");
-    git(source, "add", ".");
-    git(source, "commit", "-qm", "main advanced");
-    const mainBase = git(source, "rev-parse", "HEAD");
-    git(source, "merge", "--no-ff", "feature", "-m", "synthetic merge");
     const repo = createTempDir("openclaw-testbox-shallow-");
     git(
       source,

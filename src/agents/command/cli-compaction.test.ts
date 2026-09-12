@@ -140,7 +140,7 @@ function createPreparedRuntimeLease(input: {
       pluginMetadataSnapshot: prepared.metadataSnapshot,
       pluginRegistry: prepared.pluginRegistry,
     },
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
 }
 
@@ -712,7 +712,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactAgentHarnessSessionCalls[0]?.[1]?.preparedModelRuntime).toBe(
       preparedRuntimeLease.snapshot,
     );
-    expect(preparedRuntimeLease.release).toHaveBeenCalledOnce();
+    expect(preparedRuntimeLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(

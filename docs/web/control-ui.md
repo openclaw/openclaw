@@ -61,6 +61,8 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 - [Security model](/web/control-ui/security-model) — content security policy, media route auth, and approval links.
 - [Build and develop](/web/control-ui/development) — build the UI and run the dev server against a Gateway.
 
+Running the Gateway in Docker? See [Using the Control UI browser](/install/docker#using-the-control-ui-browser) for the browser-equipped image and setup requirements.
+
 ## Where each section moved
 
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/web/control-ui#chat-behavior` still resolves. Each entry points at the page that now holds the content.
@@ -154,3 +156,4 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Health Checks](/gateway/health) — gateway health monitoring
 - [TUI](/web/tui) — terminal user interface
 - [WebChat](/web/webchat) — browser-based chat interface
+- [Codex session catalog and supervision](/plugins/codex-supervision) — the Native Session Discovery settings surface

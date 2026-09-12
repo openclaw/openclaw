@@ -268,21 +268,24 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       await page.keyboard.press("Control+Shift+,");
-      const { sidebar } = await waitForControlUiSettingsTakeover(page);
-      const picker = page.locator("#settings-font-chat");
-      await picker.click();
-      const selected = picker.locator("wa-option:state(selected)");
+      await waitForControlUiSettingsTakeover(page);
+      const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
+      await picker.locator(".picker-select__trigger").click();
+      const selected = picker.locator('[role="option"][aria-selected="true"]');
       await selected.waitFor({ state: "visible" });
-      const selectedValue = await selected.getAttribute("value");
+      const selectedValue = await selected.getAttribute("data-value");
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      expect(await selected.getAttribute("value")).toBe(selectedValue);
+      await expect
+        .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
+        .toBe("false");
+      expect(await selected.getAttribute("data-value")).toBe(selectedValue);
       expect(
-        await picker.locator('input[role="combobox"]').evaluate((input) => input.matches(":focus")),
+        await picker
+          .locator(".picker-select__trigger")
+          .evaluate((input) => input.matches(":focus")),
       ).toBe(true);
-      await sidebar.locator(".settings-sidebar__item").first().focus();
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     } finally {
@@ -379,7 +382,7 @@ suite.define(() => {
       await waitForControlUiSettingsTakeover(page);
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
-      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
         .poll(() =>
           page.evaluate(() => {
@@ -498,11 +501,14 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
       const notice = page.locator('.connection-action-block[role="status"]');
-      await notice.waitFor();
+      await expect.poll(() => credential.getAttribute("type")).toBe("password");
+      expect(await notice.count()).toBe(0);
+      for (const input of [gatewayUrl, credential, sessionKey]) {
+        expect(await input.isEditable()).toBe(true);
+      }
       expect(await credential.getAttribute("type")).toBe("password");
       await gateway.waitForRequest("connect", { after: connections });
       await gateway.resolveDeferred("connect");
-      await notice.waitFor({ state: "hidden" });
       await gateway.waitForRequest("system.info", { after: reads });
       expect(await credential.getAttribute("type")).toBe("password");
 

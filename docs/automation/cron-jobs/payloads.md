@@ -23,7 +23,7 @@ Every job carries exactly one payload kind, chosen by flag:
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
 System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The weekly Skill Workshop review is a normal isolated `agentTurn` job with a reserved declaration key. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
-The `skillCollectionReview` payload kind is gone; existing rows are replaced with the canonical review job during upgrade.
+The `skillCollectionReview` payload kind is not accepted. Stored rows that use it are replaced with the canonical review job.
 
 Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. The Gateway converges these jobs at startup and after config reload. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
 
@@ -135,6 +135,10 @@ The script may return an object with these optional fields:
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
 
 Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
+
+Changing a running job's script payload or saved state protects that edit from
+the old script's returned state, including when completion is recovered after a
+Gateway restart. The completed run still retains its history.
 
 ## Execution styles
 

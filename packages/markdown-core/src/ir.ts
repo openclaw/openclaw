@@ -391,6 +391,22 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   return md;
 }
 
+/** Count fenced code body characters using the same block grammar as rendering. */
+export function countMarkdownFencedCodeChars(markdown: string): number {
+  const tokens = createMarkdownIt({ linkify: false, autolink: false, tableMode: "bullets" }).parse(
+    markdown,
+    {},
+  );
+  let count = 0;
+  for (const token of tokens) {
+    if (token.type === "fence") {
+      // The parser's final LF frames the code body; counting it shifts the speech threshold.
+      count += token.content.length - (token.content.endsWith("\n") ? 1 : 0);
+    }
+  }
+  return count;
+}
+
 function preserveDunderIdentifier(state: StateInline, silent: boolean): boolean {
   const match = /^__[\p{L}_][\p{L}\p{N}_]*__/u.exec(state.src.slice(state.pos, state.posMax));
   if (!match) {

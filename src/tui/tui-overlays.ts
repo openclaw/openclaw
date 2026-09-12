@@ -6,8 +6,8 @@ type OverlayHost = Pick<TUI, "showOverlay" | "hideOverlay" | "hasOverlay" | "set
 
 /** Creates open/close handlers that restore focus when no overlay is active. */
 export function createOverlayHandlers(host: OverlayHost, fallbackFocus: Component) {
-  const openOverlay = (component: Component) => {
-    return host.showOverlay(component);
+  const openOverlay: TUI["showOverlay"] = (...args) => {
+    return host.showOverlay(...args);
   };
 
   const closeOverlay = (handle?: OverlayHandle) => {

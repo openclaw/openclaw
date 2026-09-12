@@ -229,7 +229,8 @@ openclaw onboard --non-interactive --accept-risk \
 
 You can also omit `--auth-choice`; passing `--github-copilot-token` infers the
 GitHub Copilot provider auth choice. If the flag is omitted, onboarding falls
-back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
+back to `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` do not
+enable or authenticate the provider. Use
 `--secret-input-mode ref` with `COPILOT_GITHUB_TOKEN` set to store an env-backed
 `tokenRef` instead of plaintext in the auth profile store.
 
@@ -270,20 +271,12 @@ configured default model is never replaced.
 
     Failed refreshes report the failure and retain the last successful inventory,
     or bundled models before the first success. A successful empty response clears
-    discovered models. Disabled discovery or missing credentials makes no live
-    request. To use only bundled models (offline / air-gapped scenarios):
-
-    ```json5
-    {
-      plugins: {
-        entries: {
-          "github-copilot": {
-            config: { discovery: { enabled: false } },
-          },
-        },
-      },
-    }
-    ```
+    discovered models. Missing Copilot credentials makes no live request.
+    Copilot requires explicit provider configuration, a saved Copilot auth
+    profile, or `COPILOT_GITHUB_TOKEN`, within the agent's model scope.
+    The old `plugins.entries.github-copilot.config.discovery.enabled` switch
+    is retired. Config loading ignores it, and Doctor removes it when saving
+    the config. It no longer prevents live requests for configured Copilot auth.
 
   </Accordion>
 
@@ -292,7 +285,7 @@ configured default model is never replaced.
     Gemini models use the OpenAI Chat Completions transport; GPT and o-series
     models keep the OpenAI Responses transport. The bundled static catalog
     includes these transports and request compatibility settings, so Gemini
-    keeps using Chat Completions when live discovery is disabled or unavailable.
+    keeps using Chat Completions when live discovery is unavailable.
   </Accordion>
 
   <Accordion title="Thinking levels">
@@ -312,20 +305,16 @@ configured default model is never replaced.
     Copilot vision header when a turn carries image input.
   </Accordion>
 
-  <Accordion title="Environment variable resolution order">
-    OpenClaw resolves Copilot auth from environment variables in the following
-    priority order:
+  <Accordion title="Environment credentials">
+    `COPILOT_GITHUB_TOKEN` is the only automatic environment credential for
+    this provider. Generic `GH_TOKEN` and `GITHUB_TOKEN` remain available to
+    other GitHub tools and remain covered by secret auditing and cleanup.
+    Doctor reports the activation change once when only generic GitHub auth
+    is present, with instructions to sign in or set `COPILOT_GITHUB_TOKEN`.
 
-    | Priority | Variable              | Notes                            |
-    | -------- | --------------------- | -------------------------------- |
-    | 1        | `COPILOT_GITHUB_TOKEN` | Highest priority, Copilot-specific |
-    | 2        | `GH_TOKEN`            | GitHub CLI token (fallback)      |
-    | 3        | `GITHUB_TOKEN`        | Standard GitHub token (lowest)   |
-
-    When multiple variables are set, OpenClaw uses the highest-priority one.
-    The device-login flow (`openclaw models auth login-github-copilot`) stores a
-    protected-store `tokenRef` in the auth profile and takes precedence over all
-    environment variables.
+    The device-login flow stores a protected-store `tokenRef` in the Copilot
+    auth profile. An explicitly selected profile stays selected; an unscoped
+    lookup can use `COPILOT_GITHUB_TOKEN` before the first saved profile.
 
   </Accordion>
 

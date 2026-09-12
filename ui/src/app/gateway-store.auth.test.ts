@@ -46,6 +46,26 @@ describe("createApplicationGateway authentication diagnostics", () => {
     vi.useRealTimers();
   });
 
+  it("rejects a different development target before accepting its credentials or opening a client", () => {
+    const configured = store.gateway.connection.gatewayUrl;
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl: configured, proxyPath: "/dev-proxy" });
+    store.gateway.connect({ token: "configured-credential" });
+    store.current().opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
+    const connection = { ...store.gateway.connection };
+
+    store.gateway.connect({ gatewayUrl: "wss://other.example", token: "other-credential" });
+    expect(store.clients).toHaveLength(1);
+    expect(store.current().stopped).toBe(1);
+    expect(store.gateway.connection).toEqual(connection);
+    expect(loadSettings().token).toBe("configured-credential");
+    expect(store.gateway.snapshot.phase).toBe("offline");
+    expect(store.gateway.snapshot.lastError).toContain("OPENCLAW_UI_DEV_GATEWAY_URL");
+
+    store.gateway.connect();
+    expect(store.clients).toHaveLength(2);
+    expect(store.current().opts).toMatchObject({ url: configured, token: "configured-credential" });
+  });
+
   it.each(["token", "password", "trusted-proxy", undefined] as const)(
     "persists the submitted secret only after a token-mode hello (%s)",
     (authMode) => {

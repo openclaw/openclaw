@@ -51,6 +51,32 @@ afterEach(() => {
 });
 
 describe("resolveGatewayProgramArguments", () => {
+  it.each([false, true])(
+    "installs only the requested start-mode override: %s",
+    async (allowUnconfigured) => {
+      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+      process.argv = ["node", entryPath];
+      fsMocks.realpath.mockResolvedValue(entryPath);
+      fsMocks.access.mockResolvedValue(undefined);
+      const { programArguments } = await resolveGatewayProgramArguments({
+        port: 18789,
+        runtime: "node",
+        runtimePath: validatedNodePath,
+        allowUnconfigured,
+        existingCommand: {
+          programArguments: [validatedNodePath, entryPath, "gateway", "--allow-unconfigured"],
+        },
+      });
+
+      expect(programArguments.slice(programArguments.indexOf("gateway"))).toEqual([
+        "gateway",
+        "--port",
+        "18789",
+        ...(allowUnconfigured ? ["--allow-unconfigured"] : []),
+      ]);
+    },
+  );
+
   it.skipIf(Boolean(process.versions.bun))(
     "sizes only the Gateway in an ordinary Node spawn tree",
     async () => {

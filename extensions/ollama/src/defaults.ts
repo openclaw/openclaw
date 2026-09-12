@@ -9,6 +9,11 @@ export function isOllamaCloudOrigin(baseUrl: string | undefined): boolean {
   return baseUrl !== undefined && URL.parse(baseUrl)?.origin === OLLAMA_CLOUD_BASE_URL;
 }
 
+export function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
+  const host = baseUrl ? URL.parse(baseUrl)?.hostname.toLowerCase() : undefined;
+  return host !== undefined && (host === "ollama.com" || host.endsWith(".ollama.com"));
+}
+
 export const OLLAMA_CLOUD_PROVIDER_ID = "ollama-cloud";
 export const OLLAMA_GLM52_CLOUD_MODEL_ID = "glm-5.2";
 /**

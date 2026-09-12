@@ -3,6 +3,7 @@ import {
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import {
   accumulatedStreamText,
   advanceAccumulatedStreamText,
@@ -40,6 +41,7 @@ function pruneAccumulatedStreamSegments(
   segments: readonly ChatStreamSegment[],
   activeRunId: string | null | undefined,
   shouldPrune: (segment: ChatStreamSegment, index: number) => boolean,
+  retiredItemId?: string,
 ): ChatStreamSegment[] {
   return segments.flatMap((segment, index) => {
     if (!shouldPrune(segment, index)) {
@@ -50,7 +52,7 @@ function pruneAccumulatedStreamSegments(
     // deltas to trim, so retaining it would leak sibling-run state.
     const foreignRun = Boolean(segment.runId && activeRunId && segment.runId !== activeRunId);
     return !foreignRun && streamSegmentUsesAccumulatedText(segment)
-      ? [{ ...segment, persisted: true as const }]
+      ? [{ ...segment, persisted: true as const, ...(retiredItemId ? { retiredItemId } : {}) }]
       : [];
   });
 }
@@ -75,6 +77,24 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
   if (!runId) {
     return;
   }
+  for (const segment of state.chatStreamSegments ?? []) {
+    if (segment.runId !== runId || !segment.retiredItemId || !segment.pendingCommentary) {
+      continue;
+    }
+    const handoff = retireCommentaryStream(state, {
+      runId,
+      itemId: segment.retiredItemId,
+      text: segment.pendingCommentary.text,
+      timestamp: segment.ts,
+    });
+    if (handoff) {
+      state.chatStreamSegments = state.chatStreamSegments?.map((owner) =>
+        owner.runId === runId && owner.itemId === segment.retiredItemId
+          ? { ...owner, text: handoff.text }
+          : owner,
+      );
+    }
+  }
   const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
   if (!stream) {
     return;
@@ -94,16 +114,28 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
   if (!prefix) {
     return;
   }
+  retireCumulativePrefix(state, runId, prefix, Date.now());
+}
+
+function retireCumulativePrefix(
+  state: StreamSegmentPruningState,
+  runId: string,
+  prefix: string,
+  timestamp: number,
+  retirement?: { itemId: string; segmentIndex?: number },
+): void {
+  const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
   let segments = state.chatStreamSegments ?? [];
   const accumulated = state.chatStream === null ? stream : accumulatedStreamText(segments);
-  const shouldPrune = (segment: ChatStreamSegment) =>
+  const shouldPrune = (segment: ChatStreamSegment, index: number) =>
+    (!retirement || index === retirement.segmentIndex) &&
     segment.persisted !== true &&
     segment.runId === runId &&
     streamSegmentUsesAccumulatedText(segment) &&
     prefix.startsWith(segment.text);
   // Preserve renderer identity fast paths when persistence retires no segments.
   if (segments.some(shouldPrune)) {
-    segments = pruneAccumulatedStreamSegments(segments, runId, shouldPrune);
+    segments = pruneAccumulatedStreamSegments(segments, runId, shouldPrune, retirement?.itemId);
     state.chatStreamSegments = segments;
   }
   if (advanceAccumulatedStreamText(accumulated, prefix) === accumulated) {
@@ -113,17 +145,165 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
   // prefix; keep the received buffer intact so later deltas cannot restart it.
   const last = segments.at(-1);
   const extendsPersisted =
-    last?.persisted && last.runId === runId && !last.boundaryRunId && !last.toolCallId;
+    last?.persisted &&
+    last.runId === runId &&
+    !last.boundaryRunId &&
+    !last.toolCallId &&
+    !last.retiredItemId &&
+    !retirement;
   state.chatStreamSegments = [
     ...(extendsPersisted ? segments.slice(0, -1) : segments),
     {
       ...(extendsPersisted ? last : {}),
       text: prefix,
-      ts: state.chatStreamStartedAt ?? Date.now(),
+      ts: state.chatStreamStartedAt ?? timestamp,
       runId,
       persisted: true,
+      ...(retirement ? { retiredItemId: retirement.itemId } : {}),
     },
   ];
+}
+
+function completePendingCommentary(
+  state: StreamSegmentPruningState,
+  retired: ChatStreamSegment,
+): { text: string } | null {
+  const pending = retired.pendingCommentary;
+  const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
+  if (!pending || !stream?.startsWith(retired.text)) {
+    return null;
+  }
+  const expectedText = pending.text;
+  const rawTail = stream.slice(pending.prefixLength);
+  const delivered = stripInlineDirectiveTagsForDelivery(rawTail).text;
+  const projected = delivered.replace(/\s+/gu, " ").trim();
+  let prefix = stream;
+  let text = expectedText;
+  let pendingCommentary: ChatStreamSegment["pendingCommentary"];
+  if (expectedText.startsWith(projected) && projected !== expectedText) {
+    pendingCommentary = { ...pending, text: expectedText };
+  } else {
+    // Match only this already-owned occurrence. A coalesced delta may also
+    // contain new output, including another identical commentary paragraph.
+    const pattern = expectedText
+      .split(/\s+/u)
+      .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("\\s+");
+    const match = new RegExp(`^\\s*${pattern}`, "u").exec(delivered);
+    if (!match) {
+      return null;
+    }
+    const suffix = delivered.slice(match[0].length).trimEnd();
+    const source = rawTail.trimEnd();
+    if (suffix && !source.endsWith(suffix)) {
+      return null;
+    }
+    // A shorter item revision changes display, not bytes already owned by it.
+    prefix = stream.slice(
+      0,
+      Math.max(retired.text.length, pending.prefixLength + source.length - suffix.length),
+    );
+    text = match[0].replace(/^(?:[ \t]*\r?\n)+/u, "").trimEnd();
+  }
+  state.chatStreamSegments = state.chatStreamSegments?.map((segment) => {
+    if (segment === retired) {
+      return { ...segment, text: prefix, pendingCommentary };
+    }
+    // A tool may have rolled the observed partial into another segment before
+    // completion. It is the same cumulative occurrence, not new visible text.
+    return segment.runId === retired.runId &&
+      streamSegmentUsesAccumulatedText(segment) &&
+      segment.text.startsWith(retired.text) &&
+      prefix.startsWith(segment.text)
+      ? { ...segment, persisted: true }
+      : segment;
+  });
+  return { text };
+}
+
+/** Transfer one cumulative occurrence to its first keyed owner. */
+export function retireCommentaryStream(
+  state: StreamSegmentPruningState,
+  commentary: {
+    runId: string;
+    itemId: string;
+    text: string;
+    timestamp: number;
+  },
+): { text: string } | null {
+  if (state.chatRunId !== commentary.runId) {
+    return null;
+  }
+  const retired = state.chatStreamSegments?.find(
+    (segment) => segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId,
+  );
+  if (retired) {
+    // Item revisions replace the expected text; only the observed cumulative
+    // prefix must stay monotonic. Keep that update even while chat lags behind.
+    const owner =
+      retired.pendingCommentary && retired.pendingCommentary.text !== commentary.text
+        ? { ...retired, pendingCommentary: { ...retired.pendingCommentary, text: commentary.text } }
+        : retired;
+    if (owner !== retired) {
+      state.chatStreamSegments = state.chatStreamSegments?.map((segment) =>
+        segment === retired ? owner : segment,
+      );
+    }
+    return completePendingCommentary(state, owner);
+  }
+  // Only the first keyed event can acquire an unowned cumulative occurrence.
+  // A later update without a pending retirement must not consume new output.
+  if (
+    state.chatStreamSegments?.some(
+      (segment) => segment.runId === commentary.runId && segment.itemId === commentary.itemId,
+    )
+  ) {
+    return null;
+  }
+  const part = visibleAssistantStreamParts(state, {
+    includeCurrent: true,
+    isHiddenStreamText: () => false,
+  }).at(-1);
+  if (!part || part.itemId || part.runId !== commentary.runId || part.boundaryRunId) {
+    return null;
+  }
+  const preceding = (state.chatStreamSegments ?? []).slice(0, part.segmentIndex);
+  const prefix = accumulatedStreamText(preceding);
+  const rawTail =
+    prefix && part.replacementText.startsWith(prefix)
+      ? part.replacementText.slice(prefix.length)
+      : part.replacementText;
+  const text = stripInlineDirectiveTagsForDelivery(rawTail)
+    .text.replace(/^(?:[ \t]*\r?\n)+/u, "")
+    .trimEnd();
+  // The preamble producer flattens whitespace. Keep the cumulative formatting
+  // when that exact projection identifies the same complete occurrence.
+  const projectedText = text.replace(/\s+/gu, " ").trim();
+  if (!text || (text !== commentary.text && projectedText !== commentary.text)) {
+    if (!projectedText || !commentary.text.startsWith(projectedText)) {
+      return null;
+    }
+    // Retire observed bytes immediately. Keep completion with the cumulative
+    // owner so replacing the keyed display with history cannot lose the handoff.
+    retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
+      itemId: commentary.itemId,
+      segmentIndex: part.segmentIndex,
+    });
+    state.chatStreamSegments = state.chatStreamSegments?.map((segment) =>
+      segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId
+        ? {
+            ...segment,
+            pendingCommentary: { text: commentary.text, prefixLength: prefix?.length ?? 0 },
+          }
+        : segment,
+    );
+    return { text: commentary.text };
+  }
+  retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
+    itemId: commentary.itemId,
+    segmentIndex: part.segmentIndex,
+  });
+  return { text };
 }
 
 /** A durable commentary row immediately replaces its keyed live projection.
