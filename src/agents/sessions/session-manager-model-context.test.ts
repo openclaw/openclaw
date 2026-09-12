@@ -44,7 +44,8 @@ it("acquires a long sparse context with bounded queries and preserved message or
     ]);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
     const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
-    const spy = vi.spyOn(prototype, "iterate");
+    const iterate = vi.spyOn(prototype, "iterate");
+    const get = vi.spyOn(prototype, "get");
     try {
       const context = SessionManager.openModelContext(scope).buildSessionContext();
       expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
@@ -53,12 +54,13 @@ it("acquires a long sparse context with bounded queries and preserved message or
           .map((entry) => entry.message.content),
       );
       // Protect acquisition cost independently of the exact chunk size or query implementation.
-      expect(spy.mock.calls.length).toBeLessThan(20);
+      expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         context,
       );
     } finally {
-      spy.mockRestore();
+      iterate.mockRestore();
+      get.mockRestore();
     }
   });
 });
