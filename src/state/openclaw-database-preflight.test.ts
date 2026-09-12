@@ -38,6 +38,10 @@ afterEach(() => {
 });
 
 describe("OpenClaw database schema preflight", () => {
+  const supportedVersions = {
+    state: OPENCLAW_STATE_SCHEMA_VERSION,
+    agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+  };
   function snapshotSourceFamily(databasePath: string) {
     const paths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`].filter(
       fs.existsSync,
@@ -386,6 +390,34 @@ describe("OpenClaw database schema preflight", () => {
     }
   });
 
+  it("classifies a copied database without the host boot id as startup-repairable", async () => {
+    const sourcePath = createExplicitStateDatabase(
+      OPENCLAW_STATE_SCHEMA_SQL.replace(
+        "  startup_reason TEXT,\n  reason TEXT,\n  host_boot_id TEXT\n",
+        "  startup_reason TEXT,\n  reason TEXT\n",
+      ),
+    );
+    const databasePath = path.join(
+      tempDirs.make("openclaw-copied-host-boot-preflight-"),
+      "candidate.sqlite",
+    );
+    fs.copyFileSync(sourcePath, databasePath);
+    const before = snapshotSourceFamily(sourcePath);
+
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      status: "startup-repairable",
+      requiresWrite: true,
+      issues: [
+        {
+          code: "missing-column",
+          objectName: "gateway_boot_lifecycle.host_boot_id",
+        },
+      ],
+    });
+    expect(snapshotSourceFamily(sourcePath)).toEqual(before);
+  });
+
   it("accepts first-use session group columns without requiring a startup write", async () => {
     const databasePath = createExplicitStateDatabase(
       OPENCLAW_STATE_SCHEMA_SQL.replace(
@@ -495,10 +527,7 @@ describe("OpenClaw database schema preflight", () => {
       await preflightOpenClawDatabaseSchemas({
         env,
         verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
     ).toEqual({ incompatible: [], indeterminate: [] });
     await expect(
@@ -538,10 +567,7 @@ describe("OpenClaw database schema preflight", () => {
       const result = await preflightOpenClawDatabaseSchemas({
         env,
         verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       });
       expect(result.pendingMigrations).toBeUndefined();
       expect(result.incompatible).toEqual([]);
@@ -629,10 +655,7 @@ describe("OpenClaw database schema preflight", () => {
       await preflightOpenClawDatabaseSchemas({
         env,
         verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
     ).toEqual({
       incompatible: [],
@@ -750,10 +773,7 @@ describe("OpenClaw database schema preflight", () => {
     expect(
       await preflightOpenClawDatabaseSchemas({
         env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
     ).toEqual({
       incompatible: [
@@ -804,10 +824,7 @@ describe("OpenClaw database schema preflight", () => {
       const result = await preflightOpenClawDatabaseSchemas({
         env,
         verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       });
       expect(result.incompatible).toEqual([]);
       expect(result.indeterminate).toEqual(
@@ -860,10 +877,7 @@ describe("OpenClaw database schema preflight", () => {
     ).rejects.toThrow(/Gateway refused restart.*belongs to agent main; requested agent ops/);
     const result = await preflightOpenClawDatabaseSchemas({
       env,
-      supportedVersions: {
-        state: OPENCLAW_STATE_SCHEMA_VERSION,
-        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-      },
+      supportedVersions,
       verifyCurrentSchemaShape: true,
       configuredAgentDatabaseCandidatePaths: [agentPath],
     });
@@ -897,10 +911,7 @@ describe("OpenClaw database schema preflight", () => {
       await preflightOpenClawDatabaseSchemas({
         env,
         verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
     ).toEqual({
       incompatible: [],
@@ -924,10 +935,7 @@ describe("OpenClaw database schema preflight", () => {
     expect(
       await preflightOpenClawDatabaseSchemas({
         env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
     ).toEqual({
       incompatible: [],
@@ -953,10 +961,7 @@ describe("OpenClaw database schema preflight", () => {
     expect(
       await preflightOpenClawDatabaseSchemas({
         env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
     ).toEqual({
       incompatible: [],
@@ -981,10 +986,7 @@ describe("OpenClaw database schema preflight", () => {
     expect(
       await preflightOpenClawDatabaseSchemas({
         env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
     ).toEqual({
       incompatible: [],
@@ -1017,10 +1019,7 @@ describe("OpenClaw database schema preflight", () => {
       try {
         result = await preflightOpenClawDatabaseSchemas({
           env: { OPENCLAW_STATE_DIR: stateDir },
-          supportedVersions: {
-            state: OPENCLAW_STATE_SCHEMA_VERSION,
-            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-          },
+          supportedVersions,
           configuredAgentDatabaseCandidatePaths: [visiblePath, deniedPath, absentPath],
         });
       } finally {
