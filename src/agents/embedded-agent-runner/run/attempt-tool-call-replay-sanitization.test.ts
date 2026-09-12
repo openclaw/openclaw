@@ -4,6 +4,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
+import { createFakeStream } from "./attempt-stream.test-helpers.js";
 import {
   sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
@@ -13,29 +14,6 @@ import {
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
-type FakeWrappedStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createFakeStream(params: {
-  events: unknown[];
-  resultMessage: unknown;
-}): FakeWrappedStream {
-  return {
-    async result() {
-      return params.resultMessage;
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {
-        for (const event of params.events) {
-          yield event;
-        }
-      })();
-    },
-  };
-}
-
 function requireAssistantMessage(message: AgentMessage | undefined): AssistantMessage {
   if (!message || message.role !== "assistant") {
     throw new Error(`expected assistant message, got ${message?.role ?? "missing"}`);

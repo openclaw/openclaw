@@ -2,12 +2,12 @@
 
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
 import {
   collectStreamEvents,
   createFakeStream,
   type FakeWrappedStream,
-} from "./attempt-tool-call-text-promotion.test-helpers.js";
+} from "./attempt-stream.test-helpers.js";
+import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
