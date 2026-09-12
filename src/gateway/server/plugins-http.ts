@@ -139,6 +139,9 @@ function createPluginRouteRuntimeScope(params: {
   );
   return {
     pluginRegistry: params.registry,
+    ...(params.route.auth === "gateway" && params.gatewayRequestAuth?.revalidate
+      ? { revalidate: params.gatewayRequestAuth.revalidate }
+      : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     isWebchatConnect: () => false,
