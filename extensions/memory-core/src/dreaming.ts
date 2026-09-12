@@ -654,7 +654,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
           rejectionCounts.set(category, (rejectionCounts.get(category) ?? 0) + 1);
         }
         const summary = [...rejectionCounts]
-          .sort(([left], [right]) => left.localeCompare(right))
+          .toSorted(([left], [right]) => left.localeCompare(right))
           .map(([category, count]) => `${category}: ${count}`)
           .join(", ");
         reportLines.push(
