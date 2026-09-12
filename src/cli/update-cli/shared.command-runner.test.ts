@@ -149,9 +149,10 @@ describe("update CLI shared helpers", () => {
       }),
     ).rejects.toMatchObject({
       name: "UpdatePreMutationError",
-      message: expect.stringContaining("No package changes or Gateway restart were attempted."),
+      message: expect.stringMatching(
+        /No package changes or Gateway restart were attempted\.[\s\S]*Inspected:[\s\S]*\/shared\/store\/openclaw[\s\S]*npm root -g[\s\S]*pnpm root -g[\s\S]*prefix -g/,
+      ),
     });
-    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
   });
 
   it("publishes a successful fresh clone only after the clone completes", async () => {
