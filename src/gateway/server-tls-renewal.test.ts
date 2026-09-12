@@ -43,7 +43,9 @@ function createRenewal() {
     onRenewed,
     log: { info: vi.fn(), warn: vi.fn() },
   });
-  if (!owner) throw new Error("TLS renewal owner was not created");
+  if (!owner) {
+    throw new Error("TLS renewal owner was not created");
+  }
   return { owner, runtime, publish, watcher, onRenewed };
 }
 
