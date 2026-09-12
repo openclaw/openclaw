@@ -104,6 +104,7 @@ export function createWorkerTurnRunOwner(params: {
   const handle = {
     kind: "embedded",
     runId: claim.runId,
+    toolAuthorityFingerprint: turn.toolAuthorityFingerprint,
     startedAtMs,
     diagnosticOwner,
     closeDiagnostics: () => {

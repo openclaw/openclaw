@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { EmbeddedRunToolAuthorityBinding } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   isEmbeddedAgentRunHandleActive,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   createReplyOperation,
   isReplyRunEvidenceStale,
@@ -48,6 +50,63 @@ import {
 describe("cloud worker run ownership", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("registers the worker turn with its prepared tool authority fingerprint", async () => {
+    const { createWorkerTurnRunOwner } = await import("./worker-turn-run-owner.js");
+    seedActivePlacement();
+    const runId = "worker-tool-authority";
+    const claim = placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      runId,
+      claimId: "worker-tool-authority-claim",
+      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    });
+    const toolAuthorityFingerprint = "prepared-worker-tool-authority";
+    const bindToolAuthority = vi.fn<EmbeddedRunToolAuthorityBinding>(({ handle }) => {
+      if (handle.toolAuthorityFingerprint !== toolAuthorityFingerprint) {
+        throw new Error("embedded tool authority registration does not match its attempt");
+      }
+      return {
+        source: "attempt" as const,
+        assertActive: () => {},
+        project: () => toolAuthorityFingerprint,
+      };
+    });
+    let active: ReturnType<typeof createWorkerTurnRunOwner> | undefined;
+
+    try {
+      await expect(
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: SESSION_KEY,
+            embeddedRunToolAuthorityBinding: bindToolAuthority,
+          },
+          async () => {
+            active = createWorkerTurnRunOwner({
+              placements,
+              claim,
+              turn: { ...turn(runId), toolAuthorityFingerprint },
+              sessionKey: SESSION_KEY,
+            });
+          },
+        ),
+      ).resolves.toBeUndefined();
+      expect(bindToolAuthority).toHaveBeenCalledOnce();
+      expect(bindToolAuthority).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          handle: expect.objectContaining({ runId, toolAuthorityFingerprint }),
+        }),
+      );
+    } finally {
+      active?.dispose();
+    }
+  });
 
   it.each([
     { cancellation: "user", firstToolDelayMs: 0 },
