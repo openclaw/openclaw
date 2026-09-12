@@ -907,29 +907,19 @@ export async function runGatewayLoop(params: {
           server = null;
         }
         if (action === "restart") {
-          try {
-            await hostLifecycle?.retire();
-            if (shutdownFailed) {
-              await forceExitAfterStabilityBundle("gateway.restart_close_failed");
-            } else if (handoffClosed) {
-              await handleRestartAfterServerClose(
-                managedUpdateOwner,
-                managedUpdateCancellation === "restored-in-process",
-              );
-            }
-          } finally {
-            clearForceExitTimer();
-            forceActiveRestartExit = null;
+          await hostLifecycle?.retire();
+          if (shutdownFailed) {
+            await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+          } else if (handoffClosed) {
+            await handleRestartAfterServerClose(
+              managedUpdateOwner,
+              managedUpdateCancellation === "restored-in-process",
+            );
           }
         } else if (acceptedRequest.hostedStop) {
-          try {
-            await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailed);
-          } finally {
-            clearForceExitTimer();
-          }
+          await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailed);
         } else {
           await hostLifecycle?.retire();
-          clearForceExitTimer();
           if (isRestart && shutdownFailed) {
             await forceExitAfterStabilityBundle("gateway.restart_close_failed");
           } else {
@@ -947,6 +937,12 @@ export async function runGatewayLoop(params: {
             await releaseLockIfHeld();
             await exitProcessAfterLogFlush(shutdownFailed ? 1 : 0);
           }
+        }
+        // Even process.exit() can throw from an exit listener. Keep both deadline
+        // owners armed until the complete handoff succeeds, not just server close.
+        clearForceExitTimer();
+        if (action === "restart") {
+          forceActiveRestartExit = null;
         }
       }
     })();

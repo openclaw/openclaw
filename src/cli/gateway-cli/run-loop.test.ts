@@ -1618,6 +1618,47 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it.each([
+    { signal: "SIGTERM", failure: "exit handler" },
+    { signal: "SIGTERM", failure: "log flush" },
+    { signal: "SIGUSR1", failure: "exit handler" },
+    { signal: "SIGUSR1", failure: "log flush" },
+  ] as const)(
+    "retains $signal deadlines when $failure throws after server close",
+    async ({ signal, failure }) => {
+      vi.clearAllMocks();
+      process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, runtime, exited } = await createSignaledLoopHarness(undefined, true);
+        const error = new TypeError("shutdown cleanup failed");
+        if (failure === "exit handler") {
+          runtime.exit.mockImplementationOnce(() => {
+            throw error;
+          });
+        } else {
+          flushLogger.mockRejectedValueOnce(error);
+        }
+        vi.useFakeTimers();
+        try {
+          captureSignal(signal)();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(close).toHaveBeenCalledOnce();
+          expect(gatewayLog.error).toHaveBeenCalledWith(
+            "gateway lifecycle completion failed: shutdown cleanup failed",
+          );
+          expect(armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+          expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(625_000);
+          await expect(exited).resolves.toBe(1);
+        } finally {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it("exits after draining a SIGTERM restart intent without starting a successor", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "gateway.restart" });
