@@ -189,7 +189,7 @@ describe("session computer transport", () => {
       const { transport, prepared } = await h.prepare();
       await transport.invoke(request("snapshot"));
       await transport.invoke(request("type"));
-      expect(h.nodeTransport.listCurrentNodes).not.toHaveBeenCalled();
+      expect(h.nodeTransport.getCurrentNode).not.toHaveBeenCalled();
       expect(h.privateInvoke).not.toHaveBeenCalled();
       expect(h.publicInvoke).toHaveBeenLastCalledWith(
         expect.objectContaining({

@@ -261,9 +261,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     deviceId: string;
     signal: AbortSignal;
   }): Promise<NodeWorkerSupervisorNodeProof> => {
-    let nodes: readonly NodeWorkerSupervisorNodeProof[];
+    let node: NodeWorkerSupervisorNodeProof | undefined;
     try {
-      nodes = await raceNodeWorkerOperation(params.transport.listCurrentNodes(), params.signal);
+      node = await raceNodeWorkerOperation(
+        params.transport.getCurrentNode(params.deviceId),
+        params.signal,
+      );
     } catch (error) {
       if (params.signal.aborted) {
         throw error;
@@ -273,7 +276,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         "device worker node discovery is unavailable",
       );
     }
-    const node = nodes.find((candidate) => candidate.nodeId === params.deviceId);
     if (!node) {
       throw new NodeWorkerLaunchTransportError(
         "NOT_CONNECTED",

@@ -135,8 +135,8 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     signal: AbortSignal,
   ): Promise<NodeWorkerSupervisorNodeProof> => {
     signal.throwIfAborted();
-    const nodes = await raceNodeWorkerOperation(
-      capturedRuntime.transport.listCurrentNodes(),
+    const node = await raceNodeWorkerOperation(
+      capturedRuntime.transport.getCurrentNode(binding.nodeDeviceId),
       signal,
       {
         aborted: "Worker environment node desktop operation aborted",
@@ -144,7 +144,6 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       },
     );
     signal.throwIfAborted();
-    const node = nodes.find((candidate) => candidate.nodeId === binding.nodeDeviceId);
     if (!node || !bindingIsCurrent(binding, capturedRuntime, node)) {
       throw new Error("Worker environment node desktop connection is not current");
     }

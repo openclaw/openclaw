@@ -49,6 +49,9 @@ export function environment(): WorkerEnvironmentRecord {
 
 export function transport(): NodeWorkerSupervisorTransport {
   return {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
     hasCurrentRunner: () => true,
     listCurrentNodes: async () => [
       {
