@@ -379,7 +379,7 @@ Example (OpenAI-compatible):
 
     An omitted `contextWindow` remains unset so authored native-window metadata is unambiguous. When neither discovery nor per-model context metadata is available, context-budget callers use the standard `200000`-token fallback.
 
-    Recommended: set explicit values that match your proxy/model limits.
+    Recommended: set explicit values that match your proxy/model limits. Synthesizing `8192` (or `32768`) for unknown reasoning proxies truncates tool-call JSON or rejects providers whose ceiling differs.
 
     Model-selection metadata keeps capabilities tied to the API and endpoint that supplied them. A configured route change discards metadata from the previous route, while an explicit `thinkingLevelMap` is applied to the configured model.
 
