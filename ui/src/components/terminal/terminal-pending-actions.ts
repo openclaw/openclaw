@@ -333,6 +333,9 @@ export function terminalToggleIntent(
     return null;
   }
   const agentId = detail.agentId?.trim() || fallbackAgentId;
+  if (detail.newSession === true) {
+    return { kind: "open", agentId };
+  }
   if (detail.terminalSessionId) {
     return {
       kind: "attach",

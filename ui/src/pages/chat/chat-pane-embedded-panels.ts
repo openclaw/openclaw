@@ -32,6 +32,7 @@ type SidebarPanelDefinitionParams = {
   agentId: string | null;
   browserPresented: boolean;
   browserTabsInHeader: boolean;
+  terminalTabsInHeader: boolean;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
@@ -131,6 +132,7 @@ export function sidebarPanelDefinitions(
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
         embedded
+        .tabsInHeader=${params?.terminalTabsInHeader ?? false}
         .client=${state.connected ? state.client : null}
         .available=${state.terminalAvailable}
         .agentId=${params?.agentId ?? null}

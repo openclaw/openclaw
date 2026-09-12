@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html } from "lit";
+import { html, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { icons } from "../../../components/icons.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   type PanelHostedTab,
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
-import { activatePanel, openSlot } from "../sidebar-layout.ts";
+import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.ts";
 
 const shells: HTMLElement[] = [];
@@ -16,29 +17,38 @@ const firstTab: PanelHostedTab = {
   id: "remote:page:1",
   label: "First page",
   url: "https://first.example/a",
-  kind: "remote",
+  icon: icons.globe,
 };
 const secondTab: PanelHostedTab = {
   id: "native:page:2",
   label: "Second page",
   url: "https://second.example/b",
-  kind: "native",
+  icon: icons.monitor,
 };
 const tabs = [firstTab, secondTab];
 
-async function mount(options: { tabs?: PanelHostedTab[]; fetchFavicon?: LinkFaviconFetcher } = {}) {
+async function mount(
+  options: {
+    tabs?: PanelHostedTab[];
+    fetchFavicon?: LinkFaviconFetcher;
+    slot?: SidebarSlotId;
+    hostedActions?: TemplateResult;
+  } = {},
+) {
+  const slot = options.slot ?? "browser";
   const panel = Object.assign(document.createElement("div"), {
     hostedTabs: options.tabs ?? tabs,
+    hostedActions: options.hostedActions,
     activeHostedTabId: "remote:page:1",
     selectHostedTab: vi.fn(),
     closeHostedTab: vi.fn().mockResolvedValue(undefined),
   }) satisfies PanelHostedTabsElement;
   const region = document.createElement("openclaw-chat-sidebar-region");
   region.layout = activatePanel(
-    openSlot(openSlot(openSlot({ columns: [] }, "detail"), "browser"), "workspace"),
-    "browser",
+    openSlot(openSlot(openSlot({ columns: [] }, "detail"), slot), "workspace"),
+    slot,
   );
-  region.panelTemplates = { browser: html`${panel}` };
+  region.panelTemplates = { [slot]: html`${panel}` };
   region.fetchFavicon = options.fetchFavicon;
   region.callbacks = {
     activatePanel: vi.fn(),
@@ -79,7 +89,7 @@ afterEach(() => {
   }
 });
 
-describe("chat sidebar hosted Browser tabs", () => {
+describe("chat sidebar hosted tabs", () => {
   it("replaces Browser with its tabs, selects the active page and brackets the group", async () => {
     const { shell } = await mount();
     expect(labels(shell)).toEqual(["Review", "First page", "Second page", "Files"]);
@@ -177,6 +187,58 @@ describe("chat sidebar hosted Browser tabs", () => {
     );
   });
 
+  it("presents non-browser hosted tabs with their title, status, badge and class", async () => {
+    const { shell } = await mount({
+      slot: "terminal",
+      tabs: [
+        {
+          id: "shell:1",
+          label: "zsh",
+          title: "main: /workspace",
+          statusLabel: "Exited (0)",
+          badge: "agent",
+          className: "is-exited",
+          icon: icons.terminal,
+        },
+      ],
+    });
+    expect(labels(shell)).toEqual(["Review", "zsh", "Files"]);
+    const tab = shell.querySelector('wa-tab[panel="hosted:terminal:shell:1"]')!;
+    expect(tab.getAttribute("title")).toBe("main: /workspace");
+    expect(tab.querySelector(".tabstrip-tab__status")?.textContent).toBe("Exited (0)");
+    expect(tab.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
+    expect(tab.classList.contains("is-exited")).toBe(true);
+    expect(
+      tab.querySelector('.tabstrip-tab__icon polyline[points="4 17 10 11 4 5"]'),
+    ).not.toBeNull();
+  });
+
+  it("renders hosted actions before slot actions only while their panel is active", async () => {
+    const { region, shell } = await mount({
+      slot: "terminal",
+      hostedActions: html`<button type="button">New session</button>`,
+    });
+    region.panelActions = {
+      terminal: html`<button type="button">Terminal action</button>`,
+      workspace: html`<button type="button">Files action</button>`,
+    };
+    await region.updateComplete;
+    const actionLabels = () =>
+      [...shell.querySelectorAll(".side-panel__action-group--content button")].map(
+        (button) => button.textContent,
+      );
+    expect(actionLabels()).toEqual(["New session", "Terminal action"]);
+
+    region.layout = activatePanel(region.layout, "workspace");
+    await region.updateComplete;
+    expect(actionLabels()).toEqual(["Files action"]);
+    expect(shell.querySelector("[data-panel-slot='terminal']")?.hasAttribute("hidden")).toBe(true);
+
+    region.layout = activatePanel(region.layout, "terminal");
+    await region.updateComplete;
+    expect(actionLabels()).toEqual(["New session", "Terminal action"]);
+  });
+
   it("renders a cached favicon after the hostname fetch settles", async () => {
     const fetchFavicon = vi.fn<LinkFaviconFetcher>().mockResolvedValue("blob:header-favicon");
     const { shell, region } = await mount({
@@ -200,10 +262,10 @@ describe("chat sidebar hosted Browser tabs", () => {
   it("keeps remote and native fallback icons when no favicon is available", async () => {
     const fetchFavicon = vi.fn<LinkFaviconFetcher>().mockResolvedValue(null);
     const { shell, region } = await mount({
-      tabs: tabs.map(({ id, label, kind }) => ({
+      tabs: tabs.map(({ id, label, icon }) => ({
         id,
         label,
-        kind,
+        icon,
         url: "https://favicon-missing.example/",
       })),
       fetchFavicon,
@@ -226,10 +288,10 @@ describe("chat sidebar hosted Browser tabs", () => {
   it("never fetches blank, invalid, or hostless URLs", async () => {
     const fetchFavicon = vi.fn<LinkFaviconFetcher>();
     await mount({
-      tabs: ["", "not a url", "about:blank"].map((url, index) => ({
+      tabs: [undefined, "", "not a url", "about:blank"].map((url, index) => ({
         id: String(index),
         label: firstTab.label,
-        kind: firstTab.kind,
+        icon: firstTab.icon,
         url,
       })),
       fetchFavicon,
