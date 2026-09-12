@@ -79,20 +79,25 @@ function assertBase(
   return workspace.baseCommit;
 }
 
-async function refObject(
+async function refObjects(
   root: string,
-  ref: string,
+  refs: readonly string[],
   baseEnv?: NodeJS.ProcessEnv,
-): Promise<string | undefined> {
+): Promise<Map<string, string>> {
   const output = await requireWorkspaceResultGit(
     root,
-    ["for-each-ref", "--format=%(refname) %(objectname)", ref],
+    ["for-each-ref", "--format=%(refname) %(objectname)", ...refs],
     { baseEnv },
   );
-  return output
-    .split("\n")
-    .find((line) => line.startsWith(`${ref} `))
-    ?.slice(ref.length + 1);
+  const objects = new Map<string, string>();
+  for (const line of output.split("\n")) {
+    const separator = line.indexOf(" ");
+    const ref = line.slice(0, separator);
+    if (refs.includes(ref)) {
+      objects.set(ref, line.slice(separator + 1));
+    }
+  }
+  return objects;
 }
 
 export async function readSessionRepositoryCheckpoint(params: CheckpointSource) {
@@ -140,7 +145,7 @@ export async function withSessionRepositoryCheckpoint<T>(
     let useStarted = false;
     try {
       const companion = publicationRef(ref);
-      if (!(await refObject(root, companion))) {
+      if (!(await refObjects(root, [companion])).get(companion)) {
         useStarted = true;
         return await use(snapshot);
       }
@@ -224,7 +229,7 @@ async function stagePublication(params: {
     });
     const current = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit: null });
     const currentManifestRaw = serializeWorkerWorkspaceManifest(current.manifest);
-    await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+    return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
       root: params.root,
       stagingRoot,
       stagedResultRef: params.candidateRef,
@@ -326,7 +331,7 @@ export async function stageSessionRepositoryCheckpoint(
     return discardPromise;
   };
   try {
-    await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+    const objectId = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
       ...params,
       root,
       stagedResultRef: candidateRef,
@@ -337,7 +342,7 @@ export async function stageSessionRepositoryCheckpoint(
         if (!params.publicationStagingRoot || !params.publicationDigest) {
           throw new Error("Repository publication checkpoint is incomplete");
         }
-        await stagePublication({
+        companionId = await stagePublication({
           root,
           candidateRef: companionCandidate,
           publicationStagingRoot: params.publicationStagingRoot,
@@ -345,10 +350,6 @@ export async function stageSessionRepositoryCheckpoint(
           currentManifestRef: params.currentManifestRef,
           baseCommit,
         });
-        companionId = await requireWorkspaceResultGit(root, [
-          "rev-parse",
-          `${companionCandidate}^{commit}`,
-        ]);
       } catch (error) {
         // A rejected publication payload cannot discard independently validated
         // recovery bytes. Remove only its candidate, then recheck live authority.
@@ -359,22 +360,18 @@ export async function stageSessionRepositoryCheckpoint(
         );
       }
     }
-    const objectId = await requireWorkspaceResultGit(root, [
-      "rev-parse",
-      `${candidateRef}^{commit}`,
-    ]);
     const verify = async () => {
-      if (
-        (await requireWorkspaceResultGit(root, ["rev-parse", `${candidateRef}^{commit}`])) !==
-        objectId
-      ) {
+      const objects = (
+        await requireWorkspaceResultGit(root, [
+          "rev-parse",
+          `${candidateRef}^{commit}`,
+          ...(companionId ? [`${companionCandidate}^{commit}`] : []),
+        ])
+      ).split("\n");
+      if (objects[0] !== objectId) {
         throw new Error("Repository checkpoint preparation changed");
       }
-      if (
-        companionId &&
-        (await requireWorkspaceResultGit(root, ["rev-parse", `${companionCandidate}^{commit}`])) !==
-          companionId
-      ) {
+      if (companionId && objects[1] !== companionId) {
         throw new Error("Repository publication preparation changed");
       }
       assertRevision();
@@ -387,11 +384,17 @@ export async function stageSessionRepositoryCheckpoint(
       publish: async () => {
         await withWorkspaceResultRefMutation(root, async (baseEnv) => {
           const updates: string[] = [];
-          for (const [target, expected] of [
+          const targets = [
             [ref, objectId],
             [publicationRef(ref), companionId],
-          ] as const) {
-            const existing = await refObject(root, target, baseEnv);
+          ] as const;
+          const existingObjects = await refObjects(
+            root,
+            targets.map(([target]) => target),
+            baseEnv,
+          );
+          for (const [target, expected] of targets) {
+            const existing = existingObjects.get(target);
             if (existing !== undefined && existing !== expected) {
               throw new Error("Repository checkpoint identity already contains a different result");
             }
