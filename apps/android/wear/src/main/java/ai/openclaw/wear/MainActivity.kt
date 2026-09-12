@@ -56,6 +56,14 @@ internal enum class WearLaunchTarget(
   }
 }
 
+internal fun consumeWearConversationTarget(intent: Intent?): WearConversationTarget? {
+  val sessionKey = intent?.getStringExtra(EXTRA_SESSION_KEY)?.takeIf(String::isNotBlank)
+  val phoneNodeId = intent?.getStringExtra(EXTRA_PHONE_NODE_ID)?.takeIf(String::isNotBlank)
+  intent?.removeExtra(EXTRA_SESSION_KEY)
+  intent?.removeExtra(EXTRA_PHONE_NODE_ID)
+  return if (sessionKey != null && phoneNodeId != null) WearConversationTarget(sessionKey, phoneNodeId) else null
+}
+
 internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget = WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
 
 internal fun consumeWearLaunchTarget(intent: Intent?): WearLaunchTarget =
@@ -66,6 +74,7 @@ internal fun consumeWearLaunchTarget(intent: Intent?): WearLaunchTarget =
 internal data class WearNavigationRequest(
   val id: Int,
   val target: WearLaunchTarget,
+  val waitForConversation: Boolean = false,
 )
 
 internal data class WearLaunchState(
@@ -73,13 +82,17 @@ internal data class WearLaunchState(
   val navigationRequest: WearNavigationRequest? = null,
   val nextRequestId: Int = 0,
 ) {
-  fun next(intent: Intent?): WearLaunchState {
+  fun next(
+    intent: Intent?,
+    waitForConversation: Boolean = false,
+  ): WearLaunchState {
     val requestId = nextRequestId + 1
     return copy(
       navigationRequest =
         WearNavigationRequest(
           id = requestId,
           target = consumeWearLaunchTarget(intent),
+          waitForConversation = waitForConversation,
         ),
       nextRequestId = requestId,
     )
@@ -124,6 +137,7 @@ class MainActivity : ComponentActivity() {
       screenshotScene = parseWearScreenshotModeIntent(intent)
     }
     launchState = WearLaunchState.initial(intent)
+    if (screenshotScene == null) consumeWearConversationTarget(intent)?.let(viewModel::openNotification)
     setContent {
       val scene = screenshotScene
       if (scene == null) {
@@ -152,7 +166,9 @@ class MainActivity : ComponentActivity() {
       recreate()
       return
     }
-    launchState = launchState.next(intent)
+    val conversationTarget = consumeWearConversationTarget(intent)
+    conversationTarget?.let(viewModel::openNotification)
+    launchState = launchState.next(intent, waitForConversation = conversationTarget != null)
   }
 
   override fun onStart() {
@@ -181,6 +197,7 @@ internal fun OpenClawWearApp(
 ) {
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
+  val conversationContext = viewModel.captureConversationContext()
   val speaking by speaker.isSpeaking.collectAsState()
   val speechFailed by speaker.failed.collectAsState()
   val view = LocalView.current
@@ -205,9 +222,13 @@ internal fun OpenClawWearApp(
   var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
   var awaitingReplySessionId by remember { mutableStateOf<String?>(null) }
   var awaitingReplyRunId by remember { mutableStateOf<String?>(null) }
+  var awaitingReplyContext by remember { mutableStateOf<WearConversationContext?>(null) }
   var awaitingReply by remember { mutableStateOf(false) }
   var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
   var realtimeThinkingTurnId by remember { mutableStateOf<String?>(null) }
+  var inputContext by remember { mutableStateOf<WearConversationContext?>(null) }
+  var audioPermissionPending by remember { mutableStateOf(false) }
+  var modelSearchContext by remember { mutableStateOf<WearConversationContext?>(null) }
   val speakPrompt = stringResource(R.string.speak_to_agent)
   val messageLabel = stringResource(R.string.message)
   val messageTitle = stringResource(R.string.message_agent)
@@ -217,6 +238,13 @@ internal fun OpenClawWearApp(
   val searchLabel = stringResource(R.string.search)
 
   fun submitMessage(rawMessage: String) {
+    val context = inputContext
+    inputContext = null
+    if (!viewModel.validateConversationContext(context)) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
     val message = rawMessage.trim()
     val sessionId = snapshot?.activeSessionId
     if (message.isEmpty()) {
@@ -233,13 +261,14 @@ internal fun OpenClawWearApp(
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
     }
-    if (!viewModel.sendReply(message) { awaitingReplyRunId = it }) {
+    if (!viewModel.sendReply(message, context) { awaitingReplyRunId = it }) {
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
     }
     expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
     awaitingReplySessionId = sessionId
+    awaitingReplyContext = context
     awaitingReply = true
     interaction = WearInteractionState.SENDING
     speaker.stop()
@@ -254,6 +283,7 @@ internal fun OpenClawWearApp(
       if (result.resultCode == Activity.RESULT_OK && !transcript.isNullOrBlank()) {
         submitMessage(transcript)
       } else {
+        inputContext = null
         interaction = WearInteractionState.READY
       }
     }
@@ -267,6 +297,7 @@ internal fun OpenClawWearApp(
       if (result.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) {
         submitMessage(text)
       } else {
+        inputContext = null
         interaction = WearInteractionState.READY
       }
     }
@@ -289,8 +320,9 @@ internal fun OpenClawWearApp(
           ?.getCharSequence(REMOTE_INPUT_KEY)
           ?.toString()
       if (result.resultCode == Activity.RESULT_OK && !query.isNullOrBlank()) {
-        viewModel.searchModels(query)
+        if (viewModel.validateConversationContext(modelSearchContext)) viewModel.searchModels(query)
       }
+      modelSearchContext = null
     }
 
   fun launchSearchInput(
@@ -307,7 +339,7 @@ internal fun OpenClawWearApp(
     launcher.launch(intent)
   }
 
-  fun startRealtimeTalk() {
+  fun startRealtimeTalk(context: WearConversationContext?) {
     speaker.stop()
     if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
     microphoneGranted = ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -316,7 +348,7 @@ internal fun OpenClawWearApp(
       return
     }
     microphoneDenied = false
-    viewModel.startRealtimeTalk()
+    viewModel.startRealtimeTalk(context)
   }
 
   fun leaveConversationContext() {
@@ -330,6 +362,7 @@ internal fun OpenClawWearApp(
 
   val audioPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      audioPermissionPending = false
       microphoneGranted = granted
       // Permission availability is not recording intent. A fresh tap starts Talk,
       // including after Settings or a dialog that outlived its conversation.
@@ -384,13 +417,14 @@ internal fun OpenClawWearApp(
       ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
     ) {
-      startRealtimeTalk()
+      startRealtimeTalk(viewModel.captureConversationContext())
     } else {
+      audioPermissionPending = true
       audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
   }
 
-  LaunchedEffect(state.phoneNodeId, state.activeAgentId, state.selectedSession?.key, state.connected) {
+  LaunchedEffect(conversationContext) {
     speaker.stop()
   }
 
@@ -401,9 +435,12 @@ internal fun OpenClawWearApp(
     awaitingReplySessionId = awaitingReplySessionId,
     awaitingReplyRunId = awaitingReplyRunId,
     expectedAssistantKey = expectedAssistantKey,
+    conversationContext = conversationContext,
+    awaitingReplyContext = awaitingReplyContext,
   ) { reply ->
     awaitingReply = false
     awaitingReplySessionId = null
+    awaitingReplyContext = null
     expectedAssistantKey = null
     interaction = WearInteractionState.READY
     if (reply != null) {
@@ -473,6 +510,9 @@ internal fun OpenClawWearApp(
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
         actionBusy =
           state.loading ||
+            inputContext != null ||
+            audioPermissionPending ||
+            modelSearchContext != null ||
             state.sending ||
             state.talkBusy ||
             state.controlBusy ||
@@ -486,10 +526,11 @@ internal fun OpenClawWearApp(
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
         initialPage = initialPage,
-        navigationRequest = navigationRequest,
+        navigationRequest = navigationRequest?.takeUnless { it.waitForConversation && (state.loading || state.talkBusy || state.realtimeTalk.active || state.realtimeCapturing || state.realtimePlaying) },
         onNavigationRequestHandled = onNavigationRequestHandled,
         onTalk = {
           if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
+          inputContext = viewModel.captureConversationContext()
           interaction = WearInteractionState.LISTENING
           val intent =
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -499,12 +540,14 @@ internal fun OpenClawWearApp(
           try {
             speechLauncher.launch(intent)
           } catch (_: ActivityNotFoundException) {
+            inputContext = null
             interaction = WearInteractionState.ERROR
             view.performHapticFeedback(HapticFeedbackConstants.REJECT)
           }
         },
         onType = {
           if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
+          inputContext = viewModel.captureConversationContext()
           interaction = WearInteractionState.TYPING
           val remoteInput =
             RemoteInput
@@ -546,7 +589,10 @@ internal fun OpenClawWearApp(
           leaveConversationContext()
           viewModel.selectModel(modelRef)
         },
-        onSearchModels = { launchSearchInput(modelSearchTitle, modelSearchLauncher) },
+        onSearchModels = {
+          modelSearchContext = viewModel.captureConversationContext()
+          launchSearchInput(modelSearchTitle, modelSearchLauncher)
+        },
         onClearModelSearch = viewModel::clearModelSearch,
         onAgentPulseVisibilityChanged = viewModel::setAgentPulseVisible,
         onAgentPulseRefresh = viewModel::refreshAgentPulse,
@@ -605,10 +651,14 @@ internal fun WearReplyCompletionEffect(
   awaitingReplySessionId: String?,
   expectedAssistantKey: String?,
   awaitingReplyRunId: String? = null,
+  conversationContext: WearConversationContext? = null,
+  awaitingReplyContext: WearConversationContext? = null,
   onCompleted: (WearChatMessage?) -> Unit,
 ) {
   val complete by rememberUpdatedState(onCompleted)
   LaunchedEffect(
+    conversationContext,
+    awaitingReplyContext,
     snapshot?.activeSessionId,
     state.messages,
     state.activeRunId,
@@ -625,7 +675,7 @@ internal fun WearReplyCompletionEffect(
     awaitingReplyRunId,
   ) {
     if (!awaitingReply) return@LaunchedEffect
-    if (snapshot == null || snapshot.activeSessionId != awaitingReplySessionId) {
+    if (snapshot == null || snapshot.activeSessionId != awaitingReplySessionId || conversationContext != awaitingReplyContext) {
       complete(null)
       return@LaunchedEffect
     }

@@ -23,6 +23,11 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import java.util.UUID
 
+internal data class WearConversationContext(
+  val target: WearConversationTarget,
+  val generation: Long,
+)
+
 internal data class WearPendingReply(
   val runId: String,
   val retryable: Boolean = false,
@@ -412,6 +417,11 @@ internal class WearViewModel(
   private var modelLoadJob: Job? = null
   private var talkStartJob: Job? = null
   private var talkAttemptId: String? = null
+  private var notificationOpenJob: Job? = null
+  private var notificationRouteGeneration = 0L
+  private var notificationTarget: WearConversationTarget? = null
+  private var notificationStopFailure: WearConversationFailure? = null
+  private var retainedNotificationSession: WearSession? = null
 
   val state: StateFlow<WearUiState> = mutableState.asStateFlow()
 
@@ -456,10 +466,11 @@ internal class WearViewModel(
         mutableState.update { it.copy(realtimeMouthLevel = level) }
       }
     }
-    refresh()
+    loadSessions()
   }
 
   fun refresh() {
+    notificationStopFailure = null
     loadSessions()
   }
 
@@ -483,6 +494,98 @@ internal class WearViewModel(
     restartAgentPulsePolling(forceLoading = true)
   }
 
+  fun openNotification(target: WearConversationTarget) {
+    notificationTarget = target
+    notificationStopFailure = null
+    cancelLoad()
+    cancelModelLoad()
+    invalidateAgentPulse(clearSnapshot = true)
+    invalidateConversationActions()
+    controlBusyOwner.reset()
+    notificationRouteGeneration = phoneRouteGeneration
+    val startingTalk = talkStartJob
+    startingTalk?.cancel()
+    talkStartJob = null
+    talkAttemptId = null
+    mutableState.update {
+      it.copy(
+        loading = true,
+        sending = false,
+        controlBusy = false,
+        talkBusy = true,
+        talkStopping = it.talkBusy || it.realtimeTalk.active || it.realtimeCapturing || it.realtimePlaying,
+        realtimeTalk =
+          WearRealtimeTalkSnapshot(
+            attemptId = it.realtimeTalk.attemptId,
+            conversation = it.realtimeTalk.conversation,
+          ),
+      )
+    }
+    // Repeated notifications replace navigation, not the Stop already in flight.
+    if (notificationOpenJob?.isActive == true) return
+    val openJob =
+      viewModelScope.launch(start = CoroutineStart.LAZY) {
+        try {
+          // Explicit navigation finishes the original Talk IO before selecting its
+          // destination. Cancellation of an in-progress start owns remote cleanup.
+          startingTalk?.join()
+          // Replacement notifications share this wait; canonical discovery still validates their destination below.
+          realtimeTalkClient.stop(mutableState.value.phoneNodeId) { notificationTarget?.phoneNodeId }
+          // Only the actual Stop owner releases navigation; UI state can be reset
+          // while routing is uncertain. Rediscovery must then validate the target.
+          notificationOpenJob = null
+          val destination = notificationTarget ?: return@launch
+          if (phoneRouteGeneration != notificationRouteGeneration) {
+            loadSessions()
+            return@launch
+          }
+          mutableState.update {
+            it.switchSessionContext(WearSession(destination.sessionKey, null, null, false, destination.phoneNodeId))
+          }
+          loadSessions()
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          if (notificationTarget == null) return@launch
+          if (err is WearProxyException && err.code == "phone_changed") {
+            notificationOpenJob = null
+            loadSessions()
+            return@launch
+          }
+          val failure = err.toWearConversationFailure()
+          notificationStopFailure = failure
+          // Discovery started by the failing transport cannot authorize this pending navigation.
+          cancelLoad()
+          mutableState.update {
+            it.copy(loading = false, selectedSession = null, messages = emptyList(), selectedModelRef = null, streamText = null, activeRunId = null, pendingReply = null, replyTerminal = null, replyCompletion = null, replyAbort = null, talkBusy = false, talkStopping = false, realtimeTalk = WearRealtimeTalkSnapshot(), failure = failure)
+          }
+        } finally {
+          if (notificationOpenJob === coroutineContext[Job]) notificationOpenJob = null
+        }
+      }
+    notificationOpenJob = openJob
+    openJob.start()
+  }
+
+  fun captureConversationContext(): WearConversationContext? {
+    val current = mutableState.value
+    val session = current.selectedSession ?: return null
+    if (!current.connected || session.phoneNodeId != current.phoneNodeId) return null
+    return WearConversationContext(WearConversationTarget(session.key, session.phoneNodeId), phoneRouteGeneration)
+  }
+
+  fun validateConversationContext(context: WearConversationContext?): Boolean {
+    if (context != null && context == captureConversationContext()) return true
+    mutableState.update { it.copy(failure = WearConversationFailure.ACTION_REJECTED) }
+    return false
+  }
+
+  private fun invalidateConversationActions() {
+    phoneRouteGeneration += 1
+    retainedNotificationSession = null
+    sendAttemptTracker.reset()
+  }
+
   fun openSession(session: WearSession) {
     val current = mutableState.value
     if (
@@ -491,14 +594,16 @@ internal class WearViewModel(
       current.realtimeTalk.active ||
       current.realtimeCapturing ||
       current.realtimePlaying ||
-      current.selectedSession?.key == session.key
+      session.phoneNodeId != current.phoneNodeId ||
+      current.selectedSession?.let { it.key == session.key && it.phoneNodeId == session.phoneNodeId } == true
     ) {
       return
     }
+    notificationTarget = null
+    invalidateConversationActions()
     endRealtimeTalkForNavigation()
     cancelModelLoad()
     invalidateAgentPulse(clearSnapshot = true)
-    sendAttemptTracker.retainForTarget(session.key, session.phoneNodeId)
     mutableState.update { it.switchSessionContext(session) }
     loadModels(session)
     loadHistory(session)
@@ -546,9 +651,10 @@ internal class WearViewModel(
   }
 
   fun closeSession() {
+    notificationTarget = null
+    invalidateConversationActions()
     endRealtimeTalkForNavigation()
     cancelModelLoad()
-    sendAttemptTracker.reset()
     mutableState.update {
       it.copy(
         selectedSession = null,
@@ -603,7 +709,10 @@ internal class WearViewModel(
     }
   }
 
-  fun startRealtimeTalk() {
+  fun startRealtimeTalk() = startRealtimeTalk(captureConversationContext())
+
+  fun startRealtimeTalk(context: WearConversationContext?) {
+    if (!validateConversationContext(context)) return
     val current = mutableState.value
     val selectedSession = current.selectedSession ?: return
     if (current.talkBusy || current.realtimeTalk.active) return
@@ -656,7 +765,7 @@ internal class WearViewModel(
         )
       }
       try {
-        val snapshot = realtimeTalkClient.stop()
+        val snapshot = realtimeTalkClient.stop(mutableState.value.phoneNodeId)
         if (talkAttemptId != attemptId) return@launch
         if (talkAttemptId == snapshot.attemptId) talkAttemptId = null
         mutableState.update { it.copy(realtimeTalk = snapshot, talkBusy = false, talkStopping = false) }
@@ -681,7 +790,14 @@ internal class WearViewModel(
   fun sendReply(
     text: String,
     onAccepted: (String) -> Unit = {},
+  ): Boolean = sendReply(text, captureConversationContext(), onAccepted)
+
+  fun sendReply(
+    text: String,
+    context: WearConversationContext?,
+    onAccepted: (String) -> Unit = {},
   ): Boolean {
+    if (!validateConversationContext(context)) return false
     val current = mutableState.value
     val session = current.selectedSession ?: return false
     val routeGeneration = phoneRouteGeneration
@@ -855,7 +971,7 @@ internal class WearViewModel(
       current.realtimeTalk.active ||
       current.realtimeCapturing ||
       current.realtimePlaying ||
-      current.activeAgentId == agentId ||
+      (current.activeAgentId == agentId && (current.selectedSession?.conversationAgentId ?: agentId) == agentId) ||
       WearProxyCapability.AgentControls !in current.proxyCapabilities
     ) {
       return
@@ -864,17 +980,18 @@ internal class WearViewModel(
     viewModelScope.launch {
       try {
         if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
+        notificationTarget = null
         repository.selectAgent(agentId, phoneNodeId, current.proxyCapabilities)
         if (!isCurrentControlRoute(phoneNodeId, routeGeneration)) return@launch
+        invalidateConversationActions()
         mutableState.update { state ->
-          if (isCurrentControlRoute(phoneNodeId, routeGeneration, state)) {
-            sendAttemptTracker.reset()
+          if (state.phoneNodeId == phoneNodeId) {
             state.switchAgentContext(agentId)
           } else {
             state
           }
         }
-        refresh()
+        loadSessions()
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
@@ -980,7 +1097,7 @@ internal class WearViewModel(
             applyWearGatewayControlStatus(state, status, enabled)
           }
         }
-        refresh()
+        loadSessions()
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
@@ -992,6 +1109,14 @@ internal class WearViewModel(
   }
 
   private fun loadSessions(expectedNodeId: String? = null) {
+    val failedStop = notificationStopFailure.takeIf { notificationTarget != null }
+    if (failedStop != null) {
+      // Keep the outcome through automatic rediscovery; explicit refresh permits canonical recovery.
+      cancelLoad()
+      mutableState.update { it.copy(loading = false, failure = failedStop) }
+      return
+    }
+    val requestedNotification = notificationTarget
     sessionSearchJob?.cancel()
     invalidateAgentPulse(clearSnapshot = true)
     cancelLoad()
@@ -1001,6 +1126,12 @@ internal class WearViewModel(
         mutableState.update { it.copy(loading = true, failure = null) }
         try {
           val status = repository.status(expectedNodeId)
+          // Rediscover routing so the original Stop can settle, but do not load
+          // or select a destination until its actual owner releases navigation.
+          if (notificationOpenJob?.isActive == true) return@launch
+          if (requestedNotification != null && status.phoneNodeId != requestedNotification.phoneNodeId) {
+            throw WearProxyException("phone_changed", "Notification belongs to another phone")
+          }
           val agentList =
             if (status.connected && WearProxyCapability.AgentControls in status.capabilities) {
               repository.agents(status.phoneNodeId, status.capabilities)
@@ -1013,11 +1144,13 @@ internal class WearViewModel(
               )
             }
           val previousSession = mutableState.value.selectedSession
+          val selectionGeneration = phoneRouteGeneration
+          val selectionToRetain = previousSession ?: retainedNotificationSession?.takeIf { it.phoneNodeId == status.phoneNodeId }
           val sessionList =
             if (status.connected) {
               repository.sessions(
                 expectedNodeId = status.phoneNodeId,
-                selectedSessionKey = previousSession?.key,
+                selectedSessionKey = selectionToRetain?.key,
                 capabilities = status.capabilities,
               )
             } else {
@@ -1035,12 +1168,22 @@ internal class WearViewModel(
               sessionListAgentId = sessionList.activeAgentId,
             )
           val retainedSession =
-            previousSession?.takeIf { previous ->
-              sessionList.selectedSessionValid &&
+            selectionToRetain?.takeIf { previous ->
+              // The phone lookup is scoped to its current agent. A negative result
+              // cannot invalidate a cross-agent notification or an older phone selection.
+              val selectionLookupApplies =
+                WearProxyCapability.SessionSelectionLookup in status.capabilities &&
+                  previous.key.startsWith("agent:") &&
+                  previous.conversationAgentId == (sessionList.activeAgentId ?: status.activeAgentId)
+              (sessionList.selectedSessionValid || !selectionLookupApplies) &&
                 previous.phoneNodeId == sessionList.phoneNodeId &&
                 sessionList.sessions.none { session -> session.key == previous.key }
             }
-          val listedSessions = retainedSession?.let { listOf(it) + sessionList.sessions } ?: sessionList.sessions
+          val retainedSessions = retainedSession?.let { listOf(it) + sessionList.sessions } ?: sessionList.sessions
+          val listedSessions =
+            requestedNotification?.takeIf { target -> retainedSessions.none { it.key == target.sessionKey } }?.let { target ->
+              listOf(WearSession(target.sessionKey, null, null, false, target.phoneNodeId)) + retainedSessions
+            } ?: retainedSessions
           val projectedSessions =
             activeSessionKey
               ?.takeIf { activeKey -> listedSessions.none { session -> session.key == activeKey } }
@@ -1057,7 +1200,10 @@ internal class WearViewModel(
                 ) + listedSessions
               } ?: listedSessions
           val selectedSession =
-            projectedSessions.firstOrNull { session -> session.key == previousSession?.key }
+            requestedNotification?.let { target ->
+              projectedSessions.firstOrNull { it.key == target.sessionKey }
+                ?: WearSession(target.sessionKey, null, null, false, target.phoneNodeId)
+            } ?: projectedSessions.firstOrNull { session -> session.key == selectionToRetain?.key }
               ?: projectedSessions.firstOrNull { session -> session.key == activeSessionKey }
               ?: projectedSessions.firstOrNull()
           val selectedModelRef =
@@ -1095,10 +1241,17 @@ internal class WearViewModel(
             loadSessions(status.phoneNodeId)
             return@launch
           }
-          if (mutableState.value.selectedSession != previousSession) return@launch
-          val selectionChanged = selectedSession?.key != previousSession?.key
+          if (mutableState.value.selectedSession != previousSession || phoneRouteGeneration != selectionGeneration) return@launch
+          val selectionChanged = selectedSession?.key != previousSession?.key || selectedSession?.phoneNodeId != previousSession?.phoneNodeId
+          if (selectionChanged) phoneRouteGeneration += 1
           if (status.connected) {
-            sendAttemptTracker.retainForTarget(selectedSession?.key, sessionList.phoneNodeId)
+            // A validated missing/different target retires uncertainty, even after a UI reset.
+            sendAttemptTracker.retainForTarget(selectedSession?.key, selectedSession?.phoneNodeId)
+            retainedNotificationSession =
+              selectedSession?.takeIf {
+                requestedNotification != null ||
+                  (it.key == retainedNotificationSession?.key && it.phoneNodeId == retainedNotificationSession?.phoneNodeId)
+              }
           } else {
             markDisconnectedContext(status.phoneNodeId)
           }
@@ -1144,6 +1297,7 @@ internal class WearViewModel(
               replyAbort = if (selectionChanged || !status.connected) null else it.replyAbort,
             )
           }
+          if (notificationTarget == requestedNotification) notificationTarget = null
           pendingEvents.forEach(::handleEvent)
           if (status.connected && selectedSession != null) {
             loadHistory(selectedSession)
@@ -1153,11 +1307,12 @@ internal class WearViewModel(
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
-          if (err is WearProxyException && err.code == "phone_changed") {
+          if (requestedNotification == null && err is WearProxyException && err.code == "phone_changed") {
             loadJob = null
             reloadForPreferredPhone(nodeId = null)
             return@launch
           }
+          if (notificationTarget == requestedNotification) notificationTarget = null
           markDisconnectedContext(mutableState.value.phoneNodeId)
           mutableState.update {
             it.copy(
@@ -1180,7 +1335,8 @@ internal class WearViewModel(
               sessions = emptyList(),
               selectedSession = null,
               messages = emptyList(),
-              failure = err.toWearConversationFailure(),
+              talkBusy = false,
+              failure = if (requestedNotification != null && err is WearProxyException && err.code == "phone_changed") WearConversationFailure.ACTION_REJECTED else err.toWearConversationFailure(),
             )
           }
           loadJob = null
@@ -1427,7 +1583,7 @@ internal class WearViewModel(
       }
 
       WearEventType.Resync -> {
-        refresh()
+        loadSessions()
       }
 
       WearEventType.Talk -> {
@@ -1518,6 +1674,8 @@ internal class WearViewModel(
   private fun resetForPhoneRouteChange(nodeId: String?) {
     invalidateAgentPulse(clearSnapshot = true)
     markDisconnectedContext(nodeId)
+    // Retain only the notification destination, never its old action authority.
+    retainedNotificationSession = retainedNotificationSession?.takeIf { nodeId == null || it.phoneNodeId == nodeId }
     controlBusyOwner.reset()
     mutableState.update(WearUiState::resetForPhoneChange)
   }
@@ -1548,6 +1706,7 @@ internal class WearViewModel(
       it.copy(
         loading = false,
         connected = connected,
+        // The old generation finalizer no longer owns this UI after disconnect.
         sending = if (connected) it.sending else false,
         streamText = if (connected) it.streamText else null,
         activeRunId = if (connected) it.activeRunId else null,
@@ -1561,7 +1720,7 @@ internal class WearViewModel(
         failure = wearConversationFailureForConnection(payload),
       )
     }
-    if (connected) refresh()
+    if (connected) loadSessions()
   }
 
   private fun handleChatEvent(inbound: WearInboundEvent) {
@@ -1923,6 +2082,7 @@ internal class WearViewModel(
   }
 
   override fun onCleared() {
+    notificationOpenJob?.cancel()
     sendAttemptTracker.reset()
     modelLoadJob?.cancel()
     agentPulseVisible = false

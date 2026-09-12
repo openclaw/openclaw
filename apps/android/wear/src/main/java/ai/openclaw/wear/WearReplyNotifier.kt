@@ -41,10 +41,9 @@ internal class WearReplyNotifier(
           "stream:${inbound.streamId ?: "legacy"}",
           "sequence:${inbound.sequence}",
         ).joinToString("\u0000")
-    val notificationTag = replyNotificationTag(sessionKey, message, fallbackIdentity)
-    val requestCode = NOTIFICATION_ID
+    val notificationTag = replyNotificationTag(sessionKey, message, fallbackIdentity, inbound.sourceNodeId)
     val replyAction = createReplyAction(sessionKey, notificationTag, inbound.sourceNodeId)
-    val openPendingIntent = createOpenAppIntent(requestCode)
+    val openPendingIntent = createOpenAppIntent(sessionKey, notificationTag, inbound.sourceNodeId)
     val agent = Person.Builder().setName("OpenClaw").build()
     val notification =
       NotificationCompat
@@ -78,6 +77,7 @@ internal class WearReplyNotifier(
         .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(context.getString(R.string.notification_reply_failed_title))
         .setContentText(context.getString(R.string.notification_reply_failed_text))
+        .setContentIntent(createOpenAppIntent(sessionKey, notificationTag, phoneNodeId))
         .setAutoCancel(true)
         .setLocalOnly(true)
         .addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))
@@ -85,7 +85,11 @@ internal class WearReplyNotifier(
     notify(notificationTag, notification)
   }
 
-  fun showPreferredPhoneChanged(notificationTag: String) {
+  fun showPreferredPhoneChanged(
+    sessionKey: String,
+    notificationTag: String,
+    phoneNodeId: String,
+  ) {
     if (!notificationsAllowed()) return
     createChannel()
     val notification =
@@ -94,18 +98,27 @@ internal class WearReplyNotifier(
         .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(context.getString(R.string.notification_phone_changed_title))
         .setContentText(context.getString(R.string.notification_phone_changed_text))
-        .setContentIntent(createOpenAppIntent(NOTIFICATION_ID))
+        .setContentIntent(createOpenAppIntent(sessionKey, notificationTag, phoneNodeId))
         .setAutoCancel(true)
         .setLocalOnly(true)
         .build()
     notify(notificationTag, notification)
   }
 
-  private fun createOpenAppIntent(requestCode: Int): PendingIntent =
+  private fun createOpenAppIntent(
+    sessionKey: String,
+    notificationTag: String,
+    phoneNodeId: String,
+  ): PendingIntent =
     PendingIntent.getActivity(
       context,
-      requestCode,
-      Intent(context, MainActivity::class.java),
+      NOTIFICATION_ID,
+      Intent(context, MainActivity::class.java).apply {
+        action = "ai.openclaw.wear.OPEN." + sha256("$phoneNodeId\u0000$sessionKey\u0000$notificationTag")
+        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        putExtra(EXTRA_SESSION_KEY, sessionKey)
+        putExtra(EXTRA_PHONE_NODE_ID, phoneNodeId)
+      },
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -229,7 +242,7 @@ class WearReplyReceiver : BroadcastReceiver() {
           }
 
           NotificationReplyFailureAction.OpenApp -> {
-            notifier.showPreferredPhoneChanged(notificationTag)
+            notifier.showPreferredPhoneChanged(sessionKey, notificationTag, phoneNodeId)
           }
         }
       } finally {
@@ -247,6 +260,7 @@ internal fun replyNotificationTag(
   sessionKey: String,
   message: WearChatMessage,
   fallbackIdentity: String,
+  phoneNodeId: String = "",
 ): String {
   val messageIdentity =
     when {
@@ -254,7 +268,7 @@ internal fun replyNotificationTag(
       message.timestamp != null -> "timestamp:${message.timestamp}\u0000${message.role}\u0000${message.text}"
       else -> "fallback:$fallbackIdentity"
     }
-  return "ai.openclaw.wear.NOTIFICATION.${sha256("$sessionKey\u0000$messageIdentity")}"
+  return "ai.openclaw.wear.NOTIFICATION.${sha256("$phoneNodeId\u0000$sessionKey\u0000$messageIdentity")}"
 }
 
 internal fun replyPendingIntentAction(

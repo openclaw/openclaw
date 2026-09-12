@@ -27,6 +27,58 @@ class WearProxyControllerTest {
   private val json = Json
 
   @Test
+  fun capturedKeysNeverFollowLaterPhoneAgentSelection() =
+    runTest {
+      var phoneAgent = "alpha"
+      val forwarded = mutableListOf<Pair<String, JsonObject>>()
+      val controller =
+        WearProxyController(
+          requestGateway = { method, params ->
+            forwarded += method to params
+            if (method == "chat.history") {
+              buildJsonObject { put("sessionKey", params.getValue("sessionKey")) }
+            } else {
+              buildJsonObject {}
+            }
+          },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          activeAgentId = { phoneAgent },
+        )
+      // Identical short suffixes belong to different agents. Legacy bare aliases
+      // stay with the Gateway's compatibility owner, never the current Phone agent.
+      for (key in listOf("agent:alpha:shared", "agent:beta:shared", "shared")) {
+        phoneAgent = "later-phone-selection"
+        for (method in listOf(WearRpcMethod.ChatHistory, WearRpcMethod.ChatSend, WearRpcMethod.ChatAbort)) {
+          val response =
+            controller.handle(
+              request(
+                method,
+                buildJsonObject {
+                  put("sessionKey", key)
+                  if (method == WearRpcMethod.ChatSend) {
+                    put("message", "Captured reply")
+                    put("idempotencyKey", "captured-attempt")
+                  }
+                },
+              ),
+            )
+          assertTrue(response.ok)
+          assertEquals(
+            key,
+            forwarded
+              .last()
+              .second
+              .getValue("sessionKey")
+              .jsonPrimitive.content,
+          )
+          assertFalse("No later agent injected", "agentId" in forwarded.last().second)
+        }
+      }
+      assertEquals(9, forwarded.size)
+    }
+
+  @Test
   fun statusDoesNotTouchGateway() =
     runTest {
       var gatewayCalls = 0

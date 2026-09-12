@@ -67,14 +67,20 @@ class WearMicrophonePermissionTest {
       // the coroutine default executor, not Robolectric's virtual main clock.
       Thread.sleep(350L)
       idle()
-      assertEquals(RecognizerIntent.ACTION_RECOGNIZE_SPEECH, shadowOf(activity).nextStartedActivity.action)
+      val dictateIntent = shadowOf(activity).nextStartedActivity
+      assertEquals(RecognizerIntent.ACTION_RECOGNIZE_SPEECH, dictateIntent.action)
+      shadowOf(activity).receiveResult(dictateIntent, Activity.RESULT_CANCELED, Intent())
+      idle()
       assertFalse(state.value.realtimeCapturing)
       val thread = nodes(activity.window.decorView).first { it.config.getOrElseNullable(SemanticsActions.OnClick) { null }?.label == "Open thread" }
       assertTrue(thread.config[SemanticsActions.OnClick].action!!.invoke())
       idle()
       val type = nodes(activity.window.decorView).first { it.config.getOrElseNullable(SemanticsActions.OnClick) { null }?.label == "Type" }
       assertTrue(type.config[SemanticsActions.OnClick].action!!.invoke())
-      assertTrue(RemoteInputIntentHelper.isActionRemoteInput(shadowOf(activity).nextStartedActivity))
+      val typeIntent = shadowOf(activity).nextStartedActivity
+      assertTrue(RemoteInputIntentHelper.isActionRemoteInput(typeIntent))
+      shadowOf(activity).receiveResult(typeIntent, Activity.RESULT_CANCELED, Intent())
+      idle()
       // Return to Live recovery through the Thread microphone, not a whole-page gate.
       val live = nodes(activity.window.decorView).first { it.config.getOrElseNullable(SemanticsProperties.ContentDescription) { null }?.contains("Talk") == true }
       assertTrue(live.config[SemanticsActions.OnClick].action!!.invoke())

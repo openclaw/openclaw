@@ -100,6 +100,11 @@ internal data class WearAgentList(
   val eventStreamId: String? = null,
 )
 
+internal data class WearConversationTarget(
+  val sessionKey: String,
+  val phoneNodeId: String,
+)
+
 internal data class WearSession(
   val key: String,
   val title: String?,
@@ -109,6 +114,12 @@ internal data class WearSession(
   val agentId: String? = null,
   val modelRef: String? = null,
 )
+
+internal val WearSession.conversationAgentId: String?
+  get() {
+    val parts = key.split(':', limit = 3)
+    return if (parts.size == 3 && parts[0] == "agent" && parts[1].isNotBlank() && parts[2].isNotBlank()) parts[1] else agentId
+  }
 
 internal data class WearSessionList(
   val sessions: List<WearSession>,

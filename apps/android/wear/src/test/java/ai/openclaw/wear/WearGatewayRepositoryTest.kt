@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -525,6 +526,87 @@ class WearGatewayRepositoryTest {
 
     assertEquals("wear-second", different.idempotencyKey)
     assertEquals("wear-third", laterHello.idempotencyKey)
+  }
+
+  @Test
+  fun lateOriginalSuccessCannotClearANewerAmbiguousRetryOfTheSameRequest() {
+    var id = 0
+    val tracker = WearSendAttemptTracker { (++id).toString() }
+    val original = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markAmbiguous(original)
+    val retry = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markAmbiguous(retry)
+    tracker.markSucceeded(original)
+
+    assertEquals(original.idempotencyKey, tracker.begin("session-1", "hello", "phone-1").idempotencyKey)
+  }
+
+  @Test
+  fun lateOriginalErrorCannotResurrectASuccessfulRetryOfTheSameRequest() {
+    var id = 0
+    val tracker = WearSendAttemptTracker { (++id).toString() }
+    val original = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markAmbiguous(original)
+    val retry = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markSucceeded(retry)
+    tracker.markAmbiguous(original)
+
+    assertEquals("wear-2", tracker.begin("session-1", "hello", "phone-1").idempotencyKey)
+  }
+
+  @Test
+  fun terminalRetirementPreventsAnAcknowledgedAttemptBecomingAmbiguousAgain() {
+    var id = 0
+    val tracker = WearSendAttemptTracker { (++id).toString() }
+    val original = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markSucceeded(original)
+    assertTrue(tracker.isCurrent(original))
+    assertFalse(tracker.isAmbiguous(original))
+    assertTrue(tracker.retire("session-1", "phone-1", original.idempotencyKey))
+    tracker.markAmbiguous(original)
+
+    assertEquals("wear-2", tracker.begin("session-1", "hello", "phone-1").idempotencyKey)
+  }
+
+  @Test
+  fun retryIdentityDoesNotCrossPhoneOrSessionTargets() {
+    var id = 0
+    val tracker = WearSendAttemptTracker { (++id).toString() }
+    val original = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markAmbiguous(original)
+    val otherPhone = tracker.begin("session-1", "hello", "phone-2")
+    tracker.markAmbiguous(otherPhone)
+    val otherSession = tracker.begin("session-2", "hello", "phone-2")
+    tracker.markAmbiguous(original)
+    tracker.markSucceeded(otherPhone)
+    tracker.markAmbiguous(otherSession)
+
+    assertEquals("wear-2", otherPhone.idempotencyKey)
+    assertEquals("wear-3", otherSession.idempotencyKey)
+    assertEquals(otherSession, tracker.begin("session-2", "hello", "phone-2"))
+  }
+
+  @Test
+  fun validatedMissingTargetRetiresUncertainPhoneRetry() {
+    var id = 0
+    val tracker = WearSendAttemptTracker { (++id).toString() }
+    val original = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markDisconnected(null)
+    tracker.retainForTarget(null, null)
+    assertNotEquals(original.idempotencyKey, tracker.begin("session-1", "hello", "phone-1").idempotencyKey)
+  }
+
+  @Test
+  fun oldSuccessCannotRetireSameTargetRetryAfterPhoneInvalidation() {
+    var id = 0
+    val tracker = WearSendAttemptTracker { (++id).toString() }
+    val original = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markDisconnected(null)
+    tracker.retainForTarget("session-1", "phone-1")
+    val retry = tracker.begin("session-1", "hello", "phone-1")
+    tracker.markSucceeded(original)
+    tracker.markDisconnected(null)
+    assertEquals(retry.idempotencyKey, tracker.begin("session-1", "hello", "phone-1").idempotencyKey)
   }
 
   @Test
