@@ -242,7 +242,7 @@ export function registerBrowserInspectCommands(
               const indent = "  ".repeat(Math.min(20, n.depth));
               const name = n.name ? ` "${n.name}"` : "";
               const value = n.value ? ` = "${n.value}"` : "";
-              return `${indent}- ${n.role}${name}${value}`;
+              return `${indent}- ${n.role}${name}${value} [ref=${n.ref}]`;
             })
             .join("\n"),
         );
