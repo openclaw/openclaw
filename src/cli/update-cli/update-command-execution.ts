@@ -19,7 +19,7 @@ import {
   verifyPackageUpdateRecovery,
 } from "../../infra/update-global.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
-import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -79,7 +79,10 @@ import {
   UpdateCommandAbort,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
-import { verifyPreviousGatewayForUpdate } from "./update-command-verification.js";
+import {
+  recordPreviousGatewayVerification,
+  verifyPreviousGatewayForUpdate,
+} from "./update-command-verification.js";
 
 export async function executeMutableUpdate(
   params: MutableUpdateExecutionParams,
@@ -87,7 +90,8 @@ export async function executeMutableUpdate(
   const { opts, updateStepTimeoutMs } = params;
   const originalRun = opts.run;
   const requesterAuthority = originalRun?.requesterAuthority;
-  const assertRequesterCurrent = () => {
+  const assertExecutionCurrent = () => {
+    assertUpdateCommandRecovery(opts);
     if (opts.run !== originalRun || requesterAuthority?.isCurrent() === false) {
       throw new UpdateRequesterRevokedError();
     }
@@ -179,7 +183,7 @@ export async function executeMutableUpdate(
       requester: requesterAuthority?.requester,
       inputHash: validatedConfigSnapshot?.hash,
       changes: doctorConfigChanges,
-      assertCurrent: assertRequesterCurrent,
+      assertCurrent: assertExecutionCurrent,
     });
   const originalRecovery = () =>
     params.installKind === "git"
@@ -493,8 +497,7 @@ export async function executeMutableUpdate(
     return validation.steps;
   };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
-    assertUpdateCommandRecovery(opts);
-    assertRequesterCurrent();
+    assertExecutionCurrent();
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     const snapshot = await readCandidateSource(env);
     if (
@@ -530,37 +533,21 @@ export async function executeMutableUpdate(
         opts,
         timeoutMs: params.timeoutMs,
         observedStartupMs: observedGatewayStartupMs,
-        assertCurrent: () => {
-          assertUpdateCommandRecovery(opts);
-          assertRequesterCurrent();
-        },
+        assertCurrent: assertExecutionCurrent,
       });
-      if (opts.run) {
-        recordUpdateRunStep(
-          opts.run.runId,
-          {
-            step: "previous gateway verification",
-            status: "completed",
-            detail: previousVerified
-              ? "Previous package is running and ready."
-              : "Previous gateway was not verified; automatic rollback cannot restart it.",
-            endedAtMs: Date.now(),
-          },
-          { env: opts.run.env },
-        );
-      }
+      // Recovery retains the observed verdict even if its receipt cannot be written.
+      assertExecutionCurrent();
+      recordPreviousGatewayVerification(opts.run, previousVerified);
     }
     // Health and candidate work can outlive the inspected service/config generation.
     await recheckSchemas(admittedTargetSchemaVersions);
-    assertUpdateCommandRecovery(opts);
-    assertRequesterCurrent();
+    assertExecutionCurrent();
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
     }
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);
-    assertUpdateCommandRecovery(opts);
-    assertRequesterCurrent();
+    assertExecutionCurrent();
     // Git owns this fence after its post-stop schema check completes.
     if (params.updateInstallKind === "package") {
       preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
