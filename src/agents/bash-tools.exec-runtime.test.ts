@@ -1020,3 +1020,51 @@ describe("runExecProcess PTY fallback", () => {
     }
   });
 });
+
+describe("runExecProcess exactEnv sandbox launcher boundary", () => {
+  it.each([
+    { sandbox: true, expectedExactEnv: true },
+    { sandbox: false, expectedExactEnv: undefined },
+  ])(
+    "sets exactEnv=$expectedExactEnv when sandbox=$sandbox",
+    async ({ sandbox, expectedExactEnv }) => {
+      let capturedInput: SpawnInput | undefined;
+      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+        capturedInput = input;
+        return runtimeManagedRun(input);
+      });
+
+      const run = await runExecProcess({
+        command: "echo test",
+        workdir: "/tmp",
+        env: {},
+        ...(sandbox
+          ? {
+              sandbox: {
+                containerName: "c1",
+                workspaceDir: "/w",
+                containerWorkdir: "/w",
+                buildExecSpec: async () => ({
+                  argv: ["docker", "exec", "c1", "echo test"],
+                  env: { BACKEND_ENV: "true" },
+                  stdinMode: "pipe-closed",
+                }),
+              },
+            }
+          : {}),
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+      });
+
+      const outcome = await run.promise;
+      expect(outcome.status).toBe("completed");
+      expect(outcome.exitCode).toBe(0);
+      expect(capturedInput?.mode).toBe("child");
+      expect((capturedInput as { exactEnv?: boolean })?.exactEnv).toBe(expectedExactEnv);
+    },
+  );
+});

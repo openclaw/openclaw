@@ -369,6 +369,12 @@ Covered child process surfaces:
 - Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
 
+Sandbox backend launchers (such as Docker, Podman, SSH, or OpenShell transport
+processes) are spawned with exact environments and do not apply the host
+`oom_score_adj=1000` wrapper. Workload resource limits and throttling remain
+the responsibility of the sandbox runtime, avoiding preferential OOM targeting
+of the local transport client during host memory pressure.
+
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
 the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or
 `off`.
