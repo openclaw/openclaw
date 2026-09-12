@@ -477,7 +477,6 @@ export async function migrateLegacyAgentDir(
       fs.rmdirSync(sourceRoot);
     }
     recordCompletedLegacyAgentDirMigration(sourceRoot, targetRoot);
-    changes.push(`Completed legacy agent directory migration → ${targetDir}`);
   } catch (error) {
     warnings.push(
       `Could not finish legacy agent migration: ${String(error)}. Any remaining source is preserved at ${legacyDir}. Rerun openclaw doctor --fix after resolving this error.`,
