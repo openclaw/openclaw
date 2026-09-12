@@ -153,10 +153,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         ) {
           return;
         }
-        void this.loadCatalogSession(currentKey, false, true);
-        if (attempt + 1 < CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS.length) {
-          reconcile(attempt + 1);
-        }
+        void this.loadCatalogSession(currentKey, false, true).then(() => {
+          if (attempt + 1 < CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS.length) {
+            reconcile(attempt + 1);
+          }
+        });
       }, CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS[attempt]);
     };
     reconcile(0);
@@ -497,10 +498,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         CATALOG_SESSION_RELEASED_EVENT,
         this.handleCatalogSessionReleased,
       );
-      if (this.catalogReleaseRefreshTimer !== null) {
-        globalThis.clearTimeout(this.catalogReleaseRefreshTimer);
-        this.catalogReleaseRefreshTimer = null;
-      }
+      globalThis.clearTimeout(this.catalogReleaseRefreshTimer ?? undefined);
+      this.catalogReleaseRefreshTimer = null;
     });
     const panelToggleEvents = [
       [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],

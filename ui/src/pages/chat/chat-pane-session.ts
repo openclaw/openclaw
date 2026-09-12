@@ -46,6 +46,12 @@ import {
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
+function catalogRefreshMessageIdentity(message: unknown): string | null {
+  const id = catalogMessageId(message);
+  const projection = id ? null : JSON.stringify(message);
+  return id ? `id:${id}` : projection ? `projection:${projection}` : null;
+}
+
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   private deferredSessionHydrationActive = false;
   private pendingDeferredSessionHydration: (() => void) | null = null;
@@ -513,8 +519,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (older && !this.catalogCursor) {
       return false;
     }
+    if (preserveHistory && this.catalogLoading) {
+      return false;
+    }
     const agentId = resolveChatAgentId(state);
-    const generation = older ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
+    const generation =
+      older || preserveHistory ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) &&
@@ -561,13 +571,30 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         .toReversed()
         .map((item) => this.catalogItemMessage(item))
         .filter((message) => message !== null);
-      const existingIds = new Set(this.catalogMessages.map(catalogMessageId));
+      const duplicateCounts = new Map<string, number>();
+      for (const message of this.catalogMessages) {
+        const identity = catalogRefreshMessageIdentity(message);
+        if (identity) {
+          duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
+        }
+      }
       const nextMessages = older
         ? this.prependUniqueCatalogMessages(messages)
         : preserveHistory
           ? [
               ...this.catalogMessages,
-              ...messages.filter((message) => !existingIds.has(catalogMessageId(message))),
+              ...messages.filter((message) => {
+                const identity = catalogRefreshMessageIdentity(message);
+                if (!identity) {
+                  return true;
+                }
+                const remaining = duplicateCounts.get(identity) ?? 0;
+                if (remaining === 0) {
+                  return true;
+                }
+                duplicateCounts.set(identity, remaining - 1);
+                return false;
+              }),
             ]
           : messages;
       const addedMessages = nextMessages.length > this.catalogMessages.length;
