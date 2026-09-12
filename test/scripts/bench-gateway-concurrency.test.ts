@@ -442,8 +442,8 @@ describe("gateway concurrency benchmark script", () => {
     const starts: Array<{ sessionKey: string; idempotencyKey: string; message: string }> = [];
     const startedSessions: string[] = [];
     const createTurn = () => ({
-      issued: createDeferred<void>(),
-      completed: createDeferred<void>(),
+      issued: createDeferred(),
+      completed: createDeferred(),
     });
     const turns = [createTurn(), createTurn(), createTurn(), createTurn()] as const;
     const rpc = async <T>(method: string, params: unknown): Promise<T> => {
