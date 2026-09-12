@@ -122,7 +122,6 @@ async function stageCodexCandidate(ctx: StageContext): Promise<StagedCandidate |
       prompter: ctx.params.prompter ?? createQuickstartNotePrompter(ctx.params.runtime),
       runtime: ctx.params.runtime,
       workspaceDir: ctx.workspace,
-      reviewOfficialArtifacts: true,
       beforePersistentEffect: ctx.beforePersistentEffect,
     });
     if (!ensured.ok) {

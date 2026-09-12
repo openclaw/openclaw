@@ -31,8 +31,8 @@ import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
+import { isTerminalTaskStatus } from "../tasks/task-registry.types.js";
 import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
 import {
   type ChatAbortControllerEntry,

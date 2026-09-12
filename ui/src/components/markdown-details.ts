@@ -22,6 +22,8 @@ type MarkdownRawHtmlContext =
   | "cdata"
   | { element: string };
 
+type MarkdownRawHtmlState = { context: MarkdownRawHtmlContext | null };
+
 type MarkdownDisclosureTag = {
   end: number;
   raw: string;
@@ -237,7 +239,7 @@ function openingRawHtmlContext(line: string): MarkdownRawHtmlContext | null {
   if (trimmed.startsWith("<![CDATA[")) {
     return "cdata";
   }
-  if (/^<![A-Z]/.test(trimmed)) {
+  if (/^<![A-Za-z]/.test(trimmed)) {
     return "declaration";
   }
   const element = /^<(pre|script|style|textarea)(?=[\s>]|$)/i.exec(trimmed)?.[1];
@@ -258,6 +260,59 @@ function closesRawHtmlContext(context: MarkdownRawHtmlContext, line: string): bo
     return line.includes(">");
   }
   return line.includes("]]>");
+}
+
+export function consumeMarkdownRawHtmlLine(
+  line: string,
+  state: MarkdownRawHtmlState,
+  codeSpans: ReadonlyArray<readonly [number, number]> = [],
+  lineOffset = 0,
+): boolean {
+  const context = state.context ?? openingRawHtmlContext(line);
+  if (!context) {
+    return false;
+  }
+  const start = line.length - line.trimStart().length;
+  if (!state.context && isInsideMarkdownCode(lineOffset + start, codeSpans)) {
+    return false;
+  }
+  state.context = closesRawHtmlContext(context, line) ? null : context;
+  return true;
+}
+
+/** Raw ownership ends at the native HTML token, including its enclosing container. */
+export function findMarkdownRawHtmlRanges(
+  markdown: string,
+  markdownParser: MarkdownIt,
+): Array<[number, number]> {
+  const tokens: DetailsToken[] = [];
+  markdownParser.block.parse(markdown, markdownParser, {}, tokens);
+  const lineOffsets = [0];
+  for (const match of markdown.matchAll(/\n/g)) {
+    lineOffsets.push(match.index + 1);
+  }
+  const ranges: Array<[number, number]> = [];
+  for (const token of tokens) {
+    if (token.type !== "html_block" || !token.map) {
+      continue;
+    }
+    const rawHtml: MarkdownRawHtmlState = { context: null };
+    const lines = token.content.split("\n");
+    for (let line = token.map[0]; line < token.map[1]; line += 1) {
+      if (!consumeMarkdownRawHtmlLine(lines[line - token.map[0]] ?? "", rawHtml)) {
+        continue;
+      }
+      const start = lineOffsets[line] ?? markdown.length;
+      const end = lineOffsets[line + 1] ?? markdown.length;
+      const previous = ranges.at(-1);
+      if (previous?.[1] === start) {
+        previous[1] = end;
+      } else {
+        ranges.push([start, end]);
+      }
+    }
+  }
+  return ranges;
 }
 
 export function installMarkdownDetails(markdownParser: MarkdownIt): void {
@@ -315,7 +370,7 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
       };
       const lines = token.content.split("\n");
       let pendingHtml = "";
-      let rawHtmlContext: MarkdownRawHtmlContext | null = null;
+      const rawHtml: MarkdownRawHtmlState = { context: null };
       const flushHtml = () => {
         if (!pendingHtml) {
           return;
@@ -327,19 +382,8 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
       };
       for (const [lineOffset, line] of lines.entries()) {
         const hasLineBreak = lineOffset < lines.length - 1;
-        if (rawHtmlContext) {
+        if (consumeMarkdownRawHtmlLine(line, rawHtml)) {
           pendingHtml += line + (hasLineBreak ? "\n" : "");
-          if (closesRawHtmlContext(rawHtmlContext, line)) {
-            rawHtmlContext = null;
-          }
-          continue;
-        }
-        const openingContext = openingRawHtmlContext(line);
-        if (openingContext) {
-          pendingHtml += line + (hasLineBreak ? "\n" : "");
-          if (!closesRawHtmlContext(openingContext, line)) {
-            rawHtmlContext = openingContext;
-          }
           continue;
         }
         if (!scanMarkdownDisclosureLine(line)) {

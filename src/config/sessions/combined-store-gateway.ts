@@ -16,6 +16,10 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import {
+  assertAgentDatabaseAdmitted,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
+import {
   listOpenClawRegisteredAgentDatabases,
   listOpenIncognitoAgentDatabases,
   readOpenClawAgentDatabaseRegistryToken,
@@ -59,7 +63,11 @@ function storeTargetKey(target: SessionStoreTarget): string {
   return `${target.agentId}\0${target.storePath}`;
 }
 
-function createSessionModelSources(cfg: OpenClawConfig, preparedAgentIds?: ReadonlySet<string>) {
+function createSessionModelSources(
+  cfg: OpenClawConfig,
+  diagnostics: string[],
+  preparedAgentIds?: ReadonlySet<string>,
+) {
   const physicalEntries = new Map<string, Record<string, SessionEntry>>();
   const logicalEntries = new Map<string, SessionEntry | undefined>();
   const readers = new Map<string, GatewaySessionModelSource["loadSessionEntry"]>();
@@ -97,6 +105,14 @@ function createSessionModelSources(cfg: OpenClawConfig, preparedAgentIds?: Reado
           // Stored qualified lineage retains its owner before a main alias collapses.
           const parsed = parseAgentSessionKey(parentKey);
           const agentId = normalizeAgentId(parsed?.agentId ?? target.agentId);
+          const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+          if (refusal) {
+            const message = `${refusal.reason}\n${refusal.repairHint}`;
+            if (!diagnostics.includes(message)) {
+              diagnostics.push(message);
+            }
+            return undefined;
+          }
           const canonicalKey = resolveStoredSessionKeyForAgentStore({
             cfg,
             agentId,
@@ -434,7 +450,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
   return resolved;
 }
 
-function resolveGatewaySessionStoreTargets(
+function resolveGatewaySessionStoreTopology(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions,
 ): ResolvedGatewaySessionStoreTargets {
@@ -511,6 +527,51 @@ function resolveGatewaySessionStoreTargets(
   };
 }
 
+function resolveGatewaySessionStoreTargets(
+  cfg: OpenClawConfig,
+  opts: GatewaySessionStoreOptions,
+): ResolvedGatewaySessionStoreTargets {
+  if (opts.agentId?.trim()) {
+    assertAgentDatabaseAdmitted(opts.agentId);
+  }
+  const resolved = resolveGatewaySessionStoreTopology(cfg, opts);
+  const diagnostics = [...resolved.diagnostics];
+  const admitted = (target: SessionStoreTarget): boolean => {
+    const physical = resolved.physicalTargets.get(storeTargetKey(target));
+    const refusal =
+      readAgentDatabaseAdmissionRefusal(target.agentId) ??
+      (physical && readAgentDatabaseAdmissionRefusal(physical.agentId));
+    if (!refusal) {
+      return true;
+    }
+    const message = `${refusal.reason}\n${refusal.repairHint}`;
+    if (!diagnostics.includes(message)) {
+      diagnostics.push(message);
+    }
+    return false;
+  };
+  // Cached topology stays complete; each boot's admission is applied when consumed.
+  const durableTargets = resolved.durableTargets.filter(admitted);
+  const incognitoTargets = resolved.incognitoTargets.filter(admitted);
+  if (
+    durableTargets.length === resolved.durableTargets.length &&
+    incognitoTargets.length === resolved.incognitoTargets.length
+  ) {
+    return resolved;
+  }
+  return {
+    ...resolved,
+    diagnostics,
+    durableTargets,
+    incognitoTargets,
+    ...(resolved.durableStorePath === undefined
+      ? {}
+      : {
+          durableStorePath: resolveCombinedDatabasePath(durableTargets, resolved.physicalTargets),
+        }),
+  };
+}
+
 /** Checks whether Gateway prewarm can project the selected stores within a bounded row budget. */
 export function canPrewarmCombinedSessionStoresForGateway(
   cfg: OpenClawConfig,
@@ -518,6 +579,9 @@ export function canPrewarmCombinedSessionStoresForGateway(
 ): boolean {
   let totalRows = 0;
   for (const agentId of params.agentIds) {
+    if (readAgentDatabaseAdmissionRefusal(agentId)) {
+      continue;
+    }
     const resolved = resolveGatewaySessionStoreTargets(cfg, { agentId });
     const projectionTargets =
       resolved.incognitoTargets.length === 0
@@ -567,7 +631,8 @@ export function loadCombinedSessionStoreForGatewayCore(
   // Federation chooses both the logical owner and physical store once. Fresh reads
   // must not re-admit a sentinel through public aliases or select a different store.
   const targetsBySessionKey = new Map<string, GatewayStoredSessionTarget>();
-  const modelSources = createSessionModelSources(cfg, preparedAgentIds);
+  const projectionDiagnostics = [...diagnostics];
+  const modelSources = createSessionModelSources(cfg, projectionDiagnostics, preparedAgentIds);
   for (const target of durableTargets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
@@ -662,7 +727,7 @@ export function loadCombinedSessionStoreForGatewayCore(
         : durableStorePath
       : resolveCombinedStorePath([...durableStorePaths, ...incognitoStorePaths], storeConfig);
   return {
-    diagnostics,
+    diagnostics: projectionDiagnostics,
     durableStorePath,
     durableTargets,
     storePath,

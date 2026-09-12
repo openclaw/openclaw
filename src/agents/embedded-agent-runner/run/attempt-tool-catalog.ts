@@ -209,6 +209,10 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
           toolsEnabled,
           disableTools: attempt.disableTools,
           toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
+          skillWorkshop: {
+            sandboxed: input.setup.sandbox?.enabled,
+            libraryAuthoring: attempt.skillLibraryAuthoring,
+          },
         });
     logAgentRuntimeToolDiagnostics({
       runtimePlan: attempt.runtimePlan,

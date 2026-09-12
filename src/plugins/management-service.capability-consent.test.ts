@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigReplaceInput } from "../config/mutate.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import {
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   records: {} as Record<string, import("../config/types.plugins.js").PluginInstallRecord>,
   replaceConfig: vi.fn(),
   writeRecords: vi.fn(),
+  slotSelection: vi.fn((config) => ({ config, warnings: [] })),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -74,6 +76,9 @@ vi.mock("./plugin-lifecycle-lease.js", () => ({
       databasePath: "/tmp/managed-capability-consent.sqlite",
     }),
 }));
+
+vi.mock("./slot-selection.js", () => ({ applySlotSelectionForPlugin: mocks.slotSelection }));
+vi.mock("./registry-refresh.js", () => ({ refreshPluginRegistryAfterConfigMutation: vi.fn() }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
@@ -161,6 +166,80 @@ describe("managed plugin capability consent", () => {
     mocks.records = {};
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
     mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.replaceConfig.mockImplementation(async (params: ConfigReplaceInput) => {
+      const config = params.sourceConfig ?? params.nextConfig;
+      return {
+        path: "/tmp/openclaw.json",
+        nextConfig: config,
+        persistedHash: "committed",
+        persistedSourceConfig: config,
+      };
+    });
+  });
+
+  it.each([
+    { name: "global disable", plugins: { enabled: false }, reason: "plugins disabled" },
+    { name: "denylist", plugins: { deny: ["community-plugin"] }, reason: "blocked by denylist" },
+    {
+      name: "restrictive allowlist",
+      plugins: { allow: ["other-plugin"] },
+      reason: "blocked by allowlist",
+    },
+  ])(
+    "preserves CLI $name before consent, persistence, or slot selection",
+    async ({ plugins, reason }) => {
+      const record = installRecord();
+      configureExternalPlugin(record);
+      mocks.readConfig.mockResolvedValue(configSnapshot({ plugins }));
+      const applyRuntime = vi.fn();
+      const request = {
+        pluginId: "community-plugin",
+        enabled: true,
+        allowlistPolicy: "preserve" as const,
+        acknowledgeCapabilities: { reviewToken: artifactReviewToken(record) },
+        applyRuntime,
+        env: {},
+      };
+      await expect(setManagedPluginEnabled(request)).rejects.toThrow(reason);
+      expect(mocks.writeRecords).not.toHaveBeenCalled();
+      expect(mocks.replaceConfig).not.toHaveBeenCalled();
+      expect(mocks.slotSelection).not.toHaveBeenCalled();
+      expect(applyRuntime).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "admin omission", pluginId: "community-plugin", allowlistPolicy: undefined },
+    {
+      name: "explicit-selection exception",
+      pluginId: "clickclack",
+      allowlistPolicy: "preserve" as const,
+    },
+  ])("retains $name enablement", async ({ pluginId, allowlistPolicy }) => {
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false, id: pluginId }));
+    mocks.readConfig.mockResolvedValue(configSnapshot({ plugins: { allow: ["other-plugin"] } }));
+    const applyRuntime = vi.fn(async () => ({
+      operationId: "enable",
+      generation: 2,
+      pluginIds: [pluginId],
+    }));
+    const request = {
+      pluginId,
+      enabled: true,
+      ...(allowlistPolicy ? { allowlistPolicy } : {}),
+      applyRuntime,
+      env: {},
+    };
+    await setManagedPluginEnabled(request);
+    expect(mocks.replaceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({ allow: ["other-plugin", pluginId] }),
+        }),
+      }),
+    );
+    expect(mocks.slotSelection).toHaveBeenCalledOnce();
+    expect(applyRuntime).toHaveBeenCalledOnce();
   });
 
   it("exempts release-bundled plugins from durable capability acceptance", async () => {
@@ -222,70 +301,6 @@ describe("managed plugin capability consent", () => {
       ).resolves.toBeUndefined();
       expect(onCapabilityConsent).not.toHaveBeenCalled();
       expect(handler.applyAcceptedSurface("diffs", sourceRecord)).toEqual(sourceRecord);
-    },
-  );
-
-  it.each(
-    officialSources.flatMap((sourceRecord) =>
-      (["accept", "decline", "missing", "unchanged"] as const).map((decision) => ({
-        sourceRecord,
-        decision,
-      })),
-    ),
-  )(
-    "reviews official $sourceRecord.source artifacts when requested: $decision",
-    async ({ sourceRecord, decision }) => {
-      const rootDir = officialArtifact();
-      const declared = resolvePluginArtifactDeclaredSurface(rootDir);
-      const order: string[] = [];
-      const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>(async (review) => {
-        order.push("review");
-        await Promise.resolve();
-        order.push(decision === "accept" ? "accepted" : "declined");
-        return decision === "accept" ? { reviewToken: review.reviewToken } : undefined;
-      });
-      const previousRecord: PluginInstallRecord = {
-        ...sourceRecord,
-        installPath: rootDir,
-        acceptedSurface: declared,
-        acceptedSurfaceHash: computeDeclaredSurfaceHash(declared),
-        acceptedSurfaceIntegrity: sourceRecord.integrity,
-        acceptedSurfaceAt: "2026-01-01T00:00:00.000Z",
-      };
-      const handler = createManagedPluginArtifactConsentHandler({
-        config: {},
-        source: sourceRecord.source,
-        spec: sourceRecord.spec,
-        reviewOfficialArtifacts: true,
-        ...(decision === "unchanged" ? { previousRecords: { diffs: previousRecord } } : {}),
-        ...(decision !== "missing" ? { onCapabilityConsent } : {}),
-        beforePersistentEffect: () => {
-          order.push("commit");
-        },
-      });
-      const pending = handler.onBeforePluginArtifactCommit({
-        pluginId: "diffs",
-        stagedArtifactDir: rootDir,
-        mode: decision === "unchanged" ? "update" : "install",
-        sourceRecord,
-      });
-      if (decision === "decline" || decision === "missing") {
-        await expect(pending).rejects.toMatchObject({ capabilityConsent: { pluginId: "diffs" } });
-        expect(order).toEqual(decision === "decline" ? ["review", "declined"] : []);
-        expect(() => handler.applyAcceptedSurface("diffs", sourceRecord)).toThrow(
-          "did not expose its verified artifact",
-        );
-        return;
-      }
-      await pending;
-      expect(order).toEqual(decision === "accept" ? ["review", "accepted", "commit"] : ["commit"]);
-      expect(onCapabilityConsent).toHaveBeenCalledTimes(decision === "accept" ? 1 : 0);
-      expect(handler.applyAcceptedSurface("diffs", sourceRecord)).toMatchObject({
-        acceptedSurface: declared,
-        acceptedSurfaceHash: computeDeclaredSurfaceHash(declared),
-        acceptedSurfaceIntegrity: sourceRecord.integrity,
-        acceptedSurfaceAt: expect.any(String),
-      });
     },
   );
 
@@ -410,7 +425,7 @@ describe("managed plugin capability consent", () => {
         reviewToken: artifactReviewToken(record),
       },
       message: expect.stringContaining(
-        'Run "openclaw plugins enable community-plugin --accept-capabilities"',
+        "Rerun the openclaw plugins install, enable, update, or reload command with --accept-capabilities after reviewing the plugin.",
       ),
     });
     expect(mocks.replaceConfig).not.toHaveBeenCalled();

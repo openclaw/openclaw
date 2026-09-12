@@ -102,7 +102,7 @@ describe("guided onboarding inference composition", () => {
         {
           text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
         },
-        { selectValues: ["full", "detected-ai"] },
+        { selectValues: ["one", "full", "detected-ai"] },
       );
       const runSetupMemoryImportStep = vi.fn(async () => ({
         status: "skipped" as const,
@@ -172,6 +172,16 @@ describe("guided onboarding inference composition", () => {
       expect(prompter.select).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
+          initialValue: "one",
+          options: [
+            { value: "one", label: "One agent" },
+            { value: "team", label: "A small team: a chief of staff plus specialists" },
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
           options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
         }),
       );
@@ -183,7 +193,7 @@ describe("guided onboarding inference composition", () => {
       });
       expect(mockOpenAi.requestBodies).toHaveLength(1);
       expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({
-        model: "gpt-5.6-sol",
+        model: "gpt-6-astra",
       });
       const notes = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
       const inferenceReadyIndex = notes.findIndex((call) => call[1] === "Inference ready");

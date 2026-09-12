@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { visitSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -257,6 +258,36 @@ it("restores once more when a peer archives between async preparation and the at
       expect(result).toMatchObject({ type: "session", id: race.scope.sessionId });
       expect(reads).toBe(2);
     } finally {
+      race.writer.close();
+    }
+  });
+});
+
+it("retries Gateway visitation when a peer archives after async restoration", async () => {
+  await withOpenClawTestState({ label: "cold-gateway-visitor-race" }, async (state) => {
+    const race = await prepareRace(state);
+    try {
+      const visited: Array<{ message: unknown; seq: number }> = [];
+      race.commitAfterMarkerRead();
+      const count = await visitSessionMessagesAsync(
+        { ...race.scope, storePath: race.database.path },
+        (message, seq) => {
+          expect(race.database.db.isTransaction).toBe(true);
+          visited.push({ message, seq });
+        },
+      );
+      expect(race.committed()).toBe(true);
+      expect(count).toBe(2);
+      expect(visited).toEqual([
+        { message: { role: "user", content: "Original question" }, seq: 1 },
+        { message: { role: "assistant", content: "Original answer" }, seq: 2 },
+      ]);
+      expect(race.database.db.isTransaction).toBe(false);
+      expect(race.database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+    } finally {
+      vi.restoreAllMocks();
       race.writer.close();
     }
   });

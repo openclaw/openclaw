@@ -178,6 +178,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       requestTransportOverrides: params.requestStreamTransportOverrides,
       config: runParams.config,
       env: process.env,
+      agentId: runParams.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,

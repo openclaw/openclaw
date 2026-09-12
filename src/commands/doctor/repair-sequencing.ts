@@ -6,6 +6,10 @@ import {
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  hasDeferredUpdateModelRetirement,
+  recordUpdateModelRetirement,
+} from "../../infra/update-deferred-model-retirement.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
@@ -71,6 +75,7 @@ export async function runDoctorRepairSequence(params: {
   configChangeNotes: string[];
   warningNotes: string[];
   authProfilesRepaired: boolean;
+  modelRetirementRepairRan: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -81,6 +86,7 @@ export async function runDoctorRepairSequence(params: {
   const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
+  let modelRetirementRepairRan = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const resolveCurrentPluginMetadataScope = () => {
     const config = state.candidate;
@@ -354,6 +360,11 @@ export async function runDoctorRepairSequence(params: {
     });
     retiredModelRefConfig = modelRepair.retiredModelRefConfig;
     applyMutation(modelRepair);
+    modelRetirementRepairRan =
+      modelRepair.warnings.length === 0 && hasDeferredUpdateModelRetirement(env);
+  } else if (packageSwapInProgress) {
+    recordUpdateModelRetirement("deferred", env);
+    warningNotes.push("Model retirement deferred until configured plugin installation converges.");
   }
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
@@ -366,6 +377,7 @@ export async function runDoctorRepairSequence(params: {
     configChangeNotes,
     warningNotes,
     authProfilesRepaired,
+    modelRetirementRepairRan,
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     openAICodexAuthProfileIdMap,
     ...(pluginMetadataSnapshotState.current

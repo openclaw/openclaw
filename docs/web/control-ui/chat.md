@@ -72,10 +72,14 @@ in place.
 
 When you open an existing session, you can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
-composer keeps your draft and focus when the conversation appears. Send shows
-**Loading chat** until the initial history is ready; text typed during that wait
-stays in the composer and is not queued for automatic sending. Existing `/stop`
-and `/approve` controls remain available while history loads.
+composer keeps your draft and focus when the conversation appears. You can send
+ordinary messages and attachments while history loads: the message enters the
+outbox immediately, leaving the composer ready for your next draft. The open
+chat confirms its current session and conversation branch before delivery
+continues automatically. Switching chats keeps queued messages tied to their
+original conversation. If history fails to load, the queued message stays
+available while you resolve the history error. Goals and other slash commands
+wait for history; `/stop` and `/approve` remain available.
 
 On wide desktop panes, a compact rail of horizontal marks sits in the transcript's left gutter. Hover for a short message preview, or click a mark to jump to that message. Tab focuses the rail; arrow keys move between marks, Enter or Space jumps, Home and End select the endpoints, and Escape dismisses the preview. At rest, all marks are identical 8 × 2px strokes at 12px spacing. They stay faint; marks for messages currently visible in the transcript light up together as you scroll. Hovering a mark grows it to 32px and lights only that mark in text color, with progressively shorter strokes across three neighbors on either side. The other marks keep their resting colors. Outside that hover range, widths stay fixed. An empty message preview shows “Preview unavailable.” Every message keeps its own mark. Long rails scroll internally within 45% of the viewport height, with fades only at ends that hide more messages. Scrolling the transcript keeps the current mark visible; you can also scroll the rail to explore other messages. The rail stays hidden on mobile, in narrow or short panes, and when your saved message width leaves too little gutter space. A jump briefly tints the target message with a soft background, fading over 1.2 seconds without a border or ring. Reduced motion disables mark transitions and shows the target tint statically for one second.
 

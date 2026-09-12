@@ -14,6 +14,7 @@ import {
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
@@ -333,7 +334,7 @@ export async function add(
     await ensureLoadedForOperation(state);
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
-      throw new Error(`cron job agent is unavailable: ${agentId}`);
+      throw new Error(describeUnavailableCronAgent(agentId));
     }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
@@ -523,7 +524,7 @@ async function updateLoadedJob(params: {
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
-      throw new Error(`cron job agent is unavailable: ${agentId}`);
+      throw new Error(describeUnavailableCronAgent(agentId));
     }
   }
   finalizeUpdatedJob({

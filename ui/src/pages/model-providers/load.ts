@@ -35,6 +35,7 @@ export type ModelProvidersData = {
   models: ModelCatalogEntry[] | null;
   automaticUtilityModel: string | null | undefined;
   providerOutcomes: ModelCatalogProviderOutcome[];
+  pendingProviders?: readonly string[];
   catalogError: string | null;
   config: Record<string, unknown> | null;
   providerUsage: ProviderUsageRequestResult | null;
@@ -118,6 +119,7 @@ export async function loadModelProvidersData(
       ? catalog.result.defaultModels?.automaticUtilityModel
       : undefined,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
+    pendingProviders: catalog.ok ? catalog.result.pendingProviders : undefined,
     catalogError:
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)

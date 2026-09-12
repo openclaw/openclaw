@@ -6884,29 +6884,30 @@ describe("chat welcome", () => {
     return container;
   }
 
-  it("renders configured assistant avatars and the animated Clawd fallback", () => {
-    let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
-
-    const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
-    expect(avatar?.tagName).toBe("DIV");
-    expect(avatar?.textContent?.trim()).toBe("VC");
+  it("renders configured images and emoji before the generated agent face", async () => {
+    let container = renderWelcome({ assistantAvatar: "🦉", assistantAvatarUrl: null });
+    const avatar = container.querySelector<HTMLElement>(".agent-chat__welcome-avatar");
+    expect(avatar?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
 
     container = renderWelcome({
-      assistantAvatar: "avatars/val.png",
+      assistantAvatar: "🦉",
       assistantAvatarUrl: "blob:identity-avatar",
     });
-
-    const imageAvatar = container.querySelector<HTMLImageElement>("img");
-    expect(imageAvatar?.getAttribute("src")).toBe("blob:identity-avatar");
-    expect(imageAvatar?.getAttribute("alt")).toBe("Val");
+    const image = container.querySelector("img");
+    expect(image?.getAttribute("src")).toBe("blob:identity-avatar");
+    image?.dispatchEvent(new Event("load"));
+    const identity = container.querySelector(".identity-avatar--agent");
+    expect(identity?.classList.contains("is-fallback")).toBe(false);
+    image?.dispatchEvent(new Event("error"));
+    expect(identity?.classList.contains("is-fallback")).toBe(true);
+    expect(identity?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
 
     container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
-
-    const clawd = container.querySelector(".agent-chat__welcome-clawd");
-    expect(clawd).not.toBeNull();
-    expect(clawd?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("idle");
-    expect(container.querySelector(".agent-chat__badge")).toBeNull();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
+    expect(container.querySelector(".agent-chat__welcome-clawd")).toBeNull();
   });
 
   it("replaces sendable welcome actions with model setup", () => {
@@ -6986,24 +6987,6 @@ describe("chat welcome", () => {
     expect(getComposerTextarea(container).disabled).toBe(true);
     container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
     expect(onSend).not.toHaveBeenCalled();
-  });
-
-  it("teases and catches file drags with the welcome mascot", () => {
-    const container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
-    const welcome = requireElement(container, ".agent-chat__welcome", "welcome screen");
-    const mascot = requireElement(
-      container,
-      ".agent-chat__welcome-clawd openclaw-mascot",
-      "welcome mascot",
-    ) as HTMLElement & { tease: boolean; catchOnce: () => void };
-    const catchOnce = vi.spyOn(mascot, "catchOnce");
-
-    welcome.dispatchEvent(createDragEvent("dragenter"));
-    expect(mascot.tease).toBe(true);
-
-    welcome.dispatchEvent(createDragEvent("drop"));
-    expect(mascot.tease).toBe(false);
-    expect(catchOnce).toHaveBeenCalledOnce();
   });
 
   it("renders welcome text from the active locale", async () => {

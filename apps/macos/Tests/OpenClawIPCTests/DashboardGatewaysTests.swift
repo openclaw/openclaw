@@ -1435,25 +1435,29 @@ private final class DashboardGatewayTestUpdater: UpdaterProviding {
 struct DashboardPrimaryGatewayAdapterTests {
     @Test(arguments: [nil, String(repeating: "a", count: 64)] as [String?])
     func `token profile promotion carries its authentication and TLS policy`(fingerprint: String?) async throws {
-        let state = AppState(preview: true)
-        let url = try #require(URL(string: "wss://studio.example:443/"))
-        var configurations: [AppState.PrimaryGatewayConfiguration] = []
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            endpoint: { _ in
-                GatewayConnection.EndpointSnapshot(
-                    config: (url: url, token: "profile-token", password: nil),
-                    tls: DashboardGatewayTestTLS.route(fingerprint: fingerprint),
-                    routeAuthority: nil)
-            },
-            persist: { _, configuration in
-                configurations.append(configuration)
-                return true
-            })
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            let url = try #require(URL(string: "wss://studio.example:443/"))
+            let adapter = DashboardPrimaryGatewayAdapter(
+                state: state,
+                endpoint: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: url, token: "profile-token", password: nil),
+                        tls: DashboardGatewayTestTLS.route(fingerprint: fingerprint),
+                        routeAuthority: nil)
+                })
 
-        try await adapter.apply(profileID: "studio")
+            try await adapter.apply(profileID: "studio")
 
-        #expect(configurations == [.init(url: url, token: "profile-token", tlsFingerprint: fingerprint)])
+            let root = OpenClawConfigFile.loadDict()
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: root) == url)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "profile-token")
+            #expect(GatewayRemoteConfig.resolvePasswordString(root: root) == nil)
+            #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: root) == fingerprint)
+        }
     }
 
     @Test func `password only profile cannot be promoted`() async throws {
@@ -1470,63 +1474,16 @@ struct DashboardPrimaryGatewayAdapterTests {
             try await adapter.apply(profileID: "studio")
         }
     }
-
-    @Test func `deep link submits its direct endpoint without inherited authentication`() throws {
-        let state = AppState(preview: true)
-        state.remoteTransport = .ssh
-        state.remoteUrl = "ws://127.0.0.1:18789"
-        state.remoteToken = "stale-token"
-        state.connectionMode = .local
-        var configurations: [AppState.PrimaryGatewayConfiguration] = []
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            persist: { _, configuration in
-                configurations.append(configuration)
-                return true
-            })
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 8443,
-            tls: true,
-            bootstrapToken: nil,
-            token: nil,
-            password: nil)
-
-        try adapter.apply(link: link)
-
-        #expect(try configurations == [.init(
-            url: #require(link.websocketURL),
-            token: nil,
-            tlsFingerprint: nil)])
-    }
-
-    @Test func `deep link password is rejected without mutation`() throws {
-        let state = AppState(preview: true)
-        state.remoteTransport = .ssh
-        state.remoteUrl = "wss://previous.example:443"
-        state.remoteToken = "previous-token"
-        state.connectionMode = .local
-        let adapter = DashboardPrimaryGatewayAdapter(state: state)
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 443,
-            tls: true,
-            bootstrapToken: nil,
-            token: "fixture-token",
-            password: "fixture-password")
-
-        #expect(throws: DashboardPrimaryGatewayError.passwordUnsupported) {
-            try adapter.apply(link: link)
-        }
-        #expect(state.remoteUrl == "wss://previous.example:443")
-        #expect(state.remoteToken == "previous-token")
-    }
 }
 
 @MainActor
 struct DashboardGatewaySetupCoordinatorTests {
-    @Test func `cancel prompts once and preserves primary state without credential disclosure`() {
-        let state = AppState(preview: true)
+    @Test func `cancel prompts once and preserves primary state without credential disclosure`() throws {
+        var persistCount = 0
+        let state = AppState(preview: true, gatewayConfigSaver: { _, _ in
+            persistCount += 1
+            return true
+        })
         state.remoteTransport = .ssh
         state.remoteUrl = "wss://previous.example:443"
         state.remoteToken = "previous-token"
@@ -1541,14 +1498,8 @@ struct DashboardGatewaySetupCoordinatorTests {
             password: nil)
         var prompts: [(String, String)] = []
         var openedSettings = 0
-        var persistCount = 0
         let coordinator = DashboardGatewaySetupCoordinator(
-            adapter: DashboardPrimaryGatewayAdapter(
-                state: state,
-                persist: { _, _ in
-                    persistCount += 1
-                    return true
-                }),
+            adapter: DashboardPrimaryGatewayAdapter(state: state),
             confirm: { title, message in
                 prompts.append((title, message))
                 return false
@@ -1559,10 +1510,11 @@ struct DashboardGatewaySetupCoordinatorTests {
         coordinator.handle(link)
 
         #expect(prompts.count == 1)
-        #expect(!prompts[0].0.contains(token))
-        #expect(!prompts[0].1.contains(token))
-        #expect(prompts[0].1.contains("unencrypted private-network connection"))
-        #expect(!prompts[0].1.localizedCaseInsensitiveContains("loopback"))
+        let prompt = try #require(prompts.first)
+        #expect(!prompt.0.contains(token))
+        #expect(!prompt.1.contains(token))
+        #expect(prompt.1.contains("unencrypted private-network connection"))
+        #expect(!prompt.1.localizedCaseInsensitiveContains("loopback"))
         #expect(state.remoteTransport == .ssh)
         #expect(state.remoteUrl == "wss://previous.example:443")
         #expect(state.remoteToken == "previous-token")
@@ -1571,39 +1523,37 @@ struct DashboardGatewaySetupCoordinatorTests {
         #expect(openedSettings == 0)
     }
 
-    @Test func `accept persists primary and opens connection settings`() throws {
-        let state = AppState(preview: true)
-        var configurations: [AppState.PrimaryGatewayConfiguration] = []
-        var openedSettings = 0
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            persist: { _, configuration in
-                configurations.append(configuration)
-                return true
-            })
-        let coordinator = DashboardGatewaySetupCoordinator(
-            adapter: adapter,
-            confirm: { _, _ in true },
-            presentError: { _, _ in Issue.record("unexpected error") },
-            openConnectionSettings: { openedSettings += 1 })
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 443,
-            tls: true,
-            bootstrapToken: nil,
-            token: "fixture-token",
-            password: nil)
+    @Test func `accept persists primary and opens connection settings`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            var openedSettings = 0
+            let coordinator = DashboardGatewaySetupCoordinator(
+                adapter: DashboardPrimaryGatewayAdapter(state: state),
+                confirm: { _, _ in true },
+                presentError: { _, _ in Issue.record("unexpected error") },
+                openConnectionSettings: { openedSettings += 1 })
+            let link = GatewayConnectDeepLink(
+                host: "gateway.example",
+                port: 443,
+                tls: true,
+                bootstrapToken: nil,
+                token: "fixture-token",
+                password: nil)
 
-        coordinator.handle(link)
+            coordinator.handle(link)
 
-        #expect(try configurations == [.init(
-            url: #require(link.websocketURL),
-            token: "fixture-token",
-            tlsFingerprint: nil)])
-        #expect(openedSettings == 1)
+            let root = OpenClawConfigFile.loadDict()
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: root) == link.websocketURL)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "fixture-token")
+            #expect(openedSettings == 1)
+        }
     }
 
-    @Test func `password route visibly rejects before prompting or mutation`() {
+    @Test(arguments: [false, true])
+    func `invalid or expired setup rejects before prompting or mutation`(expired: Bool) throws {
         let state = AppState(preview: true)
         state.remoteUrl = "wss://previous.example:443"
         var promptCount = 0
@@ -1616,22 +1566,75 @@ struct DashboardGatewaySetupCoordinatorTests {
             },
             presentError: { errors.append(($0, $1)) },
             openConnectionSettings: { Issue.record("unexpected settings open") })
-        let password = "fixture-password"
+        let token = "fixture-token"
         let link = GatewayConnectDeepLink(
             host: "gateway.example",
             port: 443,
             tls: true,
+            tlsFingerprintSha256: expired ? nil : "invalid-pin",
+            expiresAtMs: expired ? 1 : nil,
             bootstrapToken: nil,
-            token: nil,
-            password: password)
+            token: token,
+            password: nil)
 
         coordinator.handle(link)
 
         #expect(promptCount == 0)
         #expect(errors.count == 1)
-        #expect(!errors[0].0.contains(password))
-        #expect(!errors[0].1.contains(password))
+        let error = try #require(errors.first)
+        #expect(!error.0.contains(token))
+        #expect(!error.1.contains(token))
         #expect(state.remoteUrl == "wss://previous.example:443")
+    }
+
+    @Test(arguments: [false, true])
+    func `setup confirmation cannot replace a newer primary selection`(fileEdit: Bool) async {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": ["mode": "remote", "remote": [
+                    "transport": "direct", "url": "wss://previous.example:443", "token": "previous-token",
+                ]],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            var errors: [String] = []
+            var openedSettings = 0
+            let coordinator = DashboardGatewaySetupCoordinator(
+                adapter: DashboardPrimaryGatewayAdapter(state: state),
+                confirm: { _, _ in
+                    if fileEdit {
+                        var root = OpenClawConfigFile.loadDict()
+                        var gateway = root["gateway"] as? [String: Any] ?? [:]
+                        var remote = gateway["remote"] as? [String: Any] ?? [:]
+                        remote["url"] = "wss://newer.example:443"
+                        remote["token"] = "newer-token"
+                        gateway["remote"] = remote
+                        root["gateway"] = gateway
+                        #expect(OpenClawConfigFile.saveDict(root))
+                        #expect(GatewayRemoteConfig.resolveUrlString(root: OpenClawConfigFile.loadDict()) ==
+                            "wss://newer.example:443")
+                    } else {
+                        state.remoteUrl = "wss://newer.example:443"
+                    }
+                    return true
+                },
+                presentError: { _, message in errors.append(message) },
+                openConnectionSettings: { openedSettings += 1 })
+            let link = GatewayConnectDeepLink(
+                host: "gateway.example", port: 443, tls: true,
+                bootstrapToken: nil, token: "fixture-token", password: nil)
+
+            coordinator.handle(link)
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(errors.count == 1)
+            #expect(!errors.contains { $0.contains("fixture-token") })
+            #expect(openedSettings == 0)
+            let root = OpenClawConfigFile.loadDict()
+            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://newer.example:443")
+        }
     }
 }
 

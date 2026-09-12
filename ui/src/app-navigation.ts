@@ -20,6 +20,7 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
+  "agents-home",
   "dashboards",
   "usage",
   "cron",
@@ -66,9 +67,9 @@ export type SidebarZoneEntry =
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = ["dashboards", "cron", "plugins"].map((route) =>
-  serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
-);
+export const DEFAULT_SIDEBAR_ENTRIES = (
+  ["agents-home", "dashboards", "cron", "plugins"] as const
+).map((route) => serializeSidebarEntry({ type: "route", route }));
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -225,23 +226,25 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["profile", "appearance", "notifications"] },
-  { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
-  {
-    labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "talk", "devices"],
-  },
-  {
-    labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "model-providers", "plugin-settings", "skill-settings", "memory"],
-  },
-  { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
-  {
-    labelKey: "nav.settingsGroupSystem",
-    routes: ["advanced", "debug", "logs", "updates", "about"],
-  },
-] as const satisfies readonly SettingsNavigationGroup[];
+const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "profile",
+  "appearance",
+  "notifications",
+  "connection",
+  "channels",
+  "talk",
+  "devices",
+  "agents",
+  "model-providers",
+  "plugin-settings",
+  "skill-settings",
+  "memory",
+  "approvals",
+  "advanced",
+  "debug",
+  "logs",
+  "about",
+]);
 
 export function isSettingsNavigationRouteVisible(
   routeId: NavigationRouteId,
@@ -254,12 +257,7 @@ export function isSettingsNavigationRouteVisible(
   if (routeId === "updates") {
     return canAdmin || nativeDeviceSettings !== null;
   }
-  return (
-    canAdmin ||
-    NON_ADMIN_SETTINGS_NAVIGATION_GROUPS.some((group) =>
-      group.routes.some((candidate) => candidate === routeId),
-    )
-  );
+  return canAdmin || NON_ADMIN_SETTINGS_ROUTES.has(routeId);
 }
 
 export function deviceSettingsGroupLabelKey(
@@ -284,18 +282,15 @@ export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): readonly SettingsNavigationGroup[] {
-  const groups = canAdmin ? SETTINGS_NAVIGATION_GROUPS : NON_ADMIN_SETTINGS_NAVIGATION_GROUPS;
-  return groups
-    .map((group) => ({
-      labelKey:
-        group.labelKey === "nav.settingsGroupDevice"
-          ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
-          : group.labelKey,
-      routes: group.routes.filter((route) =>
-        isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
-      ),
-    }))
-    .filter((group) => group.routes.length > 0);
+  return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    labelKey:
+      group.labelKey === "nav.settingsGroupDevice"
+        ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
+        : group.labelKey,
+    routes: group.routes.filter((route) =>
+      isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
+    ),
+  })).filter((group) => group.routes.length > 0);
 }
 
 // Settings subpages render with settings chrome but stay out of the sidebar.
@@ -321,6 +316,7 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
+  "agents-home": ["bot", "tabs.agentsHome", "subtitles.agentsHome"],
   agents: ["bot", "tabs.agents", "subtitles.agents"],
   activity: ["activity", "tabs.activity", "subtitles.activity"],
   meetings: ["book", "tabs.meetings", "subtitles.meetings"],

@@ -79,9 +79,15 @@ export function resolveSessionSelectedModelRef(params: {
   if (ownership?.modelRef) {
     return { ...ownership.modelRef, storedOverrideSource: null };
   }
-  const configuredDefault = resolveSessionModelRef(params.cfg, undefined, params.agentId, {
-    allowPluginNormalization: params.allowPluginNormalization,
-  });
+  const cachePrefix = `${normalizeAgentId(params.agentId)}\0${params.allowPluginNormalization !== false}\0`;
+  const defaultKey = `${cachePrefix}\0\0`;
+  let configuredDefault = params.rowContext?.selectedModelByOverrideRef.get(defaultKey);
+  if (!configuredDefault) {
+    configuredDefault = resolveSessionModelRef(params.cfg, undefined, params.agentId, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+    params.rowContext?.selectedModelByOverrideRef.set(defaultKey, configuredDefault);
+  }
   const storedOverride = resolveStoredModelOverride({
     // A prepared miss is authoritative; the presentation store can contain another owner's alias.
     loadSessionEntry: params.source.loadSessionEntry,
@@ -91,38 +97,38 @@ export function resolveSessionSelectedModelRef(params: {
     defaultProvider: configuredDefault.provider,
     allowPluginNormalization: params.allowPluginNormalization,
   });
-  const selectedEntry = storedOverride
-    ? {
-        providerOverride: storedOverride.provider,
-        modelOverride: storedOverride.model,
-        ...(storedOverride.routeResolution === "resolved"
-          ? { modelOverrideRouteResolution: "resolved" as const }
-          : {}),
-      }
-    : undefined;
+  if (!storedOverride) {
+    return { ...configuredDefault, storedOverrideSource: null };
+  }
+  const selectedEntry = {
+    providerOverride: storedOverride.provider,
+    modelOverride: storedOverride.model,
+    ...(storedOverride.routeResolution === "resolved"
+      ? { modelOverrideRouteResolution: "resolved" as const }
+      : {}),
+  };
   if (!params.rowContext) {
     return {
       ...resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
         allowPluginNormalization: params.allowPluginNormalization,
       }),
-      storedOverrideSource: storedOverride?.source ?? null,
+      storedOverrideSource: storedOverride.source,
     };
   }
-  const key = [
-    normalizeAgentId(params.agentId),
-    selectedEntry?.providerOverride ?? "",
-    selectedEntry?.modelOverride ?? "",
-    storedOverride?.routeResolution ?? "",
-  ].join("\0");
+  const key = `${cachePrefix}${[
+    selectedEntry.providerOverride ?? "",
+    selectedEntry.modelOverride,
+    storedOverride.routeResolution,
+  ].join("\0")}`;
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {
-    return { ...cached, storedOverrideSource: storedOverride?.source ?? null };
+    return { ...cached, storedOverrideSource: storedOverride.source };
   }
   const selected = resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
     allowPluginNormalization: params.allowPluginNormalization,
   });
   params.rowContext.selectedModelByOverrideRef.set(key, selected);
-  return { ...selected, storedOverrideSource: storedOverride?.source ?? null };
+  return { ...selected, storedOverrideSource: storedOverride.source };
 }
 
 export function resolveTranscriptUsageFallback(params: {

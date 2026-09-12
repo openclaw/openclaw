@@ -108,6 +108,9 @@ the same batch.
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
 
+Pass exactly one config path. Extra arguments, including an empty quoted argument (`""`),
+are rejected; they do not suppress validation of later options.
+
 A schema-valid but unset path explains that the runtime default applies; an unknown path suggests
 `openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
 on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
@@ -152,6 +155,8 @@ The schema is JSON in both modes. `--json` is accepted as the explicit
 machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
+
+Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 
 Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
 
@@ -394,9 +399,9 @@ Example patch:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.6-sol" },
+      model: { primary: "openai/gpt-6-astra" },
       models: {
-        "openai/gpt-5.6-sol": {
+        "openai/gpt-6-astra": {
           agentRuntime: { id: "openclaw" },
           params: { fastMode: true },
         },

@@ -24,7 +24,7 @@ Settings for individual built-in tools. Whether a run may call them at all is de
       commandHighlighting: false,
       applyPatch: {
         enabled: true,
-        allowModels: ["gpt-5.6-sol"],
+        allowModels: ["gpt-6-astra"],
       },
     },
   },

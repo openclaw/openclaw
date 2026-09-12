@@ -107,6 +107,10 @@ import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
+  assertAgentDatabaseAdmitted,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
+import {
   createCronExitWatchers,
   type CronExitResult,
   type CronExitWatcherHandlers,
@@ -466,6 +470,7 @@ export function buildGatewayCronService(params: {
     if (isAgentDeletionBlocked(agentId)) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
+    assertAgentDatabaseAdmitted(agentId, { env });
     return { agentId, cfg: runtimeConfig };
   };
 
@@ -790,6 +795,7 @@ export function buildGatewayCronService(params: {
     },
     isAgentAvailable: (agentId) =>
       !isAgentDeletionBlocked(agentId) &&
+      !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,
     sessionStorePath,

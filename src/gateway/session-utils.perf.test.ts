@@ -10,6 +10,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
+import * as sessionModelRef from "../agents/session-model-ref.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -42,6 +43,59 @@ import * as rowProjection from "./session-utils-row.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test.each([undefined, "unmatched-model-search"])(
+    "resolves configured defaults once per agent for search %s",
+    async (search) => {
+      await withStateDirEnv("openclaw-perf-default-model-", async ({ stateDir }) => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: {
+              main: { model: "openai/gpt-5" },
+              work: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            defaults: { thinkingDefault: "off" },
+          },
+        };
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const store: Record<string, SessionEntry> = Object.fromEntries(
+          Array.from({ length: 40 }, (_, index) => {
+            const agentId = index % 2 === 0 ? "main" : "work";
+            return [
+              `agent:${agentId}:default-${index}`,
+              {
+                sessionId: `default-${index}`,
+                updatedAt: index + 1,
+                modelProvider: "openai",
+                model: "previous-run-model",
+              },
+            ];
+          }),
+        );
+        const resolver = vi.spyOn(sessionModelRef, "resolveSessionModelRef");
+        try {
+          const result = await listSessionFixture({
+            cfg,
+            store,
+            storePath: path.join(stateDir, "sessions.json"),
+            opts: { limit: 40, ...(search ? { search } : {}) },
+          });
+          expect(result.count).toBe(search ? 0 : 40);
+          for (const row of result.sessions) {
+            expect([row.modelProvider, row.model]).toEqual(
+              row.agentId === "main" ? ["openai", "gpt-5"] : ["anthropic", "claude-sonnet-4-6"],
+            );
+          }
+          expect(resolver).toHaveBeenCalledTimes(2);
+        } finally {
+          resolver.mockRestore();
+        }
+      });
+    },
+  );
+
   test("bounds catalog lookups per response while preserving each agent's model metadata", async () => {
     await withStateDirEnv("openclaw-perf-catalog-", async ({ stateDir }) => {
       resetPluginRuntimeStateForTest();

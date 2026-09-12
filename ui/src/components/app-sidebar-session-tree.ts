@@ -88,7 +88,28 @@ export function projectSessionTree(params: {
           : current,
       SIDEBAR_SESSION_NO_ATTENTION,
     );
-    // Accepted gap: an unloaded failed child needs expansion before its error attention can surface.
+    const childAttention = [
+      ...new Map(
+        [
+          ...children.flatMap((child) => [
+            child.ownAttention ?? child.attention,
+            ...(child.childAttention ?? []),
+          ]),
+          ...knownSessionAttention
+            .filter((entry) =>
+              unloadedChildKeys.some((key) => areUiSessionKeysEquivalent(entry.sessionKey, key)),
+            )
+            .map((entry) => entry.attention),
+        ]
+          .filter((value) => value.kind !== "none")
+          .map((value) => [JSON.stringify(value), value]),
+      ).values(),
+    ];
+    const unreadChildCount = children.reduce(
+      (count, child) => count + Number(child.unread) + (child.unreadChildCount ?? 0),
+      0,
+    );
+    // Unloaded terminal outcomes require the existing child-detail loader.
     // Child attention is transitive just like live-run counts: a collapsed
     // ancestor remains actionable even when the blocked descendant is hidden.
     let attention =
@@ -98,6 +119,7 @@ export function projectSessionTree(params: {
         : projected.attention;
     let runningChildCount = 0;
     let failedChildCount = 0;
+    let queuedChildCount = 0;
     let childWorkspaceConflictCount = 0;
     let containsActiveDescendant = false;
     for (const child of children) {
@@ -107,6 +129,8 @@ export function projectSessionTree(params: {
         failedChildCount +
         (child.status === "failed" || child.status === "timeout" ? 1 : 0) +
         child.failedChildCount;
+      queuedChildCount +=
+        Number(child.hasActiveRun && child.status === "queued") + (child.queuedChildCount ?? 0);
       childWorkspaceConflictCount += child.workspaceConflictCount ?? 0;
       if (
         rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
@@ -129,6 +153,10 @@ export function projectSessionTree(params: {
       row.archived !== true && !projected.hasActiveRun && row.hasActiveSubagentRun;
     return {
       ...projected,
+      ownAttention: projected.attention,
+      childAttention,
+      unreadChildCount,
+      queuedChildCount,
       attention,
       childSessionKeys,
       children,

@@ -362,7 +362,7 @@ export async function collectSecurityWarnings(
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (!hasSharedSecret && resolvedAuth.mode !== "trusted-proxy") {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
@@ -446,4 +446,5 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     lines.push(`- Run: ${formatCliCommand("openclaw security audit --deep")}`);
     note(lines.join("\n"), "Security");
   }
+  return findings;
 }

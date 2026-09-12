@@ -31,6 +31,7 @@ import {
 import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
+import { gatewayPluginTestFiles } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
@@ -3515,6 +3516,9 @@ function classifyTarget(arg: string, cwd: string) {
   const configTargetKind = resolveVitestConfigTargetKind(relative);
   if (configTargetKind) {
     return configTargetKind;
+  }
+  if (gatewayPluginTestFiles.includes(relative)) {
+    return "gatewayMethods";
   }
   if (isAgentsCoreIsolatedTestFile(relative)) {
     return agentVitestProjectOwners.coreIsolated.kind;

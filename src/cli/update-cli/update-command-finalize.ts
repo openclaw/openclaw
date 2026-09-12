@@ -268,7 +268,10 @@ async function updateFinalizeCommandInternal(
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   lifecycle.recordWarnings(
     (pluginUpdate.warnings ?? [])
-      .filter((warning) => warning.reason === "plugin-target-unavailable")
+      .filter(
+        (warning) =>
+          warning.reason === "plugin-target-unavailable" || warning.reason === "doctor-advisory",
+      )
       .map((warning) => warning.message),
     "plugins",
   );

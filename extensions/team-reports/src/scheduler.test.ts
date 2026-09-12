@@ -133,7 +133,7 @@ async function setup(
     config,
     resolved,
     store,
-    llm: { complete, acquireLocalService: vi.fn(async () => undefined) },
+    llm: { complete },
     context,
     sources,
   });

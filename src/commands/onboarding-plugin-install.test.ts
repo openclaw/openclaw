@@ -307,16 +307,6 @@ describe("ensureOnboardingPluginInstalled", () => {
         source,
         accepted,
         official: false,
-        reviewRequested: false,
-        promptError: undefined,
-      })),
-    ),
-    ...(["npm", "clawhub"] as const).flatMap((source) =>
-      [false, true].map((accepted) => ({
-        source,
-        accepted,
-        official: true,
-        reviewRequested: true,
         promptError: undefined,
       })),
     ),
@@ -324,27 +314,24 @@ describe("ensureOnboardingPluginInstalled", () => {
       source,
       accepted: false,
       official: true,
-      reviewRequested: false,
       promptError: undefined,
     })),
     {
       source: "local" as const,
       accepted: false,
       official: false,
-      reviewRequested: false,
       promptError: new WizardNavigationError("back"),
     },
     ...(["npm", "clawhub"] as const).map((source) => ({
       source,
       accepted: false,
       official: false,
-      reviewRequested: false,
       promptError: new Error("capability review guard rejected the operation"),
     })),
   ])(
-    "reviews $source artifact capabilities before onboarding activation, official=$official reviewRequested=$reviewRequested accepted=$accepted promptError=$promptError",
-    async ({ source, accepted, promptError, official, reviewRequested }) => {
-      const consentRequired = !official || reviewRequested;
+    "reviews $source artifact capabilities before onboarding activation, official=$official accepted=$accepted promptError=$promptError",
+    async ({ source, accepted, promptError, official }) => {
+      const consentRequired = !official;
       const shouldInstall = !consentRequired || accepted;
       const actual = await vi.importActual<typeof import("../plugins/capability-consent.js")>(
         "../plugins/capability-consent.js",
@@ -444,7 +431,6 @@ describe("ensureOnboardingPluginInstalled", () => {
           } as never,
           runtime: { log, error: vi.fn() } as never,
           promptInstall: false,
-          ...(reviewRequested ? { reviewOfficialArtifacts: true } : {}),
           workspaceDir: artifactDir,
           beforePersistentEffect,
         });

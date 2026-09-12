@@ -17,8 +17,8 @@ import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";

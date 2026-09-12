@@ -8,6 +8,7 @@ import { t } from "../i18n/index.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
@@ -75,6 +76,20 @@ function ownerHue(id: string): number {
 export function renderSessionOwnerAvatar(
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">,
 ) {
+  if (owner.identity?.type === "agent") {
+    const avatar = resolveAvatar({
+      id: owner.id,
+      identity: owner.identity,
+      name: owner.label,
+      profileAvatarUrl: owner.avatarUrl,
+    });
+    return html`<span
+      class="viewer-avatar viewer-avatar--session"
+      aria-label=${owner.label || owner.id}
+    >
+      ${renderAgentIdentityAvatar({ id: owner.identity.id, avatar: avatar.kind === "profile" ? avatar.url : null })}
+    </span>`;
+  }
   return html`<openclaw-viewer-avatar
     .identity=${owner.identity}
     .user=${{
@@ -93,7 +108,7 @@ export function renderSessionOwnerAvatar(
  * Session-owner avatar. The owner may be reassigned; live viewing only changes
  * avatar saturation. Render only when the Gateway's complete owner facet has 2+
  * identities (solo mode shows no attribution chrome). Human actors use the durable
- * profile projection carried by the session record; actors without it keep stable initials.
+ * profile projection carried by the session record; typed agents share the agent face fallback.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ attribute: false }) owner: SessionCreatedActor | null = null;
@@ -140,7 +155,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
         >${
-          avatar?.kind === "profile"
+          owner.identity?.type === "agent" || avatar.kind === "profile"
             ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
             : initials
         }</span

@@ -8,10 +8,8 @@ import * as desktopFilter from "../../src/gateway/desktop/rfb-view-only-filter.j
 import { createWorkerEnvironmentStore } from "../../src/gateway/worker-environments/store.js";
 import type { WorkerProvider } from "../../src/plugins/types.js";
 import * as processExec from "../../src/process/exec.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import {
   createDesktopResizeGuest,

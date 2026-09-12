@@ -5,6 +5,12 @@ function htmlFragment(html: string): DocumentFragment {
   return document.createRange().createContextualFragment(html);
 }
 
+const rawHtmlStreamingContexts = [
+  ["comment", "<!--\n</details>\n-->"],
+  ["pre", "<pre>\n</details>\n</pre>"],
+  ["lowercase declaration", "<!doctype\n</details>\n>"],
+] as const;
+
 describe("model-authored details blocks", () => {
   it("renders block-level details with nested markdown", () => {
     const html = toSanitizedMarkdownHtml(
@@ -155,6 +161,7 @@ describe("model-authored details blocks", () => {
 
   it.each([
     ["<details>\n<summary>Still arriving", ["Still arriving"], null],
+    ["<details>\n<summary>Literal\n", [], "<summary>Literal"],
     ["<details><summary>Outer</summary>\n<details><summary>Inner", ["Outer", "Inner"], null],
     ["<summary>Orphan", [], "<summary>Orphan"],
     ["<details><summary>First</summary>\n<summary>Second", ["First"], "<summary>Second"],
@@ -329,14 +336,13 @@ describe("multi-token details shapes", () => {
   });
 
   it.each([
-    ["comment", "<!--\n</details>\n-->"],
-    ["pre", "<pre>\n</details>\n</pre>"],
+    ...rawHtmlStreamingContexts,
     ["script", "<script>\n</details>\n</script>"],
     ["style", "<style>\n</details>\n</style>"],
     ["processing instruction", "<?pi\n</details>\n?>"],
     ["declaration", "<!DOCTYPE\n</details>\n>"],
     ["CDATA", "<![CDATA[\n</details>\n]]>"],
-  ])("keeps closer-shaped text inside an embedded raw HTML %s literal", (_name, raw) => {
+  ] as const)("keeps closer-shaped text inside an embedded raw HTML %s literal", (_name, raw) => {
     const html = toSanitizedMarkdownHtml(
       `<details>\n<summary>X</summary>\n\n<div>\n${raw}\n</div>\n</details>\n\nFollowing`,
     );
@@ -347,6 +353,114 @@ describe("multi-token details shapes", () => {
     expect(details?.textContent).not.toContain("Following");
     expect(fragment.lastElementChild?.textContent).toBe("Following");
   });
+
+  it.each(rawHtmlStreamingContexts)(
+    "keeps body after a raw %s inside streaming details",
+    (_name, raw) => {
+      const pending = `<details>\n<summary>X</summary>\n\n<div>\n${raw}\n</div>\n\nStill inside`;
+      const completed = `${pending}\n</details>\n\nFollowing`;
+      for (const source of [pending, completed]) {
+        for (const html of [
+          toSanitizedMarkdownHtml(source),
+          toStreamingMarkdownParts(source).join(""),
+        ]) {
+          const fragment = htmlFragment(html);
+          const details = fragment.querySelector("details");
+          expect(details?.textContent).toContain("</details>");
+          expect(details?.textContent).toContain("Still inside");
+          expect(details?.textContent).not.toContain("Following");
+          if (source === completed) {
+            expect(fragment.lastElementChild?.textContent).toBe("Following");
+          }
+        }
+      }
+    },
+  );
+
+  it.each(
+    ["<!--", "<pre>"].flatMap((opener) =>
+      [
+        ["blockquote", `> ${opener}\n> **literal`],
+        ["list continuation", `- item\n\n  ${opener}\n  **literal`],
+      ].flatMap(([container, raw]) =>
+        [
+          { suffix: "**outside", selector: "strong", text: "outside" },
+          {
+            suffix: "<details>\n<summary>Next",
+            selector: "details:last-child summary",
+            text: "Next",
+          },
+        ].map(({ suffix, selector, text }) => ({ opener, container, raw, suffix, selector, text })),
+      ),
+    ),
+  )(
+    "resumes $text after an unfinished $opener leaves its $container",
+    ({ raw, suffix, selector, text }) => {
+      const source = `<details>\n<summary>X</summary>\n\n${raw}\n\n</details>\n\n${suffix}`;
+      const fragment = htmlFragment(toStreamingMarkdownParts(source).join(""));
+      expect(fragment.querySelector("details")?.textContent).toContain("**literal");
+      expect(fragment.querySelector("details")?.textContent).not.toContain(text);
+      expect(fragment.querySelector(selector)?.textContent).toBe(text);
+    },
+  );
+
+  it.each(rawHtmlStreamingContexts)(
+    "keeps a raw %s code sample from owning a later summary",
+    (_name, raw) => {
+      const opener = raw.slice(0, raw.indexOf("\n"));
+      const source = `    ${opener}\n\n<details>\n<summary>Actual`;
+      const fragment = htmlFragment(toStreamingMarkdownParts(source).join(""));
+      expect(fragment.querySelector("code")?.textContent).toBe(`${opener}\n`);
+      expect(fragment.querySelector("details summary")?.textContent).toBe("Actual");
+    },
+  );
+
+  it.each(
+    rawHtmlStreamingContexts.flatMap(([context, raw]) =>
+      [
+        { syntax: "emphasis", delimiter: "**", tag: "strong" },
+        { syntax: "inline code", delimiter: "`", tag: "code" },
+      ].flatMap(({ syntax, delimiter, tag }) =>
+        [false, true].map((closed) => ({ context, raw, syntax, delimiter, tag, closed })),
+      ),
+    ),
+  )(
+    "keeps $syntax literal in a $context block (closed=$closed)",
+    ({ raw, delimiter, tag, closed }) => {
+      const rawBlock = raw.replace("</details>", `${delimiter}literal`);
+      const literal = closed ? rawBlock : rawBlock.slice(0, rawBlock.lastIndexOf("\n"));
+      const source = `<details>\n<summary>X</summary>\n\n${literal}${closed ? `\n${delimiter}outside` : ""}`;
+      const details = htmlFragment(toStreamingMarkdownParts(source).join("")).querySelector(
+        "details",
+      );
+      expect(details?.textContent).toContain(literal);
+      if (closed) {
+        expect(details?.querySelector(tag)?.textContent).toBe("outside");
+      } else {
+        const staticDetails = htmlFragment(toSanitizedMarkdownHtml(source)).querySelector(
+          "details",
+        );
+        expect(details?.textContent).toBe(staticDetails?.textContent);
+      }
+    },
+  );
+
+  it.each(rawHtmlStreamingContexts)(
+    "keeps unfinished summaries in a raw %s literal while streaming",
+    (_name, raw) => {
+      const opener = raw.slice(0, raw.indexOf("\n"));
+      const source = `<details>\n${opener}\n<summary>literal`;
+      for (const html of [
+        toSanitizedMarkdownHtml(source),
+        toStreamingMarkdownParts(source).join(""),
+      ]) {
+        const details = htmlFragment(html).querySelector("details");
+        expect(details?.querySelector("summary")).toBeNull();
+        expect(details?.textContent).toContain("<summary>literal");
+        expect(details?.textContent).not.toContain("</summary>");
+      }
+    },
+  );
 
   it("renders details when body text starts without a summary", () => {
     const html = toSanitizedMarkdownHtml("<details>\nfirst line\n\nsecond paragraph\n</details>");

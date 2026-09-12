@@ -924,7 +924,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           defaults: {
             model: {
               primary: "deleted/default-primary",
-              fallbacks: ["custom/kept", "openai/gpt-5.6-sol", "deleted/default-fallback"],
+              fallbacks: ["custom/kept", "openai/gpt-6-astra", "deleted/default-fallback"],
             },
             models: {
               "custom/kept": { alias: "kept" },
@@ -950,27 +950,27 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.6-sol",
+      primary: "openai/gpt-6-astra",
       fallbacks: ["custom/kept"],
     });
     expect(result.config.agents?.defaults?.models).toEqual({
       "custom/kept": { alias: "kept" },
-      "openai/gpt-5.6-sol": {},
+      "openai/gpt-6-astra": {},
     });
     expect(result.config.agents?.list?.[0]).toMatchObject({
       id: "main",
-      models: { "plugin-provider/kept": {}, "openai/gpt-5.6-sol": {} },
+      models: { "plugin-provider/kept": {}, "openai/gpt-6-astra": {} },
     });
     expect(result.config.agents?.list?.[0]?.model).toBeUndefined();
     expect(result.changes).toEqual([
-      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-5.6-sol" (provider "deleted" is unavailable).',
+      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-6-astra" (provider "deleted" is unavailable).',
       'Removed stale agents.defaults.model fallback "deleted/default-fallback" (provider "deleted" is unavailable).',
-      'Removed duplicate agents.defaults.model fallback "openai/gpt-5.6-sol" after selecting it as the default primary.',
+      'Removed duplicate agents.defaults.model fallback "openai/gpt-6-astra" after selecting it as the default primary.',
       'Removed stale agents.defaults.models entry "deleted/models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
       'Removed stale agents.list.main.model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
       'Removed stale agents.list.main.models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.list.main.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.list.main.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
     ]);
   });
 
@@ -1076,9 +1076,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     );
 
-    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-6-astra");
     expect(result.changes).toEqual([
-      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-5.6-sol" (provider "agent-local" is unavailable).',
+      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-6-astra" (provider "agent-local" is unavailable).',
     ]);
   });
 
@@ -1102,7 +1102,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     );
 
-    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-6-astra");
     expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
     expect(result.changes).toContain(
       'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
@@ -1122,9 +1122,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
     );
 
-    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-5.6-sol": {} });
+    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
     expect(result.changes).toContain(
-      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
     );
   });
 

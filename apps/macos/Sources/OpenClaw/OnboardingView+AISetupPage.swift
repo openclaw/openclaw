@@ -5,7 +5,6 @@ struct GatewayAuthenticationReturnDecision: Equatable {
     let authIssue: RemoteGatewayAuthIssue
     let probeState: RemoteOnboardingProbeState
     let showRemoteChoices: Bool
-    let showAdvancedConnection: Bool
 }
 
 extension OnboardingView {
@@ -141,7 +140,6 @@ extension OnboardingView {
         remoteAuthIssue = decision.authIssue
         remoteProbeState = decision.probeState
         showRemoteChoices = decision.showRemoteChoices
-        showAdvancedConnection = decision.showAdvancedConnection
         withAnimation { currentPage = decision.connectionPage }
     }
 
@@ -160,8 +158,7 @@ extension OnboardingView {
             connectionPage: connectionPage,
             authIssue: authIssue,
             probeState: .failed(probeInput, authIssue.statusMessage),
-            showRemoteChoices: true,
-            showAdvancedConnection: true)
+            showRemoteChoices: true)
     }
 
     func resumePendingInferenceSetup() {

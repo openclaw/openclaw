@@ -14,7 +14,10 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayContextLifetime,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -32,10 +35,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
-import {
-  createGatewayPluginRuntimeGeneration,
-  type GatewayPluginRuntimeClaim,
-} from "./server-plugin-runtime-generation.js";
+import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
@@ -239,9 +239,9 @@ export async function prepareGatewayLifecycle(params: {
     minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
   );
   // Kernel methods are the only writers for readiness and advertised-method state.
-  // Residents use this surface so later ownership splits cannot mutate shared state directly.
   const kernel = {
     pluginRuntimeGeneration,
+    pluginMetadata: params.pluginMetadata,
     setDispatchReady: (ready: boolean) => {
       startupState.dispatchReady = ready;
     },
@@ -275,15 +275,10 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.heartbeatRunner = handles.heartbeatRunner;
       runtimeState.stopDeliveryRecovery = handles.stopDeliveryRecovery;
     },
-    setPostAttachHandles: (
-      handles: {
-        stopGatewayUpdateCheck: typeof runtimeState.stopGatewayUpdateCheck;
-        pluginServices: typeof runtimeState.pluginServices;
-      },
-      claim: GatewayPluginRuntimeClaim,
-    ) => {
+    setPostAttachHandles: (handles: {
+      stopGatewayUpdateCheck: typeof runtimeState.stopGatewayUpdateCheck;
+    }) => {
       runtimeState.stopGatewayUpdateCheck = handles.stopGatewayUpdateCheck;
-      pluginRuntimeGeneration.publishServices(claim, handles.pluginServices);
     },
     setTailscaleCleanup: (cleanup: typeof runtimeState.tailscaleCleanup) => {
       runtimeState.tailscaleCleanup = cleanup;
@@ -318,9 +313,9 @@ export async function prepareGatewayLifecycle(params: {
     setChannelHealthMonitor: (next: typeof runtimeState.channelHealthMonitor) => {
       runtimeState.channelHealthMonitor = next;
     },
-    notifyPluginMetadataChanged: () => {
-      runtimeState.configReloader.notifyPluginMetadataChanged();
-    },
+    applyPluginLifecycleChange: (
+      change: Parameters<typeof runtimeState.configReloader.applyPluginLifecycleChange>[0],
+    ) => runtimeState.configReloader.applyPluginLifecycleChange(change),
     getConfigReloaderHotReloadStatus: () => runtimeState.configReloader.hotReloadStatus?.(),
     setPostReadySidecars: (sidecars: typeof runtimeState.postReadySidecars) => {
       runtimeState.postReadySidecars = sidecars;
@@ -549,6 +544,7 @@ export async function prepareGatewayLifecycle(params: {
         (plugin) => plugin.id,
       );
       const transport = transportBridge.current();
+      const contextLifetime = getGatewayContextLifetime(runtime.resolvePluginGatewayContext);
       try {
         await transport?.portalService.closeAll();
       } finally {
@@ -556,7 +552,16 @@ export async function prepareGatewayLifecycle(params: {
           shutdownRuntime.completeGatewayClose(
             {
               closePluginRegistry: (onRetirement) => pluginRuntime.close(onRetirement),
-              pluginMetadata: params.pluginMetadata,
+              pluginMetadata: {
+                beginClose: params.pluginMetadata.beginClose,
+                close: async (...args) => {
+                  try {
+                    await params.pluginMetadata.close(...args);
+                  } finally {
+                    contextLifetime.abort(new Error("Gateway closed; plugin runtime unavailable."));
+                  }
+                },
+              },
               bonjourStop: kernel.swapDiscovery(null)?.stop ?? null,
               tailscaleCleanup: runtimeState.tailscaleCleanup,
               clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,

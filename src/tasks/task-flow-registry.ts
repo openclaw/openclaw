@@ -1,9 +1,9 @@
 // Coordinates managed task-flow creation, updates, ownership, and snapshots.
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  applyFlowPatch,
   assertControllerId,
   buildFlowRecord,
   cloneFlowRecord,
@@ -26,6 +26,7 @@ import {
   resetTaskFlowRegistryRuntimeForTests,
   type TaskFlowRegistryObserverEvent,
 } from "./task-flow-registry.store.js";
+import type { TaskFlowRegistryUpdateResult } from "./task-flow-registry.store.types.js";
 import {
   isTerminalTaskFlow,
   type JsonValue,
@@ -247,32 +248,78 @@ export function updateFlowRecordByIdExpectedRevision(params: {
   patch: FlowRecordPatch;
 }): TaskFlowUpdateResult {
   ensureTaskFlowRegistryReady();
-  const current = flows.get(params.flowId);
-  if (!current) {
-    return {
-      applied: false,
-      reason: "not_found",
-    };
-  }
-  if (current.revision !== params.expectedRevision) {
-    return {
-      applied: false,
-      reason: "revision_conflict",
-      current: cloneFlowRecord(current),
-    };
-  }
-  const flow = writeFlowRecord(applyFlowPatch(current, params.patch), current);
-  if (!flow) {
+  const cached = flows.get(params.flowId);
+  let result: TaskFlowRegistryUpdateResult;
+  try {
+    result = getTaskFlowRegistryStore().updateFlow(params, (observed) => {
+      const current = observed.applied
+        ? observed.flow
+        : observed.reason === "revision_conflict"
+          ? observed.current
+          : undefined;
+      const canonical = current ? cloneFlowRecord(current) : undefined;
+      const previous = observed.applied ? observed.previous : cached;
+      const changed =
+        observed.applied ||
+        !isDeepStrictEqual(cached ? normalizeRestoredFlowRecord(cached) : undefined, canonical);
+      const next = changed ? canonical : cached;
+      let committed: TaskFlowRecord | undefined;
+      return {
+        stage: () => {
+          if (next) {
+            flows.set(params.flowId, next);
+          } else {
+            flows.delete(params.flowId);
+          }
+        },
+        rollback: () => {
+          if (cached) {
+            flows.set(params.flowId, cached);
+          } else {
+            flows.delete(params.flowId);
+          }
+        },
+        commit: () => {
+          // Capture the final staged entry before any observer can reenter this owner.
+          committed = flows.get(params.flowId);
+        },
+        publish: () => {
+          if (!changed || flows.get(params.flowId) !== committed) {
+            return;
+          }
+          if (next) {
+            emitFlowRegistryObserverEvent(() => ({
+              kind: "upserted",
+              flow: cloneFlowRecord(next),
+              ...(previous ? { previous: cloneFlowRecord(previous) } : {}),
+            }));
+          } else if (previous) {
+            emitFlowRegistryObserverEvent(() => ({
+              kind: "deleted",
+              flowId: params.flowId,
+              previous: cloneFlowRecord(previous),
+            }));
+          }
+        },
+      };
+    });
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry update", { flowId: params.flowId, error });
     return {
       applied: false,
       reason: "persist_failed",
-      current: cloneFlowRecord(current),
+      ...(cached ? { current: cloneFlowRecord(cached) } : {}),
     };
   }
-  return {
-    applied: true,
-    flow,
-  };
+  if (result.applied) {
+    return { applied: true, flow: cloneFlowRecord(result.flow) };
+  }
+  if (result.reason === "invalid_patch") {
+    throw result.error;
+  }
+  return result.reason === "revision_conflict"
+    ? { ...result, current: cloneFlowRecord(result.current) }
+    : result;
 }
 
 export function setFlowWaiting(params: {

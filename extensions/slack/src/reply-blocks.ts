@@ -380,7 +380,7 @@ function resolvePresentationRenderOptions(
   segments: SlackReplyBlockSegment[],
   mode: "current" | "new-message",
 ): SlackBlockRenderOptions {
-  const allOffsets = resolveSlackBlockOffsets(readAllNativeBlocks(segments));
+  const allOffsets = resolveSlackBlockOffsets(readAllNativeBlocks(segments), "controls");
   const messageOffsets =
     mode === "current" ? resolveSlackBlockOffsets(readLastBlockSegment(segments)) : {};
   // Control ids span the logical reply, while chart/table limits reset for
@@ -564,10 +564,12 @@ export function resolveSlackReplyBlockResolution(
   }
   const renderedPresentationBlocks = readAllNativeBlocks(segments).slice(presentationBlockOffset);
 
-  const interactiveBlocks = buildSlackInteractiveBlocks(payload.interactive, {
-    ...resolveSlackBlockOffsets(readAllNativeBlocks(segments)),
-    questionOptionIndices,
-  });
+  const interactiveBlocks = payload.interactive
+    ? buildSlackInteractiveBlocks(payload.interactive, {
+        ...resolveSlackBlockOffsets(readAllNativeBlocks(segments)),
+        questionOptionIndices,
+      })
+    : [];
   // Companions are independent of the presentation's alternative text.
   // Preserve the authored continuation when no native presentation survives.
   if (

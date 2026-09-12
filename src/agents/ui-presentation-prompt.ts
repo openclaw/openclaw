@@ -17,26 +17,11 @@ export function buildUiPresentationPrompt(params: {
     messageProperties && Object.hasOwn(messageProperties, "clawhub")
       ? params.messageTool?.name
       : undefined;
-  const interactiveMessageToolName =
-    messageProperties && Object.hasOwn(messageProperties, "presentation")
-      ? params.messageTool?.name
-      : undefined;
-  if (
-    !showWidgetToolName &&
-    !dashboardToolName &&
-    !portalToolName &&
-    !clawHubMessageToolName &&
-    !interactiveMessageToolName
-  ) {
+  if (!showWidgetToolName && !dashboardToolName && !portalToolName && !clawHubMessageToolName) {
     return "";
   }
   return [
     "## UI Presentation",
-    ...(interactiveMessageToolName
-      ? [
-          `Offer an "Update now" button with reusable:true when directing the user to /update in the current chat, using \`${interactiveMessageToolName}\` presentation action {type:"command",command:"/update"}; keep \`/update\` as the text fallback. Each click uses the clicking user's current owner permissions.`,
-        ]
-      : []),
     ...(clawHubMessageToolName
       ? [
           `\`${clawHubMessageToolName}\`: When the user asks to install an integration or whether you can perform an action, check ClawHub first with \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\`, omitting channel and target. This presents official plugin or skill cards, including when it is already installed. Report availability and installation state from the result. An installed desktop app does not establish that its OpenClaw plugin is installed. Treat an unqualified service install request as an OpenClaw capability request unless the user explicitly asks for a desktop app.`,

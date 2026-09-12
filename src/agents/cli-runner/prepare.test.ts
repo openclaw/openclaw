@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
@@ -27,7 +28,11 @@ import {
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerContextEngineForOwner } from "../../context-engine/registry.js";
+import { LegacyContextEngine } from "../../context-engine/legacy.js";
+import {
+  registerContextEngineForOwner,
+  registerContextEngineInRegistry,
+} from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
 import {
@@ -41,24 +46,27 @@ import type {
   CliBackendPlugin,
 } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { HookRunner } from "../../plugins/hooks.js";
+import { createHookRunner, type HookRunner } from "../../plugins/hooks.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -107,6 +115,8 @@ import {
   hashCliSessionText,
 } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
+import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
 import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
 import {
@@ -116,6 +126,7 @@ import {
 } from "../media-generation-task-status.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
+import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   captureRoutingDecisionWork,
@@ -125,6 +136,7 @@ import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -141,6 +153,37 @@ function registerTestContextEngine(
   return registerContextEngineForOwner(id, factory, `test:${id}`, {
     allowSameOwnerRefresh: true,
   });
+}
+
+function createContextEngineCustodyFixture() {
+  const registry = createEmptyPluginRegistry();
+  const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+  resources.attach(registry);
+  const database = new DatabaseSync(":memory:");
+  let closed = false;
+  const close = () => {
+    if (!closed) {
+      closed = true;
+      database.close();
+    }
+  };
+  const retirement = createDeferred();
+  const retired = vi.fn(() => {
+    close();
+    retirement.resolve();
+  });
+  resources.register("fixture", { id: "cli-engine-database", dispose: retired });
+  return {
+    registry,
+    resources,
+    retired,
+    retirement: retirement.promise,
+    read: () => database.prepare("SELECT 42 AS value").get()?.value,
+    async cleanup() {
+      await resources.release();
+      close();
+    },
+  };
 }
 
 function installTestPluginRegistry() {
@@ -296,6 +339,16 @@ function setCliBackendForPrepareTest(
   });
 }
 
+function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
+  return {
+    command,
+    args: ["--print"],
+    output: "jsonl",
+    input: "stdin",
+    sessionMode: "existing",
+  };
+}
+
 function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { pluginId: string }) {
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
@@ -408,13 +461,7 @@ describe("prepareCliRunContext", () => {
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs: ({ baseArgs }) => baseArgs,
       projectNativeToolAuthority,
-      config: {
-        command: "native-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("native-cli"),
     });
     const context = await fixture.prepare({ provider: "native-cli", ...overrides });
     const capture = expectDefined(context.preparedBackend.mcpClientGrantCapture, "native capture");
@@ -2677,6 +2724,251 @@ describe("prepareCliRunContext", () => {
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    "custom",
+    "legacy",
+    "incompatible",
+    "incompatible-cleanup-failed",
+    "cleanup-failed",
+    "retired",
+  ] as const)("settles directly resolved CLI context-engine custody (%s)", async (scenario) => {
+    const custody = createContextEngineCustodyFixture();
+    const engineId = `cli-custody-${scenario}`;
+    const incompatible = scenario.startsWith("incompatible");
+    const cleanupFailure = new Error("CLI engine cleanup failed");
+    const backendCleanup = vi.fn(async () => {});
+    setRawCliBackendForPrepareTest({
+      ...buildDefaultTestCliBackend(),
+      prepareExecution: async () => ({ cleanup: backendCleanup }),
+    });
+    let current = true;
+    class Engine extends LegacyContextEngine {
+      override readonly info: ContextEngine["info"] = {
+        id: scenario === "legacy" ? "legacy" : engineId,
+        name: "CLI custody fixture",
+        ...(incompatible
+          ? {
+              hostRequirements: {
+                "agent-run": {
+                  requiredCapabilities: ["assemble-before-prompt"],
+                  unsupportedMessage: "CLI engine host unsupported",
+                },
+              },
+            }
+          : {}),
+      };
+      async dispose() {
+        expect(custody.read()).toBe(42);
+        if (scenario.endsWith("cleanup-failed")) {
+          throw cleanupFailure;
+        }
+      }
+    }
+    registerContextEngineInRegistry(
+      custody.registry,
+      engineId,
+      async () => {
+        current = scenario !== "retired";
+        return new Engine();
+      },
+      "plugin:fixture",
+    );
+    try {
+      const preparation = withPluginRuntimeRegistryScope(custody.registry, () =>
+        fixture.prepare({
+          config: { plugins: { slots: { contextEngine: engineId } } },
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("CLI owner retired after engine acquisition");
+            }
+          },
+        }),
+      );
+      if (incompatible || scenario === "retired") {
+        await expect(preparation).rejects.toThrow(
+          incompatible
+            ? "CLI engine host unsupported"
+            : "CLI owner retired after engine acquisition",
+        );
+        await custody.resources.release();
+      } else {
+        const context = await preparation;
+        expect(context.contextEngine?.info.id).toBe(scenario === "legacy" ? undefined : engineId);
+        await custody.resources.release();
+        expect(custody.retired).not.toHaveBeenCalled();
+        if (scenario === "cleanup-failed") {
+          await expect(context.preparedBackend.cleanup?.()).rejects.toBe(cleanupFailure);
+        } else {
+          await context.preparedBackend.cleanup?.();
+        }
+      }
+      expect(backendCleanup).toHaveBeenCalledOnce();
+      expect(custody.retired).toHaveBeenCalledOnce();
+      expect(() => custody.read()).toThrow();
+    } finally {
+      await custody.cleanup();
+    }
+  });
+
+  it("releases prepared CLI context-engine custody when hook history cannot be read", async () => {
+    const custody = createContextEngineCustodyFixture();
+    const engineId = "cli-custody-history-failure";
+    const historyFailure = new Error("synthetic hook-history read failed");
+    const backendCleanup = vi.fn(async () => {});
+    const execute = vi.fn<CliBackendExecute>(async function* () {
+      yield { type: "result", subtype: "success", result: "unexpected answer" };
+    });
+    setRawCliBackendForPrepareTest({
+      ...buildDefaultTestCliBackend(),
+      prepareExecution: async () => ({ cleanup: backendCleanup, execute }),
+    });
+    let engineAcquired = false;
+    class Engine extends LegacyContextEngine {
+      override readonly info = { id: engineId, name: "CLI failed-history custody fixture" };
+      async dispose() {
+        expect(custody.read()).toBe(42);
+      }
+    }
+    const factory = vi.fn(() => {
+      engineAcquired = true;
+      return new Engine();
+    });
+    registerContextEngineInRegistry(custody.registry, engineId, factory, "plugin:fixture");
+    custody.registry.typedHooks.push({
+      pluginId: "fixture",
+      hookName: "llm_input",
+      handler: () => {},
+      source: "test",
+    });
+    mockGetGlobalHookRunner.mockReturnValue(createHookRunner(custody.registry));
+    const history = await import("./session-history.js");
+    const readHistory = history.loadCliSessionHistoryMessages;
+    const historyRead = vi
+      .spyOn(history, "loadCliSessionHistoryMessages")
+      .mockImplementation(async (params) => {
+        if (engineAcquired) {
+          throw historyFailure;
+        }
+        return await readHistory(params);
+      });
+    try {
+      const { runCliAgent } = await import("../cli-runner.js");
+      const { dir, sessionTarget } = fixture.session;
+      await expect(
+        withPluginRuntimeRegistryScope(custody.registry, () =>
+          wrapRunWithTestPreparedAdmission(runCliAgent)({
+            sessionId: sessionTarget.sessionId,
+            sessionKey: sessionTarget.sessionKey,
+            sessionTarget,
+            sessionFile: sessionTarget.sessionKey,
+            workspaceDir: dir,
+            prompt: "synthetic question",
+            provider: "test-cli",
+            model: "test-model",
+            runId: "cli-custody-history-failure",
+            timeoutMs: 1_000,
+            config: { plugins: { slots: { contextEngine: engineId } } },
+          }),
+        ),
+      ).rejects.toBe(historyFailure);
+      expect(factory).toHaveBeenCalledOnce();
+      expect(execute).not.toHaveBeenCalled();
+      expect(backendCleanup).toHaveBeenCalledOnce();
+      await custody.resources.release();
+      expect(custody.retired).toHaveBeenCalledOnce();
+    } finally {
+      historyRead.mockRestore();
+      await custody.cleanup();
+    }
+  });
+
+  it.each(["direct", "borrowed"] as const)(
+    "retains %s CLI context-engine custody through queued turn maintenance",
+    async (ownership) => {
+      const custody = createContextEngineCustodyFixture();
+      const engineId = `cli-maintenance-custody-${ownership}`;
+      const maintenanceStarted = createDeferred();
+      const maintenanceGate = createDeferred();
+      const work = new AsyncWorkScope();
+      const { sessionTarget } = fixture.session;
+      const sessionKey = sessionTarget.sessionKey;
+      const releaseForeground = await beginForegroundSessionMaintenance(sessionKey);
+      let lease: Awaited<ReturnType<typeof createContextEngineLogicalTurnLease>> | undefined;
+      class Engine extends LegacyContextEngine {
+        override readonly info: ContextEngine["info"] = {
+          id: engineId,
+          name: "CLI maintenance custody fixture",
+          turnMaintenanceMode: "background",
+        };
+        async maintain() {
+          maintenanceStarted.resolve();
+          await maintenanceGate.promise;
+          expect(custody.read()).toBe(42);
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        }
+        async dispose() {
+          expect(custody.read()).toBe(42);
+        }
+      }
+      registerContextEngineInRegistry(
+        custody.registry,
+        engineId,
+        () => new Engine(),
+        "plugin:fixture",
+      );
+      try {
+        const config = { plugins: { slots: { contextEngine: engineId } } };
+        const context = await work.run(() =>
+          withPluginRuntimeRegistryScope(custody.registry, async () => {
+            if (ownership === "borrowed") {
+              lease = await createContextEngineLogicalTurnLease({
+                identity: { runId: "run-test", sessionId: sessionTarget.sessionId },
+                config,
+              });
+            }
+            return await fixture.prepare({
+              config,
+              sessionKey,
+              contextEngineLogicalTurnLease: lease,
+            });
+          }),
+        );
+        await custody.resources.release();
+        await finalizeCliContextEngineTurn({
+          context,
+          historyMessages: [],
+          assistantText: "synthetic answer",
+          output: { text: "synthetic answer" },
+        });
+        await context.preparedBackend.cleanup?.();
+        expect(custody.retired).not.toHaveBeenCalled();
+        await lease?.dispose();
+        expect(custody.retired).not.toHaveBeenCalled();
+        releaseForeground();
+        await maintenanceStarted.promise;
+        expect(custody.read()).toBe(42);
+        maintenanceGate.resolve();
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        if (lease) {
+          await custody.retirement;
+        }
+        await work.drain();
+        expect(custody.retired).toHaveBeenCalledOnce();
+        expect(() => custody.read()).toThrow();
+      } finally {
+        releaseForeground();
+        maintenanceGate.resolve();
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await lease?.dispose();
+        if (lease) {
+          await custody.retirement;
+        }
+        await work.drain();
+        await custody.cleanup();
+      }
+    },
+  );
+
   it("does not allocate a non-legacy context engine before fallible CLI preparation finishes", async () => {
     const engineId = `cli-prepare-late-engine-${Date.now().toString(36)}`;
     const dispose = vi.fn(async () => {});
@@ -4274,13 +4566,7 @@ describe("prepareCliRunContext", () => {
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs: ({ baseArgs }) => baseArgs,
       projectNativeToolAuthority,
-      config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("claude"),
     });
 
     await fixture.prepare({
@@ -4386,13 +4672,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
     setCliRunnerPrepareTestDeps({ resolveMcpLoopbackPolicyTools });
 
@@ -4709,13 +4989,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
 
     const context = await fixture.prepare({
@@ -4738,13 +5012,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
 
     const context = await fixture.prepare({
@@ -4772,13 +5040,7 @@ describe("prepareCliRunContext", () => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "prepare-execution",
         prepareExecution,
-        config: {
-          command: "settings-cli",
-          args: ["--print"],
-          output: "jsonl",
-          input: "stdin",
-          sessionMode: "existing",
-        },
+        config: createJsonlStdinBackendConfig("settings-cli"),
       });
 
       const cleanupScope = createAgentCleanupScope();
@@ -4806,13 +5068,7 @@ describe("prepareCliRunContext", () => {
       id: "selectable-cli",
       pluginId: "selectable-plugin",
       nativeToolMode: "selectable",
-      config: {
-        command: "selectable-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("selectable-cli"),
     });
 
     await expect(
@@ -4834,13 +5090,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "prepare-execution",
       prepareExecution,
-      config: {
-        command: "settings-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("settings-cli"),
     });
 
     const context = await fixture.prepare({
@@ -4959,13 +5209,7 @@ describe("prepareCliRunContext", () => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "prepare-execution",
         prepareExecution,
-        config: {
-          command: "claude",
-          args: ["--print"],
-          output: "jsonl",
-          input: "stdin",
-          sessionMode: "existing",
-        },
+        config: createJsonlStdinBackendConfig("claude"),
       });
 
       const context = await fixture.prepare({
@@ -5011,13 +5255,7 @@ describe("prepareCliRunContext", () => {
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "prepare-execution",
       prepareExecution,
-      config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("claude"),
     });
     const finalizePromptForResolvedTools = vi.fn(
       ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
@@ -5070,13 +5308,7 @@ describe("prepareCliRunContext", () => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "prepare-execution",
         prepareExecution,
-        config: {
-          command: "claude",
-          args: ["--print"],
-          output: "jsonl",
-          input: "stdin",
-          sessionMode: "existing",
-        },
+        config: createJsonlStdinBackendConfig("claude"),
       });
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(() => ({

@@ -1226,7 +1226,7 @@ describe("session cost usage", () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-incremental.jsonl");
-    const assistantEntry = (timestamp: string, totalTokens: number) =>
+    const assistantEntry = (timestamp: string, totalTokens: number, content = "") =>
       JSON.stringify({
         type: "message",
         timestamp,
@@ -1234,6 +1234,7 @@ describe("session cost usage", () => {
           role: "assistant",
           provider: "openai",
           model: "gpt-5.5",
+          content,
           usage: {
             input: totalTokens,
             output: 0,
@@ -1245,7 +1246,7 @@ describe("session cost usage", () => {
     await fs.writeFile(
       sessionFile,
       [
-        assistantEntry("2026-02-05T12:00:00.000Z", 10),
+        assistantEntry("2026-02-05T12:00:00.000Z", 10, "🦞".repeat(32 * 1024)),
         assistantEntry("2026-02-05T12:01:00.000Z", 20),
       ].join("\n"),
       "utf-8",

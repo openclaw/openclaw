@@ -54,7 +54,7 @@ OpenClaw host:
   | tail -200
 ```
 
-Useful excerpts usually include `openai/gpt-5.6-sol` or `openai/gpt-5.6-luna`,
+Useful excerpts usually include `openai/gpt-6-astra` or `openai/gpt-5.6-luna`,
 `Runtime: OpenAI Codex`, `agentRuntime.id` or `harnessRuntime`,
 `candidateProvider: "openai"`, and a `401`, `Incorrect API key`, or
 `No API key` result. A corrected run should show the OpenAI OAuth path

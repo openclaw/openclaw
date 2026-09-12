@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   prepare:
     vi.fn<typeof import("../../infra/update-failure-report.js").prepareUpdateFailureReport>(),
   submit: vi.fn<typeof import("../../infra/update-failure-report.js").submitUpdateFailureReport>(),
+  getUpdateRun: vi.fn<typeof import("../../infra/update-run-ledger.js").getUpdateRun>(),
 }));
 
 vi.mock("../../commands/configure.shared.js", () => ({
@@ -19,6 +21,7 @@ vi.mock("../../infra/update-failure-report.js", () => ({
   prepareUpdateFailureReport: mocks.prepare,
   submitUpdateFailureReport: mocks.submit,
 }));
+vi.mock("../../infra/update-run-ledger.js", () => ({ getUpdateRun: mocks.getUpdateRun }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -56,6 +59,7 @@ function setup(
     status: "created" as const,
     url: "https://github.com/openclaw/openclaw/issues/123",
   });
+  mocks.getUpdateRun.mockReset().mockReturnValue(undefined);
   const runtime = { log: vi.fn(), error: vi.fn() };
   const actions = Array.isArray(action) ? [...action] : [action];
   const chooseAction = mocks.select
@@ -103,6 +107,42 @@ describe("interactive update failure action", () => {
     );
     expect(fixture.runtime.log).toHaveBeenCalledWith(
       "Created GitHub issue: https://github.com/openclaw/openclaw/issues/123",
+    );
+  });
+
+  it("passes durable failed phases when the handoff result omits them", async () => {
+    const fixture = setup("report", false);
+    const recordedRun = {
+      runId: "00000000-0000-4000-8000-000000000001",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      trigger: "cli",
+      phase: "finished",
+      status: "failed",
+      reason: "global-install-failed",
+      origin: {},
+      target: { kind: "package" },
+      before: { version: "2026.8.1" },
+      after: {},
+      steps: [{ step: "activating", status: "failed", startedAtMs: 1, endedAtMs: 2 }],
+      verification: {},
+      repair: [],
+      confirmedAtMs: null,
+      finishedAtMs: 2,
+      downtimeMs: null,
+    } satisfies UpdateRunRecord;
+    mocks.getUpdateRun.mockReturnValue(recordedRun);
+
+    await expect(fixture.run()).resolves.toBe("handled");
+
+    expect(mocks.getUpdateRun).toHaveBeenCalledWith("attempt-cli", {
+      env: { OPENCLAW_STATE_DIR: expect.any(String) },
+    });
+    expect(fixture.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ recordedRun }),
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_STATE_DIR: expect.any(String) }),
+      }),
     );
   });
 

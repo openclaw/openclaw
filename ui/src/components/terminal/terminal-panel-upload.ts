@@ -358,14 +358,6 @@ export function renderTerminalPanelActions(params: {
   onHide: () => void;
 }) {
   return html`<div class="rail-header__actions tp-actions">
-    <input
-      class="tp-file-input"
-      type="file"
-      multiple
-      aria-hidden="true"
-      tabindex="-1"
-      @change=${params.upload.handleFileSelection}
-    />
     <button
       class="rail-header__action tp-icon tp-upload"
       type="button"

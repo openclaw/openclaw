@@ -452,7 +452,7 @@ export function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-export function resolveClaudeCliSessionFilePath(params: {
+function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
@@ -475,6 +475,53 @@ export function resolveClaudeCliSessionFilePath(params: {
     const projectDir = path.join(projectsDir, entry.name);
     const candidate = resolveClaudeSessionCandidate(projectDir, sessionId);
     if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+export async function resolveClaudeCliSessionFilePathAsync(params: {
+  cliSessionId: string;
+  homeDir?: string;
+}): Promise<string | undefined> {
+  const sessionId = normalizeClaudeCliSessionId(params.cliSessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+  const projectsDir = resolveClaudeProjectsDir(params.homeDir);
+  let projectEntries: fs.Dirent[];
+  try {
+    projectEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+
+  // Bound filesystem work while preserving the first match in directory order.
+  const batchSize = 16;
+  for (let offset = 0; offset < projectEntries.length; offset += batchSize) {
+    const candidates = await Promise.all(
+      projectEntries.slice(offset, offset + batchSize).map(async (entry) => {
+        if (!entry.isDirectory()) {
+          return undefined;
+        }
+        const candidate = resolveClaudeSessionCandidate(
+          path.join(projectsDir, entry.name),
+          sessionId,
+        );
+        if (!candidate) {
+          return undefined;
+        }
+        try {
+          await fs.promises.access(candidate);
+          return candidate;
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    const candidate = candidates.find((value) => value !== undefined);
+    if (candidate) {
       return candidate;
     }
   }

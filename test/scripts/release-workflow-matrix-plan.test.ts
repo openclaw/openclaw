@@ -331,11 +331,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     [
       "stable",
       "live-codex-harness-gpt56-docker",
-      [
-        "live-codex-harness-gpt56-sol-docker",
-        "live-codex-harness-gpt56-terra-docker",
-        "live-codex-harness-gpt56-luna-docker",
-      ],
+      ["live-codex-harness-gpt56-terra-docker", "live-codex-harness-gpt56-luna-docker"],
     ],
     ["beta", "live-cache", []],
   ])(

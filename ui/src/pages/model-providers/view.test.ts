@@ -87,7 +87,6 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
     onFastModeReset: () => undefined,
-    onModelPickerOpen: () => undefined,
     onCatalogRetry: () => undefined,
     onOpenModelSetup: () => undefined,
     onConnect: () => undefined,

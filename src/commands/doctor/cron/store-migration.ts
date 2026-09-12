@@ -57,6 +57,7 @@ type CronStoreIssueKey =
   | "legacyTopLevelDeliveryFields"
   | "legacyDeliveryMode"
   | "migratedScheduledToolPolicy"
+  | "reconciledOwnerAccount"
   | "invalidSchedule"
   | "invalidPayload";
 
@@ -632,8 +633,8 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const scheduledPolicyMutated = scheduledToolPolicyMigrations.migrate(raw, () =>
-      trackIssue("migratedScheduledToolPolicy"),
+    const scheduledPolicyMutated = scheduledToolPolicyMigrations.migrate(raw, (kind) =>
+      trackIssue(kind === "owner" ? "reconciledOwnerAccount" : "migratedScheduledToolPolicy"),
     );
     mutated ||= scheduledPolicyMutated;
 

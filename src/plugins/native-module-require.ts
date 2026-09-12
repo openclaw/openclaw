@@ -43,6 +43,98 @@ const moduleWithResolver = Module as typeof Module & {
   }) => { deregister: () => void };
 };
 
+type CapturedModuleResolver = (
+  request: string,
+  parent: string,
+  resolve: () => string,
+) => string | undefined;
+type CapturedModuleBinding = {
+  resolve: CapturedModuleResolver;
+  prepare: (request: string, parent: string) => string | undefined;
+};
+type BunPluginRuntime = {
+  plugin(options: {
+    name: string;
+    setup(builder: {
+      onResolve(
+        options: { filter: RegExp; namespace: "file" },
+        callback: (args: {
+          path: string;
+          importer: string;
+        }) => { path: string; namespace: "file" } | undefined,
+      ): void;
+    }): void;
+  }): void;
+};
+
+const capturedModuleResolvers = resolveGlobalSingleton(
+  Symbol.for("openclaw.capturedModuleResolvers"),
+  () => ({
+    installed: false,
+    resolving: false,
+    owners: new Set<CapturedModuleBinding>(),
+  }),
+);
+
+/** Captured parents retain their resolver while their instance's consumers drain. */
+export function registerCapturedPluginModuleResolver(binding: CapturedModuleBinding): () => void {
+  if (!capturedModuleResolvers.installed) {
+    // SAFETY: Bun supplies this synchronous public API; Node leaves the optional global absent.
+    const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
+    bun?.plugin({
+      name: "openclaw-plugin-source-capture",
+      setup(builder) {
+        builder.onResolve({ filter: /.*/, namespace: "file" }, ({ path: request, importer }) => {
+          if (!capturedModuleResolvers.resolving) {
+            capturedModuleResolvers.resolving = true;
+            try {
+              for (const owner of capturedModuleResolvers.owners) {
+                const target = owner.prepare(request, importer);
+                if (target) {
+                  return { path: target, namespace: "file" };
+                }
+              }
+            } finally {
+              capturedModuleResolvers.resolving = false;
+            }
+          }
+          // Package selection stays native; owners redirect only captured physical source paths.
+          return undefined;
+        });
+      },
+    });
+    // Older Bun drops createRequire's ESM parent when this private hook is replaced.
+    // Its public resolver above retains the importer without changing native resolution.
+    if (!bun) {
+      const previous = moduleWithResolver["_resolveFilename"]!;
+      moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
+        if (!capturedModuleResolvers.resolving && parent?.filename) {
+          capturedModuleResolvers.resolving = true;
+          try {
+            for (const owner of capturedModuleResolvers.owners) {
+              const target = owner.resolve(request, parent.filename, () =>
+                previous(request, parent, isMain, options),
+              );
+              if (target) {
+                return target;
+              }
+            }
+          } finally {
+            // Original-source Jiti lookup can itself call the native resolver.
+            capturedModuleResolvers.resolving = false;
+          }
+        }
+        return previous(request, parent, isMain, options);
+      };
+    }
+    capturedModuleResolvers.installed = true;
+  }
+  capturedModuleResolvers.owners.add(binding);
+  return () => {
+    capturedModuleResolvers.owners.delete(binding);
+  };
+}
+
 /** True for file extensions Node can load through the native JS module loader. */
 export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
@@ -142,77 +234,7 @@ export function tryNativeRequireModule(
   }
 }
 
-// Native and transformed host helpers share the same native-cache lifetime barrier.
-const nativeModuleCache = resolveGlobalSingleton(
-  Symbol.for("openclaw.pluginNativeModuleCache"),
-  () => ({ activeOwners: 0, retiringModules: new Set<NodeJS.Module>() }),
-);
-
-/** Managed loaders retain exact records; Jiti can share children without recording every edge. */
-export function createPluginModuleRequireCacheOwner(dependencyRoot: string) {
-  const entries = new Set<NodeJS.Module>();
-  let disposed = false;
-  nativeModuleCache.activeOwners += 1;
-  return {
-    retain: (module: NodeJS.Module | undefined) => {
-      if (module) {
-        entries.add(module);
-      }
-    },
-    dispose: () => {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
-      const seen = new Set<NodeJS.Module>();
-      const retire = (module: NodeJS.Module) => {
-        if (seen.has(module) || !isPathInside(dependencyRoot, module.id)) {
-          return;
-        }
-        seen.add(module);
-        nativeModuleCache.retiringModules.add(module);
-        for (const child of module.children) {
-          retire(child);
-        }
-      };
-      for (const entry of entries) {
-        retire(entry);
-      }
-      entries.clear();
-      // Jiti cache hits omit parent/child edges. Keep native records until every
-      // managed native loader closes rather than evicting an unrecorded shared dependency.
-      if (--nativeModuleCache.activeOwners !== 0) {
-        return;
-      }
-      const cache = createRequire(import.meta.url).cache;
-      for (const module of nativeModuleCache.retiringModules) {
-        if (cache[module.id] === module) {
-          delete cache[module.id];
-        }
-      }
-      nativeModuleCache.retiringModules.clear();
-    },
-  };
-}
-
-/** Record native cache identity with the load result, before another load can replace it. */
-export function getPluginModuleRequireCacheEntry(modulePath: string): NodeJS.Module | undefined {
-  const require = createRequire(import.meta.url);
-  const filename = toNativeRequirePath(modulePath);
-  if (require.cache[filename]) {
-    return require.cache[filename];
-  }
-  try {
-    return require.cache[require.resolve(filename)];
-  } catch {
-    // Custom loaders and native ESM do not necessarily publish a CJS record.
-    return undefined;
-  }
-}
-
-/** Explicit public-library invalidation refreshes the current path synchronously.
- * Managed retirement instead releases exact records through its cache owner above.
- */
+/** Explicit public-library invalidation refreshes the current path synchronously. */
 export function clearPluginModuleRequireCache(modulePath: string, dependencyRoot: string): void {
   const require = createRequire(import.meta.url);
   const seen = new Set<string>();

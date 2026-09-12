@@ -31,6 +31,14 @@ on the supplied `node:sqlite` connection. Calling Kysely's asynchronous
 dialect can identify syntax coupling, but does not prove driver behavior,
 isolation, or database compatibility.
 
+Task and flow stores keep row codecs and SQLite operations in connection-bound
+kernels. Their existing facades retain global connection acquisition, cache and
+close behavior, and write transaction admission. Compound subagent and cron
+operations call the kernels on their already-admitted connection. Task status
+classification stays with the pure record types, so decoding does not load
+provider or plugin runtime ownership. These operations and their transaction
+callbacks remain synchronous; this separation does not move SQL to a worker.
+
 Acquire a connection once for an operation and pass that exact connection
 through its transactional helpers. SQLite write callbacks remain synchronous:
 finish asynchronous planning first, then reread authoritative rows after write

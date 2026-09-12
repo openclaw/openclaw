@@ -44,7 +44,10 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
-import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
+import {
+  resolveTranscriptPathForComparison,
+  resolveTranscriptUpdatePathForComparison,
+} from "./session-transcript-path.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -103,8 +106,7 @@ function resolveLimit(req: IncomingMessage): Result<number | undefined, string> 
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 function resolveSessionHistoryHttpClient(
@@ -461,7 +463,7 @@ export async function handleSessionHistoryHttpRequest(
     const updateMatchesIdentity =
       update.target?.sessionId === historyTarget.sessionId &&
       normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
-    const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
+    const updatePath = resolveTranscriptUpdatePathForComparison(update);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
       return;
     }

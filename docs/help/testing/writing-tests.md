@@ -64,6 +64,12 @@ Future evals should stay deterministic first:
 
 ## Adding regressions (guidance)
 
+For inventory-growth and capacity regressions, pass bounded synthetic inventories
+and fixed timing data through the real planner. Put the fixture at the capacity
+boundary and preserve coverage, ownership, and execution-budget assertions. Keep
+real-checkout inventory coverage in its integration tests instead of rebuilding
+the growing repository plan for every synthetic variation.
+
 When you fix a provider/model issue discovered in live:
 
 - Add a CI-safe regression if possible (mock/stub provider, or capture the exact request-shape transformation)

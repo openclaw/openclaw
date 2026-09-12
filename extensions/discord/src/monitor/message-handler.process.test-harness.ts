@@ -159,80 +159,7 @@ export type DispatchInboundParams = {
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
     waitForIdle: () => Promise<void>;
   };
-  replyOptions?: {
-    onReasoningStream?: (payload?: {
-      text?: string;
-      isReasoningSnapshot?: boolean;
-      requiresReasoningProgressOptIn?: boolean;
-    }) => Promise<void> | void;
-    onReasoningEnd?: () => Promise<void> | void;
-    onToolStart?: (payload: {
-      itemId?: string;
-      toolCallId?: string;
-      name?: string;
-      phase?: string;
-      args?: Record<string, unknown>;
-      detailMode?: "explain" | "raw";
-    }) => Promise<void> | void;
-    onItemEvent?: (payload: {
-      itemId?: string;
-      kind?: string;
-      phase?: string;
-      status?: string;
-      progressText?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-    }) => Promise<boolean | void> | boolean | void;
-    onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
-    onProgressNarratorLifecycle?: (lifecycle: {
-      beginTurn: () => void;
-      stopTurn: () => void;
-    }) => void;
-    isProgressDraftVisible?: () => boolean;
-    progressPreambleEnabled?: boolean;
-    narrationHideCommandText?: boolean;
-    commentaryPayloadsEnabled?: boolean;
-    shouldDeliverCommentaryPayloads?: () => boolean;
-    onVerboseProgressVisibility?: (isActive: () => boolean) => void;
-    onPlanUpdate?: (payload: {
-      phase?: string;
-      explanation?: string;
-      steps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
-    }) => Promise<void> | void;
-    onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
-    onCommandOutput?: (payload: {
-      toolCallId?: string;
-      phase?: string;
-      name?: string;
-      title?: string;
-      status?: string;
-      exitCode?: number | null;
-    }) => Promise<false | void> | false | void;
-    onPatchSummary?: (payload: {
-      phase?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-      added?: string[];
-      modified?: string[];
-      deleted?: string[];
-    }) => Promise<void> | void;
-    onReplyStart?: () => Promise<void> | void;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    typingKeepalive?: boolean;
-    disableBlockStreaming?: boolean;
-    suppressDefaultToolProgressMessages?: boolean;
-    queuedDeliveryCorrelations?: Array<{ begin: () => () => void }>;
-    suppressTyping?: boolean;
-    onCompactionStart?: () => Promise<void> | void;
-    onCompactionEnd?: () => Promise<void> | void;
-    onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
-    onAssistantMessageStart?: () => Promise<void> | void;
-    onQueuedFollowupAdmitted?: () => Promise<void> | void;
-    allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-    onTypingCleanup?: () => Promise<void> | void;
-  };
+  replyOptions?: import("openclaw/plugin-sdk/reply-runtime").GetReplyOptions;
 };
 const dispatchInboundMessage = vi.hoisted(() =>
   vi.fn<
@@ -305,82 +232,70 @@ let processDiscordMessage: typeof import("./message-handler.process.js").process
 export let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
 export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
 
+const dispatchBufferedReply = vi.hoisted(() =>
+  vi.fn<
+    typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher
+  >(),
+);
+
+export const dispatchBufferedReplyForTest = dispatchBufferedReply;
+
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: async (params: {
-    dispatcherOptions: {
-      beforeDeliver?: (
-        payload: ReplyPayload,
-        info: { kind: "block" | "final" },
-      ) => Promise<ReplyPayload | null> | ReplyPayload | null;
-      deliver: (payload: unknown, info: { kind: "block" | "final" }) => Promise<void> | void;
-      onError?: (err: unknown, info: { kind: "block" | "final" }) => void;
-      transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
-      typingCallbacks?: {
-        onReplyStart?: () => Promise<void> | void;
-        onIdle?: () => void;
-        onCleanup?: () => void;
+  dispatchReplyWithBufferedBlockDispatcher: dispatchBufferedReply.mockImplementation(
+    async (params) => {
+      const pendingDeliveries: Promise<void>[] = [];
+      const deliver = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+        const transformed = params.dispatcherOptions.transformReplyPayload
+          ? params.dispatcherOptions.transformReplyPayload(payload)
+          : payload;
+        if (!transformed) {
+          return;
+        }
+        const deliverPayload = params.dispatcherOptions.beforeDeliver
+          ? await params.dispatcherOptions.beforeDeliver(transformed, info)
+          : transformed;
+        if (!deliverPayload) {
+          return;
+        }
+        await params.dispatcherOptions.deliver(deliverPayload, info);
       };
-      onReplyStart?: () => Promise<void> | void;
-      onIdle?: () => void;
-      onCleanup?: () => void;
-      onSettled?: () => unknown;
-      onFreshSettledDelivery?: () => unknown;
-    };
-    ctx?: Record<string, unknown>;
-    replyOptions?: DispatchInboundParams["replyOptions"];
-  }) => {
-    const pendingDeliveries: Promise<void>[] = [];
-    const deliver = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
-      const transformed = params.dispatcherOptions.transformReplyPayload
-        ? params.dispatcherOptions.transformReplyPayload(payload)
-        : payload;
-      if (!transformed) {
-        return;
+      const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+        const delivery = Promise.resolve(deliver(payload, info)).catch(async (err: unknown) => {
+          await params.dispatcherOptions.onError?.(err, info);
+        });
+        pendingDeliveries.push(delivery);
+        return true;
+      };
+      const typingCallbacks = params.dispatcherOptions.typingCallbacks;
+      const replyOptions = {
+        ...params.replyOptions,
+        onReplyStart: params.dispatcherOptions.onReplyStart ?? typingCallbacks?.onReplyStart,
+        onTypingCleanup: params.dispatcherOptions.onCleanup ?? typingCallbacks?.onCleanup,
+      };
+      try {
+        return await dispatchInboundMessage({
+          ctx: params.ctx,
+          replyOptions,
+          dispatcher: {
+            sendBlockReply: vi.fn((payload: ReplyPayload) =>
+              queueDelivery(payload, { kind: "block" }),
+            ),
+            sendFinalReply: vi.fn((payload: ReplyPayload) =>
+              queueDelivery(payload, { kind: "final" }),
+            ),
+            waitForIdle: vi.fn(async () => {
+              await Promise.all(pendingDeliveries);
+            }),
+          },
+        });
+      } finally {
+        await params.dispatcherOptions.onSettled?.();
+        await params.dispatcherOptions.onFreshSettledDelivery?.();
+        await params.dispatcherOptions.onIdle?.();
+        typingCallbacks?.onIdle?.();
       }
-      const deliverPayload = params.dispatcherOptions.beforeDeliver
-        ? await params.dispatcherOptions.beforeDeliver(transformed, info)
-        : transformed;
-      if (!deliverPayload) {
-        return;
-      }
-      await params.dispatcherOptions.deliver(deliverPayload, info);
-    };
-    const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
-      const delivery = Promise.resolve(deliver(payload, info)).catch((err: unknown) => {
-        params.dispatcherOptions.onError?.(err, info);
-      });
-      pendingDeliveries.push(delivery);
-      return true;
-    };
-    const typingCallbacks = params.dispatcherOptions.typingCallbacks;
-    const replyOptions = {
-      ...params.replyOptions,
-      onReplyStart: params.dispatcherOptions.onReplyStart ?? typingCallbacks?.onReplyStart,
-      onTypingCleanup: params.dispatcherOptions.onCleanup ?? typingCallbacks?.onCleanup,
-    };
-    try {
-      return await dispatchInboundMessage({
-        ctx: params.ctx,
-        replyOptions,
-        dispatcher: {
-          sendBlockReply: vi.fn((payload: ReplyPayload) =>
-            queueDelivery(payload, { kind: "block" }),
-          ),
-          sendFinalReply: vi.fn((payload: ReplyPayload) =>
-            queueDelivery(payload, { kind: "final" }),
-          ),
-          waitForIdle: vi.fn(async () => {
-            await Promise.all(pendingDeliveries);
-          }),
-        },
-      });
-    } finally {
-      await params.dispatcherOptions.onSettled?.();
-      await params.dispatcherOptions.onFreshSettledDelivery?.();
-      params.dispatcherOptions.onIdle?.();
-      typingCallbacks?.onIdle?.();
-    }
-  },
+    },
+  ),
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
   settleReplyDispatcher: async (params: {
     dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };

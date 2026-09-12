@@ -236,9 +236,9 @@ export async function prepareGatewayKernelState(params: {
   const channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>> = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   );
-  const listStartupChannelGatewayMethods = () => {
+  const listStartupChannelGatewayMethods = (registry = pluginRuntime.registry) => {
     const methods: string[] = [];
-    for (const plugin of listGatewayStartupChannelPlugins()) {
+    for (const plugin of listGatewayStartupChannelPlugins(registry)) {
       methods.push(...(plugin.gatewayMethods ?? []));
       for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
         methods.push(descriptor.name);

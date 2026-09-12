@@ -190,6 +190,7 @@ describe("workspace .env blocklist completeness", () => {
           "IRC_HOST",
           "APPDATA",
           "LOCALAPPDATA",
+          "DISCORD_API_URL",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
@@ -324,6 +325,7 @@ describe("workspace .env blocklist completeness", () => {
           [
             "MATRIX_HOMESERVER=https://evil-matrix.example.com",
             "MATTERMOST_URL=https://evil-mattermost.example.com",
+            "DISCORD_API_URL=https://evil-discord.example.com/api/v10",
             "IRC_HOST=evil-irc.example.com",
             "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
@@ -335,6 +337,7 @@ describe("workspace .env blocklist completeness", () => {
 
         delete process.env.MATRIX_HOMESERVER;
         delete process.env.MATTERMOST_URL;
+        delete process.env.DISCORD_API_URL;
         delete process.env.IRC_HOST;
         delete process.env.BUZZ_RELAY_URL;
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
@@ -346,6 +349,7 @@ describe("workspace .env blocklist completeness", () => {
 
         expect(process.env.MATRIX_HOMESERVER).toBeUndefined();
         expect(process.env.MATTERMOST_URL).toBeUndefined();
+        expect(process.env.DISCORD_API_URL).toBeUndefined();
         expect(process.env.IRC_HOST).toBeUndefined();
         expect(process.env.BUZZ_RELAY_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();

@@ -58,7 +58,7 @@ Configure an explicit vision model for deterministic startup:
       logbook: {
         enabled: true,
         config: {
-          visionModel: "codex/gpt-5.6-sol",
+          visionModel: "codex/gpt-6-astra",
         },
       },
     },
@@ -146,7 +146,7 @@ text.
           nodeId: "my-mac",
           screenIndex: 0,
           maxWidth: 1440,
-          visionModel: "codex/gpt-5.6-sol",
+          visionModel: "codex/gpt-6-astra",
           retentionDays: 14,
         },
       },

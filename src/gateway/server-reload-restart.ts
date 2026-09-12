@@ -408,7 +408,7 @@ class GatewayRestartTransaction {
     let emissionPrepared = true;
     const prepareForEmit = async () => {
       try {
-        await params.assertRestartReady?.();
+        await params.assertRestartReady?.(nextConfig);
         if (!this.isCurrentRequest(requestGeneration)) {
           return false;
         }

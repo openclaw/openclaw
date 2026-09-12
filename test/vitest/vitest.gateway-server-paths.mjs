@@ -1,3 +1,6 @@
+// Plugin integration tests retain Gateway runtime setup outside core source.
+export const gatewayPluginTestFiles = ["test/plugins/codex-model-catalog.gateway.test.ts"];
+
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
 export const gatewayServerBackedHttpTestFiles = [
   "src/gateway/embeddings-http.test.ts",

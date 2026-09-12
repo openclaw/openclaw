@@ -70,7 +70,7 @@
     "codex": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "gpt-5.6-sol"
+        "image": "gpt-6-astra"
       }
     }
   },

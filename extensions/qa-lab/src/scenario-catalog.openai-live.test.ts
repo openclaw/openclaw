@@ -185,6 +185,15 @@ describe("qa scenario catalog", () => {
     expect(config?.allowedAdversarialDiagnostics).toContain(
       "memory prompt preparation registration missing prepare function",
     );
+    expect(config?.allowedAdversarialDiagnostics).toContain(
+      "MCP server connection resolver registration missing serverName or resolve",
+    );
+    expect(config?.allowedAdversarialDiagnostics).toContain(
+      "invalid widget presenter registration",
+    );
+    expect(config?.allowedAdversarialDiagnostics).toContain(
+      "worker provider registration missing method: resolveAllocation",
+    );
     expect(
       config?.requiredAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
     ).toBe(true);
