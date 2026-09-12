@@ -33,6 +33,9 @@ import {
 } from "./store-schema.js";
 import type { Period, ReportDocument, SummaryDocument } from "./types.js";
 
+// Bound each 12-column person-day insert to 768 parameters.
+const PERSON_DAY_INSERT_BATCH_SIZE = 64;
+
 type PeriodRow = {
   period: Period;
   period_key: string;
@@ -151,10 +154,12 @@ class TeamReportsDatabase {
             .deleteFrom("team_reports_person_days")
             .where("day_key", "=", report.period.key),
         );
-        for (const person of people) {
+        for (let start = 0; start < people.length; start += PERSON_DAY_INSERT_BATCH_SIZE) {
           executeSqliteQuerySync(
             this.db,
-            this.query.insertInto("team_reports_person_days").values(person),
+            this.query
+              .insertInto("team_reports_person_days")
+              .values(people.slice(start, start + PERSON_DAY_INSERT_BATCH_SIZE)),
           );
         }
       }
