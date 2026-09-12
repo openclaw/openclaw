@@ -46,9 +46,12 @@ import {
 import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
+  resolveLineConversationId,
   buildLinePostbackContext,
   getLineSourceInfo,
   readLineTextMessageBody,
+  recordLineAgentVisibleSend,
+  resolveLineQuotableBody,
   type LineInboundContext,
   type LineInboundMentionAccess,
 } from "./bot-message-context.js";
@@ -56,8 +59,8 @@ import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
-import { quotesLineBotMessage } from "./outbound-message-log.js";
 import { parseLineQuestionPostbackData, resolveLineQuestionPostback } from "./question-postback.js";
+import { readLineQuotedMessageId, resolveLineQuotedMessage } from "./quoted-messages.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
@@ -202,16 +205,22 @@ function isLineEventAdmitted(access: ResolvedChannelMessageIngress): boolean {
   );
 }
 
-async function resolveLineEventAdmission(
-  event: MessageEvent | PostbackEvent | JoinEvent,
-  context: LineHandlerContext,
-): Promise<{
+/** What an admitted event carries forward, including the group gate it passed. */
+type LineEventAdmission = {
   access: ResolvedChannelMessageIngress;
   resolveBoundAccess: (
     contextBinding?: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
   mentions?: LineInboundMentionAccess;
-} | null> {
+  /** Group gate this event was admitted under; the context builder re-checks a quoted author against it. */
+  groupPolicy: GroupPolicy;
+  groupAllowFrom: string[];
+};
+
+async function resolveLineEventAdmission(
+  event: MessageEvent | PostbackEvent | JoinEvent,
+  context: LineHandlerContext,
+): Promise<LineEventAdmission | null> {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
@@ -258,7 +267,11 @@ async function resolveLineEventAdmission(
       hasAnyMention: hasAnyLineMention(event.message),
       implicitMentionKinds: implicitMentionKindWhen(
         "quoted_bot",
-        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+        resolveLineQuotedMessage(
+          account.accountId,
+          readLineQuotedMessageId(event.message),
+          resolveLineConversationId(event.source),
+        )?.fromBot === true,
       ),
     };
   })();
@@ -309,6 +322,22 @@ async function resolveLineEventAdmission(
       },
     });
   const access = await resolveAccess();
+  // Quotes and authorized commands can address the bot without a native LINE
+  // mention. Preserve that effective result separately from explicit evidence.
+  const mentions = mentionFacts
+    ? {
+        ...mentionFacts,
+        wasMentioned: access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned,
+        requireMention,
+      }
+    : undefined;
+  const admitted: LineEventAdmission = {
+    access,
+    resolveBoundAccess: resolveAccess,
+    mentions,
+    groupPolicy,
+    groupAllowFrom,
+  };
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "line",
@@ -323,20 +352,11 @@ async function resolveLineEventAdmission(
       groupConfig?.enabled !== false &&
       groupPolicy !== "disabled" &&
       (groupPolicy !== "allowlist" || access.state.allowlists.group.hasMatchableEntries);
-    return roomAllowed ? { access, resolveBoundAccess: resolveAccess } : null;
+    return roomAllowed ? admitted : null;
   }
 
   if (isLineEventAdmitted(access)) {
-    // Quotes and authorized commands can address the bot without a native LINE
-    // mention. Preserve that effective result separately from explicit evidence.
-    const mentions = mentionFacts
-      ? {
-          ...mentionFacts,
-          wasMentioned: access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned,
-          requireMention,
-        }
-      : undefined;
-    return { access, resolveBoundAccess: resolveAccess, mentions };
+    return admitted;
   }
 
   if (access.senderAccess.decision === "allow") {
@@ -397,13 +417,6 @@ async function resolveLineEventAdmission(
   return null;
 }
 
-// LINE reports a quote only on the message kinds a person can quote from.
-function resolveLineQuotedMessageId(message: MessageEvent["message"]): string | undefined {
-  return message.type === "text" || message.type === "sticker"
-    ? message.quotedMessageId
-    : undefined;
-}
-
 function resolveEventRawText(event: MessageEvent | PostbackEvent | JoinEvent): string {
   if (event.type === "message") {
     const msg = event.message;
@@ -433,7 +446,6 @@ async function handleMessageEvent(
 
   const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
   if (isGroup && decision.access.activationAccess.shouldSkip) {
-    const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
     const historyKey = groupId ?? roomId;
     const groupsConfigPath = resolveChannelGroupsConfigPath({
       cfg,
@@ -462,15 +474,21 @@ async function handleMessageEvent(
         : senderId;
       // History has one sender string; keep the stable ID when display names collide.
       const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
+      const recorded = createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
           sender,
-          body: rawText || `<${message.type}>`,
+          body: resolveLineQuotableBody(message),
           timestamp: event.timestamp,
         },
       });
+      // An empty result means the ambient window is switched off entirely, so
+      // this message was never put in front of the agent and a later quote of
+      // it must not resolve to its text.
+      if (recorded.length > 0) {
+        recordLineAgentVisibleSend(account.accountId, [event, ...setParts]);
+      }
     }
     return;
   }
@@ -547,6 +565,8 @@ async function handleMessageEvent(
       account,
       commandAuthorized: decision.access.commandAccess.authorized,
       resolveChannelIngress: decision.resolveBoundAccess,
+      groupPolicy: decision.groupPolicy,
+      groupAllowFrom: decision.groupAllowFrom,
       inboundHistory: historyReservation.inboundHistory,
       mentions: decision.mentions,
       buildContext: context.buildContext,
@@ -554,6 +574,8 @@ async function handleMessageEvent(
     if (!messageContext) {
       logVerbose("line: skipping empty message");
     } else {
+      // This send is on its way to the agent, so a later quote of any part may name it.
+      recordLineAgentVisibleSend(account.accountId, [event, ...setParts]);
       await processMessage(messageContext, {
         // The config this event resolved to, not the one the monitor booted on.
         cfg: context.cfg,
