@@ -16,10 +16,10 @@ import {
   selectContextEngineForTranscriptHost,
 } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
-import { continueAgentAfterPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
+import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
@@ -66,6 +66,7 @@ import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 export async function runPreparedEmbeddedLoop(
+  continueAfterPluginRuntimeRefresh: EmbeddedPluginRuntimeRefresh["continueAfterAttempt"],
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
   let { runParams: params, provider, modelId } = input;
@@ -430,7 +431,7 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason,
       };
       const normalizedAttempt = await normalizeEmbeddedRunAttempt(normalization);
-      const continuation = continueAgentAfterPluginRuntimeRefresh(
+      const continuation = continueAfterPluginRuntimeRefresh(
         normalization,
         assertAdmittedActive,
         turnTaintState.isTainted,

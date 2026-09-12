@@ -326,7 +326,7 @@ describe("Code Mode agent-loop error recovery", () => {
         expect(removed.execute).not.toHaveBeenCalled();
         expect(testing.activeRuns.size).toBe(0);
       });
-      refresh.takeContinuation();
+      refresh.close();
       await refresh.run(async () => {
         captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
         const changed = pluginToolWithExecute("changed_tool", "New capability", async (_id, args) =>

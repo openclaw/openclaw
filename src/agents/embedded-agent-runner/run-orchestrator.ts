@@ -48,7 +48,6 @@ import { createAssistantErrorTranscript } from "../assistant-error-transcript.js
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
-import { createAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -76,6 +75,7 @@ import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -247,7 +247,7 @@ async function runEmbeddedAgentInternal(
     throwIfAborted();
     return enqueueGlobal(async () => {
       const started = Date.now();
-      const refresh = createAgentPluginRuntimeRefresh();
+      const refresh = createEmbeddedAgentPluginRuntimeRefresh();
       const usage = createUsageAccumulator();
       let refreshed = false;
       let generationCleanup = Promise.resolve();
@@ -538,7 +538,7 @@ async function runEmbeddedAgentInternal(
                         }),
                     });
               const runTerminal = terminal;
-              return await runPreparedEmbeddedLoop({
+              return await runPreparedEmbeddedLoop(refresh.continueAfterAttempt, {
                 runParams: {
                   ...params,
                   assistantErrorTranscript,

@@ -262,7 +262,7 @@ describe("plugins tool", () => {
     const refresh = createAgentPluginRuntimeRefresh();
     callGateway.mockResolvedValue({ runtime });
     const oldTool = refresh.run(() => createPluginsTool());
-    refresh.takeContinuation();
+    refresh.close();
     await refresh.run(async () => {
       captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
       await expect(
