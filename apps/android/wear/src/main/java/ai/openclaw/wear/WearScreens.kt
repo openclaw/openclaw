@@ -71,6 +71,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -493,6 +494,8 @@ private fun ChatPage(
     WearPage(
       pageLabel = stringResource(R.string.chat),
       listState = listState,
+      compactHeader = true,
+      itemSpacing = 6.dp,
     ) {
       item {
         ConversationStatus(
@@ -1987,6 +1990,8 @@ private fun ConnectionStateScreen(
 private fun WearPage(
   pageLabel: String,
   listState: androidx.wear.compose.foundation.lazy.TransformingLazyColumnState? = null,
+  compactHeader: Boolean = false,
+  itemSpacing: Dp = 8.dp,
   content: androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope.() -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
@@ -2000,10 +2005,10 @@ private fun WearPage(
       state = resolvedListState,
       contentPadding = contentPadding,
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(itemSpacing),
     ) {
       item {
-        OpenClawHeader(pageLabel = pageLabel)
+        OpenClawHeader(pageLabel = pageLabel, compact = compactHeader)
       }
       content()
     }
@@ -2011,20 +2016,26 @@ private fun WearPage(
 }
 
 @Composable
-private fun OpenClawHeader(pageLabel: String) {
+private fun OpenClawHeader(
+  pageLabel: String,
+  compact: Boolean = false,
+) {
   val colors = OpenClawWearTheme.colors
   Column(
     modifier =
       Modifier
         .fillMaxWidth()
-        .padding(horizontal = 18.dp),
+        .padding(horizontal = 18.dp)
+        // Keep compact branding inside the upper round-display arc.
+        .padding(top = if (compact) 4.dp else 0.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     Text(
       text = localizedWearUppercase(stringResource(R.string.app_name)),
       color = colors.text,
-      fontSize = 16.sp,
-      fontWeight = FontWeight.Bold,
+      fontSize = if (compact) 12.sp else 16.sp,
+      lineHeight = if (compact) 16.sp else TextUnit.Unspecified,
+      fontWeight = if (compact) FontWeight.SemiBold else FontWeight.Bold,
       letterSpacing = 0.4.sp,
       textAlign = TextAlign.Center,
       maxLines = 1,
@@ -2033,6 +2044,7 @@ private fun OpenClawHeader(pageLabel: String) {
       text = localizedWearUppercase(pageLabel),
       color = colors.textMuted,
       fontSize = 10.sp,
+      lineHeight = if (compact) 14.sp else TextUnit.Unspecified,
       fontWeight = FontWeight.SemiBold,
       letterSpacing = 1.4.sp,
       textAlign = TextAlign.Center,
@@ -2432,10 +2444,7 @@ private fun ConversationStatus(
     modifier =
       Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp)
-        .background(colors.surface, RoundedCornerShape(12.dp))
-        .border(1.dp, colors.borderStrong, RoundedCornerShape(12.dp))
-        .padding(horizontal = 12.dp, vertical = 8.dp),
+        .padding(horizontal = 24.dp, vertical = 4.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Box(
@@ -2449,6 +2458,7 @@ private fun ConversationStatus(
       text = label,
       color = colors.text,
       fontSize = 12.sp,
+      lineHeight = 16.sp,
       fontWeight = FontWeight.SemiBold,
     )
   }
@@ -2474,8 +2484,8 @@ private fun MessageBubble(
       Modifier
         .fillMaxWidth()
         .padding(
-          start = if (isUser) 28.dp else 12.dp,
-          end = if (isUser) 12.dp else 28.dp,
+          start = if (isUser) 20.dp else 12.dp,
+          end = if (isUser) 12.dp else 20.dp,
         ).background(background, RoundedCornerShape(14.dp))
         .then(
           Modifier.border(
@@ -2483,7 +2493,7 @@ private fun MessageBubble(
             color = colors.borderStrong,
             shape = RoundedCornerShape(14.dp),
           ),
-        ).padding(horizontal = 12.dp, vertical = 9.dp),
+        ).padding(horizontal = 8.dp, vertical = 9.dp),
   ) {
     Text(
       text =
@@ -2549,7 +2559,7 @@ private fun StreamingBubble(text: String) {
         .padding(horizontal = 12.dp)
         .background(colors.surfaceRaised, RoundedCornerShape(14.dp))
         .border(1.dp, colors.warning, RoundedCornerShape(14.dp))
-        .padding(horizontal = 12.dp, vertical = 9.dp),
+        .padding(horizontal = 8.dp, vertical = 9.dp),
   ) {
     Text(
       text = localizedWearUppercase(stringResource(R.string.agent_working)),
