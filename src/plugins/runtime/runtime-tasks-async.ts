@@ -6,7 +6,7 @@ import {
   mapTaskRunDetail,
   mapTaskRunView,
 } from "../../tasks/task-domain-views.js";
-import { ensureTaskFlowRegistryReady } from "../../tasks/task-flow-registry.js";
+import { ensureTaskFlowRegistryReady } from "../../tasks/task-flow-runtime-internal.js";
 import { canOwnerAccessTask } from "../../tasks/task-owner-access.js";
 import { ensureTaskRegistryReady } from "../../tasks/task-registry-state.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";

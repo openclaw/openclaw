@@ -22,8 +22,10 @@ function existingIdentity(
   return { key: `file:${file.dev}:${file.ino}`, canonicalPath };
 }
 
-/** Capture identity before yielding; lifecycle owners reuse this fact until retirement. */
-export function readDatabasePathIdentitySync(databasePath: string): DatabasePathIdentity {
+/** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
+export function inspectDatabasePathIdentitySync(
+  databasePath: string,
+): DatabasePathIdentity | undefined {
   const resolvedPath = path.resolve(databasePath);
   let file: BigIntStats | undefined;
   try {
@@ -34,6 +36,9 @@ export function readDatabasePathIdentitySync(databasePath: string): DatabasePath
     }
   }
   if (file) {
+    if (!file.isFile()) {
+      return undefined;
+    }
     const canonicalPath = realpathSync(resolvedPath);
     return existingIdentity(file, statSync(canonicalPath, { bigint: true }), canonicalPath);
   }
@@ -55,6 +60,15 @@ export function readDatabasePathIdentitySync(databasePath: string): DatabasePath
       ancestor = parent;
     }
   }
+}
+
+/** Capture identity before yielding; worker admission requires a regular file or absent path. */
+export function readDatabasePathIdentitySync(databasePath: string): DatabasePathIdentity {
+  const identity = inspectDatabasePathIdentitySync(databasePath);
+  if (!identity) {
+    throw new Error("SQLite worker database path must identify a regular file");
+  }
+  return identity;
 }
 
 export async function readDatabasePathIdentity(

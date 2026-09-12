@@ -1,4 +1,4 @@
-import { linkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,6 +11,7 @@ import {
   acquireOpenClawStateDatabaseFileExclusion,
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
@@ -29,6 +30,41 @@ function databasePath(name = "state") {
 }
 
 describe("canonical shared-state resource drainage", () => {
+  it.each(["missing", "directory"] as const)(
+    "keeps unrelated owners while closing a never-admitted %s path",
+    async (kind) => {
+      const pathname = databasePath(kind);
+      if (kind === "directory") {
+        mkdirSync(pathname);
+        expect(() => captureOpenClawStateDatabaseReadAdmission(pathname)).toThrow(/regular file/);
+        expect(() => openOpenClawStateDatabase({ path: pathname })).toThrow(
+          /EISDIR|directory|open database/u,
+        );
+      }
+      const owner = openOpenClawStateDatabase({ path: databasePath("retained") });
+      const admission = captureOpenClawStateDatabaseReadAdmission(owner.path);
+      const unregister = registerOpenClawStateDatabaseAsyncResource({
+        async close(identity) {
+          if (identity === undefined) {
+            throw new Error("Unexpected global resource drain");
+          }
+          if (identity.key === admission.identity.key) {
+            owner.db.close();
+          }
+        },
+      });
+      try {
+        expect(closeOpenClawStateDatabaseByPath(pathname)).toBe(false);
+        expect(await closeOpenClawStateDatabaseByPathAsync(pathname)).toBe(false);
+        expect(owner.db.isOpen).toBe(true);
+        admission.assertCurrent();
+        expect(existsSync(pathname)).toBe(kind === "directory");
+      } finally {
+        unregister();
+      }
+    },
+  );
+
   it("keeps first-creation admission when an alias supplies the physical identity", async () => {
     const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
     const pathname = databasePath();

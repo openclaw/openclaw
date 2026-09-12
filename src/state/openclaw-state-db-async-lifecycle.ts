@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import {
+  inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
@@ -48,13 +49,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       throw new Error("OpenClaw state database read admission is closed");
     }
   };
-  const resolve = (pathname: string): IdentityRecord => {
+  const resolve = (pathname: string, preparedIdentity?: DatabasePathIdentity): IdentityRecord => {
     const resolvedPath = path.resolve(pathname);
     const cached = known(resolvedPath);
     if (cached) {
       return cached;
     }
-    const identity = readDatabasePathIdentitySync(resolvedPath);
+    const identity = preparedIdentity ?? readDatabasePathIdentitySync(resolvedPath);
     let record = records.get(identity.key);
     if (!record && identity.key.startsWith("file:")) {
       // A first creation can become visible through an alias before publication.
@@ -86,6 +87,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.paths.add(resolvedPath).add(identity.canonicalPath);
     return record;
   };
+  const resolveForNative = (pathname: string): IdentityRecord | undefined => {
+    const cached = known(pathname);
+    if (cached) {
+      return cached;
+    }
+    const identity = inspectDatabasePathIdentitySync(pathname);
+    return identity ? resolve(pathname, identity) : undefined;
+  };
   const invalidate = (record?: IdentityRecord) => {
     for (const current of record ? [record] : records.values()) {
       current.generation = {};
@@ -104,8 +113,8 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
 
   return {
-    identity(pathname: string): DatabasePathIdentity {
-      return resolve(pathname).identity;
+    identity(pathname: string): DatabasePathIdentity | undefined {
+      return resolveForNative(pathname)?.identity;
     },
     knownIdentity(pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity;
@@ -185,7 +194,12 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       pathname: string | undefined,
       retireNative: (identity?: DatabasePathIdentity) => boolean,
     ): Promise<boolean> {
-      const record = pathname === undefined ? undefined : resolve(pathname);
+      const record = pathname === undefined ? undefined : resolveForNative(pathname);
+      if (pathname !== undefined && !record) {
+        // No worker could enter a non-file target. Retire only the caller's exact
+        // native path; undefined must not reach resource.close as a global drain.
+        return Promise.resolve(retireNative());
+      }
       let attempt = attempts.get(record);
       if (attempt?.pending) {
         return attempt.pending;
