@@ -23,7 +23,11 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import { verifySystemAgentInferenceWithFallback } from "./inference-fallback.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import { completeSetupInference, verifySetupInference } from "./setup-inference-turn.js";
+import {
+  completeSetupInference,
+  verifySetupInference,
+  verifySetupInferenceConfig,
+} from "./setup-inference-turn.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -162,6 +166,71 @@ it("keeps protected credentials through a fresh setup read and verified-route re
   expect(await resolveSystemAgentVerifiedInferenceRoute(binding, deps)).toBeNull();
 });
 
+it.each(["fixture", "Fixture", " Fixture "])(
+  "keeps a staged replacement credential authoritative for %s",
+  async (providerKey) => {
+    const sourceConfig = (await readSnapshot()).sourceConfig;
+    const originalProvider = sourceConfig.models!.providers!.fixture;
+    if (!originalProvider) {
+      throw new Error("Missing fixture provider");
+    }
+    delete sourceConfig.models!.providers!.fixture;
+    sourceConfig.models!.providers![providerKey] = originalProvider;
+    await fs.writeFile(configPath, JSON.stringify(sourceConfig));
+    await activate();
+    const snapshot = await readSnapshot();
+    // An unsaved candidate replaces the provider key while the on-disk config
+    // still references the old store-backed credential. Route identity is
+    // unchanged: same provider, model, agent, and harness — exactly the shape
+    // setup activation uses when repairing a credential before committing it.
+    const candidate = cloneConfigWithResolutionFacts(snapshot.runtimeConfig);
+    const provider = candidate.models?.providers?.[providerKey];
+    if (!provider) {
+      throw new Error("Missing fixture provider");
+    }
+    provider.apiKey = "synthetic-replacement-key";
+    const candidateRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+      candidate,
+      "main",
+      { pluginMetadataPlugins: [] },
+      snapshot,
+    );
+    expect(candidateRoute).not.toBeNull();
+    // The probe succeeded using the candidate's replacement credential.
+    const replacementAuth = await resolveApiKeyForProviderCore({
+      cfg: candidateRoute!.runConfig,
+      provider: "fixture",
+      modelId: "test-model",
+      modelApi: "openai-responses",
+      agentDir: candidateRoute!.agentDir,
+      store: { version: 1, profiles: {} },
+      allowAuthProfileFallback: false,
+      secretSentinels: true,
+    });
+    const probeFingerprint = fingerprintResolvedProviderAuth(replacementAuth);
+    expect(probeFingerprint).toBeDefined();
+    // Binding creation must validate against the candidate's own material, not
+    // the on-disk route's old credential: rejecting here would block every
+    // same-route credential repair at activation time.
+    const binding = await createSystemAgentVerifiedInferenceBinding({
+      configuredRoute: candidateRoute!,
+      executionRoute: candidateRoute!,
+      auth: {
+        agentHarnessId: "openclaw",
+        modelId: "test-model",
+        modelApi: "openai-responses",
+        authFingerprint: probeFingerprint,
+      },
+      deps: { pluginMetadataPlugins: [] },
+    });
+    // The binding records the credential the probe actually used: the
+    // candidate's replacement material, not the on-disk route's old key.
+    expect(binding.auth.authFingerprint).toBe(probeFingerprint);
+    // The on-disk config is untouched: the candidate has not been committed.
+    expect((await readRuntime()).models?.providers?.[providerKey]?.apiKey).toEqual(secretRef);
+  },
+);
+
 it.each([
   {
     label: "protected key",
@@ -172,6 +241,18 @@ it.each([
   {
     label: "key rotated during probe",
     entrypoint: "verify",
+    rotateBeforeBinding: true,
+    alternateProfile: false,
+  },
+  {
+    label: "staged reference rotated during probe",
+    entrypoint: "candidate",
+    rotateBeforeBinding: true,
+    alternateProfile: false,
+  },
+  {
+    label: "existing-model activation rotated during probe",
+    entrypoint: "activate",
     rotateBeforeBinding: true,
     alternateProfile: false,
   },
@@ -290,42 +371,54 @@ it.each([
       runEmbeddedAgent,
     };
     const attemptedOwners: string[] = [];
+    const boundVerification =
+      entrypoint === "verify"
+        ? await verifySetupInference({ agentId: "main", bindSession: true, runtime, deps })
+        : entrypoint === "fallback"
+          ? await verifySystemAgentInferenceWithFallback({
+              runtime,
+              deps: {
+                verify: async (params) => {
+                  attemptedOwners.push(params.agentId);
+                  return params.agentId === "main"
+                    ? { ok: false, status: "auth", error: "Primary owner unavailable" }
+                    : verifySetupInference({ ...params, deps });
+                },
+              },
+            })
+          : undefined;
     const result =
-      entrypoint === "complete"
-        ? await completeSetupInference({ prompt: "Reply with OK", runtime, deps })
-        : entrypoint === "activate"
-          ? await activateSetupInference({
+      boundVerification ??
+      (entrypoint === "candidate"
+        ? await verifySetupInferenceConfig({
+            config: (await readSnapshot()).sourceConfig,
+            requireExecutionOwner: true,
+            runtime,
+            deps,
+          })
+        : entrypoint === "complete"
+          ? await completeSetupInference({ prompt: "Reply with OK", runtime, deps })
+          : await activateSetupInference({
               kind: "existing-model",
               surface: "gateway",
               runtime,
               deps,
-            })
-          : entrypoint === "fallback"
-            ? await verifySystemAgentInferenceWithFallback({
-                runtime,
-                deps: {
-                  verify: async (params) => {
-                    attemptedOwners.push(params.agentId);
-                    return params.agentId === "main"
-                      ? { ok: false, status: "auth", error: "Primary owner unavailable" }
-                      : verifySetupInference({ ...params, deps });
-                  },
-                },
-              })
-            : await verifySetupInference({ agentId: "main", bindSession: true, runtime, deps });
+            }));
     expect(result.ok, result.ok ? undefined : result.error).toBe(!rotateBeforeBinding);
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    if (result.ok && "binding" in result) {
+    if (boundVerification?.ok) {
       expect(
-        await resolveSystemAgentVerifiedInferenceRoute(result.binding, {
+        await resolveSystemAgentVerifiedInferenceRoute(boundVerification.binding, {
           readConfigFileSnapshot: readSnapshot,
           pluginMetadataPlugins: [],
         }),
       ).not.toBeNull();
       if (entrypoint === "fallback") {
         expect(attemptedOwners).toEqual(["main", "engineering"]);
-        expect(result.binding.execution.agentId).toBe("engineering");
-        expect(result.binding.execution.runConfig.agents?.entries?.openclaw?.params).toEqual({
+        expect(boundVerification.binding.execution.agentId).toBe("engineering");
+        expect(
+          boundVerification.binding.execution.runConfig.agents?.entries?.openclaw?.params,
+        ).toEqual({
           temperature: 0.1,
         });
       }

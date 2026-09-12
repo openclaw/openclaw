@@ -10,12 +10,9 @@ import {
   extractAgentRunText,
 } from "../agents/agent-run-result.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
-import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -54,6 +51,7 @@ import {
   setupInferenceLog,
   type VerifySetupInferenceResult,
 } from "./setup-inference-core.js";
+import { resolveSetupInferenceProfileError } from "./setup-inference-profile.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
@@ -74,58 +72,6 @@ type SetupTurnSuccess = {
   text: string;
   auth: AgentExecutionAuthBinding;
 };
-
-/** A pinned profile must exist and belong to the route before any request leaves the host. */
-function resolveConfiguredProfileError(
-  route: SystemAgentConfiguredRoute,
-  workspaceDir: string,
-  deps: ActivateSetupInferenceDeps,
-): string | undefined {
-  const profileId = route.authProfileId?.trim();
-  if (!profileId) {
-    return undefined;
-  }
-  const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
-  const store = loadStore(route.agentDir, {
-    readOnly: true,
-    allowKeychainPrompt: false,
-    config: route.runConfig,
-    externalCliProviderIds: [route.provider],
-  });
-  const credential = store.profiles[profileId];
-  if (!credential) {
-    return `No credentials found for the configured setup profile "${profileId}".`;
-  }
-  if (route.runner === "embedded") {
-    const authPlan = buildAgentRuntimeAuthPlan({
-      provider: route.provider,
-      authProfileProvider: credential.provider,
-      authProfileMode: credential.type,
-      sessionAuthProfileId: profileId,
-      config: route.runConfig,
-      workspaceDir,
-      harnessId: route.agentHarnessRuntimeOverride,
-      harnessRuntime: route.agentHarnessRuntimeOverride,
-      allowHarnessAuthProfileForwarding: true,
-    });
-    if (authPlan.forwardedAuthProfileId === profileId) {
-      return undefined;
-    }
-  } else {
-    const aliasContext = { config: route.runConfig, workspaceDir };
-    try {
-      if (
-        resolveProviderIdForAuth(route.provider, aliasContext) ===
-        resolveProviderIdForAuth(credential.provider, { ...aliasContext, storedCredential: true })
-      ) {
-        return undefined;
-      }
-    } catch {
-      return `Could not verify that configured setup profile "${profileId}" belongs to the selected ${route.provider} inference route.`;
-    }
-  }
-  return `Configured setup profile "${profileId}" belongs to ${credential.provider}, not the selected ${route.provider} inference route.`;
-}
 
 /**
  * Runs one bounded, tool-free turn through the exact configured route. The turn is evidence,
@@ -210,7 +156,7 @@ export async function runSetupInferenceTurn(params: {
     if (cliError) {
       return failed("unavailable", cliError);
     }
-    const profileError = resolveConfiguredProfileError(route, workspaceDir, deps);
+    const profileError = resolveSetupInferenceProfileError(route, workspaceDir, deps);
     if (profileError) {
       return failed("auth", profileError);
     }
@@ -508,6 +454,13 @@ export async function verifySetupInference(
   const verification = await verifySetupInferenceConfig({
     config: cfg,
     configSnapshot: snapshot,
+    readCurrentConfigSnapshot: async () => {
+      const current = await readSnapshot();
+      if (!current.exists || !current.valid) {
+        throw new Error("The current inference config is unavailable. Retry the inference check.");
+      }
+      return current;
+    },
     runtime: params.runtime,
     requireExecutionOwner: params.bindSession === true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -631,6 +584,8 @@ export async function verifySetupInferenceConfig(
   params: SetupInferenceRequestParams & {
     config: OpenClawConfig;
     configSnapshot?: SystemAgentConfigSnapshot;
+    /** Existing-route checks reread authority; candidates retain their proposed config. */
+    readCurrentConfigSnapshot?: () => Promise<SystemAgentConfigSnapshot>;
     /** Credential directory selected by the onboarding import owner. */
     agentDir?: string;
     onVerifiedExecution?: (binding: SystemAgentVerifiedInferenceBinding) => void;
@@ -659,6 +614,9 @@ export async function verifySetupInferenceConfig(
     : configuredRoute;
   const requireExecutionOwner =
     params.requireExecutionOwner === true || params.onVerifiedExecution !== undefined;
+  const baselineRoute = requireExecutionOwner
+    ? await projectInferenceRoute(params.config, route.agentId)
+    : undefined;
   let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
   if (requireExecutionOwner) {
     try {
@@ -684,8 +642,34 @@ export async function verifySetupInferenceConfig(
   }
   if (requireExecutionOwner) {
     try {
+      // Rebuild from the operation's authority, not its materialized probe route.
+      // Candidates keep their proposed source; existing routes reread current config.
+      const currentSnapshot = params.readCurrentConfigSnapshot
+        ? await params.readCurrentConfigSnapshot()
+        : params.configSnapshot;
+      const currentConfig =
+        params.readCurrentConfigSnapshot && currentSnapshot
+          ? (currentSnapshot.runtimeConfig ?? currentSnapshot.config)
+          : params.config;
+      const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+        currentConfig,
+        route.agentId,
+        { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime },
+        currentSnapshot,
+      );
+      if (
+        !currentRoute ||
+        !sameDefaultInferenceRoute(
+          baselineRoute!,
+          await projectInferenceRoute(currentConfig, route.agentId),
+        )
+      ) {
+        throw new Error(
+          "The inference route changed during its live test. Retry the inference check.",
+        );
+      }
       const binding = await revalidateStableSetupInferenceOwner({
-        route,
+        route: params.agentDir ? { ...currentRoute, agentDir: params.agentDir } : currentRoute,
         auth: turn.auth,
         stagedOwnerPluginArtifacts,
         deps,

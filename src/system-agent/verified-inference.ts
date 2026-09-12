@@ -758,6 +758,8 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     }
     currentRuntimeArtifactFingerprint = artifact.fingerprint;
   }
+  // The operation owner supplies the refreshed live or staged route. Do not
+  // substitute on-disk credentials for an unsaved candidate here.
   const currentAuthFingerprint = await (proofKind === "runtime-owner"
     ? resolveCurrentRuntimeOwnerFingerprint({
         route: execution,
