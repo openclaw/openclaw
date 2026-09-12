@@ -29,6 +29,29 @@ Native imports also need the plugin's declared dependencies and a resolvable `op
 
 ## Benchmarks
 
+<Accordion title="Session history (scripts/bench-session-history.ts)">
+
+Measure SQLite history pages and the Gateway's bounded history reader with
+synthetic conversations, including sparse markers, dense markers, and resets:
+
+```bash
+pnpm test:sessions:history:bench --samples 30 --output history.json
+pnpm test:sessions:history:bench --profile sparse,trailing,reset --operation recent --analyze --samples 15 --output history-analyzed.json
+```
+
+The second command includes 5,000 trailing compaction markers and refreshes
+SQLite planner statistics before reading. Compare both statistics states when
+changing a query. `--operation` selects `recent`, `page`, or `gateway-tail`;
+omitting it measures all three.
+
+Each reader runs in a fresh process. Reports separate imports, the first read
+(including database open), and warm p50/p95 wall and CPU time. OS caches are not
+flushed. SQL plans, statement counts, rows delivered to JavaScript, and JSON
+parsing counts come from a separate instrumented read. Heap deltas are
+uncollected observations, not total allocations. Fixtures are removed afterward.
+
+</Accordion>
+
 <Accordion title="Model latency (scripts/bench-model.ts)">
 
 ```bash

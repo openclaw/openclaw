@@ -541,6 +541,10 @@ describe("chat history exact-entry snapshots", () => {
               parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt)),
             ).toBe(false);
             await pending;
+            expect(
+              parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
+                .length,
+            ).toBeLessThanOrEqual(1);
             const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
             expect(error).toBeUndefined();
             expect(ok).toBe(true);
