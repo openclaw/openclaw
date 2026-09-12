@@ -1,5 +1,6 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -59,6 +60,8 @@ const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn(createInstallPlanFixt
 const parsePortMock = vi.hoisted(() => vi.fn(() => null));
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
 const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const resolveNodeRuntimeInfoMock = vi.hoisted(() => vi.fn());
+const resolvePreferredNodePathMock = vi.hoisted(() => vi.fn());
 
 const actionState = vi.hoisted(() => ({
   warnings: [] as string[],
@@ -76,7 +79,7 @@ const service = vi.hoisted(() => ({
   uninstall: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
-  readCommand: vi.fn(async () => null),
+  readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
 
@@ -167,6 +170,11 @@ vi.mock("../../commands/daemon-runtime.js", () => ({
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
+}));
+
+vi.mock("../../daemon/runtime-paths.js", () => ({
+  resolveNodeRuntimeInfo: resolveNodeRuntimeInfoMock,
+  resolvePreferredNodePath: resolvePreferredNodePathMock,
 }));
 
 vi.mock("./response.js", () => ({
@@ -273,6 +281,8 @@ describe("runDaemonInstall", () => {
     parsePortMock.mockReset();
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
+    resolveNodeRuntimeInfoMock.mockReset();
+    resolvePreferredNodePathMock.mockReset();
     service.isLoaded.mockReset();
     service.stage.mockReset();
     service.install.mockReset();
@@ -304,6 +314,12 @@ describe("runDaemonInstall", () => {
     parsePortMock.mockReturnValue(null);
     isGatewayDaemonRuntimeMock.mockReturnValue(true);
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      nodeVersion: null,
+      sqliteVersion: null,
+      supported: false,
+    });
+    resolvePreferredNodePathMock.mockResolvedValue("/supported/node");
     service.isLoaded.mockResolvedValue(false);
     service.stage.mockResolvedValue(undefined);
     service.install.mockResolvedValue(undefined);
@@ -554,6 +570,76 @@ describe("runDaemonInstall", () => {
 
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     expectLastEmittedResult("already-installed");
+  });
+
+  it("replaces an unsupported Node recorded in the managed service", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/obsolete/node", "openclaw.mjs", "gateway", "run"],
+      environment: {},
+    });
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      nodeVersion: "22.19.0",
+      sqliteVersion: "3.50.0",
+      supported: false,
+    });
+    resolvePreferredNodePathMock.mockResolvedValue("/supported/node");
+
+    await runDaemonInstall({ json: true });
+
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({ nodePath: "/supported/node" }),
+    );
+    expect(actionState.warnings).toContain(
+      "Replacing unsupported Gateway service Node 22.19.0 (/obsolete/node) with /supported/node; refreshing the install.",
+    );
+    expect(actionState.emitted).toEqual([]);
+  });
+
+  it("replaces an unsupported service Node during forced installation", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/obsolete/node", "openclaw.mjs", "gateway", "run"],
+      environment: { OPENCLAW_SERVICE_MARKER: "preserved" },
+    });
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      nodeVersion: "22.19.0",
+      sqliteVersion: "3.50.0",
+      supported: false,
+    });
+    resolvePreferredNodePathMock.mockResolvedValue("/usr/local/bin/node24");
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodePath: "/usr/local/bin/node24",
+        existingEnvironment: { OPENCLAW_SERVICE_MARKER: "preserved" },
+      }),
+    );
+    expect(actionState.failed).toEqual([]);
+    expect(actionState.emitted).toEqual([]);
+  });
+
+  it("rejects an unsupported service Node before mutating the service when no replacement exists", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/obsolete/node", "openclaw.mjs", "gateway", "run"],
+      environment: { OPENCLAW_SERVICE_MARKER: "preserved" },
+    });
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      nodeVersion: "22.19.0",
+      sqliteVersion: "3.50.0",
+      supported: false,
+    });
+    resolvePreferredNodePathMock.mockResolvedValue(undefined);
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(actionState.failed[0]?.message).toContain("No supported Node runtime is available");
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
   it("reinstalls when the loaded service still embeds OPENCLAW_GATEWAY_TOKEN", async () => {

@@ -8,6 +8,7 @@ import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
+import { isNodeRuntime } from "./runtime-binary.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -25,12 +26,6 @@ const VERSION_MANAGER_MARKERS = [
 
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
-}
-
-function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
-  const pathModule = getPathModule(platform);
-  const base = normalizeLowercaseStringOrEmpty(pathModule.basename(execPath));
-  return base === "node" || base === "node.exe";
 }
 
 function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
@@ -95,15 +90,15 @@ try {
 process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, sqliteVersion }));
 `;
 
-type NodeRuntimeInfo = {
+export type NodeRuntimeInfo = {
   nodeVersion: string | null;
   sqliteVersion: string | null;
   supported: boolean;
 };
 
-async function resolveNodeRuntimeInfo(
+export async function resolveNodeRuntimeInfo(
   nodePath: string,
-  execFileImpl: ExecFileAsync,
+  execFileImpl: ExecFileAsync = execFileAsync,
 ): Promise<NodeRuntimeInfo> {
   try {
     const { stdout } = await execFileImpl(nodePath, ["-e", NODE_RUNTIME_PROBE], {
@@ -255,7 +250,7 @@ export async function resolvePreferredNodePath(params: {
   const platform = params.platform ?? process.platform;
   const currentExecPath = params.execPath ?? process.execPath;
   const execFileImpl = params.execFile ?? execFileAsync;
-  if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
+  if (currentExecPath && isNodeRuntime(currentExecPath)) {
     const runtime = await resolveNodeRuntimeInfo(currentExecPath, execFileImpl);
     if (runtime.supported) {
       const stableCurrentPath = await resolveStableNodePath(currentExecPath);

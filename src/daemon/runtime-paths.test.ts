@@ -181,6 +181,24 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["/usr/local/bin/nodejs", "/usr/local/bin/node24"])(
+    "accepts supported alternate Node executable %s",
+    async (execPath) => {
+      const execFile = vi.fn().mockResolvedValue(nodeRuntime("24.15.0"));
+
+      const result = await resolvePreferredNodePath({
+        env: {},
+        runtime: "node",
+        platform: "linux",
+        execFile,
+        execPath,
+      });
+
+      expect(result).toBe(execPath);
+      expect(execFile).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("falls back to system node when execPath version is unsupported", async () => {
     mockNodePathPresent(darwinNode);
 

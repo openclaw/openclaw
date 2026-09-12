@@ -294,6 +294,36 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
   });
 
+  it("preserves operator-owned service settings in a replacement-node plan", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: isolatedHome },
+      port: 3000,
+      runtime: "node",
+      nodePath: "/usr/local/bin/node24",
+      existingEnvironment: {
+        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
+      },
+    });
+
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ nodePath: "/usr/local/bin/node24" }),
+    );
+    expect(plan.environment).toEqual(
+      expect.objectContaining({
+        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
+        OPENCLAW_PORT: "3000",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      }),
+    );
+  });
+
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     mockNodeGatewayPlanFixture();
     const originalArgv = process.argv;
