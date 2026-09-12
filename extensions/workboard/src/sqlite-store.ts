@@ -1271,17 +1271,48 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   ): Promise<WorkboardOwnerClaimResult> {
     this.validatePayload(key, value);
     return runSqliteImmediateTransactionSync(this.db, () => {
-      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
+      const query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db);
+      const current = executeSqliteQueryTakeFirstSync(
+        this.db,
+        query
+          .selectFrom("workboard_cards")
+          .selectAll()
+          .where("id", "=", key)
+          .where("updated_at", "=", expectedUpdatedAt),
+      );
+      if (!current) {
         return "conflict";
       }
-      const rows: Row[] = this.db.prepare("SELECT * FROM workboard_cards WHERE id <> ?").all(key);
-      const preloaded = loadCardChildRows(this.db);
-      for (const row of rows) {
-        const card = readCard(this.db, row, preloaded);
+      // Child records cannot occupy an owner slot. Keep lease and owner decisions
+      // with the shared policy, after SQLite excludes archived and inactive cards.
+      const candidates = query
+        .selectFrom("workboard_cards")
+        .select(["status", "agent_id", "claim_json", "execution_id", "execution_status"])
+        .where("id", "!=", key)
+        .where((eb) => eb.or([eb("archived_at", "is", null), eb("archived_at", "=", 0)]))
+        .where((eb) =>
+          eb.or([
+            eb("status", "=", "running"),
+            eb.and([eb("execution_id", "!=", ""), eb("execution_status", "=", "running")]),
+            eb.and([eb("claim_json", "is not", null), eb("status", "!=", "done")]),
+          ]),
+        );
+      for (const row of iterateSqliteQuerySync(this.db, candidates)) {
+        const card = {
+          status: requiredString(row, "status") as WorkboardCard["status"],
+          agentId: stringValue(row, "agent_id"),
+          metadata: { claim: parseJson(row.claim_json) as WorkboardMetadata["claim"] },
+          execution: stringValue(row, "execution_id")
+            ? { status: requiredString(row, "execution_status") as WorkboardExecution["status"] }
+            : undefined,
+        };
         if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
           return "owner_busy";
         }
       }
+      // Validate the target's stored tree before replacing it, without decoding
+      // unrelated cards as an incidental prerequisite for claiming this one.
+      readCard(this.db, current);
       insertCard(this.db, value.card);
       return "updated";
     });
