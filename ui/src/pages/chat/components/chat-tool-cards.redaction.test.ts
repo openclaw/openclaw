@@ -1,0 +1,79 @@
+/* @vitest-environment jsdom */
+
+import { render } from "lit";
+import { describe, expect, it, vi } from "vitest";
+import { renderToolCard } from "./chat-tool-cards.ts";
+
+describe("tool-card redaction", () => {
+  const publicUrl = "https://x.com/EliXPampa/status/2097727549400871286";
+  const secret = "Ab9Q".repeat(10);
+  const numericSlashSecret = "1234/" + "Ab9Q".repeat(8) + "Ab9";
+  const masked = "Ab9QAb...Ab9Q";
+
+  it.each([
+    ["public status URL", publicUrl, publicUrl],
+    ["long URL path", `https://example.test/${secret}`, `https://example.test/${secret}`],
+    [
+      "punctuated URL path",
+      `https://example.test/path-${secret}`,
+      `https://example.test/path-${secret}`,
+    ],
+    ["long URL hostname", `https://${secret}.example.test`, `https://${secret}.example.test`],
+    ["bare credential", secret, masked],
+    ["s3 password", `s3://user:${secret}@bucket`, `s3://user:${masked}@bucket`],
+    ["s3 username", `s3://name-${secret}:pass@bucket`, `s3://name-${masked}:pass@bucket`],
+    [
+      "s3 password with an at-sign",
+      `s3://user:part@${secret}@bucket`,
+      `s3://user:part@${masked}@bucket`,
+    ],
+    [
+      "s3 numeric slash password",
+      `s3://user:${numericSlashSecret}@bucket`,
+      "s3://user:1234/A...QAb9@bucket",
+    ],
+    ["dot-prefixed credential", `.${secret}`, `.${masked}`],
+    ["credential after URL", `${publicUrl} ${secret}`, `${publicUrl} ${masked}`],
+    ["credential before URL", `${secret} ${publicUrl}`, `${masked} ${publicUrl}`],
+    [
+      "slash credential after URL",
+      publicUrl + " " + "Aa0/".repeat(10),
+      publicUrl + " Aa0/Aa...Aa0/",
+    ],
+    [
+      "credential query",
+      `https://example.test/?access_token=${secret}`,
+      `https://example.test/?access_token=${masked}`,
+    ],
+    [
+      "credential field",
+      `{"awsSecretAccessKey":"${secret}"}`,
+      `{"awsSecretAccessKey":"${masked}"}`,
+    ],
+    [
+      "credential after Markdown link",
+      `[docs](${publicUrl})${secret}`,
+      `[docs](${publicUrl})${masked}`,
+    ],
+    [
+      "credential after Markdown punctuation",
+      `[docs](${publicUrl});${secret}`,
+      `[docs](${publicUrl});${masked}`,
+    ],
+    ["credential in table", `|${publicUrl}|${secret}|`, `|${publicUrl}|${masked}|`],
+  ])(
+    "renderToolCard displays the %s with public URLs intact and credentials masked",
+    (_label, input, expected) => {
+      const container = document.createElement("div");
+      render(
+        renderToolCard(
+          { id: "msg:redaction", name: "message", args: { message: input } },
+          { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
+        ),
+        container,
+      );
+
+      expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(expected);
+    },
+  );
+});

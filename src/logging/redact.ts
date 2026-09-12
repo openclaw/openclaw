@@ -22,6 +22,7 @@ import {
   BASE64_SAFE_TOKEN_BOUNDARY,
   BODY_SECRET_KEYS,
   CHUNK_UNSAFE_PATTERN_SOURCES,
+  createRedactPatternMatchFilter,
   DEFAULT_REDACT_PATTERNS,
   FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES,
   FORM_BODY_KEY_INVISIBLE_CHARS,
@@ -677,10 +678,15 @@ function redactText(
     next = redactFormBody(next);
   }
   for (const pattern of patterns) {
-    const replacer = (...args: unknown[]) =>
-      redactMatch(readRedactMatch(args), pattern, options?.preserveSourceAssignment);
+    const shouldRedact = createRedactPatternMatchFilter(pattern, next);
+    const replacer = (...args: unknown[]) => {
+      const match = readRedactMatch(args);
+      return shouldRedact?.(match.offset, match.offset + match.match.length) === false
+        ? match.match
+        : redactMatch(match, pattern, options?.preserveSourceAssignment);
+    };
     next =
-      options?.fullContext || chunkUnsafePatterns.has(pattern)
+      shouldRedact || options?.fullContext || chunkUnsafePatterns.has(pattern)
         ? next.replace(pattern, replacer)
         : replacePatternBounded(next, pattern, replacer);
   }
@@ -752,7 +758,14 @@ export function computeSensitiveRedactionBitmap(
     markFormBodyRedactions(text, bitmap);
   }
   for (const pattern of resolved.patterns) {
+    const shouldRedact = createRedactPatternMatchFilter(pattern, text);
     for (const match of text.matchAll(cloneGlobalPattern(pattern))) {
+      if (
+        match.index !== undefined &&
+        shouldRedact?.(match.index, match.index + match[0].length) === false
+      ) {
+        continue;
+      }
       markPatternMatchRedaction(bitmap, text, pattern, match);
     }
   }

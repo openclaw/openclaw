@@ -42,31 +42,6 @@ describe("redactSensitiveText token ordering", () => {
     expect(output).toContain("bare ");
   });
 
-  it.each([
-    "https://x.com/EliXPampa/status/2097727549400871286",
-    "https://example.test/" + "Ab9Q".repeat(10),
-    "https://example.test/path-" + "Ab9Q".repeat(10),
-    "https://" + "Ab9Q".repeat(10) + ".example.test",
-  ])("preserves public URL text through default redaction: %s", (url) => {
-    expect(redactSensitiveText(url)).toBe(url);
-  });
-
-  it("preserves a public URL while masking an adjacent AWS secret and credential query", () => {
-    const url = "https://x.com/EliXPampa/status/2097727549400871286";
-    const secret = fakeAwsCredentialWithPadding();
-    const masked = secret.slice(0, 6) + "…" + secret.slice(-4);
-    const query = "https://example.test/?SecretAccessKey=";
-    expect(redactSensitiveText(url + " " + secret)).toBe(url + " " + masked);
-    expect(redactSensitiveText(secret + " " + url)).toBe(masked + " " + url);
-    expect(redactSensitiveText(query + secret)).toBe(query + masked);
-    expect(redactSensitiveText("|" + url + "|" + secret + "|")).toBe(
-      "|" + url + "|" + masked + "|",
-    );
-    expect(redactSensitiveText("[docs](" + url + ");" + secret)).toBe(
-      "[docs](" + url + ");" + masked,
-    );
-  });
-
   it("masks a full JWT before generic bare credential matching", () => {
     const jwtSegment = fakeJwtCredentialShapedSegment();
     const jwt = `eyJheaderabcd.${jwtSegment}.signatureabcd123456`;

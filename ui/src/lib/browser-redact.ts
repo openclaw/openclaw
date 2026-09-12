@@ -7,7 +7,10 @@ import {
   redactPemBlock,
   type RedactMatch,
 } from "../../../src/logging/redact-pattern-runtime.js";
-import { DEFAULT_REDACT_PATTERNS } from "../../../src/logging/redact-patterns.js";
+import {
+  createRedactPatternMatchFilter,
+  DEFAULT_REDACT_PATTERNS,
+} from "../../../src/logging/redact-patterns.js";
 
 const URL_QUERY_PAIR_RE = /([?&])([^=&#\s]+)=([^&#\s"'<>]+)/gu;
 const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map(
@@ -78,9 +81,13 @@ function redactUrlQueryPairs(detail: string): string {
 export function redactToolDetail(detail: string): string {
   let redacted = redactUrlQueryPairs(detail);
   for (const pattern of SECRET_DETAIL_PATTERNS) {
-    redacted = redacted.replace(pattern, (...args: unknown[]) =>
-      redactMatch(readRedactMatch(args)),
-    );
+    const shouldRedact = createRedactPatternMatchFilter(pattern, redacted);
+    redacted = redacted.replace(pattern, (...args: unknown[]) => {
+      const match = readRedactMatch(args);
+      return shouldRedact?.(match.offset, match.offset + match.match.length) === false
+        ? match.match
+        : redactMatch(match);
+    });
   }
   return SENSITIVE_TEXT_PATTERNS.reduce(
     (text, [pattern, replacement]) => text.replace(pattern, replacement),

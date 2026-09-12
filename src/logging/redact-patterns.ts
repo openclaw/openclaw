@@ -79,10 +79,11 @@ const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:
 // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
 export const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
 export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
-const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_.])(?<!;base64,[A-Za-z0-9+/=]*)`;
+const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)`;
 export const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}`;
-// Check URL context only after finding a key-shaped value; credential fields mask separately.
-const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)(?<![A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>\x60|)\]}]*)/g`;
+const AWS_SECRET_ACCESS_KEY_VALUE_SOURCE = String.raw`${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)`;
+const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = `/${AWS_SECRET_ACCESS_KEY_VALUE_SOURCE}/g`;
+
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
@@ -269,3 +270,39 @@ export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
 export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly string[] = DEFAULT_REDACT_PATTERNS.filter(
   (pattern) => !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern),
 );
+
+// Scan URL context once per pattern pass, rather than once per key-shaped segment.
+export function createRedactPatternMatchFilter(
+  pattern: RegExp,
+  text: string,
+): ((start: number, end: number) => boolean) | undefined {
+  if (pattern.source !== AWS_SECRET_ACCESS_KEY_VALUE_SOURCE) {
+    return undefined;
+  }
+  const ranges: Array<{ start: number; end: number }> = [];
+  const delimiter = /[\s"'<>`|)\]}]/g;
+  let offset = 0;
+  while ((offset = text.indexOf("://", offset)) !== -1) {
+    let schemeStart = offset;
+    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(text[schemeStart - 1]!)) {
+      schemeStart--;
+    }
+    const hasScheme = /[A-Za-z]/.test(text.slice(schemeStart, offset));
+    const start = offset + 3;
+    delimiter.lastIndex = start;
+    const end = delimiter.exec(text)?.index ?? text.length;
+    // Colons and @ keep credentials eligible, including incomplete URL userinfo.
+    if (hasScheme && !/[:@]/.test(text.slice(start, end))) {
+      ranges.push({ start, end });
+    }
+    offset = end;
+  }
+  let cursor = 0;
+  return (start, end) => {
+    while (cursor < ranges.length && ranges[cursor]!.end <= start) {
+      cursor++;
+    }
+    const range = ranges[cursor];
+    return !range || start < range.start || end > range.end;
+  };
+}

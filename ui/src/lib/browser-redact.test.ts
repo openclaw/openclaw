@@ -82,12 +82,6 @@ describe("browser tool detail redaction", () => {
     expect(redacted).not.toContain(databasePassword);
   });
 
-  it("preserves public URLs beside bare AWS credentials", () => {
-    const url = "https://x.com/EliXPampa/status/2097727549400871286";
-    const secret = "Aa0/".repeat(10);
-    expect(redactToolDetail(url + " " + secret)).toBe(url + " Aa0/Aa...Aa0/");
-  });
-
   it("redacts AWS secret-access-key fields", () => {
     const secret = "Aa0/".repeat(10);
     expect(redactToolDetail(`{"awsSecretAccessKey":"${secret}"}`)).not.toContain(secret);
