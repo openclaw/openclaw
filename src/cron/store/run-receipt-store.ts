@@ -346,8 +346,12 @@ function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
   };
 }
 
-function pruneTerminalReceipts(database: DatabaseSync, storeKey: string, jobId: string): void {
-  const job = currentJob(database, storeKey, jobId);
+function pruneTerminalReceipts(
+  database: DatabaseSync,
+  storeKey: string,
+  jobId: string,
+  job: CronJob | undefined,
+): void {
   const pendingReceiptId =
     job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId;
   const terminalIds = executeSqliteQuerySync(
@@ -493,12 +497,12 @@ export function claimCronRunReceiptInDatabase(params: {
     prepared: params.prepared,
     finishedAtMs: handle.startedAtMs,
   });
-  pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId);
-  validateCurrentJob({
+  const job = validateCurrentJob({
     database: params.database,
     handle,
     resolveAgentId: params.resolveAgentId,
   });
+  pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId, job);
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -744,7 +748,12 @@ export function finishCronRunReceiptInDatabase(params: {
       .where("status", "=", "running")
       .where("owner_pid", "=", params.handle.ownerPid),
   );
-  pruneTerminalReceipts(params.database, params.handle.storeKey, params.handle.jobId);
+  pruneTerminalReceipts(
+    params.database,
+    params.handle.storeKey,
+    params.handle.jobId,
+    currentJob(params.database, params.handle.storeKey, params.handle.jobId),
+  );
   const row = executeSqliteQueryTakeFirstSync(
     params.database,
     query(params.database)
