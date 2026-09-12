@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type {
   ChatAccountSelection,
   UserModelAccount,
@@ -138,7 +139,13 @@ export function renderChatModelAccountControl(params: {
         ? [{ value: "loading", label: t("common.loading"), disabled: true }]
         : []),
       ...(currentInventory.nextCursor
-        ? [{ value: "more", label: t("profilePage.modelAccounts.loadMore") }]
+        ? [
+            {
+              value: "more",
+              label: t("profilePage.modelAccounts.loadMore"),
+              disabled: currentInventory.loading,
+            },
+          ]
         : []),
       ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
     ];
@@ -204,7 +211,9 @@ export function renderChatModelAccountControl(params: {
           role="listbox"
           aria-label=${t("chat.modelAccounts.section")}
         >
-          ${options.map(
+          ${repeat(
+            options,
+            (option) => option.value,
             (option, index) => html`
               <button
                 class="chat-controls__inline-select-option chat-controls__model-option"

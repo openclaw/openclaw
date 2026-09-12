@@ -161,6 +161,12 @@ suite.define(() => {
             },
           ],
         };
+        const firstAccountPage = {
+          profileId: "test-person",
+          accounts: [personal],
+          nextCursor: "accounts-page-2",
+          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        };
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.5",
           models,
@@ -177,12 +183,7 @@ suite.define(() => {
                 source: "user",
               },
             },
-            "users.listModelAccounts": {
-              profileId: "test-person",
-              accounts: [personal],
-              nextCursor: "accounts-page-2",
-              links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
-            },
+            "users.listModelAccounts": firstAccountPage,
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -216,8 +217,19 @@ suite.define(() => {
         await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+        const beforeRefresh = await gateway.getRequests("users.listModelAccounts");
+        await gateway.deferNext("users.listModelAccounts");
         await trigger.press("Enter");
+        const refresh = await gateway.waitForRequest("users.listModelAccounts", {
+          after: beforeRefresh.length,
+        });
+        expect(refresh.params).toEqual({});
         await expect.poll(() => more.isVisible()).toBe(true);
+        const pendingMoreTarget = await more.elementHandle();
+        expect(pendingMoreTarget).not.toBeNull();
+        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("users.listModelAccounts", firstAccountPage);
+        await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
         expect(
           await picker
             .locator('[data-chat-account-option="current"]')
@@ -225,7 +237,15 @@ suite.define(() => {
         ).toBe("true");
         const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
         await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
-        await more.click();
+        const beforePaginationUrl = page.url();
+        await pendingMoreTarget!.click();
+        await expect
+          .poll(async () => {
+            const requests = await gateway.getRequests("users.listModelAccounts");
+            return requests.length > inventoryRequests.length || page.url() !== beforePaginationUrl;
+          })
+          .toBe(true);
+        expect(page.url()).toBe(beforePaginationUrl);
         const nextPage = await gateway.waitForRequest("users.listModelAccounts", {
           after: inventoryRequests.length,
         });
