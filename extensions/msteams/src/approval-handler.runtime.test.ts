@@ -379,6 +379,8 @@ describe("msTeamsApprovalNativeRuntime", () => {
       cfg,
       accountId: "support",
       entry,
+      request,
+      approvalKind: "exec",
       payload: { type: "AdaptiveCard" },
       phase: "resolved",
     });

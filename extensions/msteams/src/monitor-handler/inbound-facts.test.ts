@@ -50,6 +50,7 @@ describe("msteams inbound facts", () => {
     ],
   ])("preserves HTML text in the inbound body: %s", async (html, expected) => {
     const entry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
       context: context({
         type: "message",
         attachments: [{ contentType: "text/html", content: html }],
@@ -62,6 +63,7 @@ describe("msteams inbound facts", () => {
 
   it("strips native mentions from card text when HTML has no visible text", async () => {
     const entry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
       context: context({
         type: "message",
         attachments: [{ contentType: "text/html", content: "<at>Bot</at>" }],
