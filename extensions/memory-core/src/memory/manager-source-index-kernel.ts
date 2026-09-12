@@ -79,18 +79,19 @@ export class MemorySourceIndexKernel {
       return "forgotten";
     }
     this.clear(entry.path, source);
-    const writeChunk = createMemoryChunkWriter(this.database, {
-      path: entry.path,
-      source,
-      model,
-      now,
-    });
+    let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
     let ftsStatement: StatementSync | undefined;
     for (const [index, chunk] of chunks.entries()) {
       const embedding = embeddings[index] ?? [];
       const id = hashText(
         `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
       );
+      writeChunk ??= createMemoryChunkWriter(this.database, {
+        path: entry.path,
+        source,
+        model,
+        now,
+      });
       writeChunk(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
         replaceMemoryVectorRow({
