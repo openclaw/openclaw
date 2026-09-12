@@ -21,10 +21,17 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
+import {
+  CATALOG_SESSION_RELEASED_EVENT,
+  CATALOG_SESSION_RELEASE_RECONCILE_MS,
+  catalogSessionReleasedDetailFromEvent,
+  parseCatalogSessionKey,
+} from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
+  normalizeAgentId,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import * as chatAvatars from "./chat-avatar.ts";
@@ -71,6 +78,7 @@ import {
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
@@ -109,6 +117,44 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
   private composerPresentation: ChatPaneComposerHandoff | undefined;
+  private catalogReleaseRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+  private readonly handleCatalogSessionReleased = (event: Event) => {
+    const state = this.state;
+    const key = parseCatalogSessionKey(this.sessionKey);
+    const detail = catalogSessionReleasedDetailFromEvent(event);
+    if (
+      !state?.connected ||
+      !state.client ||
+      !key ||
+      !detail ||
+      key.catalogId !== detail.catalogId ||
+      key.hostId !== detail.hostId ||
+      key.threadId !== detail.threadId ||
+      resolveChatAgentId(state) !== normalizeAgentId(detail.agentId)
+    ) {
+      return;
+    }
+    if (this.catalogReleaseRefreshTimer !== null) {
+      globalThis.clearTimeout(this.catalogReleaseRefreshTimer);
+    }
+    const client = state.client;
+    const sessionKey = this.sessionKey;
+    this.catalogReleaseRefreshTimer = globalThis.setTimeout(() => {
+      this.catalogReleaseRefreshTimer = null;
+      const currentState = this.state;
+      const currentKey = parseCatalogSessionKey(this.sessionKey);
+      if (
+        !currentState?.connected ||
+        currentState.client !== client ||
+        this.sessionKey !== sessionKey ||
+        !currentKey
+      ) {
+        return;
+      }
+      void this.loadCatalogSession(currentKey, false);
+    }, CATALOG_SESSION_RELEASE_RECONCILE_MS);
+  };
 
   protected activateComposerPresentation(): void {
     if (this.selected && this.presented) {
@@ -439,6 +485,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     chatState.addCleanup(() =>
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
     );
+    document.addEventListener(CATALOG_SESSION_RELEASED_EVENT, this.handleCatalogSessionReleased);
+    chatState.addCleanup(() => {
+      document.removeEventListener(
+        CATALOG_SESSION_RELEASED_EVENT,
+        this.handleCatalogSessionReleased,
+      );
+      if (this.catalogReleaseRefreshTimer !== null) {
+        globalThis.clearTimeout(this.catalogReleaseRefreshTimer);
+        this.catalogReleaseRefreshTimer = null;
+      }
+    });
     const panelToggleEvents = [
       [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],
       [BROWSER_PANEL_TOGGLE_EVENT, "browser", "openclaw-browser-panel"],

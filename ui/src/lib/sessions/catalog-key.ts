@@ -23,10 +23,51 @@ export type CatalogSessionContinuedDetail = CatalogSessionKey & {
   sessionKey: string;
 };
 
+/** A catalog-backed terminal writer exited, so retained readers should reconcile
+    after the Gateway's short list-sharing window has elapsed. */
+export const CATALOG_SESSION_RELEASED_EVENT = "openclaw-session-catalog-released";
+export const CATALOG_SESSION_RELEASE_RECONCILE_MS = 5_000;
+
+export type CatalogSessionReleasedDetail = CatalogSessionKey & {
+  agentId: string;
+};
+
 export function announceCatalogSessionContinued(detail: CatalogSessionContinuedDetail): void {
   document.dispatchEvent(
     new CustomEvent<CatalogSessionContinuedDetail>(CATALOG_SESSION_CONTINUED_EVENT, { detail }),
   );
+}
+
+export function announceCatalogSessionReleased(detail: CatalogSessionReleasedDetail): void {
+  document.dispatchEvent(
+    new CustomEvent<CatalogSessionReleasedDetail>(CATALOG_SESSION_RELEASED_EVENT, { detail }),
+  );
+}
+
+export function catalogSessionReleasedDetailFromEvent(
+  event: Event,
+): CatalogSessionReleasedDetail | null {
+  const value: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !("agentId" in value) ||
+    typeof value.agentId !== "string" ||
+    !("catalogId" in value) ||
+    typeof value.catalogId !== "string" ||
+    !("hostId" in value) ||
+    typeof value.hostId !== "string" ||
+    !("threadId" in value) ||
+    typeof value.threadId !== "string"
+  ) {
+    return null;
+  }
+  return {
+    agentId: value.agentId,
+    catalogId: value.catalogId,
+    hostId: value.hostId,
+    threadId: value.threadId,
+  };
 }
 
 const CATALOG_SESSION_LOOKUP_PAGE_LIMIT = 100;

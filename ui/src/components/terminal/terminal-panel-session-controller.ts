@@ -1,5 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { takePreparedCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
 import {
   TerminalConnection,
@@ -12,6 +12,7 @@ import {
 import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
+import { applyTerminalExit, type TerminalCatalogRelease } from "./terminal-panel-session-exit.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
 import {
   resolveTerminalPanelOwnerSessionKey,
@@ -366,6 +367,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     operation: TerminalOperation,
     options: {
       awaitFirstOutput?: boolean;
+      catalogRelease?: TerminalCatalogRelease;
       restore?: { batch: TerminalRestoreBatch; sessionId: string };
     } = {},
   ) {
@@ -377,7 +379,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       awaitFirstOutput: options.awaitFirstOutput === true,
       isCurrent: () => this.isTerminalOperationCurrent(operation, options.restore?.batch),
       onReady: (tab) => this.readiness.markReady(tab),
-      onExit: (tab, info) => this.handleExit(tab.id, info),
+      onExit: (tab, info) => this.handleExit(tab.id, info, options.catalogRelease),
     });
     if (!this.isTerminalOperationCurrent(operation, options.restore?.batch)) {
       disposeTerminalController(boot.tab.controller, boot.tab.host);
@@ -457,7 +459,10 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalPanelSessionTab | undefined;
     try {
-      const boot = await this.bootTab(operation, { awaitFirstOutput: Boolean(catalog) });
+      const boot = await this.bootTab(operation, {
+        awaitFirstOutput: Boolean(catalog),
+        catalogRelease: catalog ? { catalog, agentId } : undefined,
+      });
       createdTab = boot.tab;
       boot.tab.pendingOpen = action;
       const result = await boot.connection.open(
@@ -571,7 +576,8 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }
       if (createdTab && !createdTab.gatewaySessionId && this.tabs.includes(createdTab)) {
         if (sessionGone) {
-          this.markRestoredSessionExited(createdTab, sessionId);
+          createdTab.gatewaySessionId = sessionId;
+          this.handleExit(createdTab.id, { reason: "disconnected", exitCode: null });
         } else {
           this.removeTab(createdTab);
         }
@@ -613,17 +619,14 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }
       return;
     }
-    this.markRestoredSessionExited(boot.tab, sessionId);
-  }
-
-  private markRestoredSessionExited(tab: TerminalPanelSessionTab, sessionId: string): void {
-    tab.gatewaySessionId = sessionId;
-    this.handleExit(tab.id, { reason: "disconnected", exitCode: null });
+    boot.tab.gatewaySessionId = sessionId;
+    this.handleExit(boot.tab.id, { reason: "disconnected", exitCode: null });
   }
 
   private handleExit(
     tabId: string,
     info: { reason?: string; exitCode: number | null; signal?: number | null; error?: string },
+    catalogRelease?: TerminalCatalogRelease,
   ): void {
     const tab = this.tabs.find((entry) => entry.id === tabId);
     if (!tab) {
@@ -631,13 +634,9 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
     this.retireRestoredTab(tab);
     this.readiness.stop(tab);
-    delete tab.pendingOpen;
-    tab.status = "exited";
-    tab.exitReason = info.reason;
-    tab.exitCode = info.exitCode;
-    tab.exitSignal = info.signal;
-    if (info.error?.trim()) {
-      this.setError(formatUiExternalText(info.error));
+    const error = applyTerminalExit(tab, info, catalogRelease);
+    if (error) {
+      this.setError(error);
     }
     // The connection drops its own sink on exit delivery, so no release() here —
     // the session id may not be recorded yet when an early exit is replayed.
