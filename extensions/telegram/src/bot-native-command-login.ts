@@ -11,6 +11,7 @@ import {
   formatProviderLoginFailure,
   isProviderLoginPatchPersisted,
   prepareProviderChannelLogin,
+  refreshProviderLoginAuthState,
   releaseProviderLoginFlow,
   reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
@@ -131,6 +132,15 @@ export async function executeTelegramLoginCommand(params: {
     config: dispatch.runtimeCfg,
     agentId: dispatch.route.agentId,
     signal: dispatch.opts.accountAbortSignal,
+    refreshAuth: () =>
+      refreshProviderLoginAuthState({
+        agentId: dispatch.route.agentId,
+        readConfig: dispatch.telegramDeps.getRuntimeConfig,
+        assertCurrent: (config) => {
+          dispatch.opts.accountAbortSignal?.throwIfAborted();
+          assertCurrent(config);
+        },
+      }),
     cancelLogin: () =>
       cancelProviderLoginFlow({
         flows: activeTelegramProviderLoginFlows,
@@ -141,6 +151,8 @@ export async function executeTelegramLoginCommand(params: {
         flows: activeTelegramProviderLoginFlows,
         flowKey: buildTelegramProviderLoginFlowKey(dispatch),
         command,
+        agentId: dispatch.route.agentId,
+        readConfig: dispatch.telegramDeps.getRuntimeConfig,
         runtime: dispatch.runtime,
         signal: dispatch.opts.accountAbortSignal,
         assertCurrent,
@@ -161,11 +173,12 @@ export async function executeTelegramLoginCommand(params: {
   const reservation = reserveProviderLoginFlow({
     flows: activeTelegramProviderLoginFlows,
     flowKey,
+    providerLabel: loginChoice.providerLabel,
     signal: dispatch.opts.accountAbortSignal,
   });
   if (reservation.status === "active") {
     await sendLoginMessage(
-      `${loginChoice.providerLabel} login is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.`,
+      `${reservation.providerLabel} sign-in is already in progress. Finish it, or send /login cancel to cancel.`,
     );
     return true;
   }
@@ -271,7 +284,7 @@ export async function executeTelegramLoginCommand(params: {
           flowSignal.throwIfAborted();
           dispatch.runtime.error?.(
             danger(
-              `telegram ${formatProviderLoginCommand(loginChoice)} completed but failed to update session auth profile: ${String(
+              `telegram ${formatProviderLoginCommand(loginChoice.command)} completed but failed to update session auth profile: ${String(
                 error,
               )}`,
             ),
@@ -279,11 +292,15 @@ export async function executeTelegramLoginCommand(params: {
           sessionSwitchFailed = true;
         }
       }
+      const sessionModel =
+        targetSessionEntryAtStart?.modelOverride ?? targetSessionEntryAtStart?.model;
       terminalMessage = formatProviderLoginCompletion(
         loginChoice,
         loginResult.authRefresh,
         sessionSwitchFailed,
-        "Telegram session",
+        nextProfileId && sessionModel
+          ? { model: sessionModel, profileId: nextProfileId }
+          : undefined,
       );
     } catch (error) {
       modelAccess = undefined;
@@ -291,7 +308,9 @@ export async function executeTelegramLoginCommand(params: {
         return;
       }
       dispatch.runtime.error?.(
-        danger(`telegram ${formatProviderLoginCommand(loginChoice)} failed: ${String(error)}`),
+        danger(
+          `telegram ${formatProviderLoginCommand(loginChoice.command)} failed: ${String(error)}`,
+        ),
       );
       terminalMessage = formatProviderLoginFailure(loginChoice, error);
     }
@@ -301,7 +320,8 @@ export async function executeTelegramLoginCommand(params: {
     try {
       if (modelAccess) {
         const reply = offerProviderLoginModelAccess({
-          record: reservation.record,
+          flows: activeTelegramProviderLoginFlows,
+          flowKey,
           prepared: modelAccess,
           terminalMessage,
         });
@@ -310,21 +330,18 @@ export async function executeTelegramLoginCommand(params: {
         await sendLoginResultMessage(terminalMessage);
       }
     } catch (error) {
-      reservation.record.pendingModelAccess = undefined;
       dispatch.runtime.error?.(
         danger(
-          `telegram ${formatProviderLoginCommand(loginChoice)} result notification failed: ${String(error)}`,
+          `telegram ${formatProviderLoginCommand(loginChoice.command)} result notification failed: ${String(error)}`,
         ),
       );
     }
   })().finally(() => {
-    if (!reservation.record.pendingModelAccess) {
-      releaseProviderLoginFlow({
-        flows: activeTelegramProviderLoginFlows,
-        flowKey,
-        record: reservation.record,
-      });
-    }
+    releaseProviderLoginFlow({
+      flows: activeTelegramProviderLoginFlows,
+      flowKey,
+      record: reservation.record,
+    });
   });
   await Promise.race([signInActionDelivered.promise, completion]);
   return signInActionWasDelivered;

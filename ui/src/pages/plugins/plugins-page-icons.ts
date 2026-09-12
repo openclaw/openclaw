@@ -1,6 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import type { PluginDiscoveryEntry, PluginListResult } from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
 import { CatalogIconController } from "./catalog-icon-controller.ts";
+import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginIconController } from "./plugin-icon-controller.ts";
 
 type PluginsPageIconsHost = {
@@ -40,7 +41,15 @@ export class PluginsPageIcons {
     });
   }
 
-  syncInstalled(result: PluginListResult | null, renderedPluginIds: ReadonlySet<string>): void {
+  syncInstalled(result: PluginListResult | null, view: ParentNode): void {
+    const renderedPluginIds = new Set<string>();
+    // Rendered tile markers preserve the inventory's sorting, filtering, and collapse policy.
+    for (const tile of view.querySelectorAll<HTMLElement>("[data-plugin-icon-id]")) {
+      const pluginId = tile.dataset.pluginIconId;
+      if (pluginId) {
+        renderedPluginIds.add(pluginId);
+      }
+    }
     this.installed.sync(result, renderedPluginIds);
   }
 
@@ -56,8 +65,19 @@ export class PluginsPageIcons {
     this.installed.handleError(pluginId);
   }
 
-  syncCatalog(entries: readonly PluginDiscoveryEntry[], extraUrls: readonly string[] = []): void {
-    this.catalog.sync(entries, extraUrls);
+  syncCatalog(
+    discovery: Pick<PluginDiscoveryController, "result" | "featured" | "trending">,
+    detail?: PluginDiscoveryDetailResult | null,
+  ): void {
+    this.catalog.sync(
+      [
+        ...(discovery.result?.items ?? []),
+        ...discovery.featured,
+        ...discovery.trending,
+        ...(detail ? [detail.plugin] : []),
+      ],
+      detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
+    );
   }
 
   resetInstalled(): void {

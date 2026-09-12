@@ -22,6 +22,7 @@ import {
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
@@ -280,6 +281,7 @@ async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  agentId?: string;
   agentDir: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -484,7 +486,24 @@ async function resolveSessionAuthProfileOverride(params: {
   // Provider artifacts own persisted route stickiness; runtime planning owns cross-route failover.
   const routeResolution =
     shouldRotateCurrent && !retryableHigherPriorityProfile
-      ? resolveProviderModelRoutes({ provider, modelId: params.modelId, config: cfg })
+      ? resolveProviderModelRoutes({
+          provider,
+          modelId: params.modelId,
+          config: cfg,
+          routeIntent: resolveModelRouteIntent({
+            config: cfg,
+            provider,
+            modelId: params.modelId,
+            agentId: params.agentId,
+            primaryModel: resolveDefaultModelForAgent({
+              cfg,
+              agentId: params.agentId,
+              allowManifestNormalization: false,
+              allowPluginNormalization: false,
+            }),
+            resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
+          }),
+        })
       : null;
   const currentAuthRequirement =
     current && routeResolution?.kind === "routes" && routeResolution.routes.length > 1

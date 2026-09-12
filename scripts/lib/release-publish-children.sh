@@ -529,6 +529,8 @@ guard_existing_public_release() {
   if ! release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,assets,body,url 2>/dev/null)"; then
     return 0
   fi
+  release_body="$(printf '%s' "${release_json}" | jq -er '.body | strings')" || return 1
+  assert_initial_release_body "${release_body}" || return 1
 
   is_draft="$(printf '%s' "${release_json}" | jq -r '.isDraft')"
   if [[ "${is_draft}" == "true" ]]; then
@@ -707,16 +709,14 @@ render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
-  local changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
   local -a render_args=(
-    node --import tsx scripts/render-github-release-notes.mts
-    --changelog "${changelog_file}"
+    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
+    --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
     --tag "${RELEASE_TAG}"
     --repository "${GITHUB_REPOSITORY}"
     --output "${output_file}"
   )
 
-  git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
   if [[ -n "${verification_file}" ]]; then
     render_args+=(--verification-file "${verification_file}")
   fi
@@ -748,24 +748,25 @@ verify_release_tag_target() {
 
 canonical_release_body_matches() {
   local body_file="$1"
-  local changelog_file="${RUNNER_TEMP}/release-body-changelog.md"
-  git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
   RELEASE_BODY_FILE="${body_file}" \
-    RELEASE_CHANGELOG_FILE="${changelog_file}" \
+    RELEASE_SOURCE_SHA="${TARGET_SHA}" \
     RELEASE_REPOSITORY="${GITHUB_REPOSITORY}" \
     RELEASE_TAG="${RELEASE_TAG}" \
     node --import tsx --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 import {
   releaseNotesVersionForTag,
+  loadReleaseNotesForTag,
   verifyGithubReleaseNotes,
-} from "./scripts/render-github-release-notes.mts";
+} from "./.release-harness/scripts/render-github-release-notes.mts";
 
 const body = readFileSync(process.env.RELEASE_BODY_FILE, "utf8");
-const changelog = readFileSync(process.env.RELEASE_CHANGELOG_FILE, "utf8");
+const source = loadReleaseNotesForTag({ rootDir: process.env.GITHUB_WORKSPACE, ref: process.env.RELEASE_SOURCE_SHA,
+  tag: process.env.RELEASE_TAG, version: releaseNotesVersionForTag(process.env.RELEASE_TAG) });
 const result = verifyGithubReleaseNotes({
   body,
-  changelog,
+  changelog: source.section,
+  contributionRecordPath: source.recordPath ?? undefined,
   version: releaseNotesVersionForTag(process.env.RELEASE_TAG),
   tag: process.env.RELEASE_TAG,
   repository: process.env.RELEASE_REPOSITORY,
@@ -776,8 +777,15 @@ if (!result.matches) {
 NODE
 }
 
+assert_initial_release_body() {
+  if [[ "$1" == *'<!-- openclaw-release-publication:docs-v1 -->'* ]]; then
+    echo "Release body belongs to post-docs publication; the initial publisher cannot overwrite it." >&2
+    return 1
+  fi
+}
+
 create_or_update_github_release() {
-  local existing_body_file existing_state release_version title latest_arg prerelease_arg
+  local existing_body existing_body_file existing_state release_version title latest_arg prerelease_arg
   verify_release_tag_target
   release_version="${RELEASE_TAG#v}"
   title="openclaw ${release_version}"
@@ -791,6 +799,8 @@ create_or_update_github_release() {
   fi
 
   if existing_state="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,body 2>/dev/null)"; then
+    existing_body="$(printf '%s' "${existing_state}" | jq -er '.body | strings')" || return 1
+    assert_initial_release_body "${existing_body}" || return 1
     # A public page only reaches this call after
     # guard_existing_public_release accepted it as canonical; leave
     # it untouched so a failed resume cannot strip its verification
@@ -1171,6 +1181,9 @@ verify_published_release() {
 
 append_release_proof_to_github_release() {
   local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line
+  local current_body
+  current_body="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')" || return 1
+  assert_initial_release_body "${current_body}" || return 1
 
   release_version="${RELEASE_TAG#v}"
   proof_file="${RUNNER_TEMP}/release-verification.md"
@@ -1253,6 +1266,10 @@ writeFileSync(proofFile, section);
 NODE
 
   render_github_release_notes "${notes_file}" "${proof_file}" "${metadata_file}"
+  # Re-read immediately before this independent body writer. A docs publication
+  # may have completed since the initial publication/resume guard ran.
+  current_body="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')" || return 1
+  assert_initial_release_body "${current_body}" || return 1
   gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
   if jq -e '.verificationIncluded == true' "${metadata_file}" >/dev/null; then
     echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"

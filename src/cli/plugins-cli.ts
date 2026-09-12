@@ -149,6 +149,17 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
+    .command("reload")
+    .description("Reload a plugin in the running Gateway")
+    .argument("<id>", "Plugin id")
+    .option("--accept-capabilities", "Accept changed declared capabilities", false)
+    .option("--json", "Print the applied runtime generation", false)
+    .action(async (id: string, opts: { json?: boolean; acceptCapabilities?: boolean }) => {
+      const { runPluginsReloadCommand } = await loadPluginsRuntime();
+      await runPluginsReloadCommand(id, opts);
+    });
+
+  plugins
     .command("uninstall")
     .description("Uninstall a plugin")
     .argument("<id>", "Plugin id")

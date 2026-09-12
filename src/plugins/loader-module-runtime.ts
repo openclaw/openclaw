@@ -104,9 +104,15 @@ export function createPluginModuleLoader(options: {
   tryNative?: boolean;
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
+  expectedSourceDigests?: Readonly<Record<string, string>>;
 }) {
   const cache = getPluginCache();
-  const captured = { ...options };
+  const captured = {
+    ...options,
+    expectedSourceDigests: options.expectedSourceDigests
+      ? { ...options.expectedSourceDigests }
+      : undefined,
+  };
   const createLoaderForModule = (modulePath: string) => {
     if (captured.installNativeSdkResolver !== false && captured.tryNative !== false) {
       installOpenClawPluginSdkNativeResolver({
@@ -143,6 +149,11 @@ export function createPluginModuleLoader(options: {
       if (!instance) {
         instance = new PluginInstance(owner.record.id, owner);
         if (owner.record.origin === "bundled" && isJavaScriptModulePath(modulePath)) {
+          if (captured.expectedSourceDigests?.[owner.record.id] !== undefined) {
+            throw new Error(
+              "Source digest validation is not applicable to core-bundled runtime modules",
+            );
+          }
           // Core-shipped JS chunks keep process identity; source plugins own a reloadable graph.
           const loadHostModule = createLoaderForModule(modulePath);
           instance.bindModuleLoader((source) =>
@@ -155,10 +166,15 @@ export function createPluginModuleLoader(options: {
             source: modulePath,
             rootDir: owner.rootDir,
             standalone: owner.standalone,
+            expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
             devSourceRoot: captured.devSourceRoot,
             pluginSdkResolution: captured.pluginSdkResolution,
           });
         }
+      }
+      const expected = captured.expectedSourceDigests?.[owner.record.id];
+      if (expected !== undefined && instance.sourceDigest !== expected) {
+        throw new Error(`Plugin ${owner.record.id} captured source changed after installation`);
       }
       return instance.loadModule(modulePath);
     });

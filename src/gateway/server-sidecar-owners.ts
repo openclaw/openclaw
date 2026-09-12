@@ -15,6 +15,9 @@ export function createGatewaySidecarStopOwner(params: {
     if (phase === "closing") {
       void stop().catch(() => {});
     }
+    return () => {
+      params.setRegistered(params.getRegistered().filter((sidecar) => !sidecars.includes(sidecar)));
+    };
   };
   const beginClose = () => {
     if (phase === "open") {

@@ -108,6 +108,9 @@ the same batch.
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
 
+Pass exactly one config path. Extra arguments, including an empty quoted argument (`""`),
+are rejected; they do not suppress validation of later options.
+
 A schema-valid but unset path explains that the runtime default applies; an unknown path suggests
 `openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
 on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.

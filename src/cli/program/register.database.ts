@@ -3,8 +3,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-  preflightOpenClawStateDatabasePath,
   preflightOpenClawAgentDatabasePath,
+  preflightOpenClawStateDatabasePath,
 } from "../../state/openclaw-database-preflight.js";
 import { resolveDatabasePath } from "../../state/openclaw-state-db-maintenance.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";

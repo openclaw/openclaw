@@ -9,6 +9,7 @@ import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 import {
   COLD_READ_COMMAND_PATHS,
   registerColdReadCommandFixtures,
+  registerNativeExecutorPreActionTests,
 } from "./preaction.test-helpers.js";
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
@@ -144,9 +145,7 @@ afterEach(() => {
 
 describe("registerPreActionHooks", () => {
   let program: Command;
-  let preActionHook:
-    | ((thisCommand: Command, actionCommand: Command) => Promise<void> | void)
-    | null = null;
+  let preActionHook: Parameters<Command["hook"]>[1] | null = null;
 
   function buildProgram() {
     const programLocal = new Command().name("openclaw").enablePositionalOptions();
@@ -328,6 +327,12 @@ describe("registerPreActionHooks", () => {
     }
     await preActionHook(program, actionCommand);
   }
+
+  registerNativeExecutorPreActionTests(() => registerPreActionHooks, {
+    config: ensureConfigReadyMock,
+    plugins: ensurePluginRegistryLoadedMock,
+    banner: emitCliBannerMock,
+  });
 
   it("applies shared skip policy to routed reads on the Commander path", async () => {
     const processTitleSetSpy = vi.spyOn(process, "title", "set");

@@ -3047,7 +3047,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledWith(
       1234,
-      "Only a configured OpenClaw owner/admin can start provider login from this channel.",
+      "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
       {},
     );
   });

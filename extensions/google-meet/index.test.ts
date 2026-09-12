@@ -3720,7 +3720,29 @@ describe("google-meet plugin", () => {
     expect(JSON.parse(runMoved)).toEqual({ departed: true, urlMatched: false });
   });
 
-  it("starts the local realtime audio bridge after Meet is inspected", async () => {
+  it.each<[string, () => Record<string, unknown>, { waitForInCallMs?: number }, boolean]>([
+    [
+      "starts the local realtime audio bridge after Meet is inspected",
+      () => meetBrowserState(),
+      {},
+      true,
+    ],
+    [
+      "does not start the local realtime audio bridge while Meet admission is pending",
+      () => ({
+        inCall: false,
+        lobbyWaiting: true,
+        manualAction: {
+          reason: "meet-admission-required",
+          message: "Admit the OpenClaw browser participant in Google Meet.",
+        },
+        title: "Meet",
+        url: MEET_URL,
+      }),
+      { waitForInCallMs: 1 },
+      false,
+    ],
+  ])("%s", async (_name, browserResult, chromeOptions, startsBridge) => {
     await withPlatform("darwin", async () => {
       const events: string[] = [];
       const callGatewayFromCli = vi.fn(
@@ -3749,7 +3771,7 @@ describe("google-meet plugin", () => {
             return { ok: true };
           }
           if (request.path === "/act") {
-            return { result: JSON.stringify(meetBrowserState()) };
+            return { result: JSON.stringify(browserResult()) };
           }
           throw new Error(`unexpected browser request path ${request.path}`);
         },
@@ -3762,6 +3784,7 @@ describe("google-meet plugin", () => {
           defaultTransport: "chrome",
           chrome: {
             audioBridgeCommand: ["bridge", "start"],
+            ...chromeOptions,
           },
           realtime: { introMessage: "" },
         },
@@ -3788,92 +3811,15 @@ describe("google-meet plugin", () => {
       });
 
       expectRespondedOk(respond);
-      expect(events.indexOf("browser:/act")).toBeGreaterThan(-1);
-      expect(events.indexOf("command:bridge start")).toBeGreaterThan(
-        events.indexOf("browser:/act"),
-      );
-    });
-  });
-
-  it("does not start the local realtime audio bridge while Meet admission is pending", async () => {
-    await withPlatform("darwin", async () => {
-      const events: string[] = [];
-      const callGatewayFromCli = vi.fn(
-        async (
-          _method: string,
-          _opts: unknown,
-          params?: unknown,
-          _extra?: unknown,
-        ): Promise<Record<string, unknown>> => {
-          const request = params as { path?: string; body?: { targetId?: string; url?: string } };
-          events.push(`browser:${request.path}`);
-          if (request.path === "/tabs") {
-            return { tabs: [] };
-          }
-          if (request.path === "/tabs/open") {
-            return {
-              targetId: "local-meet-tab",
-              title: "Meet",
-              url: request.body?.url ?? MEET_URL,
-            };
-          }
-          if (request.path === "/tabs/focus" || request.path === "/permissions/grant") {
-            return { ok: true };
-          }
-          if (request.path === "/act") {
-            return {
-              result: JSON.stringify({
-                inCall: false,
-                lobbyWaiting: true,
-                manualAction: {
-                  reason: "meet-admission-required",
-                  message: "Admit the OpenClaw browser participant in Google Meet.",
-                },
-                title: "Meet",
-                url: MEET_URL,
-              }),
-            };
-          }
-          throw new Error(`unexpected browser request path ${request.path}`);
-        },
-      );
-      localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
-        await callGatewayFromCli(method, {}, params, requestOptions);
-      const { methods } = setup(
-        {
-          defaultMode: "bidi",
-          defaultTransport: "chrome",
-          chrome: {
-            audioBridgeCommand: ["bridge", "start"],
-            waitForInCallMs: 1,
-          },
-          realtime: { introMessage: "" },
-        },
-        {
-          runCommandWithTimeoutHandler: async (argv) => {
-            events.push(`command:${argv.join(" ")}`);
-            return argv[0]?.endsWith("system_profiler")
-              ? { code: 0, stdout: "BlackHole 2ch", stderr: "" }
-              : { code: 0, stdout: "", stderr: "" };
-          },
-        },
-      );
-      const handler = methods.get("googlemeet.join") as
-        | ((ctx: {
-            params: Record<string, unknown>;
-            respond: ReturnType<typeof vi.fn>;
-          }) => Promise<void>)
-        | undefined;
-      const respond = vi.fn();
-
-      await handler?.({
-        params: { url: MEET_URL },
-        respond,
-      });
-
-      expectRespondedOk(respond);
-      expect(events).toContain("browser:/act");
-      expect(events).not.toContain("command:bridge start");
+      if (startsBridge) {
+        expect(events.indexOf("browser:/act")).toBeGreaterThan(-1);
+        expect(events.indexOf("command:bridge start")).toBeGreaterThan(
+          events.indexOf("browser:/act"),
+        );
+      } else {
+        expect(events).toContain("browser:/act");
+        expect(events).not.toContain("command:bridge start");
+      }
     });
   });
 

@@ -209,6 +209,8 @@ Right-click an external link in the dashboard to choose **Open in Browser Panel*
 
 The first time a Mac tab opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Dashboard → Settings → This Mac → Browser** can re-open the native import flow while a local Gateway and eligible profile are available. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
+Switching away from Local mode hides the import banner and discards pending status or banner results. An import already sent to the local Gateway may still finish there; switching modes does not undo copied cookies. Returning to Local mode lets you request a fresh offer from **Settings → This Mac → Browser**.
+
 ## Sync cookies to a remote computer
 
 Import copies cookies once into a profile on the same Mac. When your Gateway and agent browser run on a **separate computer** (a dedicated box, a headless Linux host, or a cloud container), turn on cookie sync so this Mac keeps that remote browser signed in to the sites you choose.

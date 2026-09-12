@@ -10,7 +10,6 @@ import {
   readTaskBackingInstance,
 } from "./task-backing-authority.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 import { updateTask } from "./task-registry-mutation.js";
@@ -22,7 +21,7 @@ import {
   loadTaskRegistryControlRuntime,
   tasks,
 } from "./task-registry-state.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
 function ensureTaskCancellationReady(task: TaskRecord): void {

@@ -76,8 +76,9 @@ import {
 } from "../../plugins/control-ui-actions.ts";
 import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
-import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
+import type { SessionsRouteData } from "./route.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
@@ -100,7 +101,7 @@ type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived" | "sessionId"
 
 type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
-  query: ReturnType<typeof sessionsPageListQuery>;
+  query: ReturnType<typeof buildSessionsListQuery>;
   key: string;
   transcriptKey: string;
 };
@@ -450,7 +451,7 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private sessionListOptions(context: ApplicationContext, search = this.searchQuery) {
-    return sessionsPageListQuery(context, {
+    return buildSessionsListQuery(context, {
       activeMinutes: parseStrictPositiveInteger(this.activeMinutes),
       // The Limit box is an explicit page size, so an unparseable entry falls
       // back to the page default rather than to the shared roster page size.

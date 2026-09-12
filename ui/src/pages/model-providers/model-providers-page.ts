@@ -84,9 +84,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
   private probeEpochs = new Map<string, number>();
+  private coreCatalogGeneration = 0;
   private readonly core = new ModelProviderCoreLoader(this, {
     onStart: (reason) => {
       this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
+      this.coreCatalogGeneration = this.catalogDiscovery.generation;
       this.supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
         this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach(
@@ -94,9 +96,21 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         );
       }
     },
-    onComplete: ({ client, data, reason }) => {
-      this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
-      this.supplemental.adoptCoreData(client, data);
+    onComplete: ({ client, data }) => {
+      const current = this.data;
+      // Pickers remain usable during core loading, so their newer catalog owns the view.
+      this.supplemental.adoptCoreData(
+        client,
+        current && this.catalogDiscovery.generation !== this.coreCatalogGeneration
+          ? {
+              ...data,
+              models: current.models,
+              automaticUtilityModel: current.automaticUtilityModel,
+              providerOutcomes: current.providerOutcomes,
+              catalogError: current.catalogError,
+            }
+          : data,
+      );
     },
     refreshPublication: () => void this.refresh("publication"),
   });
@@ -600,10 +614,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       asConfigRecord(runtimeState.configForm ?? runtimeState.configSnapshot?.config) ??
       asConfigRecord(data.config) ??
       {};
-    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const configuredDefaults = {
       ...config.defaults,
-      ...readModelBehaviorConfig(agentsDefaults),
+      ...readModelBehaviorConfig(asConfigRecord(asConfigRecord(configObject.agents)?.defaults)),
     };
     const defaults = this.defaultsDraft ?? configuredDefaults;
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {

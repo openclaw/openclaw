@@ -27,6 +27,17 @@ export type TaskRuntime = (typeof TASK_RUNTIMES)[number];
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskStatusFilter = (typeof TASK_STATUS_FILTERS)[number];
 
+/** Returns whether a task status is terminal for delivery and retention policy. */
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "timed_out" ||
+    status === "cancelled" ||
+    status === "lost"
+  );
+}
+
 export type TaskDeliveryStatus =
   | "pending"
   | "delivered"

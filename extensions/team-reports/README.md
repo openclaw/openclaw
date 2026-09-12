@@ -7,7 +7,9 @@ source checkouts load it from `extensions/team-reports`. Disabled by default.
 
 Configure `plugins.entries.team-reports.config` with a GitHub token or
 SecretRef, at least one organization, and team or inline identity entries.
-Restart the Gateway after enabling the plugin or changing its configuration.
+Configuration changes automatically reload the running plugin. Use
+`openclaw plugins reload team-reports` after editing plugin code or if the
+plugin remains unavailable after fixing its configuration.
 
 ```sh
 openclaw team-reports status --json

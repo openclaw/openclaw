@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalMainCommitMatches,
   canonicalPullRequests,
@@ -39,6 +39,10 @@ import {
   validateReleaseProvenanceOverrides,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
+import { splitChangelog, writeReleaseChangelog } from "../../scripts/lib/release-changelog.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createReleaseNotesFixtureLines(): string[] {
   return [
@@ -81,6 +85,48 @@ function git(cwd: string, args: string[], extraEnv: Record<string, string> = {})
 }
 
 describe("release-note verification", () => {
+  it("refuses docs mirrors before source or GitHub work and preserves frozen records", () => {
+    const cwd = tempDirs.make("openclaw-mirror-generation-");
+    writeFileSync(
+      join(cwd, "CHANGELOG.md"),
+      [
+        ...createReleaseNotesFixtureLines(),
+        "### Complete contribution record",
+        "",
+        "#### Pull requests",
+        "",
+        "- **PR #12** Original accounting.",
+        "",
+      ].join("\n"),
+    );
+    splitChangelog({ rootDir: cwd });
+    const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
+    const recordPath = join(cwd, "CHANGELOG/records/2026.7.1.md");
+    const mirror = "## 2026.7.1\n\n<!-- openclaw-docs-mirror-v1 {} -->\n\nApproved reader prose.\n";
+    writeFileSync(entryPath, mirror);
+    const record = readFileSync(recordPath, "utf8");
+    const index = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifier,
+        "--base",
+        "absent",
+        "--target",
+        "absent",
+        "--version",
+        "2026.7.1",
+        "--write-ledger",
+      ],
+      { cwd, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("docs-publication workflow");
+    expect(readFileSync(entryPath, "utf8")).toBe(mirror);
+    expect(readFileSync(recordPath, "utf8")).toBe(record);
+    expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
+  });
+
   it("excludes maintainer and automation identities from contributor credit", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(false);
@@ -1077,6 +1123,7 @@ console.log(JSON.stringify({ data }));
         );
         chmodSync(gh, 0o755);
         const manifestPath = join(cwd, "manifest.json");
+        splitChangelog({ rootDir: cwd });
         const result = spawnSync(
           process.execPath,
           [
@@ -1109,7 +1156,7 @@ console.log(JSON.stringify({ data }));
           { ref: "v2026.6.1", count: 1, pullRequests: [12] },
         ]);
         expect(
-          readFileSync(join(cwd, "CHANGELOG.md"), "utf8").match(/\*\*PR #10\*\*/g),
+          readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8").match(/\*\*PR #10\*\*/g),
         ).toHaveLength(1);
       } finally {
         rmSync(cwd, { recursive: true, force: true });
@@ -1218,6 +1265,7 @@ console.log(JSON.stringify({ data }));
       );
       chmodSync(gh, 0o755);
       const manifestPath = join(cwd, "manifest.json");
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1408,6 +1456,7 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["config", "diff.external", hook]);
 
       const manifestPath = join(cwd, "manifest.json");
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1586,6 +1635,7 @@ console.log(JSON.stringify({ data }));
         ...(seed ? ["--seed-ref", seed] : []),
         ...(mode === "provenance-carrier" ? ["--release-provenance", `${carrier} -> #22`] : []),
       ];
+      splitChangelog({ rootDir: cwd });
       const run = (write: boolean) =>
         spawnSync(process.execPath, [...args, ...(write ? ["--write-ledger"] : [])], {
           cwd,
@@ -1614,11 +1664,12 @@ console.log(JSON.stringify({ data }));
       expect(manifest.source.retainedSeedOnlyPullRequests).toBe(seed ? 1 : 0);
       expect(manifest.source.references).toBe(2);
       if (mode === "body-only") {
-        const generated = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
-        writeFileSync(
-          join(cwd, "CHANGELOG.md"),
-          generated.replace("**PR #21**", "**PR #21** Related #22."),
-        );
+        const generated = readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8");
+        writeReleaseChangelog({
+          rootDir: cwd,
+          version: "2026.7.1",
+          section: generated.replace("**PR #21**", "**PR #21** Related #22."),
+        });
         const verified = run(false);
         expect(verified.stderr).toBe("");
         expect(verified.status, verified.stdout).toBe(0);
@@ -1685,6 +1736,7 @@ console.log(JSON.stringify({ data }));
       );
       chmodSync(gh, 0o755);
       const manifestPath = join(cwd, "manifest.json");
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1709,11 +1761,13 @@ console.log(JSON.stringify({ data }));
       if (scenario.error) {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(scenario.error);
-        expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+        expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toBe(
+          changelog.slice(changelog.indexOf("## 2026.7.1")),
+        );
       } else {
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(readFileSync(manifestPath, "utf8")).source.directCommits).toBe(1);
-        expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
+        expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toContain(
           "### Complete contribution record",
         );
       }
@@ -1750,6 +1804,7 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["commit", "-qm", "initial"]);
       const targetSha = git(cwd, ["rev-parse", "HEAD"]);
 
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1771,7 +1826,7 @@ console.log(JSON.stringify({ data }));
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout).target).toBe(targetSha);
-      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
+      expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toContain(
         `This audited record covers the complete HEAD..${targetSha} history:`,
       );
     } finally {
@@ -1818,6 +1873,7 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["commit", "-qm", "release"]);
       git(cwd, ["tag", "beta-base"]);
 
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1842,7 +1898,7 @@ console.log(JSON.stringify({ data }));
     }
   });
 
-  it("leaves CHANGELOG.md untouched when the rendered ledger fails validation", () => {
+  it("leaves split artifacts untouched when the rendered ledger fails validation", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
     try {
       git(cwd, ["init", "-q"]);
@@ -1865,6 +1921,8 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["commit", "-qm", "initial"]);
       const manifestPath = join(cwd, "release-manifest.json");
 
+      splitChangelog({ rootDir: cwd });
+      const index = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
       const result = spawnSync(
         process.execPath,
         [
@@ -1895,7 +1953,10 @@ console.log(JSON.stringify({ data }));
           uniquePullRequests: 0,
         },
       });
-      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
+      expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toBe(
+        changelog.slice(changelog.indexOf("## 2026.7.1")),
+      );
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

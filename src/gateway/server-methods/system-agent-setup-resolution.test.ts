@@ -521,7 +521,7 @@ describe("openclaw.setup provider resolution", () => {
       done: true,
       status: "error",
       error:
-        'Error: Provider setup resolution failed for "ollama". Run `openclaw doctor --fix`, restart the Gateway, and try again.',
+        'Provider setup resolution failed for "ollama". Run `openclaw doctor --fix`, restart the Gateway, and try again.',
     });
     await whenAdmittedWizardSessionSettled(session);
     expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
@@ -679,7 +679,7 @@ describe("openclaw.setup provider resolution", () => {
         expect(done).toEqual({
           done: true,
           status: "error",
-          error: "Error: Probe rejected [redacted]",
+          error: "Probe rejected [redacted]",
           activationRejection: { disposition: "rejected-before-promotion", status },
         });
         expect(done).not.toHaveProperty("modelActivation");
@@ -737,7 +737,7 @@ describe("openclaw.setup provider resolution", () => {
           expect(done).toMatchObject({
             done: true,
             status: "error",
-            error: `Error: ${shutdownMessage}`,
+            error: shutdownMessage,
           });
           expect(done).not.toHaveProperty("modelActivation");
         }
@@ -779,7 +779,7 @@ describe("openclaw.setup provider resolution", () => {
     expect(done).toEqual({
       done: true,
       status: "error",
-      error: "Error: Provider rejected sign-in",
+      error: "Provider rejected sign-in",
       activationRejection: { disposition: "rejected-before-promotion", status: "auth" },
     });
     expect(done).not.toHaveProperty("step");
@@ -864,10 +864,10 @@ describe("openclaw.setup provider resolution", () => {
             outcome === "application-error"
               ? expect.stringContaining("AI access was saved, but the Gateway could not apply it")
               : outcome === "retention-indeterminate"
-                ? "SetupInferenceActivationIndeterminateError: Could not retain Codex safely"
+                ? "Could not retain Codex safely"
                 : outcome === "thrown"
-                  ? "Error: 401 Provider rejected sign-in"
-                  : "Error: Provider rejected sign-in",
+                  ? "401 Provider rejected sign-in"
+                  : "Provider rejected sign-in",
           ...(outcome === "rejected"
             ? { activationRejection: { disposition: "rejected-before-promotion", status: "auth" } }
             : {}),

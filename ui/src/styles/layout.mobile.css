@@ -45,7 +45,7 @@
 
 /* The app host chooses this class from the platform-aware drawer breakpoint.
    Native macOS keeps its rail beside the half-width link browser until 600px;
-   regular browsers retain the 1100px tablet breakpoint. */
+   browsers and Tauri keep the sidebar at the default 1080px window width. */
 .shell--mobile-nav,
 .shell--mobile-nav.shell--nav-collapsed {
   --shell-topbar-height: 58px;

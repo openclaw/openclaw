@@ -59,6 +59,7 @@ type SharedProps = {
   pageNotice: PluginRowMessage | null;
   iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
+  reloadBlockedReason: string | null;
   mutationBlockedReason: string | null;
   configBusy: boolean;
   configSchemaLoading: boolean;
@@ -70,6 +71,7 @@ type SharedProps = {
   onIconError: (pluginId: string) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
+  onReload: (pluginId: string, rowKey: string) => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigRemove: (path: Array<string | number>) => void;
   onConfigReload: () => void;

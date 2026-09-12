@@ -4675,7 +4675,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
    Responsive - Tablet
    =========================================== */
 
-@media (max-width: 1100px) {
+@media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--mobile-nav {
     --shell-pad: 12px;
     --shell-gap: 12px;

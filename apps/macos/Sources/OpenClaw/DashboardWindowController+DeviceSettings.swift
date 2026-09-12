@@ -221,6 +221,7 @@ extension DashboardWindowController {
             guard !Task.isCancelled, self.isWindowOpen else { return }
             switch outcome {
             case .offering: self.show()
+            case .superseded: break
             case let .unavailable(title, message):
                 let alert = NSAlert()
                 alert.messageText = title

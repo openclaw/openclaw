@@ -12,6 +12,7 @@ import {
 } from "../agents/tool-policy.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
+import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -796,7 +797,15 @@ export function createHookRunner(
       }
     });
 
-    await Promise.all(promises);
+    // Strict lifecycle callers settle every handler's bounded outcome before advancing.
+    const failures = (await Promise.allSettled(promises)).flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
+    }
   }
 
   const bindVoidHook =
@@ -1535,16 +1544,29 @@ export function createHookRunner(
       shouldStop: (result) => result.cancel === true,
       terminalLabel: "cancel=true",
     }),
-    runMessageSending: bindModifyingHook("message_sending", {
-      mergeResults: (acc, next) => ({
-        content: lastDefined(acc?.content, next.content),
-        cancel: stickyTrue(acc?.cancel, next.cancel),
-        cancelReason: lastDefined(acc?.cancelReason, next.cancelReason),
-        metadata: next.metadata ?? acc?.metadata,
-      }),
-      shouldStop: (result) => result.cancel === true,
-      terminalLabel: "cancel=true",
-    }),
+    runMessageSending: async (
+      event: HookEvent<"message_sending">,
+      ctx: HookContext<"message_sending">,
+    ) => {
+      const result = await runModifyingHook<"message_sending", HookResult<"message_sending">>(
+        "message_sending",
+        event,
+        ctx,
+        {
+          mergeResults: (acc, next) => ({
+            content: lastDefined(acc?.content, next.content),
+            cancel: stickyTrue(acc?.cancel, next.cancel),
+            cancelReason: lastDefined(acc?.cancelReason, next.cancelReason),
+            metadata: next.metadata ?? acc?.metadata,
+          }),
+          shouldStop: (decision) => decision.cancel === true,
+          terminalLabel: "cancel=true",
+        },
+      );
+      const original = result?.cancel ? undefined : (result?.content ?? event.content);
+      const content = finalizeGroupThreadToolReply(original, event, ctx);
+      return content !== original ? { ...result, content } : result;
+    },
     runMessageSent: bindVoidHook("message_sent"),
     // Tool hooks
     runBeforeToolCall,

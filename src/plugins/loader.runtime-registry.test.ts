@@ -30,6 +30,7 @@ import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
 } from "./loader-runtime-load.js";
+import { PluginLoadFailureError } from "./loader-shared.js";
 import {
   clearPluginRegistryLoadCache,
   loadAndActivateRootPluginRegistry,
@@ -513,6 +514,58 @@ describe("cached plugin load failures", () => {
     expect(getActivePluginRegistry()).toBe(active);
     expect(load(options)).toBe(cached);
     expect(getActivePluginRegistry()).toBe(activates ? cached : active);
+  });
+
+  it("reports only newly failed replacements while retaining the complete diagnostic registry", () => {
+    useNoBundledPlugins();
+    const broken = writePlugin({
+      id: "startup-broken",
+      body: 'throw new Error("retained startup failure");',
+    });
+    const healthy = writePlugin({
+      id: "healthy-replacement",
+      body: "module.exports = { register() {} };",
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [broken.id, healthy.id],
+          load: { paths: [broken.file, healthy.file] },
+          slots: { memory: "none" },
+        },
+      },
+      cache: false,
+    };
+    const previous = loadPluginRegistryHandle(options);
+    const retained = previous.plugins.find((entry) => entry.id === broken.id);
+    expect(retained).toMatchObject({ status: "error" });
+    expect(previous.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "loaded",
+    });
+    fs.writeFileSync(healthy.file, 'throw new Error("new replacement failure");');
+    let failure: unknown;
+    try {
+      loadPluginRegistryHandle({
+        ...options,
+        previousRegistry: previous,
+        replacePluginIds: [healthy.id],
+        throwOnLoadError: true,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(PluginLoadFailureError);
+    if (!(failure instanceof PluginLoadFailureError)) {
+      throw failure;
+    }
+    expect(failure.pluginIds).toEqual([healthy.id]);
+    expect(failure.message).not.toContain(broken.id);
+    expect(failure.registry.plugins.find((entry) => entry.id === broken.id)).toBe(retained);
+    expect(failure.registry.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("new replacement failure"),
+    });
+    expect(failure.registry.diagnostics).toEqual(expect.arrayContaining(previous.diagnostics));
   });
 
   it("continues to reuse healthy cached registries for strict loads", () => {

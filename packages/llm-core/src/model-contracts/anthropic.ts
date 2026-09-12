@@ -17,7 +17,7 @@ function normalizeClaudeModelId(modelId?: string): string {
 
 export const CLAUDE_FABLE_5_THINKING_PROFILE = {
   levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
-  defaultLevel: "high",
+  defaultLevel: "medium",
   preserveWhenCatalogReasoningFalse: true,
 } as const;
 

@@ -519,7 +519,8 @@ describe("ModelProvidersPage catalog discovery", () => {
   ])(
     "discovers the full catalog when the $picker picker opens and merges it without clearing saved state",
     async ({ index: firstPicker }) => {
-      const { context, request, discover, readPublished, runtimeConfig } = createCatalogHarness();
+      const { context, request, discover, readPublished, runtimeConfig, publishEvent } =
+        createCatalogHarness();
       const pending = deferred<ModelCatalogResult>();
       discover.mockReturnValue(pending.promise);
       const discovered: ModelCatalogResult = {
@@ -586,7 +587,11 @@ describe("ModelProvidersPage catalog discovery", () => {
       readPublished.mockReturnValue(published);
       await openModelPicker(page, 1);
       await drainPageUpdates(page);
-      expect(page.data?.models).toEqual(published.models);
+      expect(page.data?.models).toEqual(discovered.models);
+      expect(readPublished).toHaveBeenCalledOnce();
+      publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForFast(() => expect(page.data?.models).toEqual(published.models));
+      await drainPageUpdates(page);
       expect(
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
@@ -704,15 +709,121 @@ describe("ModelProvidersPage catalog discovery", () => {
     },
   );
 
+  it.each(["completed", "pending"] as const)(
+    "keeps newer picker discovery %s when an older core refresh completes",
+    async (discoveryState) => {
+      const { context, request, discover, readPublished, catalogRequest, runtimeConfig } =
+        createCatalogHarness();
+      const refreshedConfig = {
+        agents: {
+          defaults: {
+            model: {
+              ...savedModelConfig.agents.defaults.model,
+              primary: "openai/prepared-utility",
+            },
+          },
+        },
+      };
+      const coreConfig = deferred<{ config: typeof refreshedConfig; hash: string }>();
+      const pickerDiscovery = deferred<ModelCatalogResult>();
+      readPublished.mockReturnValue({
+        ...preparedCatalog,
+        defaultModels: { automaticUtilityModel: "openai/prepared-utility" },
+      });
+      const newer: ModelCatalogResult = {
+        models: [
+          ...preparedCatalog.models,
+          { id: "newer", name: "Newer model", provider: "openai", available: true },
+        ],
+        defaultModels: { automaticUtilityModel: "openai/newer" },
+        providerOutcomes: [{ provider: "openai", status: "ready" }],
+      };
+      discover
+        .mockResolvedValueOnce({
+          ...preparedCatalog,
+          defaultModels: { automaticUtilityModel: "openai/prepared-fallback" },
+        })
+        .mockReturnValueOnce(pickerDiscovery.promise);
+      const page = appendPage(context);
+      try {
+        await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+        await drainPageUpdates(page);
+        expect(page.data?.automaticUtilityModel).toBe("openai/prepared-utility");
+        let configRequested = false;
+        request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
+          if (method === "config.get") {
+            configRequested = true;
+            return coreConfig.promise;
+          }
+          return catalogRequest(method, params);
+        });
+
+        page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+        await waitForFast(() => {
+          expect(configRequested).toBe(true);
+          expect(discover).toHaveBeenCalledOnce();
+        });
+        await drainPageUpdates(page);
+        expect(
+          modelPickers(page)[0]?.querySelector<HTMLButtonElement>(".picker-select__trigger")
+            ?.disabled,
+        ).toBe(false);
+        await openModelPicker(page);
+        expect(discover).toHaveBeenCalledTimes(2);
+        if (discoveryState === "completed") {
+          pickerDiscovery.resolve(newer);
+          await waitForFast(() => expect(page.data?.models).toEqual(newer.models));
+          await drainPageUpdates(page);
+          expect(page.querySelector('[role="option"][data-value="openai/newer"]')).not.toBeNull();
+        }
+
+        coreConfig.resolve({ config: refreshedConfig, hash: "refreshed-model-config" });
+        await waitForFast(() => expect(page.data?.config).toEqual(refreshedConfig));
+        await drainPageUpdates(page);
+        expect(page.data?.automaticUtilityModel).toBe(
+          discoveryState === "completed" ? "openai/newer" : "openai/prepared-utility",
+        );
+        expect(
+          page.querySelector("#model-providers-utility-model .picker-select__label")?.textContent,
+        ).toBe(discoveryState === "completed" ? "Auto · Newer model" : "Auto · Prepared utility");
+        expect(
+          modelPickers(page)[0]
+            ?.querySelector('[role="option"][aria-selected="true"]')
+            ?.getAttribute("data-value"),
+        ).toBe("openai/prepared-utility");
+        if (discoveryState === "pending") {
+          expect(
+            page.querySelector('.model-providers__catalog-progress[role="status"]'),
+          ).not.toBeNull();
+          pickerDiscovery.resolve(newer);
+          await waitForFast(() => expect(page.data?.models).toEqual(newer.models));
+          await drainPageUpdates(page);
+        }
+        expect(page.querySelector('[role="option"][data-value="openai/newer"]')).not.toBeNull();
+        expect(page.data?.automaticUtilityModel).toBe("openai/newer");
+        expect(
+          page.querySelector("#model-providers-utility-model .picker-select__label")?.textContent,
+        ).toBe("Auto · Newer model");
+        expect(page.data?.providerOutcomes).toEqual(newer.providerOutcomes);
+        expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+        expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      } finally {
+        coreConfig.resolve({ config: refreshedConfig, hash: "refreshed-model-config" });
+        pickerDiscovery.resolve(newer);
+        page.remove();
+      }
+    },
+  );
+
   it.each([
     { replacement: "core refresh", catalogRequests: 3, discoveries: 3, publicationReads: 1 },
     { replacement: "route data", catalogRequests: 2, discoveries: 2, publicationReads: 1 },
-    { replacement: "config.changed", catalogRequests: 3, discoveries: 1, publicationReads: 3 },
+    { replacement: "config.changed", catalogRequests: 3, discoveries: 1, publicationReads: 2 },
     {
       replacement: "chat.metadata.changed",
       catalogRequests: 3,
       discoveries: 1,
-      publicationReads: 3,
+      publicationReads: 2,
     },
   ])(
     "keeps newer $replacement after an older picker response settles",
@@ -731,7 +842,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       await openModelPicker(page);
       expect(discover).toHaveBeenCalledOnce();
 
-      // Replacing page data retires its request; direct reads have no cache to invalidate.
+      // Page replacement retires its request; publication also retires the shared cache.
       if (replacement === "core refresh") {
         page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
       } else if (replacement === "route data") {

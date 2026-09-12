@@ -69,7 +69,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Auth: OAuth (ChatGPT)
 - Fresh native Codex app-server harness ref: `openai/gpt-5.6-sol`
 - Native Codex app-server harness docs: [Codex harness](/plugins/codex-harness)
-- Astra (`openai/gpt-6-astra`) defaults to `low` reasoning effort to limit routine budget use. The [OpenAI provider default](/providers/openai/models#gpt-6-astra) is shared by model controls and both runtimes; explicit thinking settings take precedence.
+- Astra (`openai/gpt-6-astra`) defaults to `medium` reasoning effort when the account supports it. The [OpenAI provider default](/providers/openai/models#gpt-6-astra) is shared by model controls and both runtimes; explicit thinking settings take precedence.
 - Legacy model refs: `codex/gpt-*`, `openai-codex/gpt-*`
 - Plugin boundary: `openai/*` loads the OpenAI plugin; explicit runtime policy or the provider-owned effective route decides whether the native Codex app-server plugin is selected.
 - CLI: `openclaw onboard --auth-choice openai` or `openclaw models auth login --provider openai`

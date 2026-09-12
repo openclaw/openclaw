@@ -4,14 +4,13 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { invalidateChatMetadataStore, type ChatMetadataResult } from "./chat-metadata-cache.ts";
 import {
-  invalidateChatMetadataStore,
   loadChatMetadata,
   peekChatMetadata,
   beginChatMetadataPublication,
   revalidateChatMetadata,
   subscribeChatMetadata,
-  type ChatMetadataResult,
 } from "./chat-metadata-store.ts";
 
 function deferred<T>() {

@@ -296,6 +296,12 @@ struct SuspendResumeResponse {
 
 enum GatewayRequest {
     AgentsList,
+    #[cfg(target_os = "linux")]
+    Desktop {
+        generation: u64,
+        method: DesktopMethod,
+        params: Value,
+    },
     ChatSend(ChatSendParams),
     RefreshCanvasSurface {
         observed_url: Option<String>,
@@ -312,7 +318,29 @@ enum GatewayRequest {
     },
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) enum DesktopMethod {
+    Agents,
+    Sessions,
+    Send,
+    Create,
+}
+
+#[cfg(target_os = "linux")]
+impl DesktopMethod {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Agents => "agents.list",
+            Self::Sessions => "sessions.list",
+            Self::Send => "chat.send",
+            Self::Create => "sessions.create",
+        }
+    }
+}
+
 enum GatewayResponse {
+    #[cfg(target_os = "linux")]
+    Desktop(Value),
     AgentsList(AgentsListResult),
     ChatSend(ChatSendAck),
     CanvasSurface(Option<String>),
@@ -449,6 +477,7 @@ struct GatewayClientInner {
     reconnect_paused: AtomicBool,
     sleep_cycle_depth: AtomicU64,
     running: AtomicBool,
+    desktop_demand: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -461,6 +490,72 @@ impl GatewayClient {
         Self {
             inner: Arc::default(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn desktop_state(&self) -> (u64, bool) {
+        let _config = self
+            .inner
+            .config
+            .lock()
+            .expect("gateway config mutex poisoned");
+        (
+            self.inner.config_generation.load(Ordering::SeqCst),
+            self.is_connected(),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn set_desktop_demand(&self, active: bool) {
+        self.inner.desktop_demand.store(active, Ordering::SeqCst);
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_desktop_route<T>(
+        &self,
+        generation: u64,
+        action: impl FnOnce(Option<&str>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let config = self
+            .inner
+            .config
+            .lock()
+            .map_err(|_| "Gateway route unavailable")?;
+        if self.inner.config_generation.load(Ordering::SeqCst) != generation {
+            return Err("Desktop Gateway changed; refresh before trying again.".into());
+        }
+        action(config.as_ref().map(|config| config.ws_url.as_str()))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn desktop_request(
+        &self,
+        generation: u64,
+        method: DesktopMethod,
+        params: Value,
+    ) -> Result<Value, String> {
+        self.with_desktop_route(generation, |url| {
+            url.map(|_| ())
+                .ok_or_else(|| "Select a Gateway in the desktop app first.".into())
+        })?;
+        let is_send = matches!(method, DesktopMethod::Send);
+        let response = self
+            .request(GatewayRequest::Desktop {
+                generation,
+                method,
+                params,
+            })
+            .await?;
+        self.with_desktop_route(generation, |_| Ok(()))?;
+        let GatewayResponse::Desktop(value) = response else {
+            return Err("Unexpected desktop response".into());
+        };
+        if is_send {
+            let ack: ChatSendAck = serde_json::from_value(value.clone())
+                .map_err(|error| format!("Invalid chat.send response: {error}"))?;
+            classify_chat_ack(&ack)?;
+        }
+        Ok(value)
     }
 
     pub fn configure(&self, app: &AppHandle, config: GatewayWsConfig) {
@@ -774,7 +869,8 @@ impl GatewayClient {
         let mut reconnect_attempt = 0_u32;
         loop {
             if !driver_should_run(
-                app.get_window(QUICKCHAT_LABEL).is_some(),
+                app.get_window(QUICKCHAT_LABEL).is_some()
+                    || self.inner.desktop_demand.load(Ordering::SeqCst),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
@@ -855,7 +951,8 @@ impl GatewayClient {
                 reconnect_attempt = 1;
             }
             if !driver_should_run(
-                app.get_window(QUICKCHAT_LABEL).is_some(),
+                app.get_window(QUICKCHAT_LABEL).is_some()
+                    || self.inner.desktop_demand.load(Ordering::SeqCst),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 continue;
@@ -950,7 +1047,8 @@ impl GatewayClient {
         loop {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation
                 || !driver_should_run(
-                    app.get_window(QUICKCHAT_LABEL).is_some(),
+                    app.get_window(QUICKCHAT_LABEL).is_some()
+                        || self.inner.desktop_demand.load(Ordering::SeqCst),
                     self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
                 )
             {
@@ -1221,8 +1319,8 @@ fn reject_disconnected_command(command: DriverCommand) {
 }
 
 fn driver_should_run(window_exists: bool, sleep_active: bool) -> bool {
-    // Sleep cycles temporarily activate the driver; the companion-wide connection lifetime
-    // remains owned by Quick Chat outside that narrow window.
+    // Quick Chat and the desktop panel provide window demand; sleep cycles
+    // temporarily keep the same connection owner alive without either surface.
     window_exists || sleep_active
 }
 
@@ -1408,9 +1506,10 @@ async fn wait_for_connect_challenge(
 }
 
 #[cfg(target_os = "linux")]
-struct SleepDispatch<'a> {
+struct RouteDispatch<'a> {
     client: &'a GatewayClient,
-    route: &'a GatewaySleepRoute,
+    route: Option<&'a GatewaySleepRoute>,
+    generation: u64,
     connection_generation: u64,
 }
 
@@ -1420,7 +1519,7 @@ async fn request_on_socket<T, F>(
     params: Value,
     budget: Duration,
     dispatch: &F,
-    #[cfg(target_os = "linux")] sleep: Option<SleepDispatch<'_>>,
+    #[cfg(target_os = "linux")] authority: Option<RouteDispatch<'_>>,
 ) -> Result<T, RequestFailure>
 where
     T: DeserializeOwned,
@@ -1437,8 +1536,8 @@ where
         // Read current authority after transport readiness, and hold it through enqueue.
         // The socket generation also fences commands queued for a replaced connection.
         #[cfg(target_os = "linux")]
-        let current = sleep.as_ref().map(|sleep| {
-            sleep
+        let current = authority.as_ref().map(|authority| {
+            authority
                 .client
                 .inner
                 .config
@@ -1446,22 +1545,28 @@ where
                 .expect("gateway config mutex poisoned")
         });
         #[cfg(target_os = "linux")]
-        if let Some(sleep) = sleep.as_ref() {
+        if let Some(authority) = authority.as_ref() {
             let owned = current
                 .as_ref()
                 .and_then(|current| current.as_ref())
                 .is_some_and(|config| {
-                    config.ownership == GatewayOwnership::Local
-                        && config.ws_url == sleep.route.ws_url
-                        && is_loopback_ws_url(&config.ws_url)
+                    authority.route.is_none_or(|route| {
+                        config.ownership == GatewayOwnership::Local
+                            && config.ws_url == route.ws_url
+                            && is_loopback_ws_url(&config.ws_url)
+                    })
                 });
             if !owned
-                || sleep.route.generation != sleep.connection_generation
-                || sleep.client.inner.config_generation.load(Ordering::SeqCst)
-                    != sleep.route.generation
+                || authority.generation != authority.connection_generation
+                || authority
+                    .client
+                    .inner
+                    .config_generation
+                    .load(Ordering::SeqCst)
+                    != authority.generation
             {
                 return Err(RequestFailure::method_with_details(
-                    "Gateway sleep route changed; lease will self-expire.",
+                    "Gateway route changed before dispatch; refresh before trying again.",
                     None,
                 ));
             }
@@ -1524,6 +1629,26 @@ where
     let _ = (client, connection_generation);
     let budget = budget.unwrap_or(REQUEST_TIMEOUT);
     match request {
+        #[cfg(target_os = "linux")]
+        GatewayRequest::Desktop {
+            generation,
+            method,
+            params,
+        } => request_on_socket(
+            socket,
+            method.name(),
+            params,
+            budget,
+            dispatch,
+            Some(RouteDispatch {
+                client,
+                route: None,
+                generation,
+                connection_generation,
+            }),
+        )
+        .await
+        .map(GatewayResponse::Desktop),
         GatewayRequest::AgentsList => request_agents_list(socket, budget, dispatch)
             .await
             .map(GatewayResponse::AgentsList),
@@ -1572,9 +1697,10 @@ where
             json!({ "requestId": request_id }),
             budget,
             dispatch,
-            Some(SleepDispatch {
+            Some(RouteDispatch {
                 client,
-                route: &route,
+                route: Some(&route),
+                generation: route.generation,
                 connection_generation,
             }),
         )
@@ -1590,9 +1716,10 @@ where
             json!({ "suspensionId": suspension_id }),
             budget,
             dispatch,
-            Some(SleepDispatch {
+            Some(RouteDispatch {
                 client,
-                route: &route,
+                route: Some(&route),
+                generation: route.generation,
                 connection_generation,
             }),
         )
@@ -2092,6 +2219,86 @@ esac
         // An unbalanced extra end saturates at zero instead of wrapping.
         client.end_sleep_cycle();
         assert!(!driver_should_run(false, sleep_active(&client)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn desktop_requests_never_retarget_across_gateway_generations() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // Only the final request may cross the transport. A stale queued prompt
+            // would become this first frame and fail the independent wire assertion.
+            let frame: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(frame["method"], "chat.send");
+            assert_eq!(frame["params"]["message"], "current route");
+            assert_eq!(frame["params"]["deliver"], false);
+            socket.send(Message::Text(json!({"type":"res","id":frame["id"],"ok":true,"payload":{"status":"started","runId":"fixture-run"}}).to_string().into())).await.unwrap();
+        });
+        let (mut socket, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        let client = GatewayClient::new();
+        let config = |ownership| {
+            GatewayWsConfig::new(format!("ws://{address}"), None, None, None, ownership)
+        };
+        let old = client.replace_configuration(Some(config(GatewayOwnership::Local)));
+        let current = client.replace_configuration(Some(config(GatewayOwnership::Remote)));
+        for (token, connection) in [(old, current), (current, old)] {
+            let result = perform_request(
+                &client,
+                connection,
+                &mut socket,
+                GatewayRequest::Desktop {
+                    generation: token,
+                    method: DesktopMethod::Send,
+                    params: json!({"message":"stale route"}),
+                },
+                None,
+                &|_| {},
+            )
+            .await;
+            let error = result.err().expect("stale route must fail before enqueue");
+            assert!(!error.disconnect);
+            assert!(error.message.contains("route changed"));
+        }
+        client.replace_configuration(None);
+        assert!(perform_request(
+            &client,
+            current,
+            &mut socket,
+            GatewayRequest::Desktop {
+                generation: current,
+                method: DesktopMethod::Send,
+                params: json!({"message":"cleared route"}),
+            },
+            None,
+            &|_| {}
+        )
+        .await
+        .is_err());
+        let current = client.replace_configuration(Some(config(GatewayOwnership::Remote)));
+        let response = perform_request(
+            &client,
+            current,
+            &mut socket,
+            GatewayRequest::Desktop {
+                generation: current,
+                method: DesktopMethod::Send,
+                params: json!({"message":"current route","deliver":false}),
+            },
+            None,
+            &|_| {},
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        let GatewayResponse::Desktop(value) = response else {
+            panic!("desktop response expected");
+        };
+        assert_eq!(value["runId"], "fixture-run");
+        server.await.unwrap();
     }
 
     #[tokio::test]

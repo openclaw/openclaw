@@ -128,7 +128,9 @@ function buildCacheKeys(params: {
   coreGatewayMethodNames?: string[];
   allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
+  runtimeSideEffects: boolean;
   cliMetadata: boolean;
+  expectedSourceDigests?: Readonly<Record<string, string>>;
 }) {
   const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: params.workspaceDir,
@@ -191,7 +193,11 @@ function buildCacheKeys(params: {
     pluginSdkResolution: params.pluginSdkResolution ?? "auto",
     coreGatewayMethodNames: params.coreGatewayMethodNames ?? [],
     activate: params.activate !== false,
+    runtimeSideEffects: params.runtimeSideEffects,
     cliMetadata: params.cliMetadata,
+    expectedSourceDigests: params.expectedSourceDigests
+      ? Object.entries(params.expectedSourceDigests).toSorted(([a], [b]) => a.localeCompare(b))
+      : undefined,
   };
   // Capture request facts once; discovered manifests may replace only the source projection.
   const requestIdentity = JSON.stringify(cacheIdentity);
@@ -349,6 +355,9 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     config: cfg,
     activationSourceConfig,
   });
+  const shouldActivate = options.mode !== "cli-metadata" && options.activate !== false;
+  // Staged runtime registration is independent of publishing the process registry.
+  const runtimeSideEffects = options.runtimeSideEffects ?? shouldActivate;
   const { cacheKey, resolveManifestCacheKey } = buildCacheKeys({
     workspaceDir: options.workspaceDir,
     plugins: trustNormalized,
@@ -385,7 +394,9 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
-    activate: options.mode === "cli-metadata" ? false : options.activate,
+    activate: shouldActivate,
+    runtimeSideEffects,
+    expectedSourceDigests: options.expectedSourceDigests,
     cliMetadata: options.mode === "cli-metadata",
   });
   return {
@@ -403,7 +414,8 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
     artifactPreference,
-    shouldActivate: options.mode !== "cli-metadata" && options.activate !== false,
+    shouldActivate,
+    runtimeSideEffects,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,

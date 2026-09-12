@@ -208,7 +208,7 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     : undefined;
 }
 
-/** Cached identity alone cannot admit a send before the first authoritative history result. */
+/** Cached identity alone cannot authorize delivery before the first authoritative history result. */
 export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
   const requests = chatHistoryRequests(state);
   const accepted = requests.acceptedHistory;

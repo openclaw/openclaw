@@ -43,6 +43,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
+  // The module-generation test launches this Bun regression directly from its source path.
+  "src/plugins/plugin-module-generation.bun.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.

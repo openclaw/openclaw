@@ -828,6 +828,7 @@ jobs:
               provider: $provider,
               mode: $mode,
               targetContextRef: $targetContextRef,
+              targetVersion: $targetVersion,
               liveSuiteFilter: $liveSuiteFilter,
               crossOsSuiteFilter: $crossOsSuiteFilter,
               releasePackageSpec: $releasePackageSpec,
@@ -839,7 +840,7 @@ jobs:
               skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
               pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-            } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy, targetVersion: $targetVersion} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)')"
+            } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end)')"
           trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
           trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
           trusted_workflow_full_ref="$(jq -er '.fullRef | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
@@ -2295,6 +2296,7 @@ jobs:
                     provider: $provider,
                     mode: $mode,
                     targetContextRef: $targetContextRef,
+                    targetVersion: $targetVersion,
                     liveSuiteFilter: $liveSuiteFilter,
                     crossOsSuiteFilter: $crossOsSuiteFilter,
                     releasePackageSpec: $releasePackageSpec,
@@ -2306,7 +2308,7 @@ jobs:
                     skipPackageTelegramE2e: $skipPackageTelegramE2e,
                     allowUnreleasedChangelog: $allowUnreleasedChangelog,
                     pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-                  } + (if $plan.coveragePolicy then {coveragePolicy: $plan.coveragePolicy, targetVersion: $plan.targetVersion} else {} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)),
+                  } + (if $plan.coveragePolicy then {coveragePolicy: $plan.coveragePolicy} else {} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end)),
                   controls: {
                     stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
                     performanceBlocking: ($releaseProfile != "beta"),

@@ -139,15 +139,7 @@ describe("post-core plugin persistence cancellation", () => {
         }
         const controller = new AbortController();
         const refusal = new Error("initiating operation revoked after host-link probe");
-        if (effect === "symlink") {
-          const unlink = fs.promises.unlink.bind(fs.promises);
-          vi.spyOn(fs.promises, "unlink").mockImplementation(async (file) => {
-            await unlink(file);
-            if (file === linkPath) {
-              controller.abort(refusal);
-            }
-          });
-        } else {
+        if (effect !== "symlink") {
           const lstat = fs.promises.lstat.bind(fs.promises);
           vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
             try {
@@ -173,7 +165,12 @@ describe("post-core plugin persistence cancellation", () => {
           cfg,
           env: state.env,
           baselineInstallRecords,
-          beforePersistentEffect: () => controller.signal.throwIfAborted(),
+          beforePersistentEffect: () => {
+            if (effect === "symlink" && !fs.existsSync(linkPath)) {
+              controller.abort(refusal);
+            }
+            controller.signal.throwIfAborted();
+          },
         };
         await expect(runPostCorePluginConvergence(params)).rejects.toBe(refusal);
         if (effect === "mkdir") {

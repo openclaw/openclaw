@@ -77,7 +77,7 @@ Make the referenced environment variable available to the Gateway process.
 See [Secret management](/gateway/secrets) for other secret providers. If you
 use `plugins.allow`, include `team-reports` in that list.
 
-Restart the Gateway after changing plugin configuration, then check startup:
+Start the Gateway with its configured secrets available, then check the plugin:
 
 ```bash
 openclaw gateway restart
@@ -154,8 +154,8 @@ fonts, so no external stylesheets, web fonts, or scripts are needed.
 ## Configuration
 
 All keys below live under `plugins.entries.team-reports.config`. Unknown keys
-are rejected. Configuration and secret changes require a Gateway restart;
-secrets resolve once when the report service starts.
+are rejected. Configuration changes reload the running plugin. Secret changes
+still require a Gateway restart; secrets resolve when the report service starts.
 
 | Key               | Default                   | Behavior                                                                                                                                                                                                                                                               |
 | ----------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -392,8 +392,9 @@ set `retention.days: 0` to preserve all report history.
 
 **The Reports tab is missing or unavailable.** Confirm the plugin is enabled,
 allowed by `plugins.allow` if present, and the Control UI session has
-`operator.read`. Restart the Gateway after config changes. For an unavailable
-frame, check HTTPS or trusted loopback access and third-party-cookie policy.
+`operator.read`. Config changes automatically reload the plugin. If it remains
+unavailable after fixing its configuration, run `openclaw plugins reload team-reports`.
+For an unavailable frame, check HTTPS or trusted loopback access and third-party-cookie policy.
 
 **There are no reports yet.** Run `openclaw team-reports status --json`. Startup
 catch-up waits 60 seconds, and collection or model calls may still be running.

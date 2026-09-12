@@ -108,7 +108,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("acquires on the first Settings picker open and Retry, while completed reopens read publication", async () => {
+  it("acquires on the first Settings picker open and Retry, while completed reopens reuse published catalogs", async () => {
     const frames: unknown[] = [];
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
@@ -230,7 +230,17 @@ suite.define(() => {
             if ((await trigger.getAttribute("aria-expanded")) === "true") {
               await trigger.click();
             }
-            await catalogRequest(refresh, () => trigger.click());
+            if (refresh) {
+              await catalogRequest(true, () => trigger.click());
+              return;
+            }
+            await settings.getByRole("button", { name: "Refresh", exact: true }).waitFor({
+              state: "visible",
+            });
+            const before = requests.length;
+            await trigger.click();
+            await primary.getByRole("listbox").waitFor({ state: "visible" });
+            expect(requests).toHaveLength(before);
           };
           await open(true);
           await primary
@@ -243,11 +253,29 @@ suite.define(() => {
 
           await trigger.click();
           providerModel = "published-fixture:latest";
+          const publicationStart = requests.length;
           expect((await publish()).providerOutcomes).toContainEqual({
             provider: "ollama",
             status: "ready",
           });
           expect(acquisitions()).toBe(initialAcquisitions + 2);
+          await expect
+            .poll(() =>
+              requests
+                .slice(publicationStart)
+                .filter(({ params }) => params.refresh === undefined)
+                .map(({ id }) => replies.get(id)?.payload),
+            )
+            .toContainEqual(
+              expect.objectContaining({
+                models: expect.arrayContaining([
+                  expect.objectContaining({
+                    provider: "ollama",
+                    id: "published-fixture:latest",
+                  }),
+                ]),
+              }),
+            );
           await open(false);
           await primary
             .locator('[role="option"][data-value="ollama/published-fixture:latest"]')

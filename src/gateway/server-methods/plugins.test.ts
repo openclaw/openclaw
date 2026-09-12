@@ -1,15 +1,17 @@
-// Plugin management Gateway handler tests cover DTO mapping, trust errors, and reload planning.
+// Plugin management read tests cover inventory, inspection, and catalog DTOs.
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 
 const managementMocks = vi.hoisted(() => ({
   inspect: vi.fn(),
   list: vi.fn(),
-  refreshMetadata: vi.fn(),
 }));
 const searchMock = vi.hoisted(() => vi.fn());
+
 const catalogMocks = vi.hoisted(() => ({
   browse: vi.fn(),
   categories: vi.fn(),
@@ -20,7 +22,6 @@ const catalogMocks = vi.hoisted(() => ({
 vi.mock("../../plugins/management-service.js", () => ({
   inspectManagedPlugin: (...args: unknown[]) => managementMocks.inspect(...args),
   listManagedPlugins: (...args: unknown[]) => managementMocks.list(...args),
-  refreshManagedPluginMetadata: (...args: unknown[]) => managementMocks.refreshMetadata(...args),
 }));
 
 vi.mock("../../plugins/catalog-search.js", () => ({
@@ -34,8 +35,7 @@ vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
   fetchClawHubPluginDetail: (...args: unknown[]) => catalogMocks.detail(...args),
 }));
 
-const { pluginsHandlers: pluginReadHandlers } = await import("./plugins.js");
-const pluginsHandlers = pluginReadHandlers;
+const { pluginsHandlers } = await import("./plugins.js");
 
 async function callHandler(
   method: string,
@@ -45,28 +45,27 @@ async function callHandler(
   let ok: boolean | null = null;
   let response: unknown;
   let error: unknown;
-  await expectDefined(
-    pluginsHandlers[method],
-    "pluginsHandlers[method] test invariant",
-  )({
-    params,
-    req: {} as never,
-    client: null as never,
-    isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig: () => runtimeConfig,
-      notifyPluginMetadataChanged: pluginMetadataChanged,
-    } as never,
-    respond: (success, result, requestError) => {
-      ok = success;
-      response = result;
-      error = requestError;
-    },
-  });
+  await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+    expectDefined(
+      pluginsHandlers[method],
+      "pluginsHandlers[method] test invariant",
+    )({
+      params,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => runtimeConfig,
+      } as never,
+      respond: (success, result, requestError) => {
+        ok = success;
+        response = result;
+        error = requestError;
+      },
+    }),
+  );
   return { ok, response, error };
 }
-
-const pluginMetadataChanged = vi.fn();
 
 const workboard = {
   id: "workboard",
@@ -82,47 +81,13 @@ const reviewToken = "a".repeat(64);
 
 describe("plugin management Gateway handlers", () => {
   beforeEach(() => {
-    pluginMetadataChanged.mockReset();
     managementMocks.inspect.mockReset();
     managementMocks.list.mockReset();
-    managementMocks.refreshMetadata.mockReset();
     searchMock.mockReset();
     catalogMocks.browse.mockReset();
     catalogMocks.categories.mockReset();
     catalogMocks.overview.mockReset();
     catalogMocks.detail.mockReset();
-  });
-
-  it("signals that refreshed plugin metadata requires a Gateway restart", async () => {
-    const config = { plugins: { enabled: true } };
-    const result = await callHandler("plugins.refresh", {}, config);
-
-    expect(managementMocks.refreshMetadata).toHaveBeenCalledWith({ config });
-    expect(pluginMetadataChanged).toHaveBeenCalledOnce();
-    expect(result).toEqual({
-      ok: true,
-      response: { ok: true, restartRequired: true },
-      error: undefined,
-    });
-  });
-
-  it("reports inventory refresh failures while still requesting the required restart", async () => {
-    managementMocks.refreshMetadata.mockImplementationOnce(() => {
-      throw new Error("plugin index unavailable");
-    });
-
-    const result = await callHandler("plugins.refresh", {});
-
-    expect(pluginMetadataChanged).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message:
-          "Plugin inventory refresh failed: plugin index unavailable. Restart the Gateway to load updated plugins.",
-        details: { restartRequired: true },
-      },
-    });
   });
 
   it("returns cold Workboard inventory without claiming runtime loaded state", async () => {
@@ -136,7 +101,12 @@ describe("plugin management Gateway handlers", () => {
 
     expect(result).toEqual({
       ok: true,
-      response: { plugins: [workboard], diagnostics: [], mutationAllowed: true },
+      response: {
+        plugins: [{ ...workboard, runtime: { state: "unloaded" } }],
+        diagnostics: [],
+        mutationAllowed: true,
+        generation: undefined,
+      },
       error: undefined,
     });
   });

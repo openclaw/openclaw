@@ -148,7 +148,11 @@ function makeContextParams(overrides: Partial<RequestRuntime> = {}): GatewayRequ
       broadcastVoiceWakeChanged: vi.fn(),
       broadcastVoiceWakeRoutingChanged: vi.fn(),
       kernel: {
-        notifyPluginMetadataChanged: vi.fn(),
+        applyPluginLifecycleChange: vi.fn(async () => ({
+          operationId: "fixture",
+          generation: 1,
+          pluginIds: [],
+        })),
         getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
       },
       unavailableGatewayMethods: new Set(),
@@ -325,17 +329,6 @@ describe("createGatewayRequestContext", () => {
     expect(context.workerRepositoryWorkspaceMutationService).toBe(
       repositoryWorkspaceMutationService,
     );
-  });
-
-  it("routes plugin metadata changes through the kernel bridge", () => {
-    const notifyPluginMetadataChanged = vi.fn();
-    const params = makeContextParams();
-    params.runtime.kernel.notifyPluginMetadataChanged = notifyPluginMetadataChanged;
-    const context = createGatewayRequestContext(params);
-
-    context.notifyPluginMetadataChanged();
-
-    expect(notifyPluginMetadataChanged).toHaveBeenCalledOnce();
   });
 
   it("does not treat scoped CLI or backend callers as approval delivery routes", () => {

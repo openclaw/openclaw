@@ -84,3 +84,98 @@ describe("OpenAI model route contract", () => {
     }
   });
 });
+
+describe("OpenAI billing route intent", () => {
+  it.each([undefined, { runtimeId: "codex", source: "inherited" } as const])(
+    "keeps subscription eligible with a legacy official Completions adapter (%j)",
+    (routeIntent) => {
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-5.4-mini",
+          configuredProvider: {
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+          },
+          routeIntent,
+        }),
+      ).toMatchObject({
+        kind: "routes",
+        preferredAuthRequirement: "subscription",
+        routes: [
+          { api: "openai-completions", authRequirement: "api-key" },
+          { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    { authRequirement: "api-key", source: "explicit" },
+    { authRequirement: "api-key", source: "inherited" },
+  ] as const)("honors the prepared API route intent %j", (routeIntent) => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        configuredProvider: { api: "openai-completions" },
+        routeIntent,
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes:
+        routeIntent.source === "explicit"
+          ? [{ api: "openai-completions", authRequirement: "api-key" }]
+          : [
+              { api: "openai-completions", authRequirement: "api-key" },
+              { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+            ],
+      ...(routeIntent.source === "inherited" ? { preferredAuthRequirement: "api-key" } : {}),
+    });
+  });
+
+  it("keeps subscription eligible for an OpenClaw runtime pin with no API credential", () => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        configuredProvider: { api: "openai-completions" },
+        routeIntent: { runtimeId: "openclaw", source: "explicit" },
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      preferredAuthRequirement: "api-key",
+      routes: [{ authRequirement: "api-key" }, { authRequirement: "subscription" }],
+    });
+  });
+  it("retains the provider adapter for API-key callers when the model overrides its official URL", () => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        configuredModel: { baseUrl: "https://api.openai.com/v1" },
+        configuredProvider: { api: "openai-completions" },
+      }),
+    ).toEqual({
+      kind: "routes",
+      defaultRuntimeId: "openclaw",
+      preferredAuthRequirement: "subscription",
+      routes: [
+        {
+          api: "openai-completions",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+        {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+      ],
+    });
+  });
+});

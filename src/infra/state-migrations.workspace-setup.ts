@@ -1,13 +1,10 @@
 // Doctor-only import for retired workspace setup and attestation files.
-import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { TextDecoder } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
 import {
   LEGACY_WORKSPACE_ATTESTATION_DIRNAME,
-  LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
   legacyWorkspaceSiblingAttestationMayExist,
@@ -24,11 +21,15 @@ import { resolveUserPath } from "./home-dir.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
-  LegacyMigrationSourceClaim,
+  type LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import {
+  archiveWorkspaceSetupSource,
+  createLegacySourceClaim,
+} from "./state-migrations.workspace-setup-files.js";
 import {
   markLegacyMigrationSourceRemoved,
   readReceipt,
@@ -45,130 +46,9 @@ import type {
   LegacyWorkspaceStateSource,
 } from "./state-migrations.workspace-setup.types.js";
 import { formatDoctorStateRepairFailure } from "./state-repair-message.js";
+import { isUpdateRehearsalReadOnlyPath } from "./update-rehearsal-paths.js";
 
-const SETUP_MAX_BYTES = 64 * 1024;
 const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-async function readBoundedRegularFile(params: {
-  sourceRoot: Root;
-  relativePath: string;
-  sourcePath: string;
-  maxBytes: number;
-}): Promise<SourceSnapshot> {
-  const opened = await params.sourceRoot.open(params.relativePath, {
-    hardlinks: "reject",
-    symlinks: "reject",
-  });
-  try {
-    const before = opened.stat;
-    if (
-      !before.isFile() ||
-      before.nlink !== 1 ||
-      !Number.isSafeInteger(before.size) ||
-      before.size < 0 ||
-      before.size > params.maxBytes
-    ) {
-      throw new Error("legacy workspace source is not a safe regular file");
-    }
-    const buffer = Buffer.alloc(before.size);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const { bytesRead } = await opened.handle.read(
-        buffer,
-        offset,
-        buffer.length - offset,
-        offset,
-      );
-      if (bytesRead === 0) {
-        throw new Error("legacy workspace source ended unexpectedly");
-      }
-      offset += bytesRead;
-    }
-    const after = await opened.handle.stat();
-    if (
-      !after.isFile() ||
-      after.nlink !== 1 ||
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs ||
-      offset !== after.size
-    ) {
-      throw new Error("legacy workspace source changed while reading");
-    }
-    let raw: string;
-    try {
-      raw = utf8Decoder.decode(buffer);
-    } catch {
-      throw new Error("legacy workspace source is not valid UTF-8");
-    }
-    return {
-      sourcePath: params.sourcePath,
-      dev: after.dev,
-      ino: after.ino,
-      mtimeMs: after.mtimeMs,
-      sha256: createHash("sha256").update(buffer).digest("hex"),
-      size: after.size,
-      raw,
-      buffer,
-    };
-  } finally {
-    await opened[Symbol.asyncDispose]();
-  }
-}
-
-async function archiveWorkspaceSetupSource(
-  sourceRoot: Root,
-  source: LegacyWorkspaceStateSource,
-  snapshot: SourceSnapshot,
-  existingArchivePath?: string,
-): Promise<string> {
-  const archivePath =
-    existingArchivePath ?? `${source.sourcePath}.migrated.${snapshot.sha256}.${randomUUID()}`;
-  const relativePath = path.relative(source.rootDir, archivePath);
-  // The receipt publishes only a verified backup. A crash during creation leaves
-  // an unreferenced artifact, so the next attempt can safely use a fresh name.
-  if (!existingArchivePath) {
-    await sourceRoot.create(relativePath, snapshot.buffer, { mode: 0o600 });
-  }
-  const archived = await readBoundedRegularFile({
-    sourceRoot,
-    relativePath,
-    sourcePath: archivePath,
-    maxBytes: SETUP_MAX_BYTES,
-  });
-  if (archived.sha256 !== snapshot.sha256) {
-    throw new Error(`workspace setup backup differs from the claimed source: ${archivePath}`);
-  }
-  return archivePath;
-}
-
-function createLegacySourceClaim(
-  sourceRoot: Root,
-  source: LegacyWorkspaceStateSource,
-): LegacyMigrationSourceClaim<SourceSnapshot> {
-  return new LegacyMigrationSourceClaim({
-    stateRoot: sourceRoot,
-    stateDir: source.rootDir,
-    sourcePath: source.sourcePath,
-    label: "workspace",
-    claimSuffix: CLAIM_SUFFIX,
-    formatError: formatErrorMessage,
-    readSnapshot: (sourcePath) =>
-      readBoundedRegularFile({
-        sourceRoot,
-        relativePath:
-          sourcePath === source.sourcePath
-            ? source.relativePath
-            : `${source.relativePath}${CLAIM_SUFFIX}`,
-        sourcePath,
-        maxBytes:
-          source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
-      }),
-  });
-}
 
 function createLegacySource(
   params: Omit<LegacyWorkspaceStateSource, "relativePath" | "rootDir"> & { rootDir: string },
@@ -314,7 +194,16 @@ export async function detectLegacyWorkspaceState(params: {
   const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
   const homedir = params.homedir ?? os.homedir;
   const byPath = new Map<string, LegacyWorkspaceStateSource>();
+  const rehearsalInventoryPaths = new Set<string>();
   const add = (source: LegacyWorkspaceStateSource) => {
+    if (isUpdateRehearsalReadOnlyPath(source.sourcePath, env)) {
+      for (const sourcePath of [source.sourcePath, `${source.sourcePath}${CLAIM_SUFFIX}`]) {
+        if (pathMayExistSync(sourcePath)) {
+          rehearsalInventoryPaths.add(sourcePath);
+        }
+      }
+      return;
+    }
     const key = `${source.kind}:${path.resolve(source.sourcePath)}`;
     const existing = byPath.get(key);
     const sourceIsConfigured = source.workspaceDir !== undefined;
@@ -348,7 +237,7 @@ export async function detectLegacyWorkspaceState(params: {
   const historicalWorkspaceDirs = [];
   for (const workspaceDir of await listLegacySkillWorkshopWorkspaceDirs(params.cfg, env)) {
     const canonicalPath = resolveWorkspaceStateIdentity(workspaceDir).workspacePath;
-    if (!configuredPaths.has(canonicalPath)) {
+    if (!configuredPaths.has(canonicalPath) && !isUpdateRehearsalReadOnlyPath(workspaceDir, env)) {
       historicalWorkspaceDirs.push(workspaceDir);
     }
     workspaceDirs.add(workspaceDir);
@@ -368,8 +257,12 @@ export async function detectLegacyWorkspaceState(params: {
   );
   return {
     sources,
-    hasLegacy: sources.length > 0 || historicalWorkspaceDirs.length > 0,
+    hasLegacy:
+      sources.length > 0 || historicalWorkspaceDirs.length > 0 || rehearsalInventoryPaths.size > 0,
     ...(historicalWorkspaceDirs.length > 0 ? { historicalWorkspaceDirs } : {}),
+    ...(rehearsalInventoryPaths.size > 0
+      ? { rehearsalInventoryPaths: [...rehearsalInventoryPaths] }
+      : {}),
   };
 }
 
@@ -516,6 +409,9 @@ async function migrateOneSource(params: {
     ...(params.historical ? { warningDisposition: "recoverable" as const } : {}),
   });
   try {
+    if (isUpdateRehearsalReadOnlyPath(params.source.sourcePath, params.env)) {
+      throw new Error("Legacy workspace source is outside the update rehearsal root.");
+    }
     assertConfiguredWorkspaceIdentity(params.source);
     sourceRoot = await root(params.source.rootDir, {
       hardlinks: "reject",
@@ -684,7 +580,13 @@ export async function migrateLegacyWorkspaceState(params: {
     run: async (env) => {
       const changes: string[] = [];
       const warnings: string[] = [];
-      const notices: string[] = [];
+      const outsideRootLegacyFileCount = detected.rehearsalInventoryPaths?.length ?? 0;
+      const notices: string[] =
+        outsideRootLegacyFileCount > 0
+          ? [
+              `rehearsal: ${outsideRootLegacyFileCount} legacy files outside the rehearsal root left untouched`,
+            ]
+          : [];
       const historical = new Map(
         (detected.historicalWorkspaceDirs ?? []).map((directory) => [
           resolveWorkspaceStateIdentity(directory).workspacePath,
@@ -725,6 +627,7 @@ export async function migrateLegacyWorkspaceState(params: {
         changes,
         warnings,
         ...(notices.length > 0 ? { notices } : {}),
+        ...(outsideRootLegacyFileCount > 0 ? { rehearsal: { outsideRootLegacyFileCount } } : {}),
         ...(warnings.length > 0 && blockingWarnings === 0
           ? { warningDisposition: "recoverable" as const }
           : {}),

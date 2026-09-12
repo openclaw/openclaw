@@ -104,9 +104,14 @@ function buildOpenAIThinkingProfile(params: {
     // Preserve narrower account capabilities while exposing the supported runtime mode.
     const supportsUltra =
       ["openclaw", "codex", "auto"].includes(agentRuntime) && efforts.includes("max");
+    const defaultLevel = efforts.includes("medium")
+      ? "medium"
+      : efforts.includes("low")
+        ? "low"
+        : undefined;
     return {
       levels: buildCodexLevels(supportsUltra ? [...efforts, "ultra"] : efforts),
-      ...(efforts.includes("low") ? { defaultLevel: "low" as const } : {}),
+      ...(defaultLevel ? { defaultLevel } : {}),
     };
   }
   const resolvedCodexEfforts =

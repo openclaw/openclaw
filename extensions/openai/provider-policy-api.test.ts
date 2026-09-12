@@ -121,9 +121,9 @@ describe("OpenAI provider policy artifact", () => {
   });
 
   it.each([
-    ["gpt-6-astra", "codex", "low"],
-    ["gpt-6-astra", "openclaw", "low"],
-    ["gpt-6-astra", "auto", "low"],
+    ["gpt-6-astra", "codex", "medium"],
+    ["gpt-6-astra", "openclaw", "medium"],
+    ["gpt-6-astra", "auto", "medium"],
     ["gpt-5.6-sol", "codex", "medium"],
     ["gpt-5.6-sol", "openclaw", "medium"],
     ["gpt-5.6-terra", "codex", "medium"],
@@ -258,6 +258,7 @@ describe("OpenAI provider policy artifact", () => {
     const expected = {
       kind: "routes",
       defaultRuntimeId: "codex",
+      preferredAuthRequirement: "subscription",
       routes: [
         {
           api: "openai-responses",
@@ -765,29 +766,6 @@ describe("OpenAI provider policy artifact", () => {
     });
   });
 
-  it("inherits a provider adapter when the model overrides only its official base URL", () => {
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        configuredModel: { baseUrl: "https://api.openai.com/v1" },
-        configuredProvider: { api: "openai-completions" },
-      }),
-    ).toEqual({
-      kind: "routes",
-      defaultRuntimeId: "openclaw",
-      routes: [
-        {
-          api: "openai-completions",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw"] },
-        },
-      ],
-    });
-  });
-
   it("inherits lower custom endpoints without changing the model adapter", () => {
     for (const [api, authRequirement] of [
       ["openai-chatgpt-responses", "subscription"],
@@ -923,7 +901,7 @@ describe("OpenAI provider policy artifact", () => {
     }
   });
 
-  it("preserves explicit official completions and keeps them on OpenClaw", () => {
+  it("keeps explicit API route intent on official Completions", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
@@ -932,6 +910,7 @@ describe("OpenAI provider policy artifact", () => {
           api: "openai-completions",
           baseUrl: "https://api.openai.com/v1",
         },
+        routeIntent: { authRequirement: "api-key", source: "explicit" },
       }),
     ).toEqual({
       kind: "routes",

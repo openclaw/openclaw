@@ -130,8 +130,9 @@ overrides:
   form-data: 4.0.6
   werift-ice@0.2.2>ip: npm:neoip@3.1.0
   ip-address: 10.7.0
-  mailauth@5.0.3>nodemailer: 9.1.1
+  mailauth@5.0.3>nodemailer: 10.0.8
   mailauth@5.0.3>undici: 8.10.2
+  mailparser@3.9.20>nodemailer: 10.0.8
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   qs: 6.16.0
@@ -8190,9 +8191,9 @@ packages:
     resolution: {integrity: sha512-M6Rm/bbG6De/gKGxOpeOobx/dnGuP0dz40adqx38boqHhlWssBJZgLCPBNtb9NkrmnKYiV04xELq+R6PFOnoLA==}
     engines: {node: '>=4.4.0'}
 
-  nodemailer@9.1.1:
-    resolution: {integrity: sha512-izw9mVKFix6YSnC9eLgV6g1opl9DUlRio9ZNcq+Wu9Ujn2UwF+8Nl0B8nz22kEC+CTZCvinkxwJ0DeFbb6NwcQ==}
-    engines: {node: '>=6.0.0'}
+  nodemailer@10.0.8:
+    resolution: {integrity: sha512-uCZ0AtFDI46sHwJ6mhwNuIoA/KiTC0ZCzX7g01941+H9VMIXEiZjtgjQkzoBRTeQba0cIrKfwk31q99PfcIMRw==}
+    engines: {node: '>=20.0.0'}
 
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
@@ -15249,7 +15250,7 @@ snapshots:
       ipaddr.js: 2.5.0
       joi: 18.2.3
       libmime: 5.4.1
-      nodemailer: 9.1.1
+      nodemailer: 10.0.8
       punycode.js: 2.3.1
       tldts: 7.4.10
       undici: 8.10.2
@@ -15263,7 +15264,7 @@ snapshots:
       iconv-lite: 0.7.3
       libmime: 5.4.3
       linkify-it: 5.0.2
-      nodemailer: 9.1.1
+      nodemailer: 10.0.8
       punycode.js: 2.3.1
       tlds: 1.261.0
 
@@ -15857,7 +15858,7 @@ snapshots:
 
   node-wav@0.0.2: {}
 
-  nodemailer@9.1.1: {}
+  nodemailer@10.0.8: {}
 
   normalize-path@3.0.0: {}
 

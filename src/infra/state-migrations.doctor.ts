@@ -42,6 +42,7 @@ import {
   LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
@@ -2855,6 +2856,7 @@ async function runLegacyStateMigrationSteps(
         outcome: "refused",
         ...result,
         refusal: { code: "blocked-by-agent-database-refusal", message },
+        refusedAgentDatabasePaths: refusedDependencies,
       };
       entries.push({ id: step.id, result });
       receipts.push(receipt);
@@ -3084,7 +3086,13 @@ async function executeLegacyStateMigrations(
     params.doctorOnlyStateMigrations === true ? "doctor" : "automatic";
   const executionOptions = {
     onUnexpectedFailure,
-    ...(mode === "doctor" ? { refusedAgentDatabasePaths: new Set<string>() } : {}),
+    refusedAgentDatabasePaths: new Set<string>(
+      mode === "automatic"
+        ? listAgentDatabaseAdmissionRefusals({ env }).flatMap((refusal) =>
+            refusal.paths.map((pathname) => path.resolve(pathname)),
+          )
+        : [],
+    ),
   };
   const initialStateDir = resolveStateDir(env, homedir);
   const checkKey = `${path.resolve(initialStateDir)}\0${mode}`;

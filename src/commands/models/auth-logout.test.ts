@@ -68,6 +68,9 @@ vi.mock("./auth-refresh.js", () => ({
 
 vi.mock("../../gateway/server-methods/models-auth-refresh.js", () => ({
   modelsAuthRefreshHandlers: {},
+}));
+
+vi.mock("../../gateway/model-auth-refresh.js", () => ({
   refreshModelAuthStateAfterMutation: vi.fn(async () => undefined),
 }));
 
@@ -131,10 +134,14 @@ async function dispatchAuthLogout(
     }),
   });
   expect(respond).toHaveBeenCalledOnce();
-  const [ok, , error] = expectDefined(respond.mock.calls[0], "Gateway logout response");
+  const [ok, payload, error] = expectDefined(respond.mock.calls[0], "Gateway logout response");
   if (!ok) {
     throw new Error(expectDefined(error, "Gateway logout error").message);
   }
+  expect(payload).toHaveProperty(
+    "warning",
+    "Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it.",
+  );
 }
 
 function createRuntime(): RuntimeEnv & { logs: string[] } {

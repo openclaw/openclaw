@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { icons } from "../icons.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
@@ -80,9 +81,9 @@ describe("Browser panel hosted tabs", () => {
     const { panel } = await mount(true, false);
     expect(readPanelHostedTabs(panel)).toBe(panel);
     expect(panel.hostedTabs).toEqual([
-      { id: "remote:a", label: "Example", url: "https://example.test/a", kind: "remote" },
-      { id: "native:b", label: "second.test", url: "https://second.test/b", kind: "native" },
-      { id: "remote:c", label: "New tab", url: "about:blank", kind: "remote" },
+      { id: "remote:a", label: "Example", url: "https://example.test/a", icon: icons.globe },
+      { id: "native:b", label: "second.test", url: "https://second.test/b", icon: icons.monitor },
+      { id: "remote:c", label: "New tab", url: "about:blank", icon: icons.globe },
     ]);
     expect(panel.activeHostedTabId).toBe("remote:a");
     expect(

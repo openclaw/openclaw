@@ -298,19 +298,49 @@ export function deleteExpiredPluginStateEntries(
   return Number(result.numAffectedRows ?? 0);
 }
 
+type PluginStateNamespaceCountParams = { pluginId: string; namespace: string; now: number };
+type PluginStateCountRow = { count: number | bigint };
+const pluginStateNamespaceCountQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof prepareSqliteQuerySync<PluginStateNamespaceCountParams, PluginStateCountRow>>
+>();
+
 function countLivePluginStateNamespaceEntries(
   db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
+  params: PluginStateNamespaceCountParams,
 ): number {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
-  );
+  let query = pluginStateNamespaceCountQueries.get(db);
+  if (!query) {
+    query = prepareSqliteQuerySync<PluginStateNamespaceCountParams, PluginStateCountRow>(
+      db,
+      (parameter) =>
+        getPluginStateKysely(db)
+          .selectFrom("plugin_state_entries")
+          .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
+          .where(
+            "plugin_id",
+            "=",
+            parameter((value) => value.pluginId),
+          )
+          .where(
+            "namespace",
+            "=",
+            parameter((value) => value.namespace),
+          )
+          .where((eb) =>
+            eb.or([
+              eb("expires_at", "is", null),
+              eb(
+                "expires_at",
+                ">",
+                parameter((value) => value.now),
+              ),
+            ]),
+          ),
+    );
+    pluginStateNamespaceCountQueries.set(db, query);
+  }
+  const row = query(params).rows[0];
   return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
@@ -334,18 +364,41 @@ export function allocatePluginStateNamespaceCreatedAt(
   return next;
 }
 
+type PluginStateCountParams = { pluginId: string; now: number };
+const pluginStateCountQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>>
+>();
+
 export function countLivePluginStateEntries(
   db: DatabaseSync,
-  params: { pluginId: string; now: number },
+  params: PluginStateCountParams,
 ): number {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
-      .where("plugin_id", "=", params.pluginId)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
-  );
+  let query = pluginStateCountQueries.get(db);
+  if (!query) {
+    query = prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>(db, (parameter) =>
+      getPluginStateKysely(db)
+        .selectFrom("plugin_state_entries")
+        .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
+        .where(
+          "plugin_id",
+          "=",
+          parameter((value) => value.pluginId),
+        )
+        .where((eb) =>
+          eb.or([
+            eb("expires_at", "is", null),
+            eb(
+              "expires_at",
+              ">",
+              parameter((value) => value.now),
+            ),
+          ]),
+        ),
+    );
+    pluginStateCountQueries.set(db, query);
+  }
+  const row = query(params).rows[0];
   return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
@@ -573,12 +626,17 @@ export function registerPluginStateEntry(
       retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS;
     }
   }
-  const existing = selectPluginStateEntry(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    key: params.key,
-    now,
-  });
+  // Ordinary evicting writes enforce quotas after the upsert; they do not need
+  // to load the previous payload. Reject-new and batch counts still need existence.
+  const existing =
+    retention || params.overflowPolicy === "reject-new"
+      ? selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now,
+        })
+      : undefined;
   if (!existing) {
     assertCanInsertPluginStateEntry({
       store,

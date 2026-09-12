@@ -77,6 +77,14 @@ describe("AppSidebar native Gateway menu", () => {
     expect(
       rows.map((row) => row.querySelector(".sidebar-gateway-health")?.getAttribute("aria-label")),
     ).toEqual(["Connected", "Unreachable", "Unknown status"]);
+    expect(rows.map((row) => row.querySelector('[slot="details"] kbd')?.textContent)).toEqual([
+      "⌘1",
+      "⌘2",
+      "⌘3",
+    ]);
+    for (const row of rows) {
+      expect(row.querySelector("kbd")?.getAttribute("aria-hidden")).toBe("true");
+    }
     expect(rows[0]!.querySelector(".sidebar-gateway-primary")?.textContent).toBe("primary");
     expect(rows[1]!.querySelector(".sidebar-gateway-primary")).toBeNull();
     expect(rows[1]!.querySelector(".sidebar-gateway-check")).not.toBeNull();
@@ -112,5 +120,18 @@ describe("AppSidebar native Gateway menu", () => {
     expect(
       singleMenu.querySelector('wa-dropdown-item[value="command:gateway-settings"]'),
     ).not.toBeNull();
+
+    snapshot.gateways = Array.from({ length: 10 }, (_, index) => ({
+      ...snapshot.gateways[0]!,
+      id: `gateway-${index + 1}`,
+      name: `Gateway ${index + 1}`,
+    }));
+    snapshot.currentId = "gateway-1";
+    publish();
+    await sidebar.updateComplete;
+    const manyRows = sidebar.querySelectorAll('wa-dropdown-item[value^="gateway:"]');
+    expect(manyRows).toHaveLength(10);
+    expect(manyRows[8]!.querySelector('[slot="details"] kbd')?.textContent).toBe("⌘9");
+    expect(manyRows[9]!.querySelector("kbd")).toBeNull();
   });
 });

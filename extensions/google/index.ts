@@ -1,4 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -17,50 +18,29 @@ import { createLazyGoogleRealtimeVoiceProvider } from "./realtime-voice-lazy.js"
 import { buildGoogleSpeechProvider } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
-let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
-let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
-let googleMusicGenerationProviderPromise: Promise<MusicGenerationProvider> | null = null;
-let googleVideoGenerationProviderPromise: Promise<VideoGenerationProvider> | null = null;
-
 type GoogleMediaUnderstandingProvider = Required<
   Pick<MediaUnderstandingProvider, "transcribeAudio" | "describeVideo">
 >;
 
-async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
-  if (!googleImageGenerationProviderPromise) {
-    googleImageGenerationProviderPromise = import("./image-generation-provider.js").then((mod) =>
-      mod.buildGoogleImageGenerationProvider(),
-    );
-  }
-  return await googleImageGenerationProviderPromise;
-}
+const loadGoogleImageGenerationProvider = createLazyRuntimeSurface(
+  () => import("./image-generation-provider.js"),
+  (mod) => mod.buildGoogleImageGenerationProvider(),
+);
 
-async function loadGoogleMediaUnderstandingProvider(): Promise<MediaUnderstandingProvider> {
-  if (!googleMediaUnderstandingProviderPromise) {
-    googleMediaUnderstandingProviderPromise = import("./media-understanding-provider.js").then(
-      (mod) => mod.googleMediaUnderstandingProvider,
-    );
-  }
-  return await googleMediaUnderstandingProviderPromise;
-}
+const loadGoogleMediaUnderstandingProvider = createLazyRuntimeSurface(
+  () => import("./media-understanding-provider.js"),
+  (mod) => mod.googleMediaUnderstandingProvider,
+);
 
-async function loadGoogleMusicGenerationProvider(): Promise<MusicGenerationProvider> {
-  if (!googleMusicGenerationProviderPromise) {
-    googleMusicGenerationProviderPromise = import("./music-generation-provider.js").then((mod) =>
-      mod.buildGoogleMusicGenerationProvider(),
-    );
-  }
-  return await googleMusicGenerationProviderPromise;
-}
+const loadGoogleMusicGenerationProvider = createLazyRuntimeSurface(
+  () => import("./music-generation-provider.js"),
+  (mod) => mod.buildGoogleMusicGenerationProvider(),
+);
 
-async function loadGoogleVideoGenerationProvider(): Promise<VideoGenerationProvider> {
-  if (!googleVideoGenerationProviderPromise) {
-    googleVideoGenerationProviderPromise = import("./video-generation-provider.js").then((mod) =>
-      mod.buildGoogleVideoGenerationProvider(),
-    );
-  }
-  return await googleVideoGenerationProviderPromise;
-}
+const loadGoogleVideoGenerationProvider = createLazyRuntimeSurface(
+  () => import("./video-generation-provider.js"),
+  (mod) => mod.buildGoogleVideoGenerationProvider(),
+);
 
 async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMediaUnderstandingProvider> {
   const provider = await loadGoogleMediaUnderstandingProvider();

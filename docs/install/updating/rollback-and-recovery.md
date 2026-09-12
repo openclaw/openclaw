@@ -260,9 +260,29 @@ Only a passing validation allows activation; otherwise the update fails and
 discards the candidate without stopping the service.
 Before activation, repair shares one disposable rehearsal state/config snapshot
 across its turns and validation, then independently validates surviving candidate
-changes before activation; configuration changes are never promoted and
-stop as `repair-requires-config-change`, naming the changed top-level keys for
-the operator to inspect with `openclaw triage` or apply with `openclaw doctor --fix`.
+changes before activation. Successful repair can proceed when Doctor migrations
+change the copied config. Activation reruns update-mode Doctor against the
+captured live input, using the normal config writer, backup, and requester checks;
+it never copies rehearsal paths, canary settings, or inference edits into operator config.
+Optional repairs excluded during updates, such as disabling unavailable skills,
+remain excluded. The run ledger and update summary identify changed top-level
+keys and migration messages; the warning log retains the full messages.
+If the writer refuses promotion, `repair-requires-config-change` names the keys
+and the refusal reason. Revoked chat authority remains `requester-revoked`.
+Older candidates without guarded Doctor support continue through their normal
+activation Doctor. When candidate validation changes config, the ledger and
+summary warn with the changed keys that promotion receipts are unavailable for
+that candidate version.
+Repairs owned entirely by one internal include file use the existing include
+writer after requester and captured-root checks. The ledger, summary, and warning
+log name the affected keys and report `promotion unavailable for include-owned
+configuration`: the filesystem API does not yet support authority checks at each
+final include-file effect. Guarded authority resumes for later Doctor writes.
+Doctor retains the include values used to prepare each repair and refuses the
+write if those inputs change before publication.
+Mixed-ownership and external-include restrictions remain unchanged.
+Ledger entries and summaries retain their existing diagnostic limits; the warning
+log retains full migration messages.
 
 Git source updates keep the selected source revision. Repair may restore
 dependencies, generated runtime files, or state, but a candidate with changed

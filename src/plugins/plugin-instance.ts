@@ -33,6 +33,7 @@ export class PluginInstance {
   readonly lifecycle: PluginInstanceLifecycle;
   toolRegistrationComplete = false;
   controlPlaneInitialized = false;
+  sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private moduleSourceExists?: (source: string) => boolean;
   private accepting = true;
@@ -426,8 +427,7 @@ export class PluginInstance {
       }
     }
     const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
-    const reason = new Error(`Plugin ${this.pluginId} is retiring`);
-    this.controller.abort(reason);
+    this.controller.abort(new Error(`Plugin ${this.pluginId} is retiring`));
     for (const cleanup of Array.from(this.cleanups).toReversed()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
