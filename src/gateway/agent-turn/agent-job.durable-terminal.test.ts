@@ -412,6 +412,45 @@ describe("durable agent job terminal receipts", () => {
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
   });
 
+  it("does not project an ordinary receipt onto an incognito run that reuses its id", async () => {
+    const runId = `run-ordinary-to-incognito-${runSequence++}`;
+    startRun(runId);
+    finishRun(runId);
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20,
+    });
+    resetAgentJobStateForTest();
+
+    const incognitoOwner = {
+      ...owner,
+      sessionKey: "agent:agent-a:dashboard:incognito-reused-id",
+      sessionId: "incognito-session",
+    };
+    startRun(runId, incognitoOwner);
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        status: "error",
+        executionSettled: true,
+        error: "current incognito completion",
+        endedAt: 40,
+      },
+    });
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: "current incognito completion",
+      endedAt: 40,
+    });
+    expect(readAgentRunTerminalReceipt({ runId })).toBeUndefined();
+
+    resetAgentJobStateForTest();
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
+  });
+
   it("does not recover an incognito receipt written by an older gateway", async () => {
     const runId = `run-legacy-incognito-${runSequence++}`;
     const incognitoOwner = {

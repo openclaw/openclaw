@@ -560,7 +560,9 @@ function recordAgentRunSnapshot(
   const owner = agentRunOwners.get(snapshot.runId);
   if (!owner) {
     const durable =
-      snapshot.source === "chat" ? undefined : readDurableAgentRunSnapshot(snapshot.runId);
+      agentRunDurabilityFences.has(snapshot.runId) || snapshot.source === "chat"
+        ? undefined
+        : readDurableAgentRunSnapshot(snapshot.runId);
     publishAgentRunSnapshot(
       durable ? projectDurableSnapshot(observation, durable) : observation,
       version,
@@ -630,21 +632,20 @@ function beginAgentJob(runId: string, startedAt?: number) {
   } else {
     agentRunOwners.delete(runId);
   }
-  if (isIncognitoSessionKey(getAgentRunContext(runId)?.sessionKey)) {
-    agentRunDurabilityFences.delete(runId);
-  } else {
-    try {
-      if (forceTerminalPersistenceFailureForTest) {
-        throw new Error("forced terminal receipt persistence failure");
-      }
-      deleteAgentRunTerminalReceipt({ runId });
-      agentRunDurabilityFences.delete(runId);
-    } catch (error) {
-      agentRunDurabilityFences.add(runId);
-      agentJobLog.warn(
-        `terminal receipt ownership fence pending for run ${runId}: ${String(error)}`,
-      );
+  const isIncognitoRun = isIncognitoSessionKey(getAgentRunContext(runId)?.sessionKey);
+  try {
+    if (forceTerminalPersistenceFailureForTest) {
+      throw new Error("forced terminal receipt persistence failure");
     }
+    deleteAgentRunTerminalReceipt({ runId });
+    if (isIncognitoRun) {
+      agentRunDurabilityFences.add(runId);
+    } else {
+      agentRunDurabilityFences.delete(runId);
+    }
+  } catch (error) {
+    agentRunDurabilityFences.add(runId);
+    agentJobLog.warn(`terminal receipt ownership fence pending for run ${runId}: ${String(error)}`);
   }
   agentRunStarts.set(runId, startedAt ?? Date.now());
 }
@@ -1087,7 +1088,7 @@ function readAvailableAgentRunTerminal(params: {
   if (cached) {
     return publicSnapshot(cached);
   }
-  if (!params.allowDurable || params.source) {
+  if (!params.allowDurable || params.source || agentRunDurabilityFences.has(params.runId)) {
     return undefined;
   }
   try {
