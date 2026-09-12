@@ -10,7 +10,7 @@ import {
   closeOpenClawAgentDatabaseByPath,
   listOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export async function cleanupSessionStateForTest(
@@ -35,7 +35,7 @@ export async function cleanupSessionStateForTest(
       closeOpenClawAgentDatabaseByPath(database.path);
     }
   }
-  closeOpenClawStateDatabaseByPath(
+  await closeOpenClawStateDatabaseByPathAsync(
     resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: options.stateDir }),
   );
 }

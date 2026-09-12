@@ -1,11 +1,14 @@
 /** Cold adapter for provider-owned OpenAI model route facts. */
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderModelRouteResolution,
+  ProviderModelRouteAuthRequirement,
   ProviderModelRouteSource,
+  ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../plugin-sdk/provider-model-types.js";
 import {
@@ -15,6 +18,7 @@ import {
 } from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { resolveModelRouteIntent } from "./model-runtime-policy.js";
 import type { ProviderModelAuthSourcePlan } from "./provider-model-auth-source-plan.js";
 import { selectProviderModelRouteAuth } from "./provider-model-route-auth.js";
 import { createProviderModelCatalogRoutePolicy } from "./provider-model-route.js";
@@ -23,6 +27,9 @@ const OPENAI_PROVIDER_ID = "openai";
 
 export function createOpenAIModelRoutesResolver(params: {
   config?: OpenClawConfig;
+  agentId?: string;
+  primaryModel?: ProviderModelRef;
+  resolveProfileAuthMode?: (profileId: string) => string | undefined;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
 }) {
@@ -37,9 +44,28 @@ export function createOpenAIModelRoutesResolver(params: {
     api?: string | null;
     baseUrl?: unknown;
     observedRoutes?: readonly ProviderModelRouteSource[];
-  }) =>
-    resolveRoutes({
+    routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
+    pinnedAuthRequirement?: ProviderModelRouteAuthRequirement;
+  }) => {
+    const routeIntent =
+      observed.routeIntent ??
+      resolveModelRouteIntent({
+        config: params.config,
+        provider: OPENAI_PROVIDER_ID,
+        modelId: observed.modelId,
+        agentId: params.agentId,
+        primaryModel: params.primaryModel,
+        resolveProfileAuthMode: params.resolveProfileAuthMode,
+      });
+    return resolveRoutes({
       modelId: observed.modelId ? splitTrailingAuthProfile(observed.modelId).model : undefined,
+      routeIntent:
+        routeIntent?.source === "inherited" &&
+        routeIntent.authRequirement &&
+        observed.pinnedAuthRequirement &&
+        routeIntent.authRequirement !== observed.pinnedAuthRequirement
+          ? { ...routeIntent, authRequirement: observed.pinnedAuthRequirement, source: "explicit" }
+          : routeIntent,
       observedRoutes:
         observed.observedRoutes ??
         (observed.api != null || (observed.baseUrl !== undefined && observed.baseUrl !== null)
@@ -51,6 +77,7 @@ export function createOpenAIModelRoutesResolver(params: {
             ]
           : undefined),
     });
+  };
 }
 
 /** Returns the authored OpenAI provider auth mode, if one exists. */
@@ -112,19 +139,29 @@ export function resolveOpenAIModelRoutes(params: {
   api?: string | null;
   baseUrl?: unknown;
   config?: OpenClawConfig;
+  agentId?: string;
+  primaryModel?: ProviderModelRef;
+  resolveProfileAuthMode?: (profileId: string) => string | undefined;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
+  pinnedAuthRequirement?: ProviderModelRouteAuthRequirement;
 }): ProviderModelRouteResolution | null {
   if (normalizeProviderId(params.provider ?? "") !== OPENAI_PROVIDER_ID) {
     return null;
   }
   return createOpenAIModelRoutesResolver({
     config: params.config,
+    agentId: params.agentId,
+    primaryModel: params.primaryModel,
+    resolveProfileAuthMode: params.resolveProfileAuthMode,
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
   })({
     modelId: params.modelId,
     api: params.api as ModelApi | null | undefined,
     baseUrl: params.baseUrl,
+    routeIntent: params.routeIntent,
+    pinnedAuthRequirement: params.pinnedAuthRequirement,
   });
 }

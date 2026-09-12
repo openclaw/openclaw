@@ -2,6 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "../../plugins/plugin-metadata.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
 
@@ -270,9 +274,7 @@ describe("doctor repair sequencing", () => {
     mocks.getInstalledPluginRecord.mockReturnValue(undefined);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
     mocks.maybeRepairGroupAllowFromFallback.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -498,9 +500,7 @@ describe("doctor repair sequencing", () => {
 
   it("repairs managed npm plugin drift before missing plugin install repair", async () => {
     const events: string[] = [];
-    const refreshedSnapshot = {
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    };
+    const refreshedSnapshot = createPluginMetadataSnapshotFixture();
     mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(refreshedSnapshot);
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(() => {
       events.push("bundled-shadow-cleanup");
@@ -746,19 +746,14 @@ describe("doctor repair sequencing", () => {
   });
 
   it("uses plugins from every agent workspace after inventory repair", async () => {
-    const researchPlugin = {
+    const researchPlugin = createPluginManifestRecordFixture({
       id: "research-channel",
       source: "/srv/research/.openclaw/extensions/research-channel/openclaw.plugin.json",
       providers: [],
-    };
+    });
     const manifestRegistry = { plugins: [researchPlugin], diagnostics: [] };
     mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(manifestRegistry);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      plugins: [],
-      diagnostics: [],
-      byPluginId: new Map(),
-    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Installed missing configured plugin "research-channel".'],
       warnings: [],
@@ -1049,37 +1044,25 @@ describe("doctor repair sequencing", () => {
   it("refreshes retained default-workspace metadata after cleanup-only inventory repairs", async () => {
     const workspaceDir = "/tmp/openclaw-doctor-workspace";
     const workspaceProvider = "workspace-provider";
-    const staleSnapshot = {
-      manifestRegistry: {
-        plugins: [{ id: "google-meet" }],
-        diagnostics: [],
-      },
-    };
-    const createRefreshedSnapshot = (includeWorkspaceProvider: boolean) =>
-      ({
-        diagnostics: [],
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: {
-          providers: new Map(
-            includeWorkspaceProvider ? [[workspaceProvider, ["workspace-plugin"]]] : [],
-          ),
-          modelCatalogProviders: new Map(),
-          setupProviders: new Map(),
-          cliBackends: new Map(),
-        },
-      }) as unknown as PluginMetadataSnapshot;
-    const refreshedSnapshot = createRefreshedSnapshot(true);
+    const staleSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "google-meet" }],
+    });
     const configWideManifestRegistry = {
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "workspace-plugin",
           source:
             "/tmp/openclaw-doctor-workspace/.openclaw/extensions/workspace-plugin/openclaw.plugin.json",
           providers: [workspaceProvider],
-        },
+        }),
       ],
       diagnostics: [],
     };
+    const createRefreshedSnapshot = (includeWorkspaceProvider: boolean) =>
+      createPluginMetadataSnapshotFixture({
+        plugins: includeWorkspaceProvider ? configWideManifestRegistry.plugins : [],
+      });
+    const refreshedSnapshot = createRefreshedSnapshot(true);
     mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(configWideManifestRegistry);
     mocks.loadPluginMetadataSnapshot.mockImplementationOnce((params: { workspaceDir?: string }) =>
       params.workspaceDir === workspaceDir ? refreshedSnapshot : createRefreshedSnapshot(false),
@@ -1104,7 +1087,7 @@ describe("doctor repair sequencing", () => {
         }),
     );
     const pluginMetadataSnapshotState = {
-      current: staleSnapshot as unknown as PluginMetadataSnapshot,
+      current: staleSnapshot,
     };
     const scopedSnapshots: Array<PluginMetadataSnapshot | undefined> = [];
     const runWithPluginMetadataSnapshot = <T>(

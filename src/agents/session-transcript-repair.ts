@@ -21,7 +21,11 @@ import {
   extractToolResultIds,
   hasToolCallInput,
 } from "./tool-call-id.js";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import {
+  createCompletedToolCallPredicate,
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -132,6 +136,7 @@ function countRawToolCallBlocks(content: unknown[]): number {
 function isReplaySafeThinkingAssistantTurn(
   content: unknown[],
   allowedToolNames: Set<string> | null,
+  isCompleted: ReturnType<typeof createCompletedToolCallPredicate>,
 ): boolean {
   let sawToolCall = false;
   const seenToolCallIds = new Set<string>();
@@ -146,7 +151,7 @@ function isReplaySafeThinkingAssistantTurn(
       hasPartialJson(block) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !isAllowedToolCallName(block.name, allowedToolNames)
+      !isAllowedToolCallName(block.name, isCompleted(block) ? null : allowedToolNames)
     ) {
       return false;
     }
@@ -252,6 +257,7 @@ function repairToolCallInputs(
   let changed = false;
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
+  const isCompleted = createCompletedToolCallPredicate(messages);
   const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
@@ -279,7 +285,7 @@ function repairToolCallInputs(
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
       const followingToolResults = collectFollowingToolResults(messages, index);
       if (
-        isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames) &&
+        isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames, isCompleted) &&
         replaySafeToolCalls.every(
           (toolCall) =>
             !preservedThinkingToolCallIds.has(toolCall.id) &&
@@ -307,11 +313,12 @@ function repairToolCallInputs(
 
     for (const block of msg.content) {
       if (isRawToolCallBlock(block)) {
+        const rawBlock = block as RawToolCallBlock;
         // Drop genuinely incomplete streaming artifacts (missing required fields).
         if (
           !hasToolCallInput(block) ||
           !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)
+          !isAllowedToolCallName(rawBlock.name, isCompleted(rawBlock) ? null : allowedToolNames)
         ) {
           droppedToolCalls += 1;
           changed = true;

@@ -309,9 +309,6 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
-  if (!fs.existsSync(packageJsonPath)) {
-    return null;
-  }
   const packageJson = readJsonFile(packageJsonPath);
   const rootPackageJsonPath = path.join(repoRoot, "package.json");
   const rootPackageJson = fs.existsSync(rootPackageJsonPath)
@@ -532,7 +529,7 @@ function readPackageDirArg(argv: string[]) {
     throw new Error(usage());
   }
   const extraArg = args[1];
-  if (extraArg) {
+  if (args.length > 1) {
     throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
   }
   return prepareIndex === -1 ? { packageDir } : { packageDir, prepareNativeImport: true };

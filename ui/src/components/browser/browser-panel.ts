@@ -179,7 +179,7 @@ class OpenClawBrowserPanel
     const controller = this.browserPanelController;
     const hostedTabsChangeKey = JSON.stringify([
       controller.activeTargetId,
-      controller.tabs.map((tab) => [tab.id, tab.kind, tab.title, tab.url]),
+      controller.tabs.map((tab) => [tab.id, tab.kind, tab.title, tab.url, tab.favicon]),
     ]);
     if (hostedTabsChangeKey !== this.lastHostedTabsChangeKey) {
       this.lastHostedTabsChangeKey = hostedTabsChangeKey;

@@ -1,4 +1,3 @@
-// Main update orchestration for source checkouts and package installs.
 import { randomUUID } from "node:crypto";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveConfigPath } from "../../config/paths.js";
@@ -226,6 +225,7 @@ async function initializeAndRunUpdate(
             target.updateInstallKind === "package" &&
             !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
           const stageParams = (progress: ReturnType<typeof createUpdateProgress>["progress"]) => ({
+            reapplyLocalOverrides: opts.reapplyLocalOverrides,
             root: target.root,
             installKind: prepared.installKind,
             tag: target.tag,
@@ -303,7 +303,8 @@ async function initializeAndRunUpdate(
               fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
             });
             if (!runtime.ok) {
-              return await target.refuseUpdate("node-runtime-preflight", runtime.error);
+              const { error, failureFacts } = runtime;
+              return await target.refuseUpdate("node-runtime-preflight", error, failureFacts);
             }
             target.packageUpdateNodeRunner = runtime.value.nodeRunner;
             if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -431,15 +432,14 @@ async function updateCommandInternal(
     devTarget,
   } = target;
   let { packageUpdateNodeRunner } = target;
-  const refuseUpdate = (reason: string, message?: string) =>
-    reportPreMutationUpdateResult({
-      root,
-      installKind: updateInstallKind,
-      reason,
-      message,
-      opts,
-      controlPlaneUpdateSentinelMeta,
-    });
+  const reportContext = {
+    root,
+    installKind: updateInstallKind,
+    opts,
+    controlPlaneUpdateSentinelMeta,
+  };
+  const refuseUpdate: typeof target.refuseUpdate = (reason, message, failureFacts) =>
+    reportPreMutationUpdateResult({ ...reportContext, reason, message, failureFacts });
 
   recordUpdateRunPhase(
     run.runId,
@@ -490,6 +490,7 @@ async function updateCommandInternal(
   }
 
   const currentCoreFinalization = {
+    legacyConfigPlan,
     root,
     previousInstallRoot: discoveredRoot,
     requestedChannel,
@@ -510,7 +511,6 @@ async function updateCommandInternal(
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
-      legacyConfigPlan,
       opts,
       result: {
         status: "skipped",
@@ -554,7 +554,8 @@ async function updateCommandInternal(
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
     if (!runtimePreflight.ok) {
-      return await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
+      const { error, failureFacts } = runtimePreflight;
+      return await refuseUpdate("node-runtime-preflight", error, failureFacts);
     }
     const runtimeSelection = runtimePreflight.value;
     packageUpdateNodeRunner = runtimeSelection.nodeRunner;
@@ -664,14 +665,12 @@ async function updateCommandInternal(
       result,
       ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
       packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
-      legacyConfigPlan,
     });
   }
   recoveryState.triageTarget.root = result.root ?? root;
   recoveryState.triageTarget.failureResult = result;
   recoveryState.triageTarget.env =
     recoveryEnv ?? ownedManagedUpdateContext?.env ?? recoveryState.triageTarget.env;
-  const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
     ...executionState,
@@ -679,7 +678,7 @@ async function updateCommandInternal(
     root,
     previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
-    configSnapshot: finalizationConfigSnapshot,
+    configSnapshot: ownedManagedUpdateContext?.configSnapshot ?? configSnapshot,
     requestedChannel,
     storedChannel,
     channel,
@@ -703,7 +702,7 @@ async function updateCommandInternal(
         packageUpdateNodeRunner,
         schemaVersions: execution.schemaVersions,
         candidateSchemaVersions: execution.candidateSchemaVersions,
-        config: finalizationConfigSnapshot.config,
+        config: finalization.configSnapshot.config,
         env: ownedManagedUpdateContext?.env ?? run.env,
       });
   run.executorFence?.assertCurrent();

@@ -194,7 +194,7 @@ export function createConfigWriteCoordinator({
     const submit = task((submission) => {
       flight.submission = submission;
       // Keep the ack for teardown, but only a live flight may retire older loads.
-      if (submission.ackHash && !isDisposed() && inFlight === flight) {
+      if (submission.ack && !isDisposed() && inFlight === flight) {
         invalidateConfigLoad();
       }
     });
@@ -621,7 +621,7 @@ export function createConfigWriteCoordinator({
                   state,
                   "save",
                   (submission) => {
-                    if (submission.ackHash === null) {
+                    if (submission.ack === null) {
                       patches.clear();
                     }
                     onSubmitted(submission);
@@ -788,17 +788,17 @@ export function createConfigWriteCoordinator({
           // The settled flight could not update dirty/base state past the
           // epoch guard; a draft whose bytes differ from that submission is a
           // newer edit and gets exactly one chained final save — never a
-          // parallel one. Applies and external mutations never register submission
-          // info: only this save's own ack is a safe CAS base for a final flush.
+          // parallel one. The save's canonical acknowledgement supplies both
+          // the document and revision for replaying that newer edit.
           const submitted = pendingFlight.submission;
-          const ackHash = submitted?.ackHash ?? null;
+          const ack = submitted?.ack ?? null;
           const submittedRaw = submitted?.raw ?? null;
           // Bytes-vs-submission is the only trustworthy signal here: the
           // epoch guard blocked the ack's rebase, so a revert back to the
           // pre-save value reads configFormDirty=false while the persisted
           // bytes are still the unreverted submission.
-          if (ackHash && submittedRaw !== null && serializeFormForSubmit(state) !== submittedRaw) {
-            teardownFlushConfigDraft(state, client, ackHash, () =>
+          if (ack && submittedRaw !== null && serializeFormForSubmit(state) !== submittedRaw) {
+            teardownFlushConfigDraft(state, client, submittedRaw, ack, () =>
               canCallConfigMethod("config.set"),
             );
           }

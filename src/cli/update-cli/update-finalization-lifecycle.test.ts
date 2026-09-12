@@ -103,6 +103,17 @@ it.each([false, true])(
     await settled;
     expect(vi.getTimerCount()).toBe(timerCount);
     const finishedPhase = getUpdateRun(initial.runId);
+    if (fails) {
+      expect(finishedPhase?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "finalize:plugins",
+          status: "failed",
+          failureFacts: [
+            { check: "plugins", code: "finalization-failed", message: "plugin repair failed" },
+          ],
+        }),
+      );
+    }
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
     expect(getUpdateRun(initial.runId)).toEqual(finishedPhase);
     lifecycle.complete(fails ? 1 : 0);

@@ -4,6 +4,11 @@ import Foundation
 
 /// Observes one unreaped child until exit or cancellation; it never signals or reaps it.
 final class ChildProcessExit: @unchecked Sendable {
+    enum Outcome: Sendable, Equatable {
+        case exited
+        case timedOut
+    }
+
     private let lock = NSLock()
     private let processIdentifier: pid_t
     private let source: DispatchSourceProcess?
@@ -34,7 +39,26 @@ final class ChildProcessExit: @unchecked Sendable {
         }
     }
 
-    func wait() async {
+    func wait(timeout: TimeInterval) async -> Outcome {
+        await withTaskGroup(of: Outcome.self) { group in
+            group.addTask {
+                await self.wait()
+                return .exited
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(for: .seconds(timeout))
+                    return .timedOut
+                } catch {
+                    return .exited
+                }
+            }
+            defer { group.cancelAll() }
+            return await group.next() ?? .exited
+        }
+    }
+
+    private func wait() async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.waitForSignal() }
             group.addTask { await self.pollUntilExit() }

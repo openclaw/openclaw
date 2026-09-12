@@ -21,7 +21,7 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -263,9 +263,13 @@ async function finalizeInput(
   executorFence?.assertCurrent();
 }
 
-void finalizeMigratedUpdate()
-  .catch((error: unknown) => {
-    process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);
-    process.exitCode = 1;
-  })
-  .finally(() => closeOpenClawStateDatabase());
+void (async () => {
+  try {
+    await finalizeMigratedUpdate();
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
+})().catch((error: unknown) => {
+  process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);
+  process.exitCode = 1;
+});

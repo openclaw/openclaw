@@ -1382,6 +1382,73 @@ describe("refreshChat", () => {
     expect(host.chatQueue).toEqual([]);
   });
 
+  it("drains a message submitted during startup after stale active history becomes idle", async () => {
+    const sessionKey = "agent:main:dashboard";
+    const message = "Continue after history loads";
+    const startup = createDeferred<ChatHistoryResult>();
+    const idleHistory: ChatHistoryResult = {
+      messages: [],
+      sessionInfo: row(sessionKey, {
+        sessionId: "dashboard-session",
+        hasActiveRun: false,
+        status: "done",
+        updatedAt: 11,
+      }),
+    };
+    const host = makeChatHost({
+      sessionKey,
+      chatMessage: message,
+      chatFollowUpMode: "queue",
+      sessionsResult: createSessionsResult([
+        row(sessionKey, {
+          sessionId: "dashboard-session",
+          hasActiveRun: true,
+          status: "running",
+          updatedAt: 10,
+        }),
+      ]),
+      requestHandlers: {
+        "chat.startup": () => startup.promise,
+        "chat.history": idleHistory,
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "startup send payload");
+          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+        },
+      },
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      startup: true,
+      awaitHistory: true,
+      deferBranches: true,
+      scheduleScroll: false,
+    });
+    onTestFinished(async () => {
+      startup.resolve(idleHistory);
+      await refresh;
+      retireChatMetadataRequests(asChatPageHost(host));
+      host.sessions.dispose();
+    });
+
+    expect(host.chatQueue).toEqual([]);
+    await handleSendChat(host);
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ text: message, sendState: "waiting-idle" }),
+    ]);
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+
+    startup.resolve(idleHistory);
+    await refresh;
+    await waitForFast(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ sessionKey, sessionId: "dashboard-session", message }),
+      );
+      expect(host.chatQueue).toEqual([]);
+    });
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+  });
+
   it.each([
     {
       name: "keeps a restored queue while the selected session is active",
@@ -2055,10 +2122,7 @@ describe("handleSendChat", () => {
           const payload = requireRecord(params, "chat send payload");
           return { runId: payload.idempotencyKey, status: "ok" };
         },
-        "chat.history": {
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        },
+        "chat.history": idleChatHistory(),
         "sessions.list": () =>
           createSessionsResult([row("agent:main", { hasActiveRun: false, status: "done" })]),
       },
@@ -3388,10 +3452,7 @@ describe("handleSendChat", () => {
 
     const host = makeChatHost({
       requestHandlers: {
-        "chat.history": {
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        },
+        "chat.history": idleChatHistory(),
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "offscreen model-wait send");
           return { runId: String(payload.idempotencyKey), status: "started", messageSeq: 1 };
@@ -6561,10 +6622,7 @@ describe("handleSendChat", () => {
           resetIssued = true;
           throw new Error("post-commit lifecycle failed");
         },
-        "chat.history": {
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        },
+        "chat.history": idleChatHistory(),
       },
       chatQueue: [clear, successor],
     });
@@ -7454,10 +7512,7 @@ describe("handleSendChat", () => {
           }
           return { runId: payload.idempotencyKey, status: "started" };
         },
-        "chat.history": {
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        },
+        "chat.history": idleChatHistory(),
       },
       chatMessage: "retry after reconnect",
       chatReplyTarget: replyTarget,
@@ -8430,10 +8485,7 @@ describe("handleSendChat", () => {
 
     const host = makeChatHost({
       requestHandlers: {
-        "chat.history": {
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        },
+        "chat.history": idleChatHistory(),
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "retryable send payload");
           sendRunIds.push(String(payload.idempotencyKey));
@@ -8495,10 +8547,7 @@ describe("handleSendChat", () => {
             retryAfterMs: 100,
           });
         }
-        return {
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        };
+        return idleChatHistory();
       },
       "chat.send": (params: unknown) => {
         sendAttempts += 1;
@@ -8533,10 +8582,7 @@ describe("handleSendChat", () => {
     let sendAttempts = 0;
     const host = makeChatHost({
       requestHandlers: {
-        "chat.history": {
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        },
+        "chat.history": idleChatHistory(),
         "chat.send": (params: unknown) => {
           sendAttempts += 1;
           if (sendAttempts === 1) {
@@ -8618,10 +8664,7 @@ describe("handleSendChat", () => {
   it("persists queueable local commands entered while disconnected", async () => {
     executeSlashCommandMock.mockResolvedValueOnce({ content: "Thinking level set." });
     const request = makeRequestMock({
-      "chat.history": {
-        messages: [],
-        sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-      },
+      "chat.history": idleChatHistory(),
     });
     const attachment = {
       id: "offline-command-attachment",
@@ -8675,10 +8718,7 @@ describe("handleSendChat", () => {
         if (historyRequests === 1) {
           return startupHistory.promise;
         }
-        return Promise.resolve({
-          messages: [],
-          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-        });
+        return Promise.resolve(idleChatHistory());
       },
     });
     const host = makeChatHost({
@@ -8921,10 +8961,7 @@ describe("handleSendChat", () => {
           if (historyRequests === 1) {
             return staleHistory.promise;
           }
-          return Promise.resolve({
-            messages: [],
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-          });
+          return Promise.resolve(idleChatHistory());
         },
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "current epoch send payload");
@@ -8953,10 +8990,7 @@ describe("handleSendChat", () => {
     await waitForFast(() => expect(historyRequests).toBe(1));
     host.connectionEpoch = 2;
     const reconnectRetry = retryReconnectableQueuedChatSends(host);
-    staleHistory.resolve({
-      messages: [],
-      sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-    });
+    staleHistory.resolve(idleChatHistory());
     await Promise.all([staleRetry, reconnectRetry]);
 
     // The retired connection or busy snapshot cannot suppress the current idle read.
@@ -8976,10 +9010,7 @@ describe("handleSendChat", () => {
           if (historyRequests === 1) {
             return activeHistory.promise;
           }
-          return Promise.resolve({
-            messages: [],
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-          });
+          return Promise.resolve(idleChatHistory());
         },
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "terminal wakeup send payload");
@@ -9638,11 +9669,7 @@ describe("handleSendChat", () => {
   it("skips a manually failed head when replaying a later reconnect send", async () => {
     const host = makeChatHost({
       requestHandlers: {
-        "chat.history": () =>
-          Promise.resolve({
-            messages: [],
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-          }),
+        "chat.history": () => Promise.resolve(idleChatHistory()),
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "reconnect tail payload");
           return Promise.resolve({

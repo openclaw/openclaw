@@ -12,6 +12,7 @@ export class PortaledHovercardController {
   focusInside = false;
   cardFocusInside = false;
   explicitHold = false;
+  restoringFocus = false;
 
   private closeTimer: number | null = null;
   private exitCleanup: (() => void) | null = null;
@@ -48,7 +49,48 @@ export class PortaledHovercardController {
   constructor(
     private readonly close: () => void,
     private readonly closeDelayMs = 120,
+    private readonly dismiss: () => void = close,
   ) {}
+
+  readonly handleTriggerKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      this.dismiss();
+      return;
+    }
+    // A portal is outside its trigger's tab sequence. Enter at the first link,
+    // then let native Tab traversal own the links inside the card.
+    if (event.key !== "Tab" || event.shiftKey || event.target !== this.trigger) {
+      return;
+    }
+    const first = this.focusables()[0];
+    if (first) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  readonly handleCardKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" && event.key !== "Tab") {
+      return;
+    }
+    const focusables = this.focusables();
+    const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
+    if (event.key === "Tab" && document.activeElement !== edge) {
+      return;
+    }
+    event.preventDefault();
+    // Capture before dismissal retires the trigger; focus must not reopen the
+    // card being dismissed. Scheduled pointer exit may animate, keyboard exit does not.
+    const trigger = this.trigger;
+    this.dismiss();
+    this.returnFocus(trigger);
+  };
+
+  returnFocus(trigger: HTMLElement | null): void {
+    this.restoringFocus = true;
+    trigger?.focus({ preventScroll: true });
+    this.restoringFocus = false;
+  }
 
   get held(): boolean {
     return (

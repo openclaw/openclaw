@@ -102,11 +102,14 @@ scenario:
         - memory prompt preparation registration missing prepare function
         - memory prompt supplement registration missing builder
         - model catalog provider registration missing provider
+        - MCP server connection resolver registration missing serverName or resolve
         - node invoke policy registration missing commands
         - session extension registration requires namespace and description
         - session scheduler job registration requires unique id, sessionKey, and kind
         - "plugin must declare contracts.tools for: kitchen-sink-tool"
         - tool metadata registration missing toolName
+        - invalid widget presenter registration
+        - "worker provider registration missing method: resolveAllocation"
       requiredAdversarialDiagnostics:
         - agent tool result middleware must be a function
         - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods

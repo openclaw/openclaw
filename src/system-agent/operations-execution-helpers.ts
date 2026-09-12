@@ -3,6 +3,7 @@ import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -191,6 +192,8 @@ export function resolveTuiAgentId(params: {
 
 export type ExecuteOptions = {
   approved?: boolean;
+  /** Host-owned origin for team members; never supplied by model tool arguments. */
+  requesterAgentId?: string;
   operatorApprovalOnly?: boolean;
   deps?: SystemAgentCommandDeps;
   auditDetails?: Record<string, unknown>;
@@ -261,8 +264,8 @@ export async function applyPersistentOperation(params: {
       operation: auditOperation,
       summary: outcome.summary,
       configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
-      configHashBefore: before.hash ?? null,
-      configHashAfter: after.hash ?? null,
+      configHashBefore: hashConfigRaw(before.raw),
+      configHashAfter: hashConfigRaw(after.raw),
       details: { ...opts.auditDetails, ...outcome.details },
     });
   } catch (error) {

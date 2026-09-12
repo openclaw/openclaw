@@ -10,7 +10,6 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
@@ -29,6 +28,10 @@ import {
   type SessionListOptions,
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
+import {
+  createSidebarContextLifecycle,
+  disposeSidebarContextLifecycles,
+} from "./app-sidebar-context-lifecycle.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -66,6 +69,8 @@ export type SidebarLifecycleState = HTMLElement & {
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
+  sidebarAgentsMode: "chip" | "roster";
+  navigationVisible: boolean;
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
@@ -552,12 +557,10 @@ export function createContext(
       agentsError: null,
       agentsList,
     },
+    ensureList: async (): Promise<AgentsListResult | null> => agents.state.agentsList,
     subscribe: () => () => undefined,
   };
-  const agentSelection = createAgentSelectionCapability(gateway, agents, {
-    load: () => selectedAgentId,
-    save: () => undefined,
-  });
+  const { theme, agentSelection } = createSidebarContextLifecycle(gateway, agents, selectedAgentId);
   sidebarSessionGatewayBindings.get(sessions)?.(gateway, agentSelection);
   return {
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
@@ -573,6 +576,7 @@ export function createContext(
     agents,
     agentIdentity,
     agentSelection,
+    theme,
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
@@ -713,6 +717,7 @@ export function setupSidebarTest() {
     }
     await vi.dynamicImportSettled();
     document.body.replaceChildren();
+    disposeSidebarContextLifecycles();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
     } else {

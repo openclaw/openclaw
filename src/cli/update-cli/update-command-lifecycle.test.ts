@@ -293,6 +293,60 @@ describe("update plugin lifecycle lease boundaries", () => {
     },
   );
 
+  it("keeps the plugin and error class when convergence fails", async () => {
+    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
+      ...successfulPluginUpdate,
+      status: "error",
+      assessment: { kind: "unsafe", reason: "convergence-failed" },
+      changed: false,
+      npm: {
+        changed: false,
+        outcomes: [
+          {
+            pluginId: "example",
+            status: "error",
+            code: "incompatible_plugin_api",
+            message: "Plugin requires a newer host API.",
+          },
+        ],
+      },
+    });
+    const { resultWithPostUpdate } = await convergeUpdatePlugins({
+      coreAlreadyCurrent: true,
+      result: {
+        status: "skipped",
+        mode: "npm",
+        reason: "already-current",
+        steps: [],
+        durationMs: 1,
+      },
+      root: "/fixture/openclaw",
+      installKindChanged: false,
+      configSnapshot: validConfigSnapshot,
+      requestedChannel: null,
+      storedChannel: null,
+      channel: "stable",
+      downgradeRisk: false,
+      opts: {},
+      preUpdatePluginInstallRecords: {},
+      startedAt: 1,
+      updateStepTimeoutMs: 1000,
+    });
+    expect(resultWithPostUpdate.steps).toContainEqual(
+      expect.objectContaining({
+        exitCode: 1,
+        failureFacts: [
+          {
+            check: "plugin-update",
+            code: "incompatible_plugin_api",
+            pluginId: "example",
+            message: "Plugin requires a newer host API.",
+          },
+        ],
+      }),
+    );
+  });
+
   it.each(["copied", "live"] as const)(
     "preserves the %s invocation environment through a failed phase",
     async (source) => {

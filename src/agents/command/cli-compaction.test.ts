@@ -5,11 +5,21 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  registerContextEngineInRegistry,
+  resolveContextEngine as resolveContextEngineFromRegistry,
+} from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
@@ -272,6 +282,169 @@ describe("runCliTurnCompactionLifecycle", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it.each(["context", "native", "fallback", "failure", "stale"] as const)(
+    "retains one resolved engine through compaction and awaits its cleanup (%s)",
+    async (mode) => {
+      const registry = createEmptyPluginRegistry();
+      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+      resources.attach(registry);
+      const retire = vi.fn();
+      resources.register("fixture", { id: "resource", dispose: retire });
+      const cleanupStarted = createDeferred();
+      const cleanupGate = createDeferred();
+      const cleanupFile = path.join(tmpDir, `owned-${mode}-cleanup.txt`);
+      const controller = new AbortController();
+      const staleError = new Error("compaction owner retired");
+      const compactCalls: CompactParams[] = [];
+      const raw = {
+        ...buildContextEngine({ compactCalls }),
+        async dispose() {
+          cleanupStarted.resolve();
+          await cleanupGate.promise;
+          await fs.writeFile(cleanupFile, "disposed", { signal: getAsyncWorkSignal() });
+          if (mode === "failure") {
+            throw new Error("cleanup failed too");
+          }
+        },
+      };
+      registerContextEngineInRegistry(registry, "legacy", () => raw, "core");
+      let engine: ContextEngine | undefined;
+      const scenario = await prepareCompactionScenario({
+        tmpDir,
+        suffix: `owned-${mode}`,
+        provider: "github-copilot",
+        sessionEntry: mode === "native" || mode === "fallback" ? { agentHarnessId: "copilot" } : {},
+        maintenance: async () => {
+          expect(retire).not.toHaveBeenCalled();
+          if (mode === "failure") {
+            throw new Error("maintenance failed");
+          }
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        },
+        deps: {
+          ensureContextEnginesInitialized: vi.fn(),
+          resolveContextEngine: async (cfg) => {
+            engine = await withPluginRuntimeRegistryScope(registry, () =>
+              resolveContextEngineFromRegistry(cfg),
+            );
+            if (mode === "stale") {
+              controller.abort(staleError);
+            }
+            return engine;
+          },
+          maybeCompactAgentHarnessSession: async () => {
+            expect(retire).not.toHaveBeenCalled();
+            return mode === "fallback"
+              ? {
+                  ok: false,
+                  compacted: false,
+                  reason: "unsupported",
+                  failure: { reason: "unsupported_harness_compaction" },
+                }
+              : { ok: true, compacted: true };
+          },
+        },
+      });
+      const result = scenario.run({ abortSignal: controller.signal }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        expect(
+          await Promise.race([
+            cleanupStarted.promise.then(() => "cleanup"),
+            result.then(() => "returned"),
+          ]),
+        ).toBe("cleanup");
+        await resources.release();
+        expect(retire).not.toHaveBeenCalled();
+        cleanupGate.resolve();
+        const error = await result;
+        if (mode === "failure") {
+          expect(error).toEqual(new Error("maintenance failed"));
+        } else {
+          expect(error).toBe(mode === "stale" ? staleError : undefined);
+        }
+        expect(compactCalls).toHaveLength(mode === "native" || mode === "stale" ? 0 : 1);
+        expect(await fs.readFile(cleanupFile, "utf8")).toBe("disposed");
+        expect(retire).toHaveBeenCalledTimes(1);
+      } finally {
+        cleanupGate.resolve();
+        await result;
+        await engine?.dispose?.().catch(() => {});
+        await resources.release();
+      }
+    },
+  );
+
+  it("retains an aborted compaction engine until its raw work and cleanup settle", async () => {
+    const registry = createEmptyPluginRegistry();
+    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+    resources.attach(registry);
+    const retired = createDeferred();
+    const retire = vi.fn(() => retired.resolve());
+    resources.register("fixture", { id: "resource", dispose: retire });
+    const compactStarted = createDeferred();
+    const compactGate = createDeferred();
+    const cleanupStarted = createDeferred();
+    const cleanupGate = createDeferred();
+    const dispose = vi.fn(async () => {
+      cleanupStarted.resolve();
+      await cleanupGate.promise;
+    });
+    const engine = {
+      ...buildContextEngine({ compactCalls: [] }),
+      async compact() {
+        compactStarted.resolve();
+        await compactGate.promise;
+        expect(retire).not.toHaveBeenCalled();
+        return { ok: false, compacted: false, reason: "aborted" };
+      },
+      dispose,
+    };
+    registerContextEngineInRegistry(registry, "legacy", () => engine, "core");
+    let owned: ContextEngine | undefined;
+    const scenario = await prepareCompactionScenario({
+      tmpDir,
+      suffix: "owned-abort-tail",
+      deps: {
+        ensureContextEnginesInitialized: vi.fn(),
+        resolveContextEngine: async (cfg) => {
+          owned = await withPluginRuntimeRegistryScope(registry, () =>
+            resolveContextEngineFromRegistry(cfg),
+          );
+          return owned;
+        },
+      },
+    });
+    const controller = new AbortController();
+    const result = scenario
+      .run({ abortSignal: controller.signal })
+      .catch((error: unknown) => error);
+    try {
+      await compactStarted.promise;
+      controller.abort(new Error("compaction cancelled"));
+      expect(await result).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("compaction cancelled") }),
+      );
+      await resources.release();
+      expect(dispose).not.toHaveBeenCalled();
+      expect(retire).not.toHaveBeenCalled();
+      compactGate.resolve();
+      await cleanupStarted.promise;
+      expect(retire).not.toHaveBeenCalled();
+      cleanupGate.resolve();
+      await retired.promise;
+      expect(retire).toHaveBeenCalledTimes(1);
+    } finally {
+      compactGate.resolve();
+      cleanupGate.resolve();
+      await result;
+      await owned?.dispose?.();
+      await resources.release();
+    }
   });
 
   it("ignores an unversioned fresh total on the first upgraded turn", async () => {

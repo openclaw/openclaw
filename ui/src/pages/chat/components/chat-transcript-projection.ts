@@ -1,10 +1,9 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { nothing } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
-import { i18n, t } from "../../../i18n/index.ts";
-import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { i18n } from "../../../i18n/index.ts";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
-import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import {
   isUiGlobalScopeConfigured,
   isSubagentSessionKey,
@@ -35,7 +34,7 @@ import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
-import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
+import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
@@ -92,32 +91,25 @@ export function projectChatTranscript(
       isUiGlobalScopeConfigured(sessionHost) &&
       resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
+  const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
+  const assistantAvatar = resolveAssistantDisplayAvatar({
+    currentAgentId: assistantAgentId,
+    agents: props.agents,
+    assistantAvatar: props.assistantAvatar,
+    assistantAvatarUrl: props.assistantAvatarUrl,
+  });
   const assistantIdentity = {
+    agentId: assistantAgentId,
     name: props.assistantName,
-    avatar: resolveAssistantDisplayAvatar(props),
+    avatar: assistantAvatar.avatar,
+    textAvatar: assistantAvatar.textAvatar,
   };
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
-  const archiveActor = activeSession?.archivedBy;
-  const archiveLabel = archiveActor?.id
-    ? t("sessionsView.archivedBy", { name: archiveActor.label ?? archiveActor.id })
-    : activeSession?.archiveReason
-      ? formatSessionArchiveReason(activeSession.archiveReason)
-      : undefined;
-  const archiveNotice =
-    activeSession?.archived && activeSession.archivedAt !== undefined && archiveLabel
-      ? ({
-          kind: "notice",
-          key: `archive:${activeSession.sessionId ?? activeSession.key}:${activeSession.archivedAt}`,
-          label: archiveLabel,
-          text: "",
-          timestamp: activeSession.archivedAt,
-        } satisfies Extract<ChatItem, { kind: "notice" }>)
-      : undefined;
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    archiveNotice,
+    archiveNotice: buildChatArchiveNotice(activeSession),
     runId: props.runId ?? null,
     compactionStatus: props.compactionStatus,
     locale,
@@ -302,7 +294,7 @@ export function projectChatTranscript(
     fetchLinkFavicon: props.fetchLinkFavicon,
     pluginToolIcons: props.pluginToolIcons,
     githubRepo: props.githubRepo,
-    showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
+    showAssistantAvatar: avatarPlacement === "gutter",
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
@@ -343,6 +335,8 @@ export function projectChatTranscript(
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
+      assistantTextAvatar: assistantIdentity.textAvatar,
+      agentId: assistantIdentity.agentId,
       agents: props.agents,
       senderAgentAvatars: props.senderAgentAvatars,
       mainKey: props.mainKey,
@@ -668,6 +662,7 @@ export function projectChatTranscript(
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    assistantIdentity.textAvatar,
     props.currentAgentId,
     props.agents,
     props.senderAgentAvatars,

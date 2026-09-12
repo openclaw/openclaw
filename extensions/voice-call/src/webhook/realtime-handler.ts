@@ -1352,12 +1352,11 @@ export class RealtimeCallHandler {
       sessionClosed = true;
       this.cancelConsultSession(callId, session);
       audioPacer.close();
-      const finishClose = () => {
+      sessionClosePromise = drainProviderClose(closeSession).finally(() => {
         this.clearActiveBridgeMappings(callId, callSid, session);
         this.clearUserTranscriptState(callId, userTranscriptOwner);
         harness.close();
-      };
-      sessionClosePromise = drainProviderClose(closeSession).finally(finishClose);
+      });
       return sessionClosePromise;
     };
 
@@ -1380,11 +1379,6 @@ export class RealtimeCallHandler {
       bindingClosed = true;
       clearLivenessTimer();
       const ownsCall = this.activeTelephonyBindingsByCallId.get(callId) === binding;
-      const reportCloseError = (error: unknown) => {
-        console.warn(
-          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
-        );
-      };
       const finishClose = () => {
         const stillOwnsCall = this.activeTelephonyBindingsByCallId.get(callId) === binding;
         this.clearActiveTelephonyBinding(callId, binding);
@@ -1409,7 +1403,9 @@ export class RealtimeCallHandler {
         );
       }
       bindingClosePromise = pending.then(finishClose, async (error: unknown) => {
-        reportCloseError(error);
+        console.warn(
+          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
+        );
         try {
           await finishClose();
         } catch (terminationError) {

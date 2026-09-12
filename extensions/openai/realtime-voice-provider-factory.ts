@@ -222,7 +222,7 @@ async function createOpenAIRealtimeBrowserSession(
     const quicksilverRequest = {
       ...req,
       model,
-      instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+      instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
       voice: req.voice ?? config.voice,
     };
     const auth = await resolveOpenAIQuicksilverBridgeAuth(
@@ -464,7 +464,7 @@ export function buildOpenAIRealtimeVoiceProvider(
               ...req,
               model,
               voice: config.voice,
-              instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+              instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
               logger: options?.logger ?? { debug: () => undefined, warn: () => undefined },
               resolveAuth: () =>
                 resolveOpenAIQuicksilverBridgeAuth(
@@ -485,7 +485,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             ...req,
             model,
             voice: config.voice,
-            instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+            instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
             logger: options?.logger ?? { warn: () => undefined },
             resolveAuth: async () => ({
               type: "api-key",

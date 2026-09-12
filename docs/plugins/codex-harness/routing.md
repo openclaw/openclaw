@@ -88,7 +88,7 @@ route is eligible to select Codex implicitly:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
     },
   },
 }
@@ -118,7 +118,7 @@ Configure a Claude `main` agent and add a named Codex agent:
       },
       codex: {
         name: "Codex",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
       },
     },
   },
@@ -146,7 +146,7 @@ fail-closed rule:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
     },
   },
   plugins: {

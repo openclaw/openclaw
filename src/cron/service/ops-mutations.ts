@@ -9,11 +9,11 @@ import {
   type CronActiveJobMarker,
   isCronJobActive,
   noteActiveCronJobRemoval,
-  noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
@@ -92,11 +92,8 @@ export async function quiesceJobs(
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
 ): Promise<readonly string[] | undefined> {
-  if (!state.deps.listConfiguredChannels) {
-    return undefined;
-  }
   try {
-    return await state.deps.listConfiguredChannels();
+    return await state.deps.listConfiguredChannels?.();
   } catch {
     // Channel discovery is advisory at mutation time. Runtime delivery remains
     // authoritative, so discovery failures must not create false rejections.
@@ -213,11 +210,15 @@ function finalizeUpdatedJob(params: {
       // Preserve only genuine execution. Queued reservations must clear so a
       // disabled job can accept a later force run with the same timestamp.
       if (!isCronJobActive(nextJob.id)) {
-        nextJob.state.runningAtMs = undefined;
+        Object.assign(nextJob.state, { runningAtMs: undefined, runningReceiptId: undefined });
+        delete nextJob.state.runningScheduleChangeId;
       }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+  }
+  if (nextJob.state.runningAtMs !== job.state.runningAtMs) {
+    delete nextJob.state.runningReceiptId;
   }
 }
 
@@ -251,6 +252,7 @@ async function persistUpdatedJob(params: {
     !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
     ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
       !isDeepStrictEqual(previousJob.payload, nextJob.payload));
+  const scheduleChanged = !cronSchedulingInputsEqual(previousJob, nextJob);
   await persistOrRestore(state, snapshot, {
     suppressScheduledJobId: nextJob.id,
     transactionHooks: cronRunReceiptMutationHooks({
@@ -258,13 +260,9 @@ async function persistUpdatedJob(params: {
       jobId: nextJob.id,
       ownerChanged,
       triggerStateChanged,
+      ...(scheduleChanged ? { scheduleChangedJob: nextJob } : {}),
     }),
   });
-  if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
-    // Mark only committed edits; a failed SQLite write cannot retire the run's
-    // schedule ownership, and idempotent re-saves must not create a new claim.
-    noteActiveCronJobScheduleMutation(nextJob.id);
-  }
   if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
     requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
   }
@@ -333,7 +331,7 @@ export async function add(
     await ensureLoadedForOperation(state);
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
-      throw new Error(`cron job agent is unavailable: ${agentId}`);
+      throw new Error(describeUnavailableCronAgent(agentId));
     }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
@@ -523,7 +521,7 @@ async function updateLoadedJob(params: {
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
-      throw new Error(`cron job agent is unavailable: ${agentId}`);
+      throw new Error(describeUnavailableCronAgent(agentId));
     }
   }
   finalizeUpdatedJob({

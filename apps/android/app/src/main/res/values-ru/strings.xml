@@ -381,6 +381,7 @@
     <string name="native_33b31bc65885eb0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Воспроизвести аудио"</string>
     <string name="native_33b93476cf597a33" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Время"</string>
     <string name="native_33c8e8de41c3a351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не проверено"</string>
+    <string name="native_340bd53cf39d26fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ключ API сохранён. Нажмите «Обновить», чтобы применить его."</string>
     <string name="native_347de0eefc8c2b98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yield"</string>
     <string name="native_349f96d2f47c34bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Копировать команду одобрения"</string>
     <string name="native_34d29e78d246ae8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Служба подключена"</string>
@@ -1067,6 +1068,7 @@
     <string name="native_94da52ecd6c5c3b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Агент по умолчанию"</string>
     <string name="native_94ea9b1d33a02975" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Показать меньше"</string>
     <string name="native_94f5698f54d7d31a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sч"</string>
+    <string name="native_9514b7ff4860ead7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Plugins"</string>
     <string name="native_95204ae1796ddfab" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось установить %1$s из ClawHub."</string>
     <string name="native_953a8bd0a18d7a3d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Добро пожаловать в OpenClaw"</string>
     <string name="native_958074a2ffa6bae8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Управление другими приложениями"</string>
@@ -1078,7 +1080,6 @@
     <string name="native_9709a3b2e51f0ef3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Скрыть боковую панель"</string>
     <string name="native_973769a32161f8de" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Готово к использованию на этом Gateway. В Android можно включить или отключить глобально; установка и настройка выполняются на компьютере или через CLI."</string>
     <string name="native_973cbee2e75ade09" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Воспроизведение звука недоступно"</string>
-    <string name="native_976f2f9461eeb2c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ключ API сохранён. Перезапустите Gateway, чтобы применить его."</string>
     <string name="native_97a5e41b45ddd2b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"применить"</string>
     <string name="native_97cbc43c27dd76ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось загрузить данные об использовании."</string>
     <string name="native_97f1b0890fc8e065" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поддерживать доступность узла во время активной работы."</string>
@@ -1088,6 +1089,7 @@
     <string name="native_983f92956ac1a23e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"прочитан файл"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нет недавних записей в журнале."</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway вручную"</string>
+    <string name="native_98a75b6c4b7f4dcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Данные входа обновлены."</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Переименовать группу"</string>
     <string name="native_98ed7669b6d1be9b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Update Goal"</string>
     <string name="native_992a0f626b0714b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Доступность провайдера неизвестна"</string>

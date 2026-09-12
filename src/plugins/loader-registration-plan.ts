@@ -34,7 +34,7 @@ export function resolvePluginRegistrationPlan(params: {
   enableStateEnabled: boolean;
   shouldLoadModules: boolean;
   validateOnly: boolean;
-  shouldActivate: boolean;
+  runtimeSideEffects: boolean;
   manifestRecord: PluginManifestRecord;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -67,5 +67,5 @@ export function resolvePluginRegistrationPlan(params: {
   if (loadSetupRuntimeEntry) {
     return createRegistrationPlan("setup-runtime");
   }
-  return createRegistrationPlan(params.shouldActivate ? "full" : "discovery");
+  return createRegistrationPlan(params.runtimeSideEffects ? "full" : "discovery");
 }

@@ -186,6 +186,7 @@ describe("prepared catalog source composition", () => {
           isCurrent: () => true,
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,
+          readPublishedModels: () => undefined,
           loadFullModelCatalog: async () => catalogFacts.modelCatalog,
           loadAuth: async () => ({ authStore: facts.authStore, authModes: {}, credentials: {} }),
         },

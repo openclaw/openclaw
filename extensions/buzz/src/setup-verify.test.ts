@@ -1,19 +1,11 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 const mocks = vi.hoisted(() => ({ callGatewayFromCli: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   callGatewayFromCli: mocks.callGatewayFromCli,
 }));
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as RuntimeEnv["exit"],
-  };
-}
 
 describe("verifyBuzzAfterSetup", () => {
   beforeEach(() => {
@@ -39,7 +31,7 @@ describe("verifyBuzzAfterSetup", () => {
           ],
         },
       });
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({
@@ -73,7 +65,7 @@ describe("verifyBuzzAfterSetup", () => {
       .mockResolvedValueOnce({
         channelAccounts: { buzz: [{ accountId: "default" }] },
       });
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({
@@ -96,7 +88,7 @@ describe("verifyBuzzAfterSetup", () => {
         code: 1006,
       }),
     );
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({
@@ -118,7 +110,7 @@ describe("verifyBuzzAfterSetup", () => {
         code: 1006,
       }),
     );
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const { verifyBuzzAfterSetup } = await import("./setup-verify.js");
 
     await verifyBuzzAfterSetup({

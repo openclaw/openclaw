@@ -3345,9 +3345,9 @@ a:is(
   padding-right: 0;
 }
 
-/* Footer agent chip: identity-first entrance to the active agent. The body
-   resumes the latest conversation; trailing actions create/open the menu. */
-.sidebar-brand > openclaw-sidebar-agent-card {
+/* The header identifies the active agent or the whole workspace. */
+.sidebar-brand > openclaw-sidebar-agent-card,
+.sidebar-workspace-header {
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
@@ -3362,7 +3362,8 @@ a:is(
   flex: 0 1 auto;
 }
 
-.sidebar-agent-card__main {
+.sidebar-agent-card__main,
+.sidebar-workspace-header__main {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3380,17 +3381,27 @@ a:is(
 }
 
 .sidebar-agent-card__main:hover,
+.sidebar-workspace-header__main:hover,
+.sidebar-workspace-header__main[aria-expanded="true"],
 .sidebar-agent-card--open .sidebar-agent-card__main {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.sidebar-agent-card__main:active {
+.sidebar-agent-card__main:active,
+.sidebar-workspace-header__main:active {
   background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
 }
 
-.sidebar-agent-card__main:focus-visible {
+.sidebar-agent-card__main:focus-visible,
+.sidebar-workspace-header__main:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: 1px;
+}
+
+.sidebar-workspace-header__mark {
+  width: var(--sidebar-agent-avatar-size);
+  height: var(--sidebar-agent-avatar-size);
+  flex: none;
 }
 
 .sidebar-agent-card__avatar {
@@ -4023,32 +4034,11 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
     filter 120ms ease;
 }
 
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar--text,
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar--icon {
-  width: var(--agent-avatar-glyph-size);
-  height: var(--agent-avatar-glyph-size);
-  background: transparent;
-  color: var(--secondary-foreground);
-  font-size: var(--agent-avatar-glyph-size);
-  line-height: 1;
-}
-
-.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar img.agent-select__avatar {
-  display: block;
+.sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar {
   width: var(--agent-avatar-size);
   height: var(--agent-avatar-size);
-  border-radius: var(--radius-full);
-  object-fit: cover;
-  opacity: var(--agent-avatar-opacity);
-  filter: var(--agent-avatar-filter);
-  transition:
-    opacity 120ms ease,
-    filter 120ms ease;
-}
-
-.sidebar-agent-menu__agent-avatar:has(img.agent-select__avatar) {
-  opacity: 1;
-  filter: none;
+  font-size: var(--agent-avatar-glyph-size);
+  line-height: 1;
 }
 
 .sidebar-agent-menu__agent-switch--active .sidebar-agent-menu__agent-avatar {

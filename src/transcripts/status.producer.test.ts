@@ -24,6 +24,80 @@ import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript source provenance", () => {
+  it.each(["reorder", "title"] as const)(
+    "retains capture and retry diagnostics across an accepted %s change",
+    async (change) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const sources = ["ready", "waiting"].map((sessionId) =>
+        Object.assign({}, room, {
+          sessionId,
+          channelId: sessionId,
+          title: `Original ${sessionId}`,
+        }),
+      );
+      const f = fixture({ transcripts: { autoStart: sources } });
+      let unavailable = true;
+      const start = vi.fn(async (request: TranscriptStartRequest) =>
+        unavailable && request.session.sessionId === "waiting"
+          ? { ok: false as const, error: "synthetic provider unavailable" }
+          : { ok: true as const, session: request.session },
+      );
+      f.provider.start = start;
+      const service = createTranscriptsAutoStartService(f.ctx);
+      try {
+        service.start();
+        await vi.waitFor(async () =>
+          expect((await f.read()).configuredSources).toMatchObject([
+            { sessionId: "ready", state: "armed" },
+            { sessionId: "waiting", startDiagnostic: "retrying" },
+          ]),
+        );
+        const next = {
+          transcripts: {
+            autoStart:
+              change === "reorder"
+                ? sources.toReversed()
+                : sources.map((source) =>
+                    Object.assign({}, source, { title: `Future ${source.sessionId}` }),
+                  ),
+          },
+        };
+        service.start(next);
+        const retained = await readTranscriptLibraryStatus(f.store, next);
+        expect(
+          retained.configuredSources.find((source) => source.sessionId === "waiting"),
+        ).toMatchObject({ startDiagnostic: "retrying" });
+        expect(
+          retained.configuredSources.find((source) => source.sessionId === "ready"),
+        ).toMatchObject({
+          state: "armed",
+        });
+        expect(start).toHaveBeenCalledTimes(2);
+
+        unavailable = false;
+        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.waitFor(async () =>
+          expect(
+            (await readTranscriptLibraryStatus(f.store, next)).configuredSources,
+          ).toMatchObject(
+            next.transcripts.autoStart.map(({ sessionId }) => ({ sessionId, state: "armed" })),
+          ),
+        );
+        expect(start).toHaveBeenCalledTimes(3);
+        // An admitted retry keeps its existing capture title even after a future-title edit.
+        expect(start.mock.calls.at(-1)![0].session.title).toBe("Original waiting");
+        const status = await readTranscriptLibraryStatus(f.store, next);
+        for (const configured of status.configuredSources) {
+          const session = await f.store.readSession(configured.sessionId!);
+          expect(session).toBeDefined();
+          expect(configured.activeSelectors).toEqual([transcriptSessionSelector(session!)]);
+        }
+      } finally {
+        await service.stop();
+      }
+    },
+  );
+
   it.each([
     { name: "direct title edit", titles: ["Future title"], unrelated: false },
     { name: "logging then title", titles: ["Future title"], unrelated: true },

@@ -1112,8 +1112,10 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const pluginId =
     typeof manifest.id === "string" && manifest.id ? manifest.id : path.basename(packageDir);
   const generatedChannelConfigs = readGeneratedBundledChannelConfigs(repoRoot).get(pluginId);
+  // Manifest-only overlays have no package runtime to rewrite.
   const runtimePlan =
-    manifest.providerCatalogEntry || manifest.capabilityCatalogEntry
+    (manifest.providerCatalogEntry || manifest.capabilityCatalogEntry) &&
+    fs.existsSync(resolvePackageJsonPath(packageDir))
       ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir })
       : null;
   const augmentedManifest = mergeGeneratedChannelConfigs(

@@ -200,34 +200,38 @@ it("shows a download fallback for an unavailable response", async () => {
   expect(panel.querySelector("pre")).toBeNull();
 });
 
-it("aborts a superseded read and never displays its late contents", async () => {
-  let resolveOld!: (response: Response) => void;
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveOld = resolve;
-        }),
-    )
-    .mockResolvedValueOnce(new Response("Current file"));
-  vi.stubGlobal("fetch", fetchMock);
-  const panel = await mountAttachment();
-  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-  const signal = fetchMock.mock.calls[0]?.[1]?.signal;
-  panel.content = {
-    kind: "attachment",
-    title: "next.txt",
-    src: "/next.txt",
-    mimeType: "text/plain",
-  };
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Current file"));
-  expect(signal?.aborted).toBe(true);
-  resolveOld(new Response("Old file"));
-  await vi.waitFor(() => expect(fetchMock.mock.settledResults[0]?.type).toBe("fulfilled"));
-  await panel.querySelector("openclaw-chat-text-attachment")?.updateComplete;
-  expect(panel.querySelector("pre")?.textContent).toBe("Current file");
-});
+it.each(["same", "different"])(
+  "aborts a superseded read for the %s identity and never displays its late contents",
+  async (identity) => {
+    let resolveOld!: (response: Response) => void;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(new Response("Current file"));
+    vi.stubGlobal("fetch", fetchMock);
+    const panel = await mountAttachment({ sourceIdentity: "attachment:notes" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+    panel.content = {
+      kind: "attachment",
+      title: "next.txt",
+      src: "/next.txt",
+      mimeType: "text/plain",
+      sourceIdentity: identity === "same" ? "attachment:notes" : "attachment:next",
+    };
+    await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Current file"));
+    expect(signal?.aborted).toBe(true);
+    resolveOld(new Response("Old file"));
+    await vi.waitFor(() => expect(fetchMock.mock.settledResults[0]?.type).toBe("fulfilled"));
+    await panel.querySelector("openclaw-chat-text-attachment")?.updateComplete;
+    expect(panel.querySelector("pre")?.textContent).toBe("Current file");
+  },
+);
 
 it("aborts a closed preview and reloads it after remount", async () => {
   const fetchMock = vi

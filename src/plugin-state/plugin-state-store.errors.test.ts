@@ -6,10 +6,10 @@ import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
-  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
 } from "../state/openclaw-state-db.js";
@@ -21,12 +21,12 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
   pluginStateEntriesInKeyRange,
 } from "./plugin-state-store.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 
 let testState: OpenClawTestState | undefined;
 beforeAll(async () => {

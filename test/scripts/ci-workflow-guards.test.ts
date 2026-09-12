@@ -5992,7 +5992,7 @@ setImmediate(() => {
       ...expectedHostedRunners,
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
-      "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
+      "build-artifacts": "blacksmith-16vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",
@@ -8276,7 +8276,37 @@ server.listen(0, "127.0.0.1", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(source).toContain("createNodeTestShardBundles");
-    expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-32vcpu-ubuntu-2404");
+    const artifactRunner = workflow.jobs["build-artifacts"]["runs-on"];
+    for (const [frozenTarget, expected] of [
+      ["false", "blacksmith-16vcpu-ubuntu-2404"],
+      ["true", "blacksmith-32vcpu-ubuntu-2404"],
+      ["", "blacksmith-32vcpu-ubuntu-2404"],
+    ] as const) {
+      const context = {
+        eventName: "push",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: { frozen_target: frozenTarget },
+      } as const;
+      for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
+        for (const eventName of ["push", "pull_request"] as const) {
+          expect(
+            evaluateWorkflowExpression(artifactRunner, { ...context, runnerBackend, eventName }),
+            `build-artifacts: ${runnerBackend || "default"}/${eventName}/frozen=${frozenTarget}`,
+          ).toBe(expected);
+        }
+      }
+      for (const override of [
+        { runnerBackend: "github" },
+        { runnerBackend: "hybrid", runAttempt: 2 },
+        { eventName: "workflow_dispatch" },
+        { eventName: "pull_request", authorAssociation: "NONE", headRepository: "fork/openclaw" },
+      ] as const) {
+        expect(evaluateWorkflowExpression(artifactRunner, { ...context, ...override })).toBe(
+          "ubuntu-24.04",
+        );
+      }
+    }
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
       "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
     );
@@ -13430,8 +13460,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             }
           }
           if (
-            node.expression.text === "createSessionManagementE2eSuite" &&
-            node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword
+            node.expression.text === "createQuotaResetFixture" ||
+            (node.expression.text === "createSessionManagementE2eSuite" &&
+              node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword)
           ) {
             ownsPrivateServer = true;
             return;
@@ -13480,6 +13511,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
       "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
       "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+      "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",
       "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
     ]);

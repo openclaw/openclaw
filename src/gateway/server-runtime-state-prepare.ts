@@ -20,7 +20,6 @@ import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
-import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
@@ -236,9 +235,9 @@ export async function prepareGatewayKernelState(params: {
   const channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>> = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   );
-  const listStartupChannelGatewayMethods = () => {
+  const listStartupChannelGatewayMethods = (registry = pluginRuntime.registry) => {
     const methods: string[] = [];
-    for (const plugin of listGatewayStartupChannelPlugins()) {
+    for (const plugin of listGatewayStartupChannelPlugins(registry)) {
       methods.push(...(plugin.gatewayMethods ?? []));
       for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
         methods.push(descriptor.name);
@@ -389,12 +388,7 @@ export async function prepareGatewayKernelState(params: {
     () => import("./server-channels.js"),
   );
   const channelManager = createChannelManager({
-    getRuntimeConfig: () => {
-      const runtimeConfigLocal = getRuntimeConfig();
-      return resolveGatewayPluginConfig({
-        config: runtimeConfigLocal,
-      });
-    },
+    getRuntimeConfig,
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,

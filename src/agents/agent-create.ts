@@ -25,6 +25,7 @@ import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-prov
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
+import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
@@ -33,11 +34,15 @@ import {
   mergeIdentityMarkdownContent,
   sanitizeAgentIdentityLine,
 } from "./identity-file.js";
-import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js";
+import {
+  DEFAULT_IDENTITY_FILENAME,
+  ensureAgentWorkspace,
+  isWorkspaceBootstrapPending,
+} from "./workspace.js";
 
 const BOOTSTRAP_AGENT_ID = "main";
 
-type CreateAgentSuccess = {
+export type CreateAgentSuccess = {
   status: "created" | "existing";
   agentId: string;
   name: string;
@@ -57,6 +62,7 @@ type CreateError = {
     | "already-exists"
     | "deletion-pending"
     | "invalid-bindings"
+    | "unfinished-bootstrap"
     | "legacy-session-migration-required"
     | "shared-auth-store-owned-by-main"
     | "unsafe-identity-file";
@@ -76,6 +82,7 @@ type ConfigCommitReceipt = {
 
 type CreateAgentParams = {
   name?: string;
+  role?: string;
   entry?: CreateAgentEntry;
   /** Internal authorization for onboarding to materialize the sole implicit `main` agent. */
   bootstrapMain?: boolean;
@@ -98,11 +105,14 @@ type CreateAgentParams = {
   beforePersistentApply?: () => void;
   /** Prepare guided staged state at the last reversible edge before config publication. */
   prepareConfigCommit?: () => Promise<ConfigCommitReceipt | void>;
+  /** Observe published config before post-commit bookkeeping that may still fail. */
+  onCommitted?: (result: CreateAgentSuccess & { config: OpenClawConfig }) => void;
   provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
 class DuplicateAgentError extends Error {}
 class InvalidAgentBindingsError extends Error {}
+class UnfinishedRoleBootstrapError extends Error {}
 
 function createError(
   reason: CreateError["reason"],
@@ -256,9 +266,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
 
+  const template = params.role ? await loadAgentRole(params.role) : undefined;
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
-  const identity = params.entry?.identity ??
+  const identity = template?.identity ??
+    params.entry?.identity ??
     createAgentIdentityConfig({
       name: safeName,
       emoji: params.emoji,
@@ -393,12 +405,23 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                   identity,
                 })
               : creationBase;
-          if (params.entry) {
-            const { default: _retiredDefault, ...stagedEntry } = params.entry;
+          if (params.entry || template) {
+            const { default: _retiredDefault, ...stagedEntry } = params.entry ?? {};
             const list = listAgentEntries(nextConfig);
             const index = findAgentEntryIndex(list, agentId);
             list[index] = {
               ...list[index],
+              ...(template
+                ? {
+                    subagents:
+                      params.role === "coordinator"
+                        ? {
+                            allowAgents: listAgentRoles().filter((role) => role !== "coordinator"),
+                            delegationMode: "prefer" as const,
+                          }
+                        : { allowAgents: [] },
+                  }
+                : {}),
               ...stagedEntry,
               id: agentId,
               name: safeName,
@@ -430,15 +453,23 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
 
           // The outer lock makes this result-bearing transform single-attempt: setup
           // finishes before the final entry becomes visible to readers or delete flows.
-          const skipBootstrap = params.skipBootstrap ?? nextConfig.agents?.defaults?.skipBootstrap;
+          const skipBootstrap = template
+            ? false
+            : (params.skipBootstrap ?? nextConfig.agents?.defaults?.skipBootstrap);
+          // Role files must not supply completion evidence for an unfinished workspace.
+          if (template && (await isWorkspaceBootstrapPending(workspaceDir))) {
+            throw new UnfinishedRoleBootstrapError();
+          }
           params.beforePersistentApply?.();
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
             beforePersistentApply: params.beforePersistentApply,
             ensureBootstrapFiles: !skipBootstrap,
-            skipOptionalBootstrapFiles:
-              params.skipOptionalBootstrapFiles ??
-              nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+            ...(template ? { templates: template.files } : {}),
+            skipOptionalBootstrapFiles: template
+              ? []
+              : (params.skipOptionalBootstrapFiles ??
+                nextConfig.agents?.defaults?.skipOptionalBootstrapFiles),
           });
           if (workspace.dir !== workspaceDir) {
             const entries = listAgentEntries(nextConfig);
@@ -461,7 +492,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
           // A creation-time name is config, not proof that the fresh workspace hatched.
           // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
-          if (!workspace.bootstrapPending && !skipBootstrap) {
+          if (!template && !workspace.bootstrapPending && !skipBootstrap) {
             await writeIdentityFile({
               workspaceDir: workspace.dir,
               identity,
@@ -492,6 +523,15 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       // even after delegated authority closes; it must not roll staged state back.
       const committedReceipt = configCommitReceipt;
       configCommitReceipt = undefined;
+      const result = {
+        ...committed.result!,
+        config: committed.nextConfig,
+        configPath: committed.path,
+        ...(typeof committed.persistedHash === "string"
+          ? { configHash: committed.persistedHash }
+          : {}),
+      };
+      params.onCommitted?.(result);
       await committedReceipt?.commit();
       if (
         deletion?.cleanupCompleted &&
@@ -501,18 +541,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       ) {
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
-      const result = committed.result!;
       if (result.status === "created") {
         recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
       }
-      return {
-        ...result,
-        config: committed.nextConfig,
-        configPath: committed.path,
-        ...(typeof committed.persistedHash === "string"
-          ? { configHash: committed.persistedHash }
-          : {}),
-      };
+      return result;
     });
   } catch (error) {
     if (configCommitReceipt) {
@@ -530,6 +562,13 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     }
     if (error instanceof InvalidAgentBindingsError) {
       return createError("invalid-bindings", error.message, agentId);
+    }
+    if (error instanceof UnfinishedRoleBootstrapError) {
+      return createError(
+        "unfinished-bootstrap",
+        "The workspace has an unfinished bootstrap. Complete it first or choose a new workspace for this role.",
+        agentId,
+      );
     }
     if (error instanceof FsSafeError) {
       return createError(

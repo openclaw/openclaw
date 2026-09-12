@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import { createAgentSelectionCapability, selectApplicationSession } from "./agent-selection.ts";
+import { loadSettings, saveSettings, type UiSettings } from "./settings.ts";
 
 function createGateway(
   assistantAgentId: string | null = "Main",
@@ -60,7 +62,216 @@ function createRoster() {
   };
 }
 
+function createPreferences(sidebarAgentsMode?: "chip" | "roster") {
+  let settings = loadSettings("ws://gateway-a.test");
+  const listeners = new Set<() => void>();
+  const refresh = (url = settings.gatewayUrl) => {
+    settings = loadSettings(url);
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  const patch = (changes: Partial<UiSettings>) => {
+    saveSettings({ ...settings, ...changes });
+    refresh();
+  };
+  if (sidebarAgentsMode) {
+    patch({ sidebarAgentsMode });
+  }
+  return {
+    get settings() {
+      return settings;
+    },
+    patch,
+    refresh,
+    persistence: {
+      load: (url: string) => loadSettings(url).selectedAgentId ?? null,
+      save: (url: string, selectedAgentId: string | null) => {
+        saveSettings({ ...loadSettings(url), selectedAgentId: selectedAgentId ?? undefined });
+        refresh();
+      },
+    },
+    setMode: (mode: "chip" | "roster") => patch({ sidebarAgentsMode: mode }),
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
 describe("agent selection", () => {
+  installSettingsStorageLifecycle();
+  beforeEach(() => {
+    setTestLocation({ protocol: "http:", host: "gateway-a.test", pathname: "/" });
+  });
+
+  it.each(["research", null])(
+    "restores %s after team chat navigation and a preference reload",
+    (scopeId) => {
+      let preferences = createPreferences();
+      const gateway = createGateway().gateway;
+      const roster = createRoster().roster;
+      let selection = createAgentSelectionCapability(
+        gateway,
+        roster,
+        preferences.persistence,
+        preferences,
+      );
+      selection.setScope(scopeId);
+      preferences.setMode("roster");
+      selectApplicationSession({
+        selection,
+        gateway: { setSessionKey() {} },
+        sessionKey: "agent:writer:main",
+      });
+      selection.dispose();
+
+      preferences = createPreferences();
+      selection = createAgentSelectionCapability(
+        gateway,
+        roster,
+        preferences.persistence,
+        preferences,
+      );
+      expect(selection.state).toEqual({ selectedId: "writer", scopeId: null });
+      preferences.setMode("chip");
+      expect(selection.state).toEqual({ selectedId: "writer", scopeId });
+      expect(loadSettings().sidebarPreTeamScope).toBeUndefined();
+      selection.dispose();
+    },
+  );
+
+  it("restores each gateway's own pre-team scope after switching away and back", () => {
+    const harness = createGateway();
+    const preferences = createPreferences();
+    harness.gateway.subscribe(() => preferences.refresh(harness.gateway.connection.gatewayUrl));
+    const selection = createAgentSelectionCapability(
+      harness.gateway,
+      createRoster().roster,
+      preferences.persistence,
+      preferences,
+    );
+    selection.setScope("research");
+    preferences.setMode("roster");
+    selection.set("writer");
+
+    harness.switchGateway("ws://gateway-b.test");
+    selection.setScope(null);
+    preferences.setMode("roster");
+    selection.set("ops");
+    harness.switchGateway("ws://gateway-a.test");
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId: "research" });
+    harness.switchGateway("ws://gateway-b.test");
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: "ops", scopeId: null });
+    selection.dispose();
+  });
+  it.each(["research", null])("restores the previous %s page scope after team mode", (scopeId) => {
+    const preferences = createPreferences();
+    const selection = createAgentSelectionCapability(
+      createGateway().gateway,
+      createRoster().roster,
+      undefined,
+      preferences,
+    );
+    selection.setScope(scopeId);
+    preferences.setMode("roster");
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
+    selection.set("research");
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: null });
+    selection.setScope("main");
+    selection.set("writer");
+    preferences.setMode("roster");
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId: "main" });
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId });
+    selection.set("research");
+    expect(selection.state.scopeId).toBe("research");
+    selection.dispose();
+    preferences.setMode("roster");
+    expect(selection.state.scopeId).toBe("research");
+  });
+
+  it("keeps persisted team mode global through roster fallback and clears removed filters", () => {
+    const preferences = createPreferences("roster");
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(
+      createGateway("stale").gateway,
+      roster.roster,
+      { load: () => "research", save: vi.fn() },
+      preferences,
+    );
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: null });
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "research" }],
+    });
+    selection.setScope("research");
+    const listener = vi.fn();
+    selection.subscribe(listener);
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    });
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
+    expect(listener).toHaveBeenLastCalledWith({ selectedId: "main", scopeId: null });
+    preferences.setMode("chip");
+    expect(selection.state.scopeId).toBe("main");
+  });
+
+  it.each([undefined, "historical", "deleted"])(
+    "reconciles a cold saved agent while preserving explicit historical scopes (%s)",
+    (historicalScope) => {
+      const roster = createRoster();
+      const preferences = createPreferences(historicalScope ? "chip" : "roster");
+      const selection = createAgentSelectionCapability(
+        createGateway(null).gateway,
+        roster.roster,
+        { load: () => "deleted", save: vi.fn() },
+        preferences,
+      );
+      if (historicalScope) {
+        selection.setScope(historicalScope);
+        preferences.setMode("roster");
+      }
+      roster.publish({
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      });
+      expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
+      preferences.setMode("chip");
+      expect(selection.state.scopeId).toBe(historicalScope ?? "main");
+    },
+  );
+
+  it("resets the remembered team scope for the target Gateway before applying its mode", () => {
+    const harness = createGateway();
+    const preferences = createPreferences("roster");
+    // The application preference owner refreshes before selection sees the switch.
+    harness.gateway.subscribe(() => {
+      preferences.refresh(harness.gateway.connection.gatewayUrl);
+      preferences.setMode("roster");
+    });
+    const selection = createAgentSelectionCapability(
+      harness.gateway,
+      createRoster().roster,
+      { load: (url) => (url === "ws://gateway-a.test" ? "research" : "writer"), save: vi.fn() },
+      preferences,
+    );
+    selection.setScope("research");
+    harness.switchGateway("ws://gateway-b.test");
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId: null });
+    preferences.setMode("chip");
+    expect(selection.state).toEqual({ selectedId: "writer", scopeId: "writer" });
+  });
+
   it("restores a persisted selection before the Gateway default arrives", () => {
     const harness = createGateway(null);
     const persistence = {

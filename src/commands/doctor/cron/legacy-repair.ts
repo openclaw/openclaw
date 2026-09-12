@@ -417,6 +417,11 @@ export async function applyLegacyCronStoreRepair(params: {
   }
 
   changes.push(...retirementChanges);
+  if (normalized.issues.reconciledOwnerAccount) {
+    changes.push(
+      `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,
+    );
+  }
   if (quarantineRecovery.recoveredJobs.length > 0) {
     changes.push(
       `Recovered ${pluralize(quarantineRecovery.recoveredJobs.length, "quarantined automation")} after current schedule validation passed.`,

@@ -18,7 +18,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { stop } from "./ops-lifecycle.js";

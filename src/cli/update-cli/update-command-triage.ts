@@ -7,6 +7,7 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
+import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
@@ -57,6 +58,9 @@ export async function prepareUpdateCommandFailureTriage(
     : !opts.yes && isTerminalInteractive()
       ? "interactive"
       : "non-interactive";
+  if (mode === "interactive") {
+    await preparePublicUpdateFailureIdentifiers();
+  }
   const { prepareUpdateFailureTriage } = await import("../../infra/update-triage.js");
   const runTriage = await prepareUpdateFailureTriage({
     mode,

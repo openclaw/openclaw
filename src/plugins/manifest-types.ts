@@ -2,6 +2,7 @@ import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-ca
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
@@ -395,6 +396,8 @@ export type PluginManifest = {
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
   channels?: string[];
+  /** Account-key selection rules available before channel runtime loads. */
+  channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
   providers?: string[];
   /**
    * Optional lightweight module that exports provider plugin metadata for

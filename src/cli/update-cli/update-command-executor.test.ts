@@ -276,7 +276,7 @@ describe("live update executor", () => {
 
   it("preserves an unreadable existing coordination database without repairing it", async () => {
     const database = path.join(temporary, "managed-update-handoffs.sqlite");
-    fs.writeFileSync(database, "unreadable native owner");
+    fs.writeFileSync(database, "unreadable native owner", { mode: 0o600 });
     const before = fs.readFileSync(database);
     await expect(
       withUpdateCommandExecutor(randomUUID(), async (executor) => executor.enter(root)),

@@ -154,6 +154,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       onAttemptDeadlineChanged(deadline);
     }
     return {
+      isCurrent,
       abortSignal: signal,
       onAttemptDeadlineChanged,
       onAttemptTimeout: (reason: Error) => {

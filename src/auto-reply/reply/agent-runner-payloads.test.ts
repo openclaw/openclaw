@@ -13,10 +13,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import {
-  resolveHeartbeatScratchProposalFromReplyResult,
-  resolveHeartbeatToolResponseFromReplyResult,
-} from "../heartbeat-tool-response.js";
+import { selectHeartbeatToolResponse } from "../heartbeat-tool-response.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -93,12 +90,20 @@ describe("heartbeat reply scratch", () => {
         }),
       );
       const expected = proposals.at(-1);
-      expect(resolveHeartbeatScratchProposalFromReplyResult(payloads)).toBe(expected);
+      const embedded = expectDefined(
+        selectHeartbeatToolResponse(payloads),
+        "expected the embedded heartbeat response",
+      );
+      expect(getReplyPayloadMetadata(embedded.payload)?.heartbeatScratchProposal).toBe(expected);
       const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
 
       expect(replyPayloads).toHaveLength(proposals.length);
-      expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBe(expected);
-      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual({
+      const selected = expectDefined(
+        selectHeartbeatToolResponse(replyPayloads),
+        "expected the final heartbeat response",
+      );
+      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(expected);
+      expect(selected.response).toEqual({
         outcome: "done",
         notify,
         summary: `Monitor checked ${proposals.length}.`,

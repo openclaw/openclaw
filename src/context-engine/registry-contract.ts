@@ -1,4 +1,28 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ContextEngine } from "./types.js";
+
+export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
+  "sessionKey prompt runtimeSettings sessionTarget runtimeContext abortSignal".split(" "),
+);
+
+export function projectContextEngineHostParams(
+  engine: ContextEngine,
+  methodName: PropertyKey,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  const accepted = engine.info.acceptedHostParams;
+  if (!accepted) {
+    return params;
+  }
+  return Object.fromEntries(
+    Object.entries(params).filter(
+      ([key]) =>
+        accepted.includes(key) ||
+        !CONTEXT_ENGINE_HOST_PARAMS.has(key) ||
+        (methodName === "compact" && key === "abortSignal"),
+    ),
+  );
+}
 
 export function describeResolvedContextEngineContractError(
   engineId: string,

@@ -136,9 +136,9 @@ export class OpenAIQuicksilverDelegationController {
         dispatch: (id, input) => this.startDelegation(id, input),
         onExpired: (id) => {
           this.sendAppend(
-            { type: "delegation.context.append", delegation_item_id: id },
             "Ask the user to repeat their request; no user transcript was received.",
             "speakable",
+            id,
           );
         },
         onError: (error) => this.fail(error),
@@ -252,9 +252,9 @@ export class OpenAIQuicksilverDelegationController {
       const input = event.prompt ?? this.transcript.latestUserInput();
       if (event.prompt === undefined && !input.trim()) {
         this.sendAppend(
-          { type: "delegation.context.append", delegation_item_id: event.id },
           "Ask the user to repeat their request; no user transcript was received.",
           "speakable",
+          event.id,
         );
         return;
       }
@@ -266,7 +266,7 @@ export class OpenAIQuicksilverDelegationController {
     const content = text.trim();
     if (content) {
       // Standalone speech must not become the result of whichever delegation is active.
-      this.sendAppend({ type: "session.context.append" }, content, channel);
+      this.sendAppend(content, channel);
     }
   }
 
@@ -334,12 +334,7 @@ export class OpenAIQuicksilverDelegationController {
           return;
         }
         try {
-          this.sendAppend(
-            { type: "delegation.context.append", delegation_item_id: id },
-            message,
-            "speakable",
-            socket,
-          );
+          this.sendAppend(message, "speakable", id, socket);
         } catch (error) {
           this.fail(toErrorObject(error, "OpenAI GPT-Live control response failed"));
         }
@@ -554,13 +549,7 @@ export class OpenAIQuicksilverDelegationController {
       this.revokeRequesterFinal();
       return;
     }
-    if (
-      !this.sendAppend(
-        { type: "delegation.context.append", delegation_item_id: delegationId },
-        text,
-        "speakable",
-      )
-    ) {
+    if (!this.sendAppend(text, "speakable", delegationId)) {
       this.revokeRequesterFinal();
     }
   }
@@ -572,9 +561,9 @@ export class OpenAIQuicksilverDelegationController {
     }
     this.requesterFinalOwner = undefined;
     return this.sendAppend(
-      { type: "delegation.context.append", delegation_item_id: owner.delegationId },
       boundOpenAIQuicksilverDelegationResult(text),
       "speakable",
+      owner.delegationId,
     );
   }
 
@@ -584,11 +573,9 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   private sendAppend(
-    target:
-      | { type: "session.context.append" }
-      | { type: "delegation.context.append"; delegation_item_id: string },
     text: string,
     channel: "speakable" | "commentary",
+    delegationId?: string,
     socket = this.options.getSocket(),
   ): boolean {
     for (const chunk of chunkOpenAIQuicksilverAppendText(text)) {
@@ -609,8 +596,7 @@ export class OpenAIQuicksilverDelegationController {
             model: this.options.model,
             text: chunk,
             channel,
-            delegationId:
-              target.type === "delegation.context.append" ? target.delegation_item_id : undefined,
+            delegationId,
           }),
         ),
       );

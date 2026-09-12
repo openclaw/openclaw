@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -388,6 +390,48 @@ describe("mutable update execution", () => {
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
     expect(mocks.serviceStopped).toBe(false);
   });
+
+  it.each(["admission", "execution"] as const)(
+    "preserves native inspection reasons through %s refusal",
+    async (phase) => {
+      mocks.maybeStopService.mockImplementation(async ({ handoffFromGateway }) => {
+        if (phase === "admission" || handoffFromGateway) {
+          return {
+            stopped: false,
+            inspected: false,
+            runtimeInspected: false,
+            running: false,
+            serviceMutationAllowed: false,
+            serviceUpdateVerdict: {
+              kind: "unavailable",
+              message: "The systemd user session bus is unavailable.",
+              inspectionReason: "systemd-user-bus-unavailable",
+            },
+            blockMessage: "The systemd user session bus is unavailable.",
+          };
+        }
+        return inspectOrStopService("inspect");
+      });
+      const execution = await executeMutableUpdate(executionParams("package"));
+      expect(execution?.result).toMatchObject({
+        status: "error",
+        reason: "managed-service-preflight",
+        steps: [
+          {
+            failureFacts: [
+              {
+                check: "managed-service",
+                code: "systemd-user-bus-unavailable",
+                message: "The systemd user session bus is unavailable.",
+              },
+            ],
+          },
+        ],
+      });
+      expect(mocks.serviceStopped).toBe(false);
+      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["available", "incompatible", "changed-owner"] as const)(
     "admits local artifacts from the staged version before rehearsal: %s",
@@ -805,20 +849,43 @@ describe("mutable update execution", () => {
     },
   );
 
-  it("reports activation exceptions without retrying a fallback package updater", async () => {
-    const failure = new Error("activation failed");
-    mocks.runPackageUpdate.mockRejectedValue(failure);
+  it.each(["activation", "requester revocation", "service ownership"])(
+    "reports %s exceptions without retrying a fallback package updater",
+    async (kind) => {
+      const failure =
+        kind === "requester revocation"
+          ? new UpdateRequesterRevokedError()
+          : kind === "service ownership"
+            ? new GatewayServiceUpdateOwnershipError(
+                "Service manager returned EACCES.",
+                undefined,
+                "service-manager-access-denied",
+              )
+            : new Error("activation failed");
+      mocks.runPackageUpdate.mockRejectedValue(failure);
 
-    const execution = await executeMutableUpdate(executionParams("package"));
+      const execution = await executeMutableUpdate(executionParams("package"));
 
-    expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
-    expect(execution?.failure?.cause).toBe(failure);
-    expect(execution?.result).toMatchObject({
-      status: "error",
-      reason: "update-failed",
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    });
-  });
+      expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
+      expect(execution?.failure?.cause).toBe(failure);
+      expect(execution?.result).toMatchObject({
+        status: "error",
+        reason: kind === "requester revocation" ? "requester-revoked" : "update-failed",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        steps: [expect.objectContaining({ name: "update", exitCode: 1 })],
+      });
+      expect(mocks.verifyPackageRecovery).not.toHaveBeenCalled();
+      if (kind === "service ownership") {
+        expect(execution?.result.steps[0]?.failureFacts).toEqual([
+          {
+            check: "managed-service",
+            code: "service-manager-access-denied",
+            message: "Service manager returned EACCES.",
+          },
+        ]);
+      }
+    },
+  );
 
   it("keeps Git candidate selection online and delegates its later activation", async () => {
     const events: string[] = [];
@@ -849,5 +916,56 @@ describe("mutable update execution", () => {
     expect(mocks.serviceStopped).toBe(false);
     expect(execution?.result.mode).toBe("git");
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+  });
+
+  it("retains rejected Git canary findings in the terminal result", async () => {
+    const fact = {
+      check: "core/doctor/config-readable",
+      code: "doctor-failed",
+      message: "The configured state directory is not readable.",
+      affectedKey: "stateDir",
+    };
+    mocks.validateCanary.mockResolvedValue({
+      status: "error",
+      reason: "doctor-failed",
+      phase: "doctor",
+      durationMs: 1,
+      logTail: [fact.message],
+      steps: [
+        {
+          name: "candidate doctor",
+          command: "openclaw doctor",
+          cwd: "/candidate",
+          durationMs: 1,
+          exitCode: 1,
+          stderrTail: fact.message,
+          failureFacts: [fact],
+        },
+      ],
+    });
+    const repair = await import("./update-command-repair.js");
+    vi.spyOn(repair, "runUpdateCommandRepair").mockResolvedValue({
+      status: "unavailable",
+      attempts: [],
+      finalValidation: { ok: false, score: 0, summary: fact.message },
+    });
+    mocks.runGitUpdate.mockImplementation(
+      async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {
+        if (!params.validateCandidate) {
+          throw new Error("Expected the Git candidate validation callback");
+        }
+        await params.validateCandidate("/candidate");
+        return { ...successfulUpdate, mode: "git" };
+      },
+    );
+
+    const execution = await executeMutableUpdate(executionParams("git"));
+
+    expect(execution?.result).toMatchObject({
+      status: "error",
+      reason: "doctor-failed",
+      steps: [{ failureFacts: [fact] }],
+    });
+    expect(mocks.serviceStopped).toBe(false);
   });
 });

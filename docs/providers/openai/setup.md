@@ -60,7 +60,7 @@ sidebarTitle: "Setup"
     ```json5
     {
       env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
-      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
     }
     ```
 
@@ -79,7 +79,7 @@ sidebarTitle: "Setup"
     ```
 
     `chat-latest` is a moving alias. Fresh OpenAI API-key setup instead uses
-    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to Sol. Existing
     explicit primaries, including `openai/gpt-5.5`, remain unchanged. The
     `chat-latest` alias only accepts `medium` text verbosity; OpenClaw forces
@@ -120,7 +120,7 @@ sidebarTitle: "Setup"
       </Step>
       <Step title="Use the canonical OpenAI model route">
         ```bash
-        openclaw config set agents.defaults.model.primary openai/gpt-5.6-sol
+        openclaw config set agents.defaults.model.primary openai/gpt-6-astra
         ```
 
         No runtime config is required for this exact official HTTPS native
@@ -142,10 +142,10 @@ sidebarTitle: "Setup"
 
     | Model ref                | Runtime policy or route facts                                 | Route                                                    | Auth                                               |
     | ------------------------ | ------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
-    | `openai/gpt-5.6-sol`     | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in, or an ordered `openai` auth profile |
+    | `openai/gpt-6-astra`     | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in, or an ordered `openai` auth profile |
     | `openai/gpt-5.6-terra`   | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in when the catalog exposes Terra       |
     | `openai/gpt-5.6-luna`    | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in when the catalog exposes Luna        |
-    | `openai/gpt-5.6-sol`     | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime, internal Codex-auth transport | Selected `openai` OAuth profile                    |
+    | `openai/gpt-6-astra`     | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime, internal Codex-auth transport | Selected `openai` OAuth profile                    |
     | `openai/gpt-5.5`         | explicit provider/model `agentRuntime.id`                     | Selected agent runtime                                   | Selected OpenAI auth profile                       |
     | `openai/*`               | authored Completions, custom, or request override | OpenClaw embedded runtime                                | Credential requirement remains route-specific      |
     | `openai/*`               | plaintext official HTTP endpoint                  | Rejected                                                 | Credential is not sent                              |
@@ -153,9 +153,9 @@ sidebarTitle: "Setup"
     | `codex-cli/gpt-5.5`      | repaired by doctor                                            | Rewritten to `openai/gpt-5.5`                            | Codex app-server auth                              |
 
     <Warning>
-    Fresh subscription-backed setup uses exact `openai/gpt-5.6-sol`; the
+    Fresh subscription-backed setup uses exact `openai/gpt-6-astra`; the
     native Codex catalog may also expose exact Terra or Luna refs. If the
-    account does not expose GPT-5.6, select `openai/gpt-5.5` explicitly. Older
+    account does not expose Astra, select an available model explicitly. Older
     Codex GPT refs are legacy OpenClaw routes, not the native Codex runtime
     path; run `openclaw doctor --fix` to migrate them without upgrading an
     existing explicit GPT-5.5 selection. `gpt-5.3-codex-spark` stays limited
@@ -175,7 +175,7 @@ sidebarTitle: "Setup"
       plugins: { entries: { codex: { enabled: true } } },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-6-astra" },
         },
       },
     }
@@ -190,7 +190,7 @@ sidebarTitle: "Setup"
       plugins: { entries: { codex: { enabled: true } } },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-6-astra" },
         },
       },
       auth: {

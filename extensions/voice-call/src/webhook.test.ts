@@ -226,14 +226,12 @@ function expectTwilioCallStateReleased(
     callStreamMap: Map<string, string>;
     streamAuthTokens: Map<string, string>;
     twimlStorage: Map<string, string>;
-    notifyCalls: Set<string>;
     activeStreamCalls: Set<string>;
   };
   expect(state.callWebhookUrls.has(params.providerCallId)).toBe(false);
   expect(state.callStreamMap.has(params.providerCallId)).toBe(false);
   expect(state.streamAuthTokens.has(params.providerCallId)).toBe(false);
   expect(state.twimlStorage.has(params.callId)).toBe(false);
-  expect(state.notifyCalls.has(params.callId)).toBe(false);
   expect(state.activeStreamCalls.has(params.providerCallId)).toBe(false);
 }
 
@@ -1289,7 +1287,6 @@ describe("VoiceCallWebhookServer replay handling", () => {
       callStreamMap: Map<string, string>;
       streamAuthTokens: Map<string, string>;
       twimlStorage: Map<string, string>;
-      notifyCalls: Set<string>;
       activeStreamCalls: Set<string>;
     };
     state.callWebhookUrls.set(
@@ -1299,7 +1296,6 @@ describe("VoiceCallWebhookServer replay handling", () => {
     state.callStreamMap.set(providerCallId, "MZ-webhook-terminal");
     state.streamAuthTokens.set(providerCallId, "stream-token");
     state.twimlStorage.set(callId, "<Response><Say>Hello</Say></Response>");
-    state.notifyCalls.add(callId);
     state.activeStreamCalls.add(providerCallId);
 
     const parseWebhookEvent = vi.spyOn(twilioProvider, "parseWebhookEvent");
@@ -1494,21 +1490,26 @@ describe("VoiceCallWebhookServer replay handling", () => {
   });
 
   it("returns Plivo XML for replayed answer callbacks while skipping event side effects", async () => {
+    const authToken = "signed-plivo-replay-token";
+    const nonce = "signed-plivo-replay-nonce";
+    const publicUrl = "https://example.test/voice/webhook";
     const plivoProvider = new PlivoProvider(
       {
         authId: "MA000000000000000000",
-        authToken: "test-token",
+        authToken,
       },
-      { skipVerification: true },
+      { publicUrl },
     );
     const parseWebhookEvent = vi.spyOn(plivoProvider, "parseWebhookEvent");
     const { manager, processEvent } = createManager([]);
     const config = createConfig({
       provider: "plivo",
-      skipSignatureVerification: true,
+      skipSignatureVerification: false,
+      serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" },
+      staleCallReaperSeconds: 0,
       plivo: {
         authId: "MA000000000000000000",
-        authToken: "test-token",
+        authToken,
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, plivoProvider);
@@ -1519,34 +1520,77 @@ describe("VoiceCallWebhookServer replay handling", () => {
       requestUrl.searchParams.set("provider", "plivo");
       requestUrl.searchParams.set("flow", "answer");
       requestUrl.searchParams.set("callId", "internal-call-id");
+      requestUrl.searchParams.append("tag", "z");
+      requestUrl.searchParams.append("tag", "a");
       const body =
-        "CallUUID=plivo-replay-answer-callback&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp";
+        "CallUUID=plivo-replay-answer-callback&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp&Tag=z&Tag=a";
+      const canonicalBaseFor = (tag: string) =>
+        `${publicUrl}?callId=internal-call-id&flow=answer&provider=plivo&tag=a&tag=z.CallStatusin-progressCallUUIDplivo-replay-answer-callbackDirectionoutboundEventStartAppFrom+15550000000Tag${tag}TagzTo+15550000001`;
+      const signatureFor = (tag: string) =>
+        crypto
+          .createHmac("sha256", authToken)
+          .update(`${canonicalBaseFor(tag)}.${nonce}`)
+          .digest("base64");
+      const expectedKeyFor = (tag: string) =>
+        `plivo:v3:${crypto
+          .createHash("sha256")
+          .update(`${canonicalBaseFor(tag)}\n${nonce}`)
+          .digest("hex")}`;
+      const postCallback = (rawBody: string, signature: string) =>
+        fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-plivo-signature-v3": signature,
+            "x-plivo-signature-v3-nonce": nonce,
+          },
+          body: rawBody,
+        });
 
-      const first = await fetch(requestUrl.toString(), {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body,
-      });
+      const rejected = await postCallback(body, "invalid");
+      expect(rejected.status).toBe(401);
+      expect(await rejected.text()).toBe("Unauthorized");
+      expect(parseWebhookEvent).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
+
+      const first = await postCallback(body, signatureFor("a"));
       expect(first.status).toBe(200);
       expect(first.headers.get("content-type")).toContain("text/xml");
-      expect(await first.text()).toContain("<Wait");
+      const expectedBody = await first.text();
+      expect(expectedBody).toContain("<Wait");
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
       expect(processEvent).toHaveBeenCalledTimes(1);
+      const firstKey = processEvent.mock.calls[0]?.[0].dedupeKey;
+      expect(firstKey).toBe(expectedKeyFor("a"));
+      expect(parseWebhookEvent.mock.calls[0]?.[1]).toEqual({
+        verifiedRequestKey: expectedKeyFor("a"),
+      });
 
       parseWebhookEvent.mockClear();
       processEvent.mockClear();
 
-      const replay = await fetch(requestUrl.toString(), {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body,
-      });
+      requestUrl.search = "?tag=a&callId=internal-call-id&tag=z&flow=answer&provider=plivo";
+      const replay = await postCallback(body.split("&").toReversed().join("&"), signatureFor("a"));
 
       expect(replay.status).toBe(200);
       expect(replay.headers.get("content-type")).toContain("text/xml");
-      expect(await replay.text()).toContain("<Wait");
+      const replayBody = await replay.text();
+      expect(replayBody).toContain("<Wait");
+      expect(replayBody).toBe(expectedBody);
       expect(parseWebhookEvent).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
+
+      const changed = await postCallback(body.replace("Tag=a", "Tag=b"), signatureFor("b"));
+      expect(changed.status).toBe(200);
+      expect(await changed.text()).toBe(expectedBody);
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      const changedKey = processEvent.mock.calls[0]?.[0].dedupeKey;
+      expect(changedKey).toBe(expectedKeyFor("b"));
+      expect(parseWebhookEvent.mock.calls[0]?.[1]).toEqual({
+        verifiedRequestKey: expectedKeyFor("b"),
+      });
+      expect(changedKey).not.toBe(firstKey);
     } finally {
       parseWebhookEvent.mockRestore();
       await server.stop();
@@ -1955,57 +1999,6 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(response.status).toBe(200);
       expect(body).toContain("<Connect><Stream");
       expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
-    } finally {
-      await server.stop();
-    }
-  });
-
-  it("passes verified request key from verifyWebhook into parseWebhookEvent", async () => {
-    const parseWebhookEvent = vi.fn((_ctx: unknown, options?: { verifiedRequestKey?: string }) => ({
-      events: [
-        {
-          id: "evt-verified",
-          dedupeKey: options?.verifiedRequestKey,
-          type: "call.speech" as const,
-          callId: "call-1",
-          providerCallId: "provider-call-1",
-          timestamp: Date.now(),
-          transcript: "hello",
-          isFinal: true,
-        },
-      ],
-      statusCode: 200,
-    }));
-    const verifiedProvider: VoiceCallProvider = {
-      ...provider,
-      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "verified:req:123" }),
-      parseWebhookEvent,
-    };
-    const { manager, processEvent } = createManager([]);
-    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
-    const server = new VoiceCallWebhookServer(config, manager, verifiedProvider);
-
-    try {
-      const baseUrl = await server.start();
-      const response = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
-
-      expect(response.status).toBe(200);
-      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      const parseOptions = expectDefined(parseWebhookEvent.mock.calls.at(0), "webhook parse")[1];
-      if (!parseOptions) {
-        throw new Error("webhook server did not pass verified parse options");
-      }
-      expect(parseOptions).toEqual({
-        verifiedRequestKey: "verified:req:123",
-      });
-      expect(processEvent).toHaveBeenCalledTimes(1);
-      const firstEvent = expectDefined(processEvent.mock.calls.at(0), "processed event")[0] as
-        | NormalizedEvent
-        | undefined;
-      if (!firstEvent) {
-        throw new Error("webhook server did not forward the parsed event");
-      }
-      expect(firstEvent.dedupeKey).toBe("verified:req:123");
     } finally {
       await server.stop();
     }

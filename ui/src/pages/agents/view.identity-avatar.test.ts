@@ -93,8 +93,15 @@ function avatarImage(view: AgentAvatarView) {
   return view.querySelector<HTMLImageElement>(".agent-identity-editor__avatar img");
 }
 
-function avatarText(view: AgentAvatarView) {
-  return view.querySelector(".agent-identity-editor__avatar-text")?.textContent;
+async function expectAvatarFallback(view: AgentAvatarView) {
+  await waitForFast(() => {
+    expect(
+      view.querySelector(".agent-identity-editor__avatar .identity-avatar__agent-face"),
+    ).not.toBeNull();
+  });
+  expect(
+    view.querySelector(".agent-identity-editor__avatar .identity-avatar--agent")?.classList,
+  ).toContain("is-fallback");
 }
 
 async function changeAvatarRevision(view: AgentAvatarView, revision: number) {
@@ -112,7 +119,7 @@ it("fetches a persisted settings avatar with the bearer credential", async () =>
 
   try {
     expect(avatarImage(view)).toBeNull();
-    expect(avatarText(view)).toBe("F");
+    await expectAvatarFallback(view);
     expect(fetchAvatar).toHaveBeenCalledWith(
       `${globalThis.location.origin}/avatar/beta?v=1`,
       expect.objectContaining({
@@ -159,7 +166,7 @@ it("keeps a missing settings avatar on its fallback and recovers on a new revisi
   view.requestUpdate();
   await view.updateComplete;
   expect(avatarImage(view)).toBeNull();
-  expect(avatarText(view)).toBe("R");
+  await expectAvatarFallback(view);
   expect(fetchAvatar).toHaveBeenCalledTimes(2);
 
   await changeAvatarRevision(view, 3);
@@ -180,13 +187,13 @@ it("keeps a decode failure on its fallback across rerenders until the revision c
   failedImage?.dispatchEvent(new Event("error"));
   await view.updateComplete;
   expect(avatarImage(view)).toBeNull();
-  expect(avatarText(view)).toBe("F");
+  await expectAvatarFallback(view);
 
   view.props.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
   view.requestUpdate();
   await view.updateComplete;
   expect(avatarImage(view)).toBeNull();
-  expect(avatarText(view)).toBe("R");
+  await expectAvatarFallback(view);
   expect(fetchAvatar).toHaveBeenCalledOnce();
 
   await changeAvatarRevision(view, 2);

@@ -103,6 +103,7 @@ export function resolveStateDatabaseCoordinatorPath(params: {
 function acquireLifecycleCoordinator(
   family: CoordinatorFamily,
   params: CoordinatorOptions,
+  keepAlive = false,
 ): { path: string; release: () => void } {
   const coordinatorPath =
     params.coordinatorPath ??
@@ -118,6 +119,7 @@ function acquireLifecycleCoordinator(
     ensurePrivateSqliteCoordinatorDirectory(path.dirname(coordinatorPath), `${family} coordinator`);
     const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
       busyTimeoutMs: params.busyTimeoutMs,
+      keepAlive,
     });
     if (!coordinator) {
       throw new StateDatabaseCoordinatorContentionError(family);
@@ -169,6 +171,9 @@ export function retainHeldStateDatabaseCoordinator(databasePath: string) {
 }
 
 export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
+  // Caller-owned locations must remain removable immediately after release,
+  // including on Windows where an idle SQLite handle blocks unlink.
+  const keepAlive = params.coordinatorPath === undefined && params.runtimeDirectory === undefined;
   // Lifecycle ownership is reentrant for nested transactions. File publication
   // is not: even this process must refuse before ownership probes touch SQLite.
   const base = resolveLifecycleCoordinatorBase({
@@ -184,15 +189,23 @@ export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
     }
     writeScope.assertCurrent();
     // Authority callbacks can change paths; resolve again after their checks.
-    return acquireLifecycleCoordinator("state-lifecycle", params);
+    return acquireLifecycleCoordinator(
+      "state-lifecycle",
+      params,
+      params.coordinatorPath === undefined && params.runtimeDirectory === undefined,
+    );
   } else if (heldCoordinators.has(handlesPath)) {
     throw new StateDatabaseCoordinatorContentionError("state-handles");
   }
-  return acquireLifecycleCoordinator("state-lifecycle", {
-    ...params,
-    coordinatorPath:
-      params.coordinatorPath ?? buildLifecycleCoordinatorPath("state-lifecycle", base),
-  });
+  return acquireLifecycleCoordinator(
+    "state-lifecycle",
+    {
+      ...params,
+      coordinatorPath:
+        params.coordinatorPath ?? buildLifecycleCoordinatorPath("state-lifecycle", base),
+    },
+    keepAlive,
+  );
 }
 
 /** Fence schema mutation against another process's live Gateway owner. */

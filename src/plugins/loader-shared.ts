@@ -186,12 +186,11 @@ export function createPluginCandidatesFromManifestRegistry(
   });
 }
 
-class PluginLoadFailureError extends Error {
+export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
 
-  constructor(registry: PluginRegistry) {
-    const failedPlugins = registry.plugins.filter((entry) => entry.status === "error");
+  constructor(registry: PluginRegistry, failedPlugins: readonly PluginRecord[]) {
     const summary = failedPlugins
       .map((entry) => `${entry.id}: ${entry.error ?? "unknown plugin load error"}`)
       .join("; ");
@@ -424,9 +423,17 @@ export function applyManifestSnapshotMetadata(
 export function maybeThrowOnPluginLoadError(
   registry: PluginRegistry,
   throwOnLoadError: boolean | undefined,
+  retained?: ReadonlyMap<string, PluginRecord>,
 ): void {
-  if (throwOnLoadError && registry.plugins.some((entry) => entry.status === "error")) {
-    throw new PluginLoadFailureError(registry);
+  if (!throwOnLoadError) {
+    return;
+  }
+  // Startup diagnostics remain visible; only newly evaluated failures reject a replacement.
+  const failedPlugins = registry.plugins.filter(
+    (entry) => entry.status === "error" && retained?.get(entry.id) !== entry,
+  );
+  if (failedPlugins.length > 0) {
+    throw new PluginLoadFailureError(registry, failedPlugins);
   }
 }
 

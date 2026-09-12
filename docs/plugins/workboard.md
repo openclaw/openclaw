@@ -128,7 +128,7 @@ Unlinked cards without an active or unresolved task association can start work d
 
 - **Run Claude** / **Run OpenAI** starts a task-tracked agent run with an
   explicit engine, sends the card prompt, and marks the card `running`. Claude
-  runs use `anthropic/claude-sonnet-4-6`. OpenAI runs use `openai/gpt-5.6-sol`.
+  runs use `anthropic/claude-sonnet-4-6`. OpenAI runs use `openai/gpt-6-astra`.
 - **Open Claude** / **Open OpenAI** creates a linked Control UI session without
   sending the card prompt, for manual work that stays attached to the board.
   Opening it clears any schedule and moves a `scheduled` card to `todo`.

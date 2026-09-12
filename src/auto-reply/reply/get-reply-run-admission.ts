@@ -416,7 +416,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: context.runtimePolicySessionKey,
       });
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime) {
+    if (useFastReplyRuntime && !params.configuredProfileId) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -424,7 +424,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         ),
       };
     }
-    const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
+    const shouldUseEphemeralSession =
+      params.autoFallbackPrimaryProbe !== undefined || params.configuredProfileId !== undefined;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry =
       shouldUseEphemeralSession && preparedSessionState.sessionEntry
@@ -442,6 +443,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       provider,
       modelId: model,
       agentId,
+      configuredProfileId: params.configuredProfileId,
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,

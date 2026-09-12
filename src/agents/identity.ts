@@ -5,6 +5,7 @@
  */
 import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 
@@ -29,7 +30,12 @@ export function resolveAckReaction(
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountReaction = accounts?.[opts.accountId]?.ackReaction as string | undefined;
+    const accountReaction = resolveChannelAccountEntry(
+      accounts,
+      opts.accountId,
+      opts.channel,
+      (id) => id,
+    )?.ackReaction as string | undefined;
     if (accountReaction !== undefined) {
       return accountReaction.trim();
     }
@@ -108,7 +114,12 @@ export function resolveResponsePrefix(
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountPrefix = accounts?.[opts.accountId]?.responsePrefix as string | undefined;
+    const accountPrefix = resolveChannelAccountEntry(
+      accounts,
+      opts.accountId,
+      opts.channel,
+      (id) => id,
+    )?.responsePrefix as string | undefined;
     if (accountPrefix !== undefined) {
       if (accountPrefix === "auto") {
         return resolveIdentityNamePrefix(cfg, agentId);

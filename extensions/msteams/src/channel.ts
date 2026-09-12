@@ -105,7 +105,7 @@ const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicyWarning
 const collectMSTeamsSecurityFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectMSTeamsSecurityWarnings,
   checkId: "channels.msteams.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "MS Teams security warning",
 });
 

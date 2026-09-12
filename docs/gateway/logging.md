@@ -18,7 +18,7 @@ OpenClaw has two log surfaces:
 At startup, the Gateway logs the resolved default agent model plus the mode defaults that affect new sessions:
 
 ```text
-agent model: openai/gpt-5.6-sol (thinking=medium, fast=on)
+agent model: openai/gpt-6-astra (thinking=medium, fast=on)
 ```
 
 `thinking` comes from the default agent, model params, or the global agent default. When unset it shows `medium`. `fast` comes from the default agent or the model's `fastMode` params.
@@ -157,7 +157,7 @@ secrets instead of relying on key-name matching. Other transcript fields and
 diagnostic sinks retain broad assignment matching.
 
 - Sensitive-value redaction is always enabled.
-- `logging.redactPatterns`: array of regex strings (overrides defaults)
+- `logging.redactPatterns`: array of regex strings (replaces the default string list). Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply.
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
   - Matches are masked keeping the first 6 + last 4 chars (values >= 18 chars). Shorter values become `***`.
   - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular vendor token prefixes, and payment credential field names (card number, CVC/CVV, shared payment token, payment credential).

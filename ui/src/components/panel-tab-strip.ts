@@ -532,6 +532,12 @@ export const panelTabStripStyles = css`
     display: inline-flex;
     color: var(--accent, #ff5c5c);
   }
+  .tabstrip-tab__favicon {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    object-fit: contain;
+  }
   .tabstrip-tab.is-exited .tabstrip-tab__icon {
     color: var(--muted, #8a919e);
   }

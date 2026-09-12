@@ -1,6 +1,27 @@
 // Clones and normalizes task registry records at persistence boundaries.
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  isTerminalTaskStatus,
+  type TaskDeliveryState,
+  type TaskRecord,
+} from "./task-registry.types.js";
+
+export function getTaskRelatedSessionIndexKeys(
+  task: Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "childSessionKey">,
+): string[] {
+  return uniqueStrings(
+    [task.requesterSessionKey, task.ownerKey, task.childSessionKey]
+      .map(normalizeOptionalString)
+      .filter((key): key is string => Boolean(key)),
+  );
+}
+
+export function compareTasksForRunIdLookup(left: TaskRecord, right: TaskRecord): number {
+  const leftPriority = left.runtime === "cli" ? 1 : 0;
+  const rightPriority = right.runtime === "cli" ? 1 : 0;
+  return leftPriority - rightPriority || left.createdAt - right.createdAt;
+}
 
 export function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return {

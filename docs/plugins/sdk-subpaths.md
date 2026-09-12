@@ -268,7 +268,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
     | `plugin-sdk/channel-secret-tts-runtime` | Private-local after July 2026; Narrow nested channel TTS secret assignment helpers |
     | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, setup-plan construction, and setup CLI scaffolding for plugin-owned secret providers |
-    | `plugin-sdk/security-runtime` | Deprecated broad barrel for trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers; prefer focused security/SSRF/secret subpaths |
+    | `plugin-sdk/security-runtime` | Deprecated broad barrel for trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, `redactSensitiveText`, constant-time secret comparison, and secret-collection helpers; prefer focused security/SSRF/secret subpaths |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, `SsrFBlockedError` and `GuardedFetchRedirectError`, SSRF policy helpers, and loopback/private host classification |
@@ -278,6 +278,49 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers, canonical Gateway browser-origin acceptance via `resolveAcceptedBrowserOrigin`, and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
+
+### Sensitive text redaction
+
+The retained `openclaw/plugin-sdk/security-runtime` export and its
+`@openclaw/plugin-sdk/security-runtime` package facade expose
+`redactSensitiveText(text, options?)`. It returns the redacted string.
+
+- `text` is a string. Without `options`, the function uses logging configuration.
+- `mode` accepts `"tools"` (the default) or `"off"`. Registered exact secrets
+  are masked even when mode is `"off"`.
+- `patterns` is a readonly array of strings, `RegExp` objects, or synchronous
+  matcher objects. An omitted or empty array uses the default string rules. A
+  nonempty array replaces that string list. Built-in form-body, structured-auth,
+  and AWS bare-key protections always apply when mode is `"tools"`. String rules
+  run in order after form-body and structured-auth preprocessing.
+- String entries accept a regex source (default flags `gi`) or `/source/flags`.
+  Strings pass the config regex safety validator. Regex entries gain `g` when
+  absent. Captures select the value to mask; without captures, the whole match
+  is masked.
+- `sensitiveFieldPatterns` has the same entry types but is used by structured
+  redaction, not by this text function.
+
+A matcher has `source: string` (a diagnostic label) and
+`exec(input): Iterable<{ match: string; groups: string[]; input: string; offset: number }>`.
+It must finish synchronously and return a fresh iterable for each call. Keep
+cursors and other scan state local to that call; the same object can be reused.
+Each record must satisfy these requirements:
+
+- `input` is the current string passed to `exec`, after registered-secret
+  masking and earlier rules. Do not use offsets from the original user text.
+- `offset` is a UTF-16 code-unit index into that current string. `match` is a
+  nonempty exact substring beginning there. Emit records in ascending order
+  without overlap.
+- `groups` contains capture strings in order, using `""` for unmatched groups.
+  The last nonempty capture selects the secret's last occurrence within
+  `match`; an empty capture list selects the whole match. Include only the
+  intended secret in that capture so surrounding text remains intact.
+
+Matcher objects and `RegExp` objects are programmatic arguments. They are never
+serialized into `logging.redactPatterns`, which remains a string array. OpenClaw
+does not persist matcher state or migrate configuration for this argument kind.
+Existing string and regex callers remain supported. Older hosts need not support
+matcher objects; plugins using them must require a host version that supports them.
 
 For structured SecretRefs, `resolveReadOnlyEnvSecretRef` returns `blocked` when the ref cannot be used, including an allowed env ref whose value is missing or empty. Callers may apply their existing fallback only for `missing`; a blocked ref must not borrow ambient or auth-profile credentials. Its provider check follows source-specific default aliases and explicit env allowlists.
 

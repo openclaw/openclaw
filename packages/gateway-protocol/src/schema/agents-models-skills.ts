@@ -111,6 +111,17 @@ const AgentCreatedViaSchema = Type.Union([
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
+  status: Type.Optional(Type.Literal("degraded")),
+  admissionRefusal: Type.Optional(
+    closedObject({
+      agentId: NonEmptyString,
+      paths: Type.Array(NonEmptyString),
+      embeddedOwnerId: NonEmptyString,
+      code: Type.Literal("agent-database-ownership-mismatch"),
+      reason: NonEmptyString,
+      repairHint: NonEmptyString,
+    }),
+  ),
   kind: Type.Optional(AgentKindSchema),
   createdVia: Type.Optional(AgentCreatedViaSchema),
   creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -370,6 +381,7 @@ export const ModelsListResultSchema = closedObject({
     }),
   ),
   refreshFailed: Type.Optional(Type.Boolean()),
+  pendingProviders: Type.Optional(Type.Array(NonEmptyString)),
   accountSelection: Type.Optional(ChatAccountSelectionSchema),
   providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),
 });

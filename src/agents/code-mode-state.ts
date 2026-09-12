@@ -18,6 +18,7 @@ import type {
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
@@ -72,6 +73,9 @@ let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 /** Catalog ownership spans worker legs and snapshots; parking never closes the cell. */
 export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeModeConfig) {
   const inbox = new CodeModeProgramDataInbox(config);
+  // A parked cell still owns pending calls and their output. Re-admission waits
+  // for its final exec/wait result rather than stranding or replaying that work.
+  const releaseRuntimeRefresh = captureAgentPluginRuntimeRefresh().hold();
   const runId = `cm_${randomUUID()}`;
   const closed = new AbortController();
   // Observe approvals for the entire cell, including parked gaps.
@@ -88,6 +92,7 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
       return;
     }
     inbox.close();
+    releaseRuntimeRefresh();
     releaseCall();
     approvalWait.dispose();
     signal.removeEventListener("abort", onLifetimeAbort);

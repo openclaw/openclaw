@@ -80,18 +80,6 @@ function replaceProviderAuthState<T>(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function updateSuccessfulUsageStatsEntry(
-  store: AuthProfileStore,
-  profileId: string,
-  lastUsed?: number,
-): void {
-  store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = resetAuthProfileFailureState(
-    store.usageStats[profileId] ?? {},
-    lastUsed === undefined ? undefined : { lastUsed },
-  );
-}
-
 /** Sets or clears explicit auth profile order for a provider. */
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
@@ -520,7 +508,11 @@ export async function markAuthProfileSuccess(params: {
       if (updatesSelection) {
         freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
       }
-      updateSuccessfulUsageStatsEntry(freshStore, profileId, inherited ? undefined : lastUsed);
+      freshStore.usageStats ??= {};
+      freshStore.usageStats[profileId] = resetAuthProfileFailureState(
+        freshStore.usageStats[profileId] ?? {},
+        { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
+      );
       applied = true;
       return true;
     },

@@ -132,10 +132,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         dispatch: (id, input) => this.startDelegation(id, input, connection),
         onExpired: (id) =>
           this.sendContext(
-            "delegation.context.append",
-            id,
             "Ask the user to repeat their request; no user transcript was received.",
             "speakable",
+            id,
           ),
         onError: (error) => this.fail(connection, error),
       });
@@ -324,16 +323,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   sendUserMessage(text: string): void {
     const channel = isOpenAIGptLiveApiModel(this.config.model) ? "speakable" : undefined;
-    this.sendContext("session.context.append", undefined, text, channel);
+    this.sendContext(text, channel);
   }
 
   triggerGreeting(instructions?: string): void {
-    this.sendContext(
-      "session.context.append",
-      undefined,
-      instructions ?? "Greet the user briefly.",
-      "speakable",
-    );
+    this.sendContext(instructions ?? "Greet the user briefly.", "speakable");
   }
 
   submitToolResult(
@@ -343,13 +337,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   ): void {
     const channel = options?.suppressResponse || options?.willContinue ? "commentary" : "speakable";
     const isDelegation = this.activeDelegations.has(callId);
-    const type = isDelegation ? "delegation.context.append" : "session.context.append";
     const text = openAIQuicksilverToolResultText(result);
     this.sendContext(
-      type,
-      isDelegation ? callId : undefined,
       isDelegation ? boundOpenAIQuicksilverDelegationResult(text) : text,
       channel,
+      isDelegation ? callId : undefined,
     );
     if (!options?.willContinue) {
       this.activeDelegations.delete(callId);
@@ -579,8 +571,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       activeDelegations: this.activeDelegations,
       isActive: () => this.lifecycle.acceptsEvents(connection),
       isCurrent: () => this.lifecycle.isCurrent(connection),
-      sendReply: (message) =>
-        this.sendContext("delegation.context.append", id, message, "speakable"),
+      sendReply: (message) => this.sendContext(message, "speakable", id),
       onError: (error) => this.fail(connection, error),
     });
   }
@@ -597,10 +588,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private sendContext(
-    type: "delegation.context.append" | "session.context.append",
-    delegationItemId: string | undefined,
     text: string,
     channel?: "speakable" | "commentary",
+    delegationId?: string,
   ): void {
     if (this.lifecycle.phase() === "terminal") {
       return;
@@ -611,7 +601,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
           model: this.config.model,
           text: chunk,
           channel,
-          delegationId: type === "delegation.context.append" ? delegationItemId : undefined,
+          delegationId,
         }),
       );
     }

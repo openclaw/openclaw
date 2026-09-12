@@ -390,7 +390,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-6-astra` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       );
     }
   });

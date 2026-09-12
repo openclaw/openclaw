@@ -104,22 +104,19 @@ export function sanitizeAssistantDisplayText(
     : undefined;
 }
 
-export function extractAssistantDisplayTextFromContent(
+export function extractAssistantDisplayText(
   content?: readonly AssistantDisplayContentBlock[] | null,
 ): string | undefined {
   if (!Array.isArray(content) || content.length === 0) {
     return undefined;
   }
-  const parts = content
-    .map((block) => {
-      if (block?.type !== "text" || typeof block.text !== "string") {
-        return "";
-      }
-      return block.text;
-    })
-    .filter(Boolean);
-  const text = combineNonStreamingReplyParts(parts);
-  return text || undefined;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block?.type === "text" && typeof block.text === "string" && block.text) {
+      parts.push(block.text);
+    }
+  }
+  return combineNonStreamingReplyParts(parts) || undefined;
 }
 
 export async function buildAssistantReplyContent(params: {
@@ -284,20 +281,6 @@ export function stripManagedOutgoingAssistantContentBlocks(
     );
   });
   return filtered.length > 0 ? filtered : undefined;
-}
-
-export function extractAssistantDisplayText(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-): string | undefined {
-  if (!content || content.length === 0) {
-    return undefined;
-  }
-  const text = combineNonStreamingReplyParts(
-    content.map((block) =>
-      block?.type === "text" && typeof block.text === "string" ? block.text : "",
-    ),
-  );
-  return text || undefined;
 }
 
 export function hasAssistantDisplayMediaContent(

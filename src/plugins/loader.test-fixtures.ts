@@ -32,7 +32,7 @@ export function mkdirSafe(dir: string) {
   chmodSafeDir(dir);
 }
 
-const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
+const fixtureRoot = fs.realpathSync(mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-")));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;

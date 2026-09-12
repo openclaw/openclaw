@@ -6,7 +6,7 @@ import {
 import type { ChannelId } from "../channels/plugins/types.core.js";
 import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
   avoidTrailingHighSurrogateBreak,
@@ -37,6 +37,7 @@ type ProviderChunkConfig = {
 
 function resolveChunkLimitForProvider(
   cfgSection: ProviderChunkConfig | undefined,
+  provider: TextChunkProvider,
   accountId?: string | null,
 ): number | undefined {
   if (!cfgSection) {
@@ -45,7 +46,7 @@ function resolveChunkLimitForProvider(
   const normalizedAccountId = normalizeAccountId(accountId);
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
-    const direct = resolveAccountEntry(accounts, normalizedAccountId);
+    const direct = resolveChannelAccountEntry(accounts, normalizedAccountId, provider);
     if (typeof direct?.textChunkLimit === "number") {
       return direct.textChunkLimit;
     }
@@ -69,7 +70,7 @@ export function resolveTextChunkLimit(
     }
     const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
     const providerConfig = channelsConfig?.[provider] as ProviderChunkConfig | undefined;
-    return resolveChunkLimitForProvider(providerConfig, accountId);
+    return resolveChunkLimitForProvider(providerConfig, provider, accountId);
   })();
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
@@ -79,6 +80,7 @@ export function resolveTextChunkLimit(
 
 function resolveChunkModeForProvider(
   cfgSection: ProviderChunkConfig | undefined,
+  provider: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode | undefined {
   if (!cfgSection) {
@@ -87,7 +89,7 @@ function resolveChunkModeForProvider(
   const normalizedAccountId = normalizeAccountId(accountId);
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
-    const direct = resolveAccountEntry(accounts, normalizedAccountId);
+    const direct = resolveChannelAccountEntry(accounts, normalizedAccountId, provider);
     const directMode = resolveChannelStreamingChunkMode(direct);
     if (directMode) {
       return directMode;
@@ -106,7 +108,7 @@ export function resolveChunkMode(
   }
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
   const providerConfig = channelsConfig?.[provider] as ProviderChunkConfig | undefined;
-  const mode = resolveChunkModeForProvider(providerConfig, accountId);
+  const mode = resolveChunkModeForProvider(providerConfig, provider, accountId);
   return mode ?? DEFAULT_CHUNK_MODE;
 }
 

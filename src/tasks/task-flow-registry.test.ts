@@ -276,6 +276,7 @@ describe("task-flow-registry", () => {
     const deleteFlow = vi.fn();
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot,
         upsertFlow,
         deleteFlow,
@@ -349,11 +350,8 @@ describe("task-flow-registry", () => {
   });
 
   it("does not throw or mutate memory when flow update persistence fails", () => {
-    let failUpsert = false;
-    const upsertFlow = vi.fn(() => {
-      if (failUpsert) {
-        throw new Error("SQLITE_IOERR: disk I/O error");
-      }
+    const updateFlow = vi.fn(() => {
+      throw new Error("SQLITE_IOERR: disk I/O error");
     });
     configureTaskFlowRegistryRuntime({
       store: {
@@ -361,7 +359,7 @@ describe("task-flow-registry", () => {
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        upsertFlow,
+        updateFlow,
       },
     });
     const created = createManagedTaskFlow({
@@ -370,7 +368,6 @@ describe("task-flow-registry", () => {
       goal: "Update while persistence fails",
     });
 
-    failUpsert = true;
     const result = setFlowWaiting({
       flowId: created.flowId,
       expectedRevision: created.revision,
@@ -398,6 +395,7 @@ describe("task-flow-registry", () => {
     });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),

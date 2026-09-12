@@ -619,15 +619,21 @@ describe("runGuidedOnboarding custodian flow", () => {
   ])(
     "keeps onboarding pending when $label changes before the completion lock",
     async ({ replace }) => {
-      withConfigMutationExclusive.mockImplementationOnce(async (effect) => {
+      const completionLock = vi.fn(async (effect: (config: OpenClawConfig) => Promise<unknown>) => {
         localOnboarding.persisted.config = replace(localOnboarding.persisted.config ?? {});
         return await effect(localOnboarding.persisted.config);
       });
-      const deps = setupDeps({ prompter: createWizardPrompter() });
+      const deps = setupDeps({
+        prompter: createWizardPrompter(),
+        applySetup: vi.fn(async () => {
+          withConfigMutationExclusive.mockImplementationOnce(completionLock);
+          return setupApplyResult();
+        }),
+      });
 
       await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-      expect(withConfigMutationExclusive).toHaveBeenCalledOnce();
+      expect(completionLock).toHaveBeenCalledOnce();
       expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("pending");
       expect(localOnboarding.complete).not.toHaveBeenCalled();
       expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();

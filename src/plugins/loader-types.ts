@@ -53,8 +53,12 @@ export type PluginLoadOptions = {
     context: PluginCapabilityCatalogContext;
   };
   activate?: boolean;
+  /** Staged Gateway candidates expose runtime APIs only after publication or owner preparation. */
+  runtimeSideEffects?: boolean;
   previousRegistry?: PluginRegistry;
   replacePluginIds?: readonly string[];
+  /** Validate captured source before evaluation; this never grants plugin authority. */
+  expectedSourceDigests?: Readonly<Record<string, string>>;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;

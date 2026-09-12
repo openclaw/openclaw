@@ -241,7 +241,7 @@ describe("OpenClaw database integrity verifier", () => {
       },
     ]);
 
-    applyOpenClawDatabaseVerificationResults({
+    await applyOpenClawDatabaseVerificationResults({
       env,
       results,
       targets,
@@ -289,7 +289,7 @@ describe("OpenClaw database integrity verifier", () => {
 
     fs.renameSync(agentPath, corruptArchivePath);
     fs.renameSync(healthyReplacementPath, agentPath);
-    applyOpenClawDatabaseVerificationResults({ env, results, targets });
+    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
     expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
@@ -312,7 +312,7 @@ describe("OpenClaw database integrity verifier", () => {
 
       fs.renameSync(agent.path, corruptArchivePath);
       fs.renameSync(healthyReplacementPath, agent.path);
-      applyOpenClawDatabaseVerificationResults({ env, results, targets });
+      await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
       expect(agent.db.isOpen).toBe(false);
       expect(readOpenClawDatabaseQuarantine(agent.path, { env })).toBeUndefined();
@@ -337,7 +337,7 @@ describe("OpenClaw database integrity verifier", () => {
 
       fs.renameSync(state.path, corruptArchivePath);
       fs.renameSync(healthyReplacementPath, state.path);
-      applyOpenClawDatabaseVerificationResults({ env, results, targets });
+      await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
       expect(state.db.isOpen).toBe(false);
       expect(readOpenClawDatabaseQuarantine(state.path, { env })).toBeUndefined();
@@ -357,7 +357,7 @@ describe("OpenClaw database integrity verifier", () => {
     ];
     const results = preparedVerificationResults(targets);
 
-    applyOpenClawDatabaseVerificationResults({ env, results, targets });
+    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
     expect(readOpenClawDatabaseQuarantine(agentPath, { env })?.reason).toMatch(
       /missing from index unsafe_index_records_value/iu,
@@ -383,13 +383,13 @@ describe("OpenClaw database integrity verifier", () => {
     await expect(verifyOpenClawDatabases(targets)).resolves.toEqual([
       expect.objectContaining({ ok: true }),
     ]);
-    applyOpenClawDatabaseVerificationResults({ env, results, targets });
+    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
     expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 
-  it("rejects stale terminal results after draining healthy owners", () => {
+  it("rejects stale terminal results after draining healthy owners", async () => {
     const stateDir = tempDirs.make("openclaw-database-verify-live-stale-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const state = openOpenClawStateDatabase({ env });
@@ -399,7 +399,7 @@ describe("OpenClaw database integrity verifier", () => {
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
     ];
 
-    applyOpenClawDatabaseVerificationResults({
+    await applyOpenClawDatabaseVerificationResults({
       env,
       results: targets.map((target) => ({
         path: target.path,
@@ -418,7 +418,7 @@ describe("OpenClaw database integrity verifier", () => {
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 
-  it("revalidates agent schema ownership after confirmation drains a pathname", () => {
+  it("revalidates agent schema ownership after confirmation drains a pathname", async () => {
     const stateDir = tempDirs.make("openclaw-database-verify-agent-revalidate-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -433,7 +433,7 @@ describe("OpenClaw database integrity verifier", () => {
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
     ];
 
-    applyOpenClawDatabaseVerificationResults({
+    await applyOpenClawDatabaseVerificationResults({
       env,
       results: [{ path: agent.path, ok: false, error: "stale terminal result", terminal: true }],
       targets,
@@ -709,7 +709,7 @@ describe("OpenClaw database integrity verifier", () => {
     },
   );
 
-  it("does not latch transient verifier errors", () => {
+  it("does not latch transient verifier errors", async () => {
     const stateDir = tempDirs.make("openclaw-database-verify-transient-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
@@ -719,7 +719,7 @@ describe("OpenClaw database integrity verifier", () => {
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
 
-    applyOpenClawDatabaseVerificationResults({
+    await applyOpenClawDatabaseVerificationResults({
       env,
       results: [{ path: agentPath, ok: false, error: "Error: database is busy", terminal: false }],
       targets,

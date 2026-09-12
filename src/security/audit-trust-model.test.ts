@@ -420,7 +420,7 @@ describe("security audit trust model findings", () => {
         },
       },
       {
-        name: "flags open groupPolicy when coding exposes update and automation tools",
+        name: "flags open groupPolicy when coding exposes update, automation, and plugin tools",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false }, profile: "coding" },
@@ -431,7 +431,8 @@ describe("security audit trust model findings", () => {
           );
           expect(finding?.severity).toBe("critical");
           expect(finding?.detail).toContain("channels.whatsapp.groupPolicy");
-          expect(finding?.detail).toContain("controlPlane=[automations, gateway]");
+          expect(finding?.detail).toContain("controlPlane=[automations, gateway, plugins]");
+          expect(finding?.remediation).toContain("`plugins`");
         },
       },
       {
@@ -490,13 +491,13 @@ describe("security audit trust model findings", () => {
         },
       },
       {
-        name: "does not flag control-plane exposure when gateway and cron are denied",
+        name: "does not flag control-plane exposure when gateway, cron, and plugins are denied",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: {
             elevated: { enabled: false },
             profile: "coding",
-            deny: ["gateway", "cron"],
+            deny: ["gateway", "cron", "plugins"],
           },
         } satisfies OpenClawConfig,
         assert: (findings: ReturnType<typeof audit>) => {

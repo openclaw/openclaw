@@ -72,10 +72,14 @@ in place.
 
 When you open an existing session, you can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
-composer keeps your draft and focus when the conversation appears. Send shows
-**Loading chat** until the initial history is ready; text typed during that wait
-stays in the composer and is not queued for automatic sending. Existing `/stop`
-and `/approve` controls remain available while history loads.
+composer keeps your draft and focus when the conversation appears. You can send
+ordinary messages and attachments while history loads: the message enters the
+outbox immediately, leaving the composer ready for your next draft. The open
+chat confirms its current session and conversation branch before delivery
+continues automatically. Switching chats keeps queued messages tied to their
+original conversation. If history fails to load, the queued message stays
+available while you resolve the history error. Goals and other slash commands
+wait for history; `/stop` and `/approve` remain available.
 
 On wide desktop panes, a compact rail of horizontal marks sits in the transcript's left gutter. Hover for a short message preview, or click a mark to jump to that message. Tab focuses the rail; arrow keys move between marks, Enter or Space jumps, Home and End select the endpoints, and Escape dismisses the preview. At rest, all marks are identical 8 × 2px strokes at 12px spacing. They stay faint; marks for messages currently visible in the transcript light up together as you scroll. Hovering a mark grows it to 32px and lights only that mark in text color, with progressively shorter strokes across three neighbors on either side. The other marks keep their resting colors. Outside that hover range, widths stay fixed. An empty message preview shows “Preview unavailable.” Every message keeps its own mark. Long rails scroll internally within 45% of the viewport height, with fades only at ends that hide more messages. Scrolling the transcript keeps the current mark visible; you can also scroll the rail to explore other messages. The rail stays hidden on mobile, in narrow or short panes, and when your saved message width leaves too little gutter space. A jump briefly tints the target message with a soft background, fading over 1.2 seconds without a border or ring. Reduced motion disables mark transitions and shows the target tint statically for one second.
 
@@ -222,17 +226,24 @@ an explanation in chat.
 ### Source previews and copying code
 
 Select **Open** on a text attachment to read it directly in the **Files** side
-panel. Same-origin text attachments, including pasted `.txt` files, Markdown,
-CSV, and JSON, display as selectable, read-only text with line breaks and
-indentation preserved. HTML and other markup remain literal text, never an
-embedded page. Previews require UTF-8 content no larger than 256 KiB; unsupported,
-external, oversized, or unavailable files keep their **Download** action.
+panel. Plain-text attachments, including pasted `.txt` files, CSV, and JSON,
+preserve line breaks and indentation. Markdown attachments render as documents
+with interactive code blocks. When an open attachment refreshes with unchanged
+text, its code blocks keep your expansion and wrapping choices after loading.
+A different attachment or changed text starts with fresh controls. HTML and
+other markup remain literal text, never an embedded page. Same-origin previews
+require UTF-8 content no larger than 256 KiB; unsupported, external, oversized,
+or unavailable files keep their **Download** action.
 
 **View Raw Text** keeps Markdown notation literal, including nested code fences.
 Decoded text artifacts use the same literal preview. **Copy code** preserves the
 code's leading whitespace and final newline when present. Indented Markdown code
 blocks also work at the start of a message and remain literal while streaming,
 including blank lines within the block.
+
+Completed top-level code blocks keep your expansion and wrapping choices while
+later paragraphs stream into the same assistant reply. Replacing the message or
+correcting earlier content starts a fresh view.
 
 **Copy URL** in browser tab cards also works on plain HTTP connections where the
 browser does not provide its Clipboard API.
@@ -245,7 +256,7 @@ cancel native clipboard writes that the browser has already accepted.
 ### Markdown tables
 
 Markdown tables scroll horizontally within the conversation. **Copy table** copies
-tab-separated cells, and **Expand table** opens a larger view. In Chat, workspace
+tab-separated cells, and **Expand table** opens a larger view. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 

@@ -204,6 +204,7 @@ describe("runIsolatedCompletion", () => {
           await expect(completion).resolves.toMatchObject({ text: "done" });
           expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
             expect.objectContaining({ modelId: "gpt-test", profileId: "openai:original" }),
+            expect.any(Function),
           );
           expect(dispatch).toHaveBeenCalledOnce();
           expect(dispatch).toHaveBeenCalledWith(
@@ -261,6 +262,7 @@ describe("runIsolatedCompletion", () => {
             provider: "openai",
             modelId: "gpt-test",
           }),
+          expect.any(Function),
         );
       }
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
@@ -289,6 +291,7 @@ describe("runIsolatedCompletion", () => {
         preparedModelRuntime,
         workspaceDir: "/tmp/workspace",
       }),
+      expect.any(Function),
     );
     expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();

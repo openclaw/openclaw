@@ -140,19 +140,16 @@ describe("status-all format", () => {
         tailscaleMode: "funnel",
         tailscaleDns: null,
         tailscaleHttpsUrl: null,
-        tailscaleBackendState: "Running",
         includeBackendStateWhenOn: true,
       }),
-    ).toBe("funnel · Running · magicdns unknown");
+    ).toBe("funnel · unknown · magicdns unknown");
     expect(
       getStatusOverviewRowValue("Tailscale exposure", {
         tailscaleMode: "off",
-        tailscaleBackendState: "Stopped",
         tailscaleDns: "box.tail.ts.net",
-        includeBackendStateWhenOff: true,
         includeDnsNameWhenOff: true,
       }),
-    ).toBe("off · daemon Stopped · box.tail.ts.net");
+    ).toBe("off · box.tail.ts.net");
   });
 
   it("formats service values across short and detailed runtime surfaces", () => {

@@ -7,7 +7,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import { resolveLinkedDirectPeerId } from "../../routing/session-key.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -189,9 +189,10 @@ export function getHistoryLimitFromSessionKey(
   // match the routed `work-team`).
   const trimmedAccountId = routedAccountId?.trim();
   const accountConfig = trimmedAccountId
-    ? resolveNormalizedAccountEntry(
+    ? resolveChannelAccountEntry(
         providerConfig.accounts,
         normalizeAccountId(trimmedAccountId),
+        provider,
         normalizeAccountId,
       )
     : undefined;

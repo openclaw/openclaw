@@ -26,12 +26,14 @@ export function createMockTarStream(
       if (params.error) {
         throw params.error;
       }
-      yield params.contents ?? "archive-bytes";
+      yield Buffer.from(params.contents ?? "archive-bytes");
+      yield Buffer.alloc(1024);
     })(),
   );
 }
 
-vi.mock("tar", () => ({
+vi.mock("tar", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("tar")>()),
   c: backupTestMocks.tarCreateMock,
 }));
 

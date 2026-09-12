@@ -528,7 +528,10 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.1" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
-    for (const id of ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+    for (const id of ["gpt-5.6", "gpt-5.6-sol"]) {
+      expect(isHighSignalLiveModelRef({ provider: "openai", id })).toBe(false);
+    }
+    for (const id of ["gpt-5.6-terra", "gpt-5.6-luna"]) {
       expect(isHighSignalLiveModelRef({ provider: "openai", id })).toBe(true);
     }
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-codex" })).toBe(false);
@@ -709,7 +712,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m3" },
-      { provider: "openai", id: "gpt-5.6" },
+      { provider: "openai", id: "gpt-5.6-luna" },
       { provider: "openrouter", id: "openai/gpt-5.2-chat" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },

@@ -350,6 +350,39 @@ from implementations that do not declare support.
 The `adapterFactory` id must match `commandName`. Do not export registrations
 for commands absent from the manifest.
 
+## channelAccountKeyPolicies reference
+
+`channelAccountKeyPolicies` declares stored account-key selection rules for channels
+listed in the plugin's `channels` array. It is plugin metadata; operators keep their
+account config under `channels.<id>.accounts`.
+
+```json
+{
+  "channels": ["signal"],
+  "channelAccountKeyPolicies": {
+    "signal": { "canonicalAliasesRequireOwnField": "account" }
+  }
+}
+```
+
+`canonicalAliasesRequireOwnField` is the name of a string field in the account
+entry. An alias that matches only after account-id normalization is eligible when
+that entry has a nonempty value for this field. Root values do not satisfy it.
+Exact stored keys win; existing case-insensitive matches keep their behavior.
+Readers and writers use the same selected stored key.
+
+For Signal, `Work Phone` resolves as `work-phone` when it has its own `account`
+number. Its settings then apply even if the channel root also has a number.
+Without its own number, the previously ignored entry stays ignored and the route
+keeps its inherited settings. Doctor preserves that key and reports the required
+manual change. Doctor also reports normalized-key collisions and preserves both
+entries; an exact `work-phone` key wins at runtime.
+
+Rules for undeclared channels are ignored. Runtime reads use the selected plugin
+metadata snapshot; they do not load plugin code to find the rule. See
+[account lookup arguments](/plugins/sdk-channel-plugins/setup-and-config#stored-account-key-selection)
+for the SDK contract.
+
 ## channelConfigs reference
 
 Use `channelConfigs` when a channel plugin needs cheap config metadata before runtime loads. Read-only channel setup/status discovery can use this metadata directly for configured external channels when no setup entry is available, or when `setup.requiresRuntime: false` declares setup runtime unnecessary.

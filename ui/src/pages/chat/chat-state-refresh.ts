@@ -63,6 +63,7 @@ export function retireChatMetadataRequests(host: ChatPageHost): void {
   host.chatModelCatalog = [];
   host.chatModelCatalogError = null;
   host.chatModelCatalogRefreshFailed = undefined;
+  host.chatModelCatalogPendingProviders = undefined;
   host.chatModelsLoading = false;
   host.chatAccountSelection = null;
 }
@@ -247,6 +248,7 @@ async function loadChatModelCatalog(
         host.chatAccountSelection = result.accountSelection ?? null;
         host.chatModelCatalogError = null;
         host.chatModelCatalogRefreshFailed = result.refreshFailed;
+        host.chatModelCatalogPendingProviders = result.pendingProviders;
         return true;
       },
       (error: unknown) => {

@@ -82,18 +82,12 @@ export function createHarness(params?: {
   const socket = new FakeSocket(params?.autoStart, params?.afterOpen);
   socket.deferClose = params?.deferClose ?? false;
   const connections: Array<{ url: string; options: ClientOptions }> = [];
-  const webSocketFactory: OpenAIQuicksilverSocketFactory = (url, options) => {
+  const webSocketFactory: OpenAIQuicksilverSocketFactory = function (url, options) {
     connections.push({ url, options });
     queueMicrotask(() => socket.open());
     return socket;
   };
-  if (params?.mockDefaultSocket) {
-    params.mockDefaultSocket.mockImplementation(function (url: string, options: ClientOptions) {
-      connections.push({ url, options });
-      queueMicrotask(() => socket.open());
-      return socket;
-    });
-  }
+  params?.mockDefaultSocket?.mockImplementation(webSocketFactory);
   const onAudio: Mock<RealtimeVoiceBridgeCallbacks["onAudio"]> = vi.fn();
   const onClearAudio: Mock<RealtimeVoiceBridgeCallbacks["onClearAudio"]> = vi.fn();
   const onTranscript: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>> = vi.fn();

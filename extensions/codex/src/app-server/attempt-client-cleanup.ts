@@ -167,6 +167,7 @@ export async function terminateCodexBackgroundTerminals(
   client: CodexAppServerClient,
   threadId: string,
   oneShotCliRun = false,
+  waitForNativeItems?: (signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
   const options = {
     timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
@@ -200,6 +201,8 @@ export async function terminateCodexBackgroundTerminals(
         throw new Error("native terminal termination did not confirm process cleanup");
       }
     }
+    // Native process termination does not join its asynchronous final item event.
+    await waitForNativeItems?.(options.signal);
   } catch (cause) {
     throw new Error(
       "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",

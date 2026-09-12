@@ -90,12 +90,17 @@ const schemaResourceKeywords = new Set([
   "definitions",
 ]);
 
-function normalizeSchemaMap(value: unknown): unknown {
+type NormalizationOptions = {
+  /** Treat format keywords as annotations without changing literal data or property names. */
+  format?: "annotation";
+};
+
+function normalizeSchemaMap(value: unknown, options: NormalizationOptions): unknown {
   if (!isRecord(value)) {
     return value;
   }
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry)]),
+    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry, options)]),
   );
 }
 
@@ -122,23 +127,26 @@ function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
   return compilesUnicodePattern(repaired) ? repaired : pattern;
 }
 
-function normalizeSchemaDependencies(value: unknown): unknown {
+function normalizeSchemaDependencies(value: unknown, options: NormalizationOptions): unknown {
   if (!isRecord(value)) {
     return value;
   }
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [
       key,
-      isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry),
+      isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry, options),
     ]),
   );
 }
 
-function normalizePatternProperties(value: Record<string, unknown>): Record<string, unknown> {
+function normalizePatternProperties(
+  value: Record<string, unknown>,
+  options: NormalizationOptions,
+): Record<string, unknown> {
   const normalized = new Map<string, unknown>();
   for (const [pattern, propertySchema] of Object.entries(value)) {
     const repairedPattern = repairJsonSchemaPatternForUnicodeRegExp(pattern);
-    const repairedSchema = normalizeJsonSchemaNode(propertySchema);
+    const repairedSchema = normalizeJsonSchemaNode(propertySchema, options);
     const existingSchema = normalized.get(repairedPattern);
     normalized.set(
       repairedPattern,
@@ -191,9 +199,9 @@ function normalizeAdditionalPropertiesSchema(
   };
 }
 
-function normalizeJsonSchemaNode(schema: unknown): unknown {
+function normalizeJsonSchemaNode(schema: unknown, options: NormalizationOptions): unknown {
   if (Array.isArray(schema)) {
-    return schema.map((entry) => normalizeJsonSchemaNode(entry));
+    return schema.map((entry) => normalizeJsonSchemaNode(entry, options));
   }
   if (!isRecord(schema)) {
     return schema;
@@ -209,27 +217,29 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
     expandJsonSchemaTypeArray(schemaWithNullableEnum),
   );
   return Object.fromEntries(
-    Object.entries(normalizedSchema).map(([key, value]) => {
-      if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
-        return ["$ref", value];
-      }
-      if (key === "pattern" && typeof value === "string") {
-        return [key, repairJsonSchemaPatternForUnicodeRegExp(value)];
-      }
-      if (key === "patternProperties" && isRecord(value)) {
-        return [key, normalizePatternProperties(value)];
-      }
-      if (schemaMapKeywords.has(key)) {
-        return [key, normalizeSchemaMap(value)];
-      }
-      if (key === "dependencies") {
-        return [key, normalizeSchemaDependencies(value)];
-      }
-      if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
-        return [key, normalizeJsonSchemaNode(value)];
-      }
-      return [key, value];
-    }),
+    Object.entries(normalizedSchema)
+      .filter(([key]) => key !== "format" || options.format !== "annotation")
+      .map(([key, value]) => {
+        if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
+          return ["$ref", value];
+        }
+        if (key === "pattern" && typeof value === "string") {
+          return [key, repairJsonSchemaPatternForUnicodeRegExp(value)];
+        }
+        if (key === "patternProperties" && isRecord(value)) {
+          return [key, normalizePatternProperties(value, options)];
+        }
+        if (schemaMapKeywords.has(key)) {
+          return [key, normalizeSchemaMap(value, options)];
+        }
+        if (key === "dependencies") {
+          return [key, normalizeSchemaDependencies(value, options)];
+        }
+        if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
+          return [key, normalizeJsonSchemaNode(value, options)];
+        }
+        return [key, value];
+      }),
   );
 }
 
@@ -311,8 +321,11 @@ function isJsonValue(
 }
 
 /** Normalize JSON Schema constructs into the TypeBox runtime subset used by validators. */
-export function normalizeJsonSchemaForTypeBox(schema: JsonSchemaValue): JsonSchemaValue {
-  return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
+export function normalizeJsonSchemaForTypeBox(
+  schema: JsonSchemaValue,
+  options: NormalizationOptions = {},
+): JsonSchemaValue {
+  return normalizeJsonSchemaNode(schema, options) as JsonSchemaValue;
 }
 
 /** Compare acyclic JSON values using the same equality semantics as TypeBox. */

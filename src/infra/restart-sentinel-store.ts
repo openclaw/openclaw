@@ -7,7 +7,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { UpdateFailureFact } from "./update-failure-facts.js";
 import { updateRecoverySchema, type UpdateRecovery } from "./update-recovery.js";
+import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
 type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -22,6 +24,7 @@ type RestartSentinelStep = {
   durationMs?: number | null;
   log?: RestartSentinelLog | null;
   advisory?: boolean;
+  failureFacts?: UpdateFailureFact[];
 };
 
 type RestartSentinelStats = {
@@ -166,6 +169,10 @@ function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
     return null;
   }
   const result: RestartSentinelStep = { name: value.name, command: value.command };
+  const facts = UpdateFailureFactSchema.array().max(5).safeParse(value.failureFacts);
+  if (facts.success) {
+    result.failureFacts = facts.data;
+  }
   if (cwd !== undefined) {
     result.cwd = cwd;
   }

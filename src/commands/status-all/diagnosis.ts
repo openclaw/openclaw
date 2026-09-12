@@ -56,13 +56,6 @@ type ConfigSnapshotLike = {
 
 type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
 
-type TailscaleStatusLike = {
-  backendState: string | null;
-  dnsName: string | null;
-  ips: string[];
-  error: string | null;
-};
-
 type ChannelIssueLike = {
   channel: string;
   accountId: string;
@@ -158,7 +151,7 @@ export async function appendStatusAllDiagnosis(params: {
   port: number;
   portUsage: PortUsageLike | null;
   tailscaleMode: string;
-  tailscale: TailscaleStatusLike;
+  tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
   skillStatus: SkillStatusReport | null;
   pluginCompatibility: PluginCompatibilityNotice[];
@@ -291,26 +284,12 @@ export async function appendStatusAllDiagnosis(params: {
     }
   }
 
-  {
-    const backend = params.tailscale.backendState ?? "unknown";
-    const okBackend = backend === "Running";
-    const hasDns = Boolean(params.tailscale.dnsName);
-    const label =
-      params.tailscaleMode === "off"
-        ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
-        : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, params.tailscaleMode === "off" || (okBackend && hasDns) ? "ok" : "warn");
-    if (params.tailscale.error) {
-      lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
-    }
-    if (params.tailscale.ips.length > 0) {
-      lines.push(
-        `  ${muted(`ips: ${params.tailscale.ips.slice(0, 3).join(", ")}${params.tailscale.ips.length > 3 ? "…" : ""}`)}`,
-      );
-    }
-    if (params.tailscaleHttpsUrl) {
-      lines.push(`  ${muted(`https: ${params.tailscaleHttpsUrl}`)}`);
-    }
+  emitCheck(
+    `Tailscale exposure: ${params.tailscaleMode} · daemon unknown${params.tailscaleDns ? ` · ${params.tailscaleDns}` : ""}`,
+    params.tailscaleMode === "off" ? "ok" : "warn",
+  );
+  if (params.tailscaleHttpsUrl) {
+    lines.push(`  ${muted(`https: ${params.tailscaleHttpsUrl}`)}`);
   }
 
   if (params.skillStatus) {

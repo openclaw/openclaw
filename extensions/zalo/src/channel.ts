@@ -195,7 +195,7 @@ const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollecto
 const collectZaloOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectZaloSecurityWarnings,
   checkId: "channels.zalo.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Zalo security warning",
 });
 

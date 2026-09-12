@@ -39,11 +39,11 @@ const counterfactualFailure = "counterfactual first-file failure after allocatio
 const fixtureTests = [
   [
     "tui-pty-harness.e2e.test.ts",
-    "opens actual fallback SQLite and retains it until the worker finishes",
+    "opens actual fallback SQLite and retains it until file drainage",
   ],
   [
     "tui-pty-local.e2e.test.ts",
-    "keeps the same worker namespace alive across files and module resets",
+    "keeps the worker namespace and stored rows across file drainage and module resets",
   ],
 ] as const;
 
@@ -271,6 +271,7 @@ it(${JSON.stringify(fixtureTests[0][1])}, () => {
   closeOpenClawStateDatabaseForTest();
   expect(first.db.isOpen).toBe(false);
   const reopened = openOpenClawStateDatabase();
+  reopened.db.exec("CREATE TABLE worker_lifetime_sentinel(value TEXT); INSERT INTO worker_lifetime_sentinel VALUES ('retained')");
   const fallback = openOpenClawStateDatabase({ env: {} });
   expect(fallback.path).toBe(fallbackPath);
   const explicit = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: ${JSON.stringify(path.dirname(path.dirname(explicitPath)))} } });
@@ -294,12 +295,14 @@ const { openOpenClawStateDatabase } = await import(${databaseModule});
 const resources = await allocateResources();
 it(${JSON.stringify(fixtureTests[1][1])}, () => {
   expect(process.pid).toBe(previous.pid);
-  expect(previous.reopened.db.isOpen).toBe(true);
-  expect(previous.explicit.db.isOpen).toBe(true);
-  expect(previous.fallback.db.isOpen).toBe(true);
+  expect(previous.reopened.db.isOpen).toBe(false);
+  expect(previous.explicit.db.isOpen).toBe(false);
+  expect(previous.fallback.db.isOpen).toBe(false);
   expect(assertHomeBoundary()).toBe(previous.fallback.path);
   const current = openOpenClawStateDatabase();
   expect(current.path).toBe(previous.reopened.path);
+  expect(current.db === previous.reopened.db).toBe(false);
+  expect(current.db.prepare("SELECT value FROM worker_lifetime_sentinel").get().value).toBe("retained");
   expect(current.db.prepare("SELECT count(*) AS count FROM sqlite_schema").get().count).toBeGreaterThan(0);
   expect(fs.existsSync(current.path)).toBe(true);
   expect(resources.home).toBe(previous.resources.home);

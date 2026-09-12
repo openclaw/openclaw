@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import {
@@ -33,6 +34,7 @@ import {
 } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { buildCodexUserInput } from "./user-input.js";
+import { buildResolvedCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export function activateCodexAttemptTurn(
   resources: CodexAttemptResources,
@@ -106,6 +108,7 @@ export function activateCodexAttemptTurn(
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridgeRef.current = createCodexUserInputBridge({
     paramsForRun: params,
+    onOrdinaryResponse: (response) => projectorRef.current?.recordUserInputResponse(response),
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     signal: runAbortController.signal,
@@ -353,7 +356,28 @@ export function activateCodexAttemptTurn(
           `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for Codex steering`,
         );
       }
-      return buildCodexUserInput(text, result.images);
+      const source = await buildResolvedCodexUserPromptMessage({
+        ...params,
+        prompt: text,
+        transcriptPrompt: text,
+        userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
+      });
+      return {
+        input: buildCodexUserInput(text, result.images),
+        message: {
+          ...source,
+          role: "user",
+          content: result.images.length ? [{ type: "text", text }, ...result.images] : text,
+          ...(result.images.length
+            ? {
+                __openclaw: {
+                  ...asOptionalRecord(Reflect.get(source, "__openclaw")),
+                  mediaImageBlockFactIndexes: result.imageFactIndexes,
+                },
+              }
+            : {}),
+        },
+      };
     },
     beforeSubmit: async (items) => {
       // Commit preceding answers and user custody before Codex can act on the
@@ -547,6 +571,22 @@ export function activateCodexAttemptTurn(
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
+  if (
+    thread.preserveNativeModel !== true &&
+    thread.connectionScope !== "supervision" &&
+    !params.expectedSessionRuntimeOwnership
+  ) {
+    const route = resourceState.turnRoute;
+    params.registerPluginRuntimeRefreshConsumer?.(
+      () =>
+        resourceState.turnRoute === route &&
+        route?.signal.aborted === false &&
+        turnRuntime.turnIdRef.current === activeTurnId &&
+        !state.completed &&
+        !state.terminalTurnNotificationQueued &&
+        !runAbortController.signal.aborted,
+    );
+  }
   const projectionReady = bindProjection();
   params.replyOperation?.attachBackend(handle);
   setActiveEmbeddedRun(

@@ -3,6 +3,7 @@ import {
   runAgentHarnessBeforeCompactionHook,
   projectProgressCardChannelUpdate,
   type AgentMessage,
+  type AgentHarnessUserInputQuestion,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -272,6 +273,29 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         this.transcriptCheckpoint.flush(),
       );
     }
+  }
+
+  recordUserInputResponse(params: {
+    itemId: string;
+    questions: readonly AgentHarnessUserInputQuestion[];
+    response: JsonValue;
+  }): void {
+    if (this.projectionClosed) {
+      return;
+    }
+    // The bridge supplies the validated native request and the exact response it returns.
+    this.toolTranscriptProjection.recordToolCall({
+      id: params.itemId,
+      name: "request_user_input",
+      arguments: { questions: params.questions },
+    });
+    this.toolTranscriptProjection.recordToolResult({
+      id: params.itemId,
+      name: "request_user_input",
+      // Continuation elides call arguments; retain ordinary question context with its response.
+      text: JSON.stringify({ response: params.response, request: { questions: params.questions } }),
+      isError: false,
+    });
   }
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {

@@ -69,7 +69,7 @@ host.
     const result = await api.runtime.llm.complete({
       messages: [{ role: "user", content: "Return one JSON value." }],
       systemPrompt: "You are a JSON-only function.",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       execution: {
         mode: "isolated-agent-runtime",
         authProfileId: "openai:work",

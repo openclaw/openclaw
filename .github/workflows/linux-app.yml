@@ -99,6 +99,11 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: cargo +stable fmt --check
 
+      - name: Test Omarchy desktop handoff
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover \
+            -s apps/linux/omarchy -p 'test_*.py'
+
       - name: Run Rust tests
         working-directory: apps/linux/src-tauri
         run: cargo +stable test --locked --all-targets

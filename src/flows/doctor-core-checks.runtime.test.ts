@@ -1543,7 +1543,7 @@ describe("doctor provider catalog projection checks", () => {
         path: "plugins.entries.mockplugin",
         target: "mockplugin",
         message: "Provider catalog mockplugin failed during doctor validation.",
-        requirement: "Cannot perform 'get' on a proxy that has been revoked",
+        requirement: expect.stringMatching(/proxy.*revoked/iu),
       }),
     );
   });

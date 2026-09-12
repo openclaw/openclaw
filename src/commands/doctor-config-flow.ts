@@ -12,6 +12,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
@@ -42,6 +43,7 @@ import {
   applyLegacyCompatibilityStep,
   applyUnknownConfigKeyStep,
 } from "./doctor/shared/config-flow-steps.js";
+import { prepareDoctorConfigMigrationResult } from "./doctor/shared/config-migration-result.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationResult,
@@ -237,6 +239,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const explicitSetPaths: string[][] = [];
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
+  let modelRetirementRepairRan = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
@@ -255,9 +258,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       fixHint: options.fixHint,
     });
   };
-  const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
-  const sourceLastTouchedVersion =
-    typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
+  const finalizeMigrationResult = prepareDoctorConfigMigrationResult(preflight, snapshot);
 
   const rawRosterMigrations = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
     .filter((source) => source !== undefined)
@@ -391,7 +392,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       config: state.candidate,
       authoredRoot: snapshot.parsed,
       configPath: snapshot.path,
-      currentHash: snapshot.hash ?? null,
+      currentHash: hashConfigRaw(snapshot.raw),
       auditRecords: readRecentConfigAuditRecords({
         env: process.env,
         homedir,
@@ -586,6 +587,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pluginMetadataSnapshotState.current = repairSequence.pluginMetadataSnapshot;
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
+    modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
@@ -692,10 +694,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (configuredOpencodePluginIds.length > 0) {
     const { resolveEnabledProviderPluginIds } = await import("../plugins/providers.js");
     activeOpencodePluginIds = runWithCurrentPluginMetadata(cfg, () =>
-      resolveEnabledProviderPluginIds({
-        config: cfg,
-        onlyPluginIds: configuredOpencodePluginIds,
-      }),
+      resolveEnabledProviderPluginIds({ config: cfg, onlyPluginIds: configuredOpencodePluginIds }),
     );
   }
   noteOpencodeProviderOverrides(cfg, {
@@ -706,13 +705,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   noteSandboxOriginProxyWarning(cfg);
   noteMcpOriginWarning(cfg);
 
+  const migrationResult = await finalizeMigrationResult({
+    cfg,
+    shouldWriteConfig,
+    metadataSnapshot: pluginMetadataSnapshotState.current,
+    runWithCurrentPluginMetadata,
+  });
+
   // Queued repair panels describe candidate mutations; the write runner prints
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
-  const receipts = preflight.stateMigrationStepReceipts;
-  const postSession = preflight.postSessionPluginMigration;
-  const planBound = preflight.postSessionPluginMigrationPlanBound;
 
   return {
     ...finalized,
@@ -722,7 +725,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     shouldWriteConfig,
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
-    ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
     ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
     ...(shouldWriteConfig && persistCanonicalAgentRoster
@@ -742,12 +744,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       : {}),
     ...(openAICodexAuthProfileIdMap ? { openAICodexAuthProfileIdMap } : {}),
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
-    ...(pluginMetadataSnapshotState.current
-      ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
-      : {}),
-    ...(receipts ? { stateMigrationStepReceipts: receipts } : {}),
-    ...(postSession ? { postSessionPluginMigration: postSession } : {}),
-    ...(planBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+    modelRetirementRepairRan:
+      modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
+    ...migrationResult,
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,
   };

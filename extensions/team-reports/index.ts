@@ -38,7 +38,7 @@ export default definePluginEntry({
     const requireScheduler = () => {
       if (!scheduler) {
         throw new Error(
-          "Team Reports service is not running; check plugin configuration and restart the Gateway",
+          "Team Reports service is not running; check plugin configuration and reload the plugin",
         );
       }
       return scheduler;
@@ -52,7 +52,6 @@ export default definePluginEntry({
 
     api.registerService({
       id: "team-reports",
-      reload: { configPrefixes: ["plugins.entries.team-reports"] },
       async start(ctx) {
         if (retired) {
           throw new Error("Team Reports runtime has been retired");
@@ -97,7 +96,7 @@ export default definePluginEntry({
             config: { ...config, summaries: summaryOptions },
             resolved,
             store: nextStore,
-            llm: api.runtime.llm,
+            llm: { complete: (params) => api.runtime.llm.complete(params) },
             context: ctx,
           });
           try {
@@ -130,13 +129,6 @@ export default definePluginEntry({
         }
         return undefined;
       },
-    });
-    // Route and descriptor registration belong to the registry, not a restarted service.
-    api.registerReload({
-      restartPrefixes: [
-        "plugins.entries.team-reports.config.basePath",
-        "plugins.entries.team-reports.config.displayTimezone",
-      ],
     });
     api.registerHttpRoute({
       path: initial.basePath,

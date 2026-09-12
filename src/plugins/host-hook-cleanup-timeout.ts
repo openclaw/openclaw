@@ -3,7 +3,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 /** Max time allowed for plugin host cleanup hooks before failing shutdown. */
 const PLUGIN_HOST_CLEANUP_TIMEOUT_MS = 5_000;
 
-class PluginHostCleanupTimeoutError extends Error {}
+export class PluginHostCleanupTimeoutError extends Error {}
 
 /** Runs plugin host cleanup with a bounded timeout and clears the timer afterward. */
 export async function withPluginHostCleanupTimeout<T>(

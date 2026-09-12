@@ -10,9 +10,11 @@ const QA_CODEX_OAUTH_LIVE_MODEL = "openai/gpt-5.6-luna";
 export function resolveQaLiveFrontierAlternateModel(primaryModel: string) {
   const normalized = primaryModel.toLowerCase();
   if (normalized === QA_CODEX_OAUTH_LIVE_MODEL) {
-    return "openai/gpt-5.6-sol";
+    return "openai/gpt-5.6-terra";
   }
-  return normalized === "openai/gpt-5.6" || normalized === "openai/gpt-5.6-sol"
+  return normalized === "openai/gpt-5.6" ||
+    normalized === "openai/gpt-5.6-sol" ||
+    normalized === "openai/gpt-5.6-terra"
     ? QA_CODEX_OAUTH_LIVE_MODEL
     : undefined;
 }

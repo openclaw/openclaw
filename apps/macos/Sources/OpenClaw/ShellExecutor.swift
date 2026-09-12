@@ -64,11 +64,6 @@ enum ShellExecutor {
         case timedOut
     }
 
-    private enum DeadlineOutcome: Sendable, Equatable {
-        case exited
-        case timedOut
-    }
-
     private enum StreamingTaskResult: Sendable {
         case drained
         case deadline(timedOut: Bool)
@@ -213,22 +208,7 @@ enum ShellExecutor {
             let exitSignal = ChildProcessExit(
                 processIdentifier: processIdentifier,
                 queue: .global(qos: .userInitiated))
-            let deadline = await withTaskGroup(of: DeadlineOutcome.self) { group in
-                group.addTask {
-                    await exitSignal.wait()
-                    return .exited
-                }
-                group.addTask {
-                    do {
-                        try await Task.sleep(for: .seconds(timeout))
-                        return .timedOut
-                    } catch {
-                        return .exited
-                    }
-                }
-                defer { group.cancelAll() }
-                return await group.next() ?? .exited
-            }
+            let deadline = await exitSignal.wait(timeout: timeout)
 
             guard deadline == .timedOut, !exitSignal.hasExited() else { return false }
             try? execution.send(signal: .terminate, toProcessGroup: true)

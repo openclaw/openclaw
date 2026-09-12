@@ -18,6 +18,8 @@ import type {
   UpdateDoctorConfigChange,
   UpdateDoctorConfigWriteRefusal,
 } from "./update-doctor-config.js";
+import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
+import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
 // IPC contract between package update parents and the post-install doctor child.
 export const UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV =
@@ -42,6 +44,8 @@ const doctorResultEvidence = {
   configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
   configInputHash: configHashSchema.optional(),
   warnings: z.array(z.string()).optional(),
+  // Invalid optional diagnostics cannot change the child's classified outcome.
+  failureFacts: z.array(UpdateFailureFactSchema).catch([]).optional(),
   configChanges: z.array(UpdateDoctorConfigChangeSchema).optional(),
   configWriteRefusal: UpdateDoctorConfigWriteRefusalSchema.optional(),
 };
@@ -59,6 +63,17 @@ const UpdatePostInstallDoctorResultSchema = z.discriminatedUnion("status", [
   }),
 ]);
 export type UpdatePostInstallDoctorResult = z.infer<typeof UpdatePostInstallDoctorResultSchema>;
+
+export class UpdateDoctorError extends Error {
+  constructor(
+    message: string,
+    readonly failureFacts: UpdateFailureFact[],
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "UpdateDoctorError";
+  }
+}
 
 /** Keep optional health diagnostics bounded across Doctor and its update parent. */
 export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
@@ -254,14 +269,16 @@ export async function writeUpdatePostInstallDoctorResult(params: {
   result: UpdatePostInstallDoctorResult;
 }): Promise<void> {
   const resultPath = resolveSafeUpdatePostInstallDoctorResultPath(params.resultPath);
-  const { warnings, ...result } = params.result;
+  const { warnings, failureFacts, ...result } = params.result;
   const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
+  const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
   await fs.writeFile(
     resultPath,
     `${JSON.stringify({
       ...result,
       ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
+      ...(facts.length ? { failureFacts: facts } : {}),
     })}\n`,
     {
       encoding: "utf8",
@@ -296,10 +313,12 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
   if (!parsed.success) {
     return null;
   }
-  const { warnings, ...result } = parsed.data;
+  const { warnings, failureFacts, ...result } = parsed.data;
   const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
+  const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   return {
     ...result,
     ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
+    ...(facts.length ? { failureFacts: facts } : {}),
   };
 }

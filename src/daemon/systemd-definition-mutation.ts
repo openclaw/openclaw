@@ -15,6 +15,7 @@ import {
   type GatewayServiceEnv,
   type ServiceDefinitionMutationArtifact,
   type ServiceDefinitionMutationCapability,
+  type SystemdServiceReadBinding,
 } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import {
@@ -88,6 +89,7 @@ async function inspect(
   environment: GatewayServiceEnv,
   timeoutMs?: number,
   requireLoaded = false,
+  systemdReadBinding?: SystemdServiceReadBinding,
 ) {
   const { unit, generated } = resolveMutationTargets(env, environment);
   const snapshots = new Map<string, Snapshot>();
@@ -106,6 +108,7 @@ async function inspect(
     const command = await readSystemdServiceExecStart(env, {
       requireEffective: true,
       timeoutMs,
+      ...(systemdReadBinding ? { systemdReadBinding } : {}),
       ...(requireLoaded ? { requireLoaded: true } : {}),
     });
     sourcePath = command?.sourcePath;
@@ -184,7 +187,12 @@ async function inspect(
 
 export async function readSystemdDefinitionMutationCapability(
   env: GatewayServiceEnv,
-  options?: { environment?: GatewayServiceEnv; timeoutMs?: number; requireLoaded?: boolean },
+  options?: {
+    environment?: GatewayServiceEnv;
+    timeoutMs?: number;
+    requireLoaded?: boolean;
+    systemdReadBinding?: SystemdServiceReadBinding;
+  },
 ): Promise<ServiceDefinitionMutationCapability> {
   const selected = path.basename(resolveSystemdUnitPath(env));
   const names =
@@ -222,8 +230,15 @@ export async function readSystemdDefinitionMutationCapability(
     }
   }
   try {
-    return (await inspect(env, options?.environment ?? env, remaining(), options?.requireLoaded))
-      .capability;
+    return (
+      await inspect(
+        env,
+        options?.environment ?? env,
+        remaining(),
+        options?.requireLoaded,
+        options?.systemdReadBinding,
+      )
+    ).capability;
   } catch {
     return { kind: "unknown", reason: "inspection-failed" };
   }

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -46,6 +48,14 @@ function captureReports(runtimeSource = fileURLToPath(new URL("./index.ts", impo
         ...api,
         runtimeSource,
         pluginConfig: api.config.plugins?.entries?.["team-reports"]?.config,
+        runtime: new Proxy(api.runtime, {
+          get(target, key, receiver) {
+            if (key === "llm") {
+              throw new Error("Reports without summaries must not load the LLM runtime");
+            }
+            return Reflect.get(target, key, receiver);
+          },
+        }),
         registerService(service) {
           services.push(service);
           api.registerService(service);
@@ -179,7 +189,6 @@ describe("Team Reports registration", () => {
     expect(services).toHaveLength(1);
     expect(services[0]).toMatchObject({
       id: "team-reports",
-      reload: { configPrefixes: ["plugins.entries.team-reports"] },
       start: expect.any(Function),
       stop: expect.any(Function),
     });
@@ -203,6 +212,31 @@ describe("Team Reports registration", () => {
       },
     ]);
     expect(createTeamReportsStore).not.toHaveBeenCalled();
+  });
+
+  it("starts reports with summaries disabled without loading the LLM runtime", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-lazy-llm-"));
+    const actual = await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
+    const store = await actual.createTeamReportsStore({
+      stateDir: directory,
+      workerModuleUrl: new URL("./src/store.worker.ts", import.meta.url),
+    });
+    vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
+    const { services } = captureReports();
+    const service = services[0]!;
+    const context: OpenClawPluginServiceContext = {
+      config,
+      stateDir: directory,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    };
+    try {
+      await expect(service.start(context)).resolves.toBeUndefined();
+      expect(await store.listPeriods()).toEqual([]);
+    } finally {
+      await service.stop?.(context);
+      await store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it.each(["disable", "restart"] as const)(

@@ -860,6 +860,15 @@ describe("memory plugin e2e", () => {
         inputType: "query",
         signal: expect.any(AbortSignal),
       });
+      (service.start as () => void)();
+      await expect(
+        recallTool.execute("call-2", { query: "restored memory" }),
+      ).resolves.toMatchObject({
+        details: { count: 0 },
+      });
+      expect(createProvider).toHaveBeenCalledTimes(2);
+      await stop();
+      expect(closeProvider).toHaveBeenCalledTimes(3);
     } finally {
       resetMemoryModuleMocks();
     }
@@ -2258,8 +2267,9 @@ describe("memory plugin e2e", () => {
 
     const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
     const sessionEnd = on.mock.calls.find(([hookName]) => hookName === "session_end")?.[1];
-    const stop = firstObjectArg(mockApi.registerService, "capture service")
-      .stop as () => Promise<void>;
+    const service = firstObjectArg(mockApi.registerService, "capture service");
+    const start = service.start as () => void;
+    const stop = service.stop as () => Promise<void>;
     expect(agentEnd).toBeTypeOf("function");
     expect(sessionEnd).toBeTypeOf("function");
 
@@ -2271,6 +2281,7 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       logger,
       sessionEnd,
+      start,
       stop,
     };
   }
@@ -2994,7 +3005,7 @@ describe("memory plugin e2e", () => {
   });
 
   test.each(["embedding", "storage"])(
-    "drains capture %s work and fences new captures on stop",
+    "drains capture %s work and resumes after service rollback",
     async (phase) => {
       const started = createDeferred<void>();
       const release = createDeferred<void>();
@@ -3044,9 +3055,15 @@ describe("memory plugin e2e", () => {
         expect(embeddingsCreate).toHaveBeenCalledTimes(1);
         expect(add).toHaveBeenCalledTimes(phase === "embedding" ? 0 : 1);
         expect(harness.logger.warn).not.toHaveBeenCalled();
+        harness.start();
+        await harness.agentEnd?.(event, { ...context, sessionKey: "session-after-restart" });
+        expect(embeddingsCreate).toHaveBeenCalledTimes(3);
+        expect(add).toHaveBeenCalledTimes(phase === "embedding" ? 2 : 3);
+        expect(harness.logger.warn).not.toHaveBeenCalled();
       } finally {
         release.resolve();
         await Promise.allSettled(pending);
+        await harness.stop();
         cleanupAutoCaptureCursorHarness();
       }
     },

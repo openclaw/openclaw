@@ -1,9 +1,5 @@
 // Signal helper module supports config schema behavior.
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  resolveAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   buildChannelConfigSchema,
   buildChannelReactionShape,
@@ -17,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SIGNAL_RETIRED_TRANSPORT_KEYS = [
@@ -164,7 +161,7 @@ function validateSignalConfigAllowFrom(value: SignalConfigValidationValue, ctx: 
 }
 
 function validateSignalContainerAccounts(value: SignalConfigValidationValue, ctx: z.RefinementCtx) {
-  const defaultAccount = resolveAccountEntry(value.accounts, DEFAULT_ACCOUNT_ID);
+  const defaultAccount = resolveSignalAccountEntry(value.accounts, DEFAULT_ACCOUNT_ID);
   const effectiveDefaultAccount =
     defaultAccount?.account === undefined ? value.account : defaultAccount.account;
   const channelEnabled = value.enabled !== false;

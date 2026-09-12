@@ -360,7 +360,7 @@ describe("Codex supervision actions", () => {
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
     const provider = getProvider();
     expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       agentRuntime: "codex",
     });
     await withEnvAsync({ CODEX_HOME: undefined }, async () => {

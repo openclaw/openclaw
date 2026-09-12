@@ -6,8 +6,9 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import * as pidAlive from "../../shared/pid-alive.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -115,6 +116,41 @@ function makeForeignOwner(handle: CronRunReceiptHandle) {
 }
 
 describe("cron run receipt store", () => {
+  it("reports the recorded database refusal when a scheduled agent is unavailable", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeJob("database-refusal");
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const receipt = claim(storePath, job, Date.now());
+    const reason = "Refused agent alpha: its database belongs to main.";
+    recordAgentDatabaseAdmissions([
+      {
+        agentId: "alpha",
+        paths: ["/synthetic/alpha/openclaw-agent.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch",
+        reason,
+        repairHint: "Inspect the copy, then restart.",
+      },
+    ]);
+    try {
+      expect(() =>
+        assertCronRunReceiptCurrent({
+          handle: receipt,
+          resolveAgentId: (current) => current.agentId!,
+          isAgentAvailable: () => false,
+        }),
+      ).toThrow(reason);
+    } finally {
+      recordAgentDatabaseAdmissions([]);
+      finishCronRunReceipt({
+        handle: receipt,
+        status: "error",
+        finishedAtMs: Date.now(),
+        error: reason,
+      });
+    }
+  });
+
   it.each([
     "self-removed",
     "operator-removed",

@@ -438,14 +438,20 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   }
 
   if (params.snapshot.events) {
-    const events = [...params.snapshot.events];
-    while (events.length > 0) {
-      const candidate = { ...bounded, events };
+    const events = params.snapshot.events;
+    let start = 0;
+    let end = events.length;
+    // Try all progress first, then search suffixes instead of serializing each eviction.
+    let middle = 0;
+    while (start < end) {
+      const candidate = { ...bounded, events: events.slice(middle) };
       if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
         bounded = candidate;
-        break;
+        end = middle;
+      } else {
+        start = middle + 1;
       }
-      events.shift();
+      middle = Math.floor((start + end) / 2);
     }
   }
 

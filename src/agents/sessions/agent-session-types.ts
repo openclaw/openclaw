@@ -1,4 +1,4 @@
-import type { ImageContent, Model } from "../../llm/types.js";
+import type { ImageContent } from "../../llm/types.js";
 import type {
   Agent,
   AgentEvent,
@@ -66,8 +66,6 @@ export interface AgentSessionConfig {
   sessionManager: SessionManager;
   settingsManager: SettingsManager;
   cwd: string;
-  /** Models to cycle through with Ctrl+P. */
-  scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
   /** Resource loader for skills, prompts, themes, context files, and system prompt. */
   resourceLoader: ResourceLoader;
   /** SDK custom tools registered outside extensions. */
@@ -115,12 +113,4 @@ export interface PromptOptions {
   preflightResult?: (success: boolean) => void;
   /** Internal identity for a current user turn that is already durable. */
   persistedUserIdempotencyKey?: string;
-}
-
-/** Result from cycling the active model. */
-export interface ModelCycleResult {
-  model: Model;
-  thinkingLevel: ThinkingLevel;
-  /** Whether the cycle used the scoped model list. */
-  isScoped: boolean;
 }

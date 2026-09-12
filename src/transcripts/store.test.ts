@@ -57,7 +57,7 @@ describe("TranscriptsStore", () => {
       await store.writeSession({ ...session("c"), title: "changed" });
       closeOpenClawStateDatabaseForTest();
       expect(writer.db.isOpen).toBe(false);
-      expect(() => acquireOpenClawStateDatabaseFileExclusion(writer.path)).toThrow(
+      await expect(acquireOpenClawStateDatabaseFileExclusion(writer.path)).rejects.toThrow(
         StateDatabaseCoordinatorContentionError,
       );
       const remaining: string[] = [];
@@ -68,7 +68,7 @@ describe("TranscriptsStore", () => {
     } finally {
       await rows.return(false);
     }
-    const exclusion = acquireOpenClawStateDatabaseFileExclusion(writer.path);
+    const exclusion = await acquireOpenClawStateDatabaseFileExclusion(writer.path);
     exclusion.release();
     expect((await store.readSession("c"))?.title).toBe("changed");
   });
@@ -88,7 +88,7 @@ describe("TranscriptsStore", () => {
       try {
         const first = await rows.next();
         expect(first.done).toBe(false);
-        expect(() => acquireOpenClawStateDatabaseFileExclusion(writer.path)).toThrow(
+        await expect(acquireOpenClawStateDatabaseFileExclusion(writer.path)).rejects.toThrow(
           StateDatabaseCoordinatorContentionError,
         );
         if (finish === "return") {
@@ -107,7 +107,7 @@ describe("TranscriptsStore", () => {
       } finally {
         await rows.return(undefined);
       }
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(writer.path);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(writer.path);
       exclusion.release();
       expect((await store.readUtterancesForSession(target)).map((row) => row.text)).toEqual([
         "first",
@@ -311,14 +311,32 @@ describe("TranscriptsStore", () => {
     ]);
   });
 
-  it("rejects two session identities that map to one shipped selector", async () => {
-    const { store } = createStore();
-    await store.writeSession(session("standup", "2026-07-01T10:00:00.000Z"));
-
-    await expect(
-      store.writeSession(session("standup", "2026-07-01T11:00:00.000Z")),
-    ).rejects.toThrow();
-  });
+  it.each(["stored", "exported", "concurrent"] as const)(
+    "reports a typed conflict for a selector with a %s owner",
+    async (mode) => {
+      const { store } = createStore();
+      const original = session("standup", "2026-07-01T10:00:00.000Z");
+      const firstWrite = store.writeSession(original);
+      if (mode !== "concurrent") {
+        await firstWrite;
+        if (mode === "exported") {
+          await store.materializeSessionArtifacts(original, "metadata");
+        }
+      }
+      const competing = session("standup", "2026-07-01T11:00:00.000Z");
+      const outcomes = await Promise.allSettled([firstWrite, store.writeSession(competing)]);
+      expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(outcomes.filter((result) => result.status === "rejected")).toEqual([
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ name: "TranscriptSessionConflictError" }),
+        },
+      ]);
+      await expect(store.readSession(original.sessionId)).resolves.toEqual(
+        outcomes[0].status === "fulfilled" ? original : competing,
+      );
+    },
+  );
 
   it("stores case-distinct sessions and rejects only unsafe export collisions", async () => {
     const { store } = createStore();

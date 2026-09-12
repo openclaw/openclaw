@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  sharedStateStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../state/openclaw-state.worker",
+    distWorkerPath: "state/openclaw-state.worker.js",
+  },
   sqliteStore: {
     currentModuleUrl,
     sourceWorkerName: "sqlite-store.worker",
@@ -63,6 +68,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-accessor.sqlite-archive.worker",
     distWorkerPath: "config/sessions/session-accessor.sqlite-archive.worker.js",
+  },
+  sessionModelContext: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-model-context.worker",
+    distWorkerPath: "config/sessions/session-model-context.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

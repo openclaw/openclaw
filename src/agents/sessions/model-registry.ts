@@ -380,6 +380,7 @@ export class ModelRegistry {
     authStorage: AuthStorage,
     modelsJsonPath: string | undefined,
     options: ModelRegistryOptions = {},
+    publishedModels?: ReadonlyMap<string, readonly Model[]>,
   ) {
     this.authStorage = authStorage;
     this.config = options.config ?? options.sourceSnapshot?.config;
@@ -387,7 +388,16 @@ export class ModelRegistry {
     initializeModelRegistryRuntime(this);
     if (options.sourceSnapshot) {
       const source = options.sourceSnapshot;
-      const sourceSnapshot = source.baseCatalogSnapshot ?? source.captureCatalogSnapshot();
+      const captured = source.baseCatalogSnapshot ?? source.captureCatalogSnapshot();
+      const sourceSnapshot = publishedModels
+        ? {
+            ...captured,
+            models: [
+              ...captured.models.filter((model) => !publishedModels.has(model.provider)),
+              ...[...publishedModels.values()].flat(),
+            ],
+          }
+        : captured;
       this.sourceSnapshot = sourceSnapshot;
       this.baseCatalogSnapshot = sourceSnapshot;
       this.restoreSourceCatalog(sourceSnapshot);
@@ -459,8 +469,11 @@ export class ModelRegistry {
   }
 
   /** Creates a request-isolated registry from this lifecycle-owned catalog snapshot. */
-  fork(authStorage: AuthStorage): ModelRegistry {
-    return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this });
+  fork(
+    authStorage: AuthStorage,
+    publishedModels?: ReadonlyMap<string, readonly Model[]>,
+  ): ModelRegistry {
+    return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
   /**

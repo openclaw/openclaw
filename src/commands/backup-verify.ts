@@ -6,7 +6,8 @@ import { toStringifiedError } from "@openclaw/normalization-core/error-coercion"
 import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
-  assertArchiveSymbolicLinkTarget,
+  recordArchiveSymbolicLink,
+  type BackupSymbolicLink,
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
@@ -23,12 +24,12 @@ import { resolveUserPath } from "../utils.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 import {
   type BackupManifest,
+  backupManifestSizeError,
   isRootBackupManifestEntry,
   parseBackupManifest,
   verifyBackupManifestEntries,
 } from "./backup-verify-manifest.js";
 
-const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
@@ -46,11 +47,13 @@ type BackupVerifyResult = {
   assetCount: number;
   entryCount: number;
   symlinkCount: number;
+  externalSymbolicLinks?: BackupSymbolicLink[];
 };
 
 type PreparedBackupArchive = {
   result: BackupVerifyResult;
   hardlinkTargets: ReadonlyMap<string, string>;
+  symbolicLinks: BackupSymbolicLink[];
 };
 
 type ArchiveEntry = {
@@ -103,7 +106,6 @@ async function extractManifest(params: {
   archivePath: string;
   manifestEntryPath: string;
 }): Promise<string> {
-  const limitError = new Error(`Backup manifest exceeds ${MAX_MANIFEST_BYTES} byte limit.`);
   let manifestContentPromise: Promise<Buffer | Error> | undefined;
   await tar.t({
     file: params.archivePath,
@@ -111,10 +113,10 @@ async function extractManifest(params: {
     maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     filter: (entryPath) => entryPath === params.manifestEntryPath,
     onReadEntry: (entry) => {
-      manifestContentPromise =
-        entry.size > MAX_MANIFEST_BYTES
-          ? Promise.resolve(limitError)
-          : entry.concat().catch((error: unknown) => toStringifiedError(error));
+      manifestContentPromise = Promise.resolve(
+        backupManifestSizeError(entry.size) ??
+          entry.concat().catch((error: unknown) => toStringifiedError(error)),
+      );
     },
   });
 
@@ -635,12 +637,57 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<Prepare
       hardlinkTargets.set(entry.path, rawTarget);
     }
   }
+  const preparedSymbolicLinks: BackupSymbolicLink[] = [];
+  const externalSymbolicLinks: BackupSymbolicLink[] = [];
+  const symbolicLinkPaths = new Set(
+    symbolicLinks.map(({ entryPath }) =>
+      resolvePortableArchivePathKey(normalizeArchivePath(entryPath, "Archive symbolic link path")),
+    ),
+  );
+  for (const entry of entries) {
+    for (
+      let parent = path.posix.dirname(entry.normalized);
+      parent !== ".";
+      parent = path.posix.dirname(parent)
+    ) {
+      if (symbolicLinkPaths.has(resolvePortableArchivePathKey(parent))) {
+        throw new Error(`Archive entry is beneath a symbolic link: ${entry.raw}`);
+      }
+    }
+  }
+  const state =
+    manifest.assets.find((asset) => asset.kind === "state") ??
+    (manifest.paths?.stateDir
+      ? {
+          sourcePath: manifest.paths.stateDir,
+          archivePath: buildBackupArchivePath(manifest.archiveRoot, manifest.paths.stateDir),
+        }
+      : undefined);
   for (const link of symbolicLinks) {
-    assertArchiveSymbolicLinkTarget({
+    const { external, ...record } = recordArchiveSymbolicLink({
       ...link,
       archiveRoot: manifest.archiveRoot,
+      platform: manifest.platform,
+      state,
+      hasExternalLinkReport: manifest.externalSymbolicLinks !== undefined,
       assets: manifest.assets,
     });
+    preparedSymbolicLinks.push(record);
+    if (external) {
+      externalSymbolicLinks.push(record);
+    }
+  }
+  const reportedLinks = new Map(
+    (manifest.externalSymbolicLinks ?? []).map(({ entryPath, linkpath }) => [entryPath, linkpath]),
+  );
+  if (
+    manifest.externalSymbolicLinks !== undefined &&
+    (reportedLinks.size !== externalSymbolicLinks.length ||
+      externalSymbolicLinks.some(
+        ({ entryPath, linkpath }) => reportedLinks.get(entryPath) !== linkpath,
+      ))
+  ) {
+    throw new Error("Backup manifest external symbolic links do not match archive entries.");
   }
   await verifySqliteSnapshots({ archivePath, entries, manifest });
 
@@ -653,9 +700,10 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<Prepare
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
     symlinkCount: symbolicLinks.length,
+    ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };
 
-  return { result, hardlinkTargets };
+  return { result, hardlinkTargets, symbolicLinks: preparedSymbolicLinks };
 }
 
 /** Verify an archive and prepare the exact hardlink targets needed by extraction. */

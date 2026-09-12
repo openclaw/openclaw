@@ -31,6 +31,7 @@ export type TaskFlowWebhookTarget = {
   secretInput: WebhookSecretInput;
   defaultControllerId: string;
   taskFlow: BoundTaskFlowRuntime;
+  taskFlowReads: ReturnType<PluginRuntime["tasks"]["async"]["managedFlows"]["bindSession"]>;
 };
 
 type FlowView = {
@@ -422,21 +423,21 @@ async function executeWebhookAction(params: {
         : { created: false, code: "persist_failed" };
     }
     case "get_flow": {
-      const flow = target.taskFlow.get(action.flowId);
+      const flow = await target.taskFlowReads.get(action.flowId);
       return { flow: flow ? toFlowView(flow) : null };
     }
     case "list_flows":
-      return { flows: target.taskFlow.list().map(toFlowView) };
+      return { flows: (await target.taskFlowReads.list()).map(toFlowView) };
     case "find_latest_flow": {
-      const flow = target.taskFlow.findLatest();
+      const flow = await target.taskFlowReads.findLatest();
       return { flow: flow ? toFlowView(flow) : null };
     }
     case "resolve_flow": {
-      const flow = target.taskFlow.resolve(action.token);
+      const flow = await target.taskFlowReads.resolve(action.token);
       return { flow: flow ? toFlowView(flow) : null };
     }
     case "get_task_summary":
-      return { summary: target.taskFlow.getTaskSummary(action.flowId) ?? null };
+      return { summary: (await target.taskFlowReads.getTaskSummary(action.flowId)) ?? null };
     case "set_waiting": {
       const result = target.taskFlow.setWaiting({
         flowId: action.flowId,

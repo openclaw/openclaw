@@ -256,6 +256,32 @@ describe("Gateway route model reuse", () => {
             },
           );
           const activeClient = client;
+          // Measure reuse after startup publication has settled its runtime facts.
+          await activeClient.request("models.list", {
+            agentId: "main",
+            view: "all",
+            refresh: true,
+          });
+          await expect
+            .poll(
+              async () => {
+                const catalog = await activeClient.request<{
+                  models: Array<{ id: string; provider: string }>;
+                  pendingProviders?: string[];
+                  refreshFailed?: boolean;
+                }>("models.list", { agentId: "main", view: "all" });
+                expect(catalog.refreshFailed).not.toBe(true);
+                expect(catalog.models).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({ provider: PROVIDERS[0], id: "stable" }),
+                    expect.objectContaining({ provider: PROVIDERS[1], id: "stable" }),
+                  ]),
+                );
+                return catalog.pendingProviders;
+              },
+              { timeout: 30_000 },
+            )
+            .toBeUndefined();
           const stats = () =>
             activeClient.request<{ counts: Counts; reloadSettled: boolean }>(
               "routeModelProof.stats",

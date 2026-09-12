@@ -216,16 +216,10 @@ async function discoverChannelAddresses(params: {
   };
 }
 
-function matchesConversationQuery(conversation: ConversationRecord, rawQuery: string): boolean {
-  const query = rawQuery.trim().toLowerCase();
-  if (!query) {
-    return true;
-  }
-  const terms = query.startsWith("@") ? [query, query.slice(1)] : [query];
-  const values = [conversation.conversationRef, conversation.target, conversation.label]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => value.toLowerCase());
-  return terms.some((term) => term && values.some((value) => value.includes(term)));
+function matchesConversationQuery(conversation: ConversationRecord, query: string): boolean {
+  return [conversation.conversationRef, conversation.target, conversation.label].some((value) =>
+    value?.toLowerCase().includes(query),
+  );
 }
 
 /** Lists persisted and channel-directory addresses from the Gateway's live plugin runtime. */
@@ -259,12 +253,17 @@ export async function runGatewayConversationList(
     discovery ? { channel: discovery.channel } : {},
   );
   const currentConfig = params.readCurrentConfig?.() ?? params.config;
+  const normalizedQuery = query?.toLowerCase() ?? "";
+  const searchQuery =
+    normalizedQuery.startsWith("@") && normalizedQuery.length > 1
+      ? normalizedQuery.slice(1)
+      : normalizedQuery;
   const selected = conversations
     .filter((entry) => {
       if (
         query &&
         discovery?.discoveredConversationRefs.has(entry.conversationRef) !== true &&
-        !matchesConversationQuery(entry, query)
+        !matchesConversationQuery(entry, searchQuery)
       ) {
         return false;
       }

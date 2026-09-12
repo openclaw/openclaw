@@ -60,70 +60,20 @@ describe("subagent orphan recovery — faithful restart path", () => {
   const { acceptRecoveryDispatch, activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
 
   it.each([
-    {
-      source: "lifecycle then wait",
-      stopReason: "restart",
-      timeoutPhase: undefined,
-      expected: "interrupted",
-    },
-    {
-      source: "wait only",
-      stopReason: "restart",
-      timeoutPhase: undefined,
-      expected: "interrupted",
-    },
-    { source: "retired wait", stopReason: "restart", timeoutPhase: undefined, expected: "running" },
-    {
-      source: "retired wait retry",
-      stopReason: "restart",
-      timeoutPhase: undefined,
-      expected: "running",
-    },
-    {
-      source: "lifecycle then wait",
-      stopReason: "aborted",
-      timeoutPhase: undefined,
-      expected: "terminal",
-    },
-    {
-      source: "lifecycle then wait",
-      stopReason: "restart",
-      timeoutPhase: "provider",
-      expected: "terminal",
-    },
-    {
-      source: "restart then rejected wait",
-      stopReason: "restart",
-      timeoutPhase: undefined,
-      expected: "interrupted",
-    },
-    {
-      source: "restart then soft timeout",
-      stopReason: "restart",
-      timeoutPhase: undefined,
-      expected: "interrupted",
-    },
-    {
-      source: "restart then provider error",
-      stopReason: "error",
-      timeoutPhase: undefined,
-      expected: "terminal",
-    },
-    {
-      source: "restart then provider timeout",
-      stopReason: "restart",
-      timeoutPhase: "provider",
-      expected: "terminal",
-    },
-    {
-      source: "restart then user cancel",
-      stopReason: "aborted",
-      timeoutPhase: undefined,
-      expected: "terminal",
-    },
+    ["restart", "lifecycle then wait", "interrupted", undefined],
+    ["restart", "wait only", "interrupted", undefined],
+    ["restart", "retired wait", "running", undefined],
+    ["restart", "retired wait retry", "running", undefined],
+    ["aborted", "lifecycle then wait", "terminal", undefined],
+    ["restart", "lifecycle then wait", "terminal", "provider"],
+    ["restart", "restart then rejected wait", "interrupted", undefined],
+    ["restart", "restart then soft timeout", "interrupted", undefined],
+    ["error", "restart then provider error", "terminal", undefined],
+    ["restart", "restart then provider timeout", "terminal", "provider"],
+    ["aborted", "restart then user cancel", "terminal", undefined],
   ] as const)(
-    "preserves $stopReason through $source as $expected (timeout: $timeoutPhase)",
-    async ({ source, stopReason, expected, timeoutPhase }) => {
+    "preserves %s through %s as %s (timeout: %s)",
+    async (stopReason, source, expected, timeoutPhase) => {
       const runId = "live-restart-child";
       const childSessionKey = "agent:main:subagent:live-restart-child";
       const startedAt = Date.now();

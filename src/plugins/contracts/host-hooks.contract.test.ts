@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  PROTOCOL_VERSION,
   validatePluginsUiDescriptorsResult,
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
@@ -20,8 +21,18 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../../gateway/methods/registry.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+} from "../../gateway/operator-scopes.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -52,6 +63,7 @@ import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import {
   clearActivePluginRegistry,
+  getActivePluginRegistryVersion,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
   stageActivePluginRegistry,
@@ -2467,16 +2479,35 @@ describe("host-hook fixture plugin contract", () => {
     Object.assign(descriptorEntry.descriptor, { leakedRegistryField: true });
     setActivePluginRegistry(registry.registry);
 
+    const methodRegistry = createGatewayMethodRegistry(
+      createCoreGatewayMethodDescriptors(pluginHostHookHandlers),
+      registry.registry,
+    );
+    const context: Pick<GatewayRequestContext, "getRuntimeConfig" | "getGatewayMethodRegistry"> = {
+      getRuntimeConfig: () => config,
+      getGatewayMethodRegistry: () => methodRegistry,
+    };
     const calls: Array<[boolean, unknown, unknown]> = [];
     void expectDefined(
       pluginHostHookHandlers["plugins.uiDescriptors"],
       'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
     )({
+      req: { type: "req", id: "ui-descriptors", method: "plugins.uiDescriptors", params: {} },
       params: {},
+      client: {
+        connect: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+          scopes: [ADMIN_SCOPE],
+        },
+      },
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
       respond: (ok: boolean, payload: unknown, error: unknown) => {
         calls.push([ok, payload, error]);
       },
-    } as never);
+    });
 
     expect(calls).toHaveLength(1);
     const [ok, payload, error] = calls[0] ?? [];
@@ -2485,14 +2516,15 @@ describe("host-hook fixture plugin contract", () => {
     expect(validatePluginsUiDescriptorsResult(payload)).toBe(true);
     expect(payload).toEqual({
       ok: true,
+      generation: getActivePluginRegistryVersion(),
+      methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
+      controlUiTabs: [],
+      controlUiWidgetKinds: [
+        { pluginId: "session", kind: "session:report", label: "Report" },
+        { pluginId: "session", kind: "session:progress", label: "Session progress" },
+      ],
+      pluginSurfaceUrls: {},
       descriptors: [
-        {
-          id: "approval-panel",
-          pluginId: "host-hook-fixture",
-          pluginName: "Host Hook Fixture",
-          surface: "session",
-          label: "Approval panel",
-        },
         {
           id: "admin-panel",
           pluginId: "host-hook-fixture",
@@ -2500,6 +2532,13 @@ describe("host-hook fixture plugin contract", () => {
           surface: "settings",
           label: "Admin panel",
           requiredScopes: ["operator.admin"],
+        },
+        {
+          id: "approval-panel",
+          pluginId: "host-hook-fixture",
+          pluginName: "Host Hook Fixture",
+          surface: "session",
+          label: "Approval panel",
         },
       ],
     });

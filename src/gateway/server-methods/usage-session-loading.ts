@@ -56,12 +56,13 @@ export async function discoverAllSessionsForUsage(params: {
         agentId,
         startMs: params.startMs,
         endMs: params.endMs,
-        includeFirstUserMessage: false,
       });
       return sessions.map((session) => Object.assign({}, session, { agentId }));
     }),
   );
-  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+  const allSessions = discovered.flat();
+  allSessions.sort((a, b) => b.mtime - a.mtime);
+  return allSessions;
 }
 
 export function mergeUsageCacheStatus(

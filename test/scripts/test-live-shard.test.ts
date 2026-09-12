@@ -504,6 +504,7 @@ describe("scripts/test-live-shard", () => {
   });
 
   it.each([
+    ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
     ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
     ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
@@ -555,25 +556,26 @@ describe("scripts/test-live-shard", () => {
   });
 
   it("allows GPT-Live files to be skipped until their shared opt-in is enabled", () => {
-    const quicksilverFiles = [
+    const gptLiveFiles = [
       "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
       "extensions/openai/realtime-quicksilver.live.test.ts",
+      "extensions/openai/realtime-talk-defaults.live.test.ts",
     ];
     const payload = {
       numPassedTests: 1,
-      numTotalTests: 3,
+      numTotalTests: 1 + gptLiveFiles.length,
       testResults: [
         {
           name: path.join(process.cwd(), "extensions/openai/openai.live.test.ts"),
           assertionResults: [{ status: "passed" }],
         },
-        ...quicksilverFiles.map((file) => ({
+        ...gptLiveFiles.map((file) => ({
           name: path.join(process.cwd(), file),
           assertionResults: [{ status: "skipped" }],
         })),
       ],
     };
-    const expectedFiles = ["extensions/openai/openai.live.test.ts", ...quicksilverFiles];
+    const expectedFiles = ["extensions/openai/openai.live.test.ts", ...gptLiveFiles];
 
     expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
       ok: true,
@@ -584,8 +586,21 @@ describe("scripts/test-live-shard", () => {
       }),
     ).toEqual({
       ok: false,
-      reason: `Vitest report selected live test files had no passing assertions: ${quicksilverFiles.join(", ")}`,
+      reason: `Vitest report selected live test files had no passing assertions: ${gptLiveFiles.join(", ")}`,
     });
+    const passingPayload = {
+      ...payload,
+      numPassedTests: expectedFiles.length,
+      testResults: payload.testResults.map(({ name }) => ({
+        name,
+        assertionResults: [{ status: "passed" }],
+      })),
+    };
+    expect(
+      validateLiveShardReportPayload(passingPayload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_GPT_LIVE: "1",
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("does not count disabled opt-in sentinel assertions as live shard proof", () => {

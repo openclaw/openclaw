@@ -229,12 +229,9 @@ export function buildStatusAllOverviewRows(params: {
       lastActiveAgeMs?: number | null;
     }>;
   };
-  tailscaleBackendState?: string | null;
 }) {
   return buildStatusOverviewRowsFromSurface({
     surface: params.surface,
-    tailscaleBackendState: params.tailscaleBackendState,
-    includeBackendStateWhenOff: true,
     includeBackendStateWhenOn: true,
     includeDnsNameWhenOff: true,
     prefixRows: [

@@ -17,7 +17,8 @@ import { VERSION } from "../version.js";
 import {
   createTestInstalledPluginIndex,
   pluginCliConfigMock,
-  notifyGatewayPluginMetadataChangedMock,
+  resolvePluginLifecycleGatewayMock,
+  pluginLifecycleGatewayMock,
   readConfigFileSnapshotForWriteMock,
   readPersistedInstalledPluginIndexMock,
   refreshPluginRegistryMock,
@@ -114,10 +115,10 @@ function createCapabilityConsentReview(): PluginCapabilityConsentReview {
   };
 }
 
-function expectRestartNoticeLogged() {
+function expectOfflineNoticeLogged() {
   expect(
     pluginsCliRuntimeLogs.some((message) =>
-      message.includes("Restart the gateway to load plugins and hooks."),
+      message.includes("Updates saved; they will load on the next Gateway start."),
     ),
   ).toBe(true);
 }
@@ -547,7 +548,7 @@ describe("plugins cli update", () => {
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expect(transaction.commit).toHaveBeenCalledOnce();
     expect(transaction.rollback).not.toHaveBeenCalled();
-    expectRestartNoticeLogged();
+    expectOfflineNoticeLogged();
   });
 
   it.each([
@@ -584,7 +585,7 @@ describe("plugins cli update", () => {
     const update = runPluginsCommand(["plugins", "update", "demo-hooks"]);
     if (settlement === "commit") {
       await update;
-      expectRestartNoticeLogged();
+      expectOfflineNoticeLogged();
     } else {
       await expect(update).rejects.toThrow(failure);
     }
@@ -815,6 +816,68 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
+  it("refreshes the online owner only after releasing the update lease", async () => {
+    const config = {};
+    primeUpdateConfigSnapshot({ config });
+    primeBravePluginRecordUpdate(config);
+    const lifecycle = await import("../plugins/plugin-lifecycle-lease.js");
+    const original = lifecycle.withPluginLifecycleLease;
+    let held = false;
+    const spy = vi
+      .spyOn(lifecycle, "withPluginLifecycleLease")
+      .mockImplementation(
+        async <T>(
+          options: Parameters<typeof original>[0],
+          run: (
+            lease: import("../plugins/plugin-lifecycle-lease.js").PluginLifecycleLeaseContext,
+          ) => Promise<T>,
+        ) =>
+          original(options, async (lease) => {
+            const wasHeld = held;
+            held = true;
+            try {
+              return await run(lease);
+            } finally {
+              held = wasHeld;
+            }
+          }),
+      );
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+    pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
+      const [method] = args;
+      expect(held).toBe(false);
+      return method === "plugins.refresh"
+        ? {
+            runtime: { generation: 7 },
+            warnings: ["Previous plugin service could not stop."],
+          }
+        : {};
+    });
+    try {
+      await runPluginsCommand(["plugins", "update", "brave"]);
+      expect(pluginLifecycleGatewayMock.mock.calls.map(([method]) => method)).toEqual([
+        "plugins.list",
+        "plugins.refresh",
+      ]);
+      expect(pluginsCliRuntimeLogs).toContainEqual(
+        expect.stringContaining("Previous plugin service could not stop."),
+      );
+      expect(pluginsCliRuntimeLogs).toContain("Applied plugin updates in Gateway generation 7.");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not mutate packages when the known Gateway is unreachable", async () => {
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+    pluginLifecycleGatewayMock.mockRejectedValue(new Error("owner unreachable"));
+    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
+      "owner unreachable",
+    );
+    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+  });
+
   it("does not rewrite source config for persisted install record-only updates", async () => {
     const cfg = {
       gateway: {
@@ -858,8 +921,7 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChangedMock).toHaveBeenCalledWith(cfg);
-    expectRestartNoticeLogged();
+    expectOfflineNoticeLogged();
   });
 
   it("commits a moved managed npm load path with its replacement record", async () => {
@@ -914,7 +976,10 @@ describe("plugins cli update", () => {
       },
       baseHash: "update-config",
       writeOptions: expect.objectContaining({
-        afterWrite: { mode: "restart", reason: "plugin source changed" },
+        afterWrite: {
+          mode: "none",
+          reason: "plugin update applies runtime after releasing its lease",
+        },
       }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
@@ -926,7 +991,6 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChangedMock).not.toHaveBeenCalled();
   });
 
   it("rolls back persisted install records when source config changes during a records-only update", async () => {
@@ -1012,7 +1076,6 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
-    expect(notifyGatewayPluginMetadataChangedMock).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(commit).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("Updated");
@@ -1835,11 +1898,10 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChangedMock).toHaveBeenCalledWith(runtimeConfig);
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin update committed");
     expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Restart is required");
-    expectRestartNoticeLogged();
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Run openclaw plugins doctor");
+    expectOfflineNoticeLogged();
   });
 
   it("exits non-zero when a plugin update reports an error after persisting successes", async () => {

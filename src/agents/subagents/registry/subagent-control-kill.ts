@@ -227,6 +227,7 @@ async function withSubagentKillScope<T>(
       tree.errors.add(formatErrorMessage(error));
     }
   };
+  let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try {
     const trees: KillTree[] = [];
     select(params.runs, trees, params.controller, undefined, params.ownsRoot);
@@ -250,11 +251,21 @@ async function withSubagentKillScope<T>(
     };
     scope.refresh();
     const result = await run(scope, trees);
-    return publish ? publish(result, trees) : result;
-  } finally {
-    holds.forEach((reservation) => reservation.release());
-    releaseRetirements.forEach((release) => release());
+    outcome = { ok: true, value: publish ? publish(result, trees) : result };
+  } catch (error) {
+    outcome = { ok: false, error };
   }
+  const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
+  const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  for (const result of [...released, ...retired]) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+  return outcome.value;
 }
 
 async function killLatestSubagentRun(params: {

@@ -135,6 +135,7 @@ export function loadOpenClawPluginsCore(
     const loadPluginModule = createPluginModuleLoader({
       devSourceRoot: context.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
+      expectedSourceDigests: options.expectedSourceDigests,
       ...overrides?.moduleLoader,
     });
     const activeRuntime =
@@ -186,7 +187,7 @@ export function loadOpenClawPluginsCore(
         coreGatewayMethodNames: options.coreGatewayMethodNames,
       }),
       ...(options.hostServices !== undefined && { hostServices: options.hostServices }),
-      activateGlobalSideEffects: context.shouldActivate,
+      activateGlobalSideEffects: context.runtimeSideEffects,
     });
     const builder = registryBuilder;
     const { registry } = builder;
@@ -274,7 +275,7 @@ export function loadOpenClawPluginsCore(
         hasKind(manifest.kind, "memory") ? memorySlot : undefined,
         manifest.id === dreamingSidecar?.engineId ? dreamingSidecar : undefined,
         context.artifactPreference,
-        context.shouldActivate,
+        context.runtimeSideEffects,
         context.channelPluginLoadIntent,
         context.includeSetupOnlyChannelPlugins,
         context.forceSetupOnlyChannelPlugins,
@@ -432,14 +433,14 @@ export function loadOpenClawPluginsCore(
         ),
       );
     }
-    maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
+    maybeThrowOnPluginLoadError(registry, options.throwOnLoadError, retained);
     if (context.shouldActivate && options.mode !== "validate") {
       const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
       if (failedPlugins.length > 0) {
         logger.warn(
           `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
             failedPlugins,
-          )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics and 'openclaw plugins list' for registry state. Restart the Gateway after fixing plugin code or load paths.`,
+          )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics and 'openclaw plugins list' for registry state. After fixing plugin code or load paths, run 'openclaw plugins reload <id>' to retry.`,
         );
       }
     }

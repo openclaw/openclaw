@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
+import { committedPluginMetadata } from "./commands-plugins.install.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
@@ -74,6 +75,19 @@ vi.mock("../../plugins/git-install.js", async (importOriginal) => ({
 vi.mock("../../plugins/install-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/install-persistence.js")>()),
   persistPluginInstall: persistPluginInstallMock,
+}));
+
+vi.mock("../../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/official-external-plugin-catalog.js")>()),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: async () => ({
+    source: "hosted",
+    entries: [],
+  }),
+}));
+vi.mock("../../plugins/management-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/management-service.js")>()),
+  refreshManagedPluginMetadata: () =>
+    committedPluginMetadata(persistPluginInstallMock.mock.lastCall?.[0]),
 }));
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-install-");

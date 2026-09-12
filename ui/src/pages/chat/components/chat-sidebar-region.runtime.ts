@@ -12,6 +12,7 @@ import {
 import { renderPanelTabStrip, type PanelTabStripTab } from "../../../components/panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
 } from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
@@ -190,11 +191,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   };
 
   private hostedTabsElement(panel: SidebarPanel) {
-    return panel.slot === "browser"
-      ? readPanelHostedTabs(
-          this.parentElement?.querySelector('[data-panel-slot="browser"]')?.firstElementChild,
-        )
-      : null;
+    return readPanelHostedTabs(
+      this.parentElement?.querySelector(`[data-panel-slot="${panel.slot}"]`)?.firstElementChild,
+    );
   }
 
   deliverPanelEvent(slot: SidebarSlotId, event: Event): boolean {
@@ -233,6 +232,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                 }),
               );
             }
+            if (slot === "terminal" && openSlots.has(slot)) {
+              this.deliverPanelEvent(
+                slot,
+                new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
+                  detail: { open: true, newSession: true },
+                }),
+              );
+            }
           }
         }}
       >
@@ -246,7 +253,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ${icons.plus}
         </button>
         ${this.panelTypes()
-          .filter((type) => type.slot === "browser" || !openSlots.has(type.slot))
+          .filter(
+            (type) =>
+              type.slot === "browser" || type.slot === "terminal" || !openSlots.has(type.slot),
+          )
           .map(
             (type) => html`
               <wa-dropdown-item
@@ -262,21 +272,20 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderHostedTabIcon(tab: PanelHostedTab) {
+    if (tab.favicon) {
+      return html`<img class="tabstrip-tab__favicon" src=${tab.favicon} alt="" />`;
+    }
     let hostname = "";
     try {
-      hostname = new URL(tab.url).hostname;
+      hostname = tab.url ? new URL(tab.url).hostname : "";
     } catch {
-      // Blank and incomplete URLs keep the browser-kind icon.
+      // Blank and incomplete URLs keep the panel's fallback icon.
     }
     const favicon =
       hostname && this.fetchFavicon
         ? readLinkFavicon(hostname, this.fetchFavicon, this.refreshHostedTabs)
         : null;
-    return favicon
-      ? html`<img class="tabstrip-tab__favicon" src=${favicon} alt="" />`
-      : tab.kind === "native"
-        ? icons.monitor
-        : icons.globe;
+    return favicon ? html`<img class="tabstrip-tab__favicon" src=${favicon} alt="" />` : tab.icon;
   }
 
   private renderHeader(column: SidebarColumn) {
@@ -305,7 +314,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           domId: `side-panel-tab-${panel.id}-${tab.id}`,
           label: tab.label,
           labelTooltip: tab.label,
+          title: tab.title,
           icon: this.renderHostedTabIcon(tab),
+          statusLabel: tab.statusLabel,
+          badge: tab.badge,
+          className: tab.className,
           closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
           group: panel.id,
           draggable: false,
@@ -385,12 +398,15 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           })}
           ${this.renderTypeMenu()}
         </div>
-        ${this.renderHeaderActions(activeActions)}
+        ${this.renderHeaderActions(activeActions, activeHosted?.element.hostedActions ?? nothing)}
       </header>
     `;
   }
 
-  private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null) {
+  private renderHeaderActions(
+    panelActions: TemplateResult | typeof nothing | null,
+    hostedActions: TemplateResult | typeof nothing,
+  ) {
     const active = sidebarActivePanel(this.layout);
     const expanded = this.layout.expanded === true && this.layout.expandedSide === true;
     const expandLabel = expanded
@@ -400,9 +416,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         });
     return html`<div class="rail-header__actions side-panel__actions">
       ${
-        panelActions
+        panelActions || hostedActions !== nothing
           ? html`<span class="side-panel__action-group side-panel__action-group--content">
-              ${panelActions}
+              ${hostedActions} ${panelActions}
             </span>`
           : nothing
       }

@@ -389,9 +389,8 @@ function resolveSingleObservedModelRoute(
 
   const modelId = normalizeOpenAIModelRouteId(context.modelId);
   const sourceBaseUrl = effectiveBaseUrl;
-  // An authored Completions adapter is a concrete transport contract, not an
-  // alias for Responses. Codex does not execute that adapter, so preserve it
-  // and let the OpenClaw runtime own the request.
+  // Retain Completions for API-key callers; older configs also used this
+  // adapter while Codex selected subscription credentials independently.
   const platformApi =
     configuredRoute && effectiveApi === OPENAI_COMPLETIONS_API
       ? OPENAI_COMPLETIONS_API
@@ -421,6 +420,16 @@ function resolveSingleObservedModelRoute(
   const subscriptionOnly = isOpenAISubscriptionOnlyRouteModelId(modelId);
   const dualRoute = isOpenAIDualRouteModelId(modelId);
 
+  const legacyCompletionsDefault =
+    effectiveApi === OPENAI_COMPLETIONS_API && requestTransportOverrides === "none";
+  if (dualRoute && (!configuredRoute || legacyCompletionsDefault)) {
+    return {
+      kind: "routes",
+      defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
+      routes: [platformRoute, chatGPTRoute],
+    };
+  }
+
   // Observed catalog transport is not authored route intent. Known model
   // contracts stay stable regardless of which official sibling row was seen.
   if (!configuredRoute) {
@@ -429,13 +438,6 @@ function resolveSingleObservedModelRoute(
     }
     if (platformOnly) {
       return route(platformRoute, sourceBaseUrl);
-    }
-    if (dualRoute) {
-      return {
-        kind: "routes",
-        defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
-        routes: [platformRoute, chatGPTRoute],
-      };
     }
   }
 
@@ -573,7 +575,7 @@ function resolveAuthoredObservedFallback(observedRoutes: readonly ProviderModelR
 }
 
 /** Resolves every physical row for one logical OpenAI model in provider order. */
-export function resolveModelRoutes(
+function resolveModelRouteCandidates(
   context: ProviderResolveModelRoutesContext,
 ): ProviderModelRouteResolution {
   const observedRoutes = (context.observedRoutes ?? []).filter(
@@ -635,6 +637,47 @@ export function resolveModelRoutes(
     )
       ? OPENAI_AGENT_RUNTIME_ID
       : defaultRuntimeIdForRoute(firstRoute),
+  };
+}
+
+/** Apply billing intent independently of which runtimes can execute each candidate. */
+export function resolveModelRoutes(
+  context: ProviderResolveModelRoutesContext,
+): ProviderModelRouteResolution {
+  const resolution = resolveModelRouteCandidates(context);
+  if (resolution.kind !== "routes" || resolution.routes.length < 2) {
+    return resolution;
+  }
+  const intent = context.routeIntent;
+  const requirement = intent?.authRequirement;
+  if (requirement && intent.source === "explicit") {
+    const selected = resolution.routes.find(
+      (candidate) => candidate.authRequirement === requirement,
+    );
+    if (selected) {
+      return route(selected);
+    }
+  }
+  const explicitRuntimeId =
+    intent?.source === "explicit" ? intent.runtimeId?.trim().toLowerCase() : undefined;
+  if (explicitRuntimeId) {
+    const compatible = resolution.routes.filter((candidate) =>
+      candidate.runtimePolicy?.compatibleIds.includes(explicitRuntimeId),
+    );
+    const [first, ...rest] = compatible;
+    if (first && compatible.length < resolution.routes.length) {
+      return {
+        kind: "routes",
+        routes: [first, ...rest],
+        defaultRuntimeId: explicitRuntimeId,
+      };
+    }
+  }
+  const preferredAuthRequirement =
+    requirement ?? (intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription");
+  return {
+    ...resolution,
+    preferredAuthRequirement,
   };
 }
 

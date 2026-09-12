@@ -1,5 +1,6 @@
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
+import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -175,6 +176,29 @@ function collectConfiguredRuntimePluginWarnings(params: {
   });
 }
 
+async function applyPluginEnabledThroughGateway(
+  pluginId: string,
+  enabled: boolean,
+  opts: { acceptCapabilities?: boolean } = {},
+): Promise<boolean> {
+  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+  const gateway = await resolvePluginLifecycleGateway();
+  if (!gateway) {
+    return false;
+  }
+  const consent = resolvePluginCapabilityConsentCliOptions({ ...opts, action: "enable" });
+  const result = await gateway<{ plugin: { id: string }; warnings?: string[] }>(
+    "plugins.setEnabled",
+    { pluginId, enabled, ...(enabled ? { allowlistPolicy: "preserve" } : {}) },
+    consent.onCapabilityConsent,
+  );
+  for (const warning of result.warnings ?? []) {
+    defaultRuntime.log(theme.warn(warning));
+  }
+  defaultRuntime.log(`${enabled ? "Enabled" : "Disabled"} plugin "${result.plugin.id}".`);
+  return true;
+}
+
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsEnableCommand(
   id: string,
@@ -194,6 +218,9 @@ async function runPluginPolicyCommand(
   acceptCapabilities?: boolean,
 ): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
+  if (await applyPluginEnabledThroughGateway(id, enabled, { acceptCapabilities })) {
+    return;
+  }
   const { mutateManagedPluginEnabled } = await import("../plugins/management-mutations.js");
   const { ManagedPluginLifecycleError } = await import("../plugins/management-lifecycle-error.js");
   await withPluginLifecycleLease({}, async () => {
@@ -218,7 +245,7 @@ async function runPluginPolicyCommand(
         defaultRuntime.log(theme.warn(warning));
       }
       defaultRuntime.log(
-        `${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Restart the gateway to apply.`,
+        `${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Saved for the next Gateway start.`,
       );
     } catch (error) {
       if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
@@ -228,6 +255,34 @@ async function runPluginPolicyCommand(
       return defaultRuntime.exit(1);
     }
   });
+}
+
+export async function runPluginsReloadCommand(
+  pluginId: string,
+  opts: { json?: boolean; acceptCapabilities?: boolean } = {},
+): Promise<void> {
+  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+  const gateway = await resolvePluginLifecycleGateway();
+  if (!gateway) {
+    throw new Error("The Gateway is not running. Start it before reloading a plugin.");
+  }
+  const consent = resolvePluginCapabilityConsentCliOptions({
+    ...opts,
+    action: "reload",
+    allowPrompt: !opts.json,
+  });
+  const result = await gateway<{ runtime: { generation: number }; warnings?: string[] }>(
+    "plugins.reload",
+    { plugins: [{ pluginId }] },
+    consent.onCapabilityConsent,
+  );
+  if (opts.json) {
+    return defaultRuntime.writeJson(result);
+  }
+  for (const warning of result.warnings ?? []) {
+    defaultRuntime.log(theme.warn(warning));
+  }
+  defaultRuntime.log(`Reloaded plugin "${pluginId}" (generation ${result.runtime.generation}).`);
 }
 
 export async function runPluginsInstallAction(
@@ -825,9 +880,6 @@ function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayloa
   return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
 
-const MARKETPLACE_GATEWAY_RESTART_GUIDANCE =
-  'The running Gateway could not refresh its marketplace catalog. Run "openclaw gateway restart" to apply the current catalog state.';
-
 /** List entries from the configured OpenClaw marketplace feed. */
 export async function runPluginMarketplaceEntriesCommand(
   opts: PluginMarketplaceEntriesOptions,
@@ -890,6 +942,8 @@ export async function runPluginMarketplaceEntriesCommand(
 export async function runPluginMarketplaceRefreshCommand(
   opts: PluginMarketplaceRefreshOptions,
 ): Promise<void> {
+  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+  const gateway = await resolvePluginLifecycleGateway();
   const { loadConfiguredHostedOfficialExternalPluginCatalogEntries } =
     await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
@@ -902,12 +956,29 @@ export async function runPluginMarketplaceRefreshCommand(
   });
   const { clearManagedPluginCatalogCache } = await import("../plugins/management-catalog.js");
   clearManagedPluginCatalogCache();
-  let gatewayRefreshed = true;
-  // Reused snapshots can lose install authority as they age, so their Gateway projection is stale too.
+  let runtimeNotice: string | undefined;
+  let applicationFailure: string | undefined;
+  // Reused snapshots can lose install authority as they age; apply the current catalog too.
   if (result.source !== "bundled-fallback") {
-    const { notifyGatewayPluginMetadataChanged } =
-      await import("./plugins-update-gateway-signal.js");
-    gatewayRefreshed = await notifyGatewayPluginMetadataChanged(cfg);
+    if (gateway) {
+      try {
+        const applied = await gateway<PluginsRefreshResult>("plugins.refresh", {});
+        if (!applied.runtime) {
+          throw new Error("Marketplace refresh did not return a runtime application receipt.");
+        }
+        for (const warning of applied.warnings ?? []) {
+          (opts.json ? defaultRuntime.error : defaultRuntime.log)(theme.warn(warning));
+        }
+        runtimeNotice = `Marketplace catalog applied in Gateway generation ${applied.runtime.generation}.`;
+      } catch (error) {
+        const message = sanitizeTerminalText(
+          error instanceof Error ? error.message : String(error),
+        );
+        applicationFailure = `Marketplace catalog saved, but Gateway runtime application failed: ${message}. Repair the reported problem, then rerun this refresh.`;
+      }
+    } else {
+      runtimeNotice = "Marketplace catalog saved for the next Gateway start.";
+    }
   }
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
@@ -927,23 +998,23 @@ export async function runPluginMarketplaceRefreshCommand(
 
   if (opts.json) {
     defaultRuntime.writeJson(payload);
-    if (!gatewayRefreshed) {
-      defaultRuntime.error(MARKETPLACE_GATEWAY_RESTART_GUIDANCE);
+    if (!gateway && runtimeNotice) {
+      defaultRuntime.error(runtimeNotice);
     }
-    if (failedPinnedRefresh) {
-      defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
-      return defaultRuntime.exit(1);
+  } else {
+    const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
+    if (runtimeNotice) {
+      lines.push("", runtimeNotice);
     }
-    return;
+    defaultRuntime.log(lines.join("\n"));
   }
-
-  const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
-  if (!gatewayRefreshed) {
-    lines.push("", theme.warn(MARKETPLACE_GATEWAY_RESTART_GUIDANCE));
+  if (applicationFailure) {
+    defaultRuntime.error(applicationFailure);
   }
-  defaultRuntime.log(lines.join("\n"));
   if (failedPinnedRefresh) {
     defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
+  }
+  if (applicationFailure || failedPinnedRefresh) {
     return defaultRuntime.exit(1);
   }
 }

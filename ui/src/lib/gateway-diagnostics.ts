@@ -1,21 +1,8 @@
+import type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/types.ts";
 
-type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
-
-export type CommandLaneSnapshot = {
-  lane: string;
-  queuedCount: number;
-  activeCount: number;
-  maxConcurrent: number;
-  draining: boolean;
-  generation: number;
-  group?: string;
-  groupActive?: number;
-  groupBudget?: number;
-  reservedForLane?: number;
-  blockedBy?: CommandLaneBlockReason;
-};
+export type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
 
 export type CommandLaneDynamicSummary = {
   laneCount: number;

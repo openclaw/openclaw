@@ -99,7 +99,7 @@ describe("diagnostic support export", () => {
     },
   );
 
-  it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
+  it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const fakeJwt = [
@@ -280,6 +280,7 @@ describe("diagnostic support export", () => {
           },
           time: "2026-04-22T12:00:00.300Z",
         }),
+        JSON.stringify({ module: `gAAAA${"b".repeat(40_000)}` }),
         `plain fallback ${privateChat} ${fakeToken}`,
       ],
     };
@@ -404,6 +405,7 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain("<redacted-aws-key>");
     expect(sanitizedLogs).toContain("<redacted-jwt>");
     expect(sanitizedLogs).toContain('"module":"matrix-auto-reply"');
+    expect(sanitizedLogs).toContain('"module":"gAAAAb…bbbb"');
     expect(sanitizedLogs).toContain('"subsystem":"gateway/channels/matrix"');
     expect(sanitizedLogs).toContain('"logger":"gateway-runtime"');
     expect(sanitizedLogs).toContain('"level":"warn"');

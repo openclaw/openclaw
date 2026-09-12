@@ -47,17 +47,19 @@ export function renderSessionLeadingState(
   attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
   avatarAuth?: SessionAvatarAuth,
+  trailingState = false,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
   renderedIdentities?: readonly SessionParticipantIdentity[];
 } {
   const { participants, participantCount } = session;
-  const subagentsWorking = session.runningChildCount > 0;
+  // Team rows summarize descendant activity in their trailing slots.
+  const subagentsWorking = !trailingState && session.runningChildCount > 0;
   const running = session.hasActiveRun || subagentsWorking;
   const ownRunQueued = session.hasActiveRun && session.status === "queued";
   const runState = {
-    running,
+    running: running && !trailingState,
     queued: ownRunQueued && !subagentsWorking,
     runningLabel:
       subagentsWorking && (!session.hasActiveRun || ownRunQueued)
@@ -65,7 +67,7 @@ export function renderSessionLeadingState(
         : undefined,
   };
   // Transient attention always outranks the persistent decorative icon.
-  if (session.isChild) {
+  if (session.isChild && !trailingState) {
     if (session.attention.kind !== "none") {
       return {
         running,
@@ -110,13 +112,13 @@ export function renderSessionLeadingState(
     };
   }
 
-  if (session.attention.kind !== "none") {
+  if (session.attention.kind !== "none" && !trailingState) {
     return {
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderSessionAttentionIcon(session.attention, true),
         ...runState,
-        badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
       }),
     };
   }
@@ -126,7 +128,7 @@ export function renderSessionLeadingState(
       leadingIndicator: renderSessionGlyph({
         content: renderPersistentSessionIcon(session.icon),
         ...runState,
-        badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
       }),
     };
   }
@@ -154,7 +156,7 @@ export function renderSessionLeadingState(
           .fallback=${ownerChip ?? nothing}
         ></openclaw-channel-avatar>`,
         ...runState,
-        badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
         circular: true,
       }),
     };
@@ -168,7 +170,7 @@ export function renderSessionLeadingState(
       leadingIndicator: renderSessionGlyph({
         content: ownerChip,
         ...runState,
-        badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
         circular: true,
         ring: stackedParticipants > 0 ? "pair" : "circle",
       }),
@@ -183,9 +185,9 @@ export function renderSessionLeadingState(
   }
   return {
     running,
-    leadingIndicator: running
+    leadingIndicator: runState.running
       ? renderSessionGlyph({ content: nothing, ...runState })
-      : session.unread
+      : session.unread && !trailingState
         ? renderSessionIdleState(session)
         : nothing,
   };

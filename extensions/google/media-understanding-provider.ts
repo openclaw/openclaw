@@ -16,7 +16,6 @@ import {
   GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS,
 } from "./generation-provider-metadata.js";
 import {
-  DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleModelId,
   resolveGoogleGenerativeAiHttpRequestConfig,
 } from "./runtime-api.js";
@@ -36,7 +35,6 @@ async function generateGeminiInlineDataText(params: {
   timeoutMs: number;
   signal?: AbortSignal;
   fetchFn?: typeof fetch;
-  defaultBaseUrl: string;
   defaultModel: string;
   defaultPrompt: string;
   defaultMime: string;
@@ -60,8 +58,7 @@ async function generateGeminiInlineDataText(params: {
       capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
       transport: "media-understanding",
     });
-  const resolvedBaseUrl = baseUrl ?? params.defaultBaseUrl;
-  const url = `${resolvedBaseUrl}/models/${model}:generateContent`;
+  const url = `${baseUrl}/models/${model}:generateContent`;
 
   const prompt = (() => {
     const trimmed = params.prompt?.trim();
@@ -123,7 +120,6 @@ export async function transcribeGeminiAudio(
 ): Promise<AudioTranscriptionResult> {
   const { text, model } = await generateGeminiInlineDataText({
     ...params,
-    defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
     defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.audio,
     defaultPrompt: DEFAULT_GOOGLE_AUDIO_PROMPT,
     defaultMime: "audio/wav",
@@ -138,7 +134,6 @@ export async function describeGeminiVideo(
 ): Promise<VideoDescriptionResult> {
   const { text, model } = await generateGeminiInlineDataText({
     ...params,
-    defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
     defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.video,
     defaultPrompt: DEFAULT_GOOGLE_VIDEO_PROMPT,
     defaultMime: "video/mp4",

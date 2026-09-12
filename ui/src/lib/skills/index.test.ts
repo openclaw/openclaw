@@ -898,7 +898,7 @@ describe("skill mutations", () => {
     },
   );
 
-  it("serializes skill changes after pending settings drafts and refreshes both owners", async () => {
+  it("config.set serializes skill changes after pending settings drafts and refreshes both owners", async () => {
     const { state, request } = createState();
     const methods: string[] = [];
     let storedConfig: Record<string, unknown> = { count: 1 };
@@ -917,7 +917,7 @@ describe("skill mutations", () => {
       if (method === "config.set") {
         storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { hash };
+        return { config: storedConfig, hash };
       }
       if (method === "skills.update") {
         storedConfig = { ...storedConfig, skillEnabled: true };
@@ -952,7 +952,7 @@ describe("skill mutations", () => {
     }
   });
 
-  it("does not dispatch a queued skill update after access changes", async () => {
+  it("config.set does not dispatch a queued skill update after access changes", async () => {
     const { state, request } = createState();
     const firstSet = createDeferred<unknown>();
     const methods: string[] = [];
@@ -996,7 +996,7 @@ describe("skill mutations", () => {
       const mutation = updateSkillEnabled(state, "github", true, () => canDispatch);
       await waitForFast(() => expect(methods).toEqual(["config.set"]));
       canDispatch = false;
-      firstSet.resolve({ hash: "hash-2" });
+      firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
       await mutation;
 
       expect(methods).toEqual(["config.set"]);

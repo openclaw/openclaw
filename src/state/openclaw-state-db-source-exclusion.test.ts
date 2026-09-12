@@ -1,11 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
+import {
+  inspectSqliteSchemaHeader,
+  prepareSqliteReadOnlyLocation,
+} from "../infra/sqlite-snapshot-source.js";
 import { withSqliteSourceHandleAsync } from "../infra/sqlite-source-handle.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 function populate(env: NodeJS.ProcessEnv) {
@@ -29,7 +33,7 @@ describe("owner-held SQLite source reads", () => {
   it("does not let a second caller borrow another task's physical exclusion", async () => {
     await withOpenClawTestState({ label: "excluded-owner-reentry" }, async (state) => {
       const databasePath = populate(state.env);
-      const current = acquireOpenClawStateDatabaseFileExclusion(databasePath);
+      const current = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
       let competing: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
       try {
         expect(() => {
@@ -43,37 +47,43 @@ describe("owner-held SQLite source reads", () => {
     });
   });
 
-  it("honors cancellation before returning a private source copy", async () => {
-    await withOpenClawTestState({ label: "excluded-copy-abort" }, async (state) => {
-      const pathname = populate(state.env);
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
-      try {
-        await exclusion.runWithSourceReads(async (assertCurrent) => {
-          const controller = new AbortController();
-          const cancelled = prepareSqliteReadOnlyLocation(pathname, { signal: controller.signal });
-          controller.abort(new Error("capture cancelled"));
-          await expect(cancelled).rejects.toThrow("capture cancelled");
-          assertCurrent();
-          const retried = await prepareSqliteReadOnlyLocation(pathname);
-          try {
-            expect(readValue(retried.location)).toBe("original");
-          } finally {
-            retried.cleanup();
-          }
-        });
-      } finally {
-        exclusion.release();
-      }
-    });
-  });
+  it.each([prepareSqliteReadOnlyLocation, inspectSqliteSchemaHeader])(
+    "honors cancellation before returning a private source inspection (%#)",
+    async (inspect) => {
+      await withOpenClawTestState({ label: "excluded-copy-abort" }, async (state) => {
+        const pathname = populate(state.env);
+        const exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
+        try {
+          await exclusion.runWithSourceReads(async (assertCurrent) => {
+            const controller = new AbortController();
+            const cancelled = inspect(pathname, { signal: controller.signal });
+            controller.abort(new Error("capture cancelled"));
+            await expect(cancelled).rejects.toThrow("capture cancelled");
+            assertCurrent();
+            const retried = await prepareSqliteReadOnlyLocation(pathname);
+            try {
+              expect(readValue(retried.location)).toBe("original");
+            } finally {
+              retried.cleanup();
+            }
+          });
+        } finally {
+          exclusion.release();
+        }
+      });
+    },
+  );
 
   it("reads a private SQLite copy under current physical exclusion", async () => {
     await withOpenClawTestState({ label: "excluded-checkpoint" }, async (state) => {
       const pathname = populate(state.env);
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
       try {
         await exclusion.runWithSourceReads(async (assertCurrent) => {
           expect(() => openOpenClawStateDatabase({ env: state.env })).toThrow(/state-handles/);
+          expect(await inspectSqliteSchemaHeader(pathname)).toMatchObject({
+            userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          });
           const copy = await prepareSqliteReadOnlyLocation(pathname);
           try {
             assertCurrent();
@@ -95,7 +105,7 @@ describe("owner-held SQLite source reads", () => {
     async (preserveSourceArtifacts) => {
       await withOpenClawTestState({ label: "excluded-private-copy" }, async (state) => {
         const pathname = populate(state.env);
-        const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+        const exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
         try {
           await exclusion.runWithSourceReads(async (assertCurrent) => {
             const prepared = await prepareSqliteReadOnlyLocation(pathname, {
@@ -119,7 +129,7 @@ describe("owner-held SQLite source reads", () => {
   it("does not admit a concurrent non-owner reader through the local scope", async () => {
     await withOpenClawTestState({ label: "excluded-nonowner-read" }, async (state) => {
       const pathname = populate(state.env);
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const running = exclusion.runWithSourceReads(async (assertCurrent) => {
@@ -130,6 +140,7 @@ describe("owner-held SQLite source reads", () => {
       try {
         await entered.promise;
         await expect(prepareSqliteReadOnlyLocation(pathname)).rejects.toThrow(/state-handles/);
+        await expect(inspectSqliteSchemaHeader(pathname)).rejects.toThrow(/state-handles/);
       } finally {
         release.resolve();
         await running;
@@ -141,7 +152,7 @@ describe("owner-held SQLite source reads", () => {
   it("retains physical exclusion through admitted reads after early owner release", async () => {
     await withOpenClawTestState({ label: "excluded-read-drain" }, async (state) => {
       const pathname = populate(state.env);
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
       const entered = createDeferredCore();
       const finish = createDeferredCore();
       const running = exclusion.runWithSourceReads(async () =>
@@ -153,17 +164,19 @@ describe("owner-held SQLite source reads", () => {
       );
       await entered.promise;
       exclusion.release();
-      let competing: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+      let competing:
+        | Awaited<ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion>>
+        | undefined;
       try {
-        expect(() => {
-          competing = acquireOpenClawStateDatabaseFileExclusion(pathname);
-        }).toThrow(/state-handles/);
+        await expect(async () => {
+          competing = await acquireOpenClawStateDatabaseFileExclusion(pathname);
+        }).rejects.toThrow(/state-handles/);
       } finally {
         competing?.release();
         finish.resolve();
       }
       await expect(running).rejects.toThrow(/no longer current/);
-      const next = acquireOpenClawStateDatabaseFileExclusion(pathname);
+      const next = await acquireOpenClawStateDatabaseFileExclusion(pathname);
       next.release();
     });
   });
@@ -171,7 +184,7 @@ describe("owner-held SQLite source reads", () => {
   it("expires inherited read scopes and refuses a released owner", async () => {
     await withOpenClawTestState({ label: "excluded-read-expiry" }, async (state) => {
       const pathname = populate(state.env);
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
       const wake = createDeferredCore();
       let delayed: Promise<unknown> | undefined;
       try {

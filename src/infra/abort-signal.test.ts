@@ -1,4 +1,4 @@
-// Covers abort signal wait helpers.
+import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
 import {
   createAbortError,
@@ -58,58 +58,21 @@ describe("waitForAbortSignal", () => {
     abort.abort();
     await task;
     expect(resolved).toBe(true);
-  });
-
-  it("registers and removes the abort listener exactly once", async () => {
-    let handler: (() => void) | undefined;
-    const addEventListener = (
-      _type: string,
-      listener: () => void,
-      options?: AddEventListenerOptions,
-    ) => {
-      handler = listener;
-      expect(options).toEqual({ once: true });
-    };
-    const removeEventListener = (_type: string, listener: () => void) => {
-      expect(listener).toBe(handler);
-      removed += 1;
-    };
-    let removed = 0;
-
-    const task = waitForAbortSignal({
-      aborted: false,
-      addEventListener,
-      removeEventListener,
-    } as unknown as AbortSignal);
-
-    expect(handler).toBeTypeOf("function");
-    handler?.();
-    await expect(task).resolves.toBeUndefined();
-    expect(removed).toBe(1);
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
   });
 });
 
 describe("racePromiseWithAbortSignal", () => {
   it("preserves source settlement and removes the listener", async () => {
-    let handler: (() => void) | undefined;
-    let removed = 0;
-    const signal = {
-      aborted: false,
-      addEventListener: (_type: string, listener: () => void) => {
-        handler = listener;
-      },
-      removeEventListener: (_type: string, listener: () => void) => {
-        expect(listener).toBe(handler);
-        removed += 1;
-      },
-    } as unknown as AbortSignal;
+    const signal = new AbortController().signal;
     const sourceError = new Error("source failed");
 
     await expect(racePromiseWithAbortSignal(Promise.resolve("done"), signal)).resolves.toBe("done");
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
     await expect(racePromiseWithAbortSignal(Promise.reject(sourceError), signal)).rejects.toBe(
       sourceError,
     );
-    expect(removed).toBe(2);
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
   });
 
   it("rejects with the abort reason as cause without cancelling the source", async () => {

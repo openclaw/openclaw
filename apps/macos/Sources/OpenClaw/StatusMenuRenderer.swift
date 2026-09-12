@@ -373,7 +373,7 @@ final class StatusMenuRenderer: NSObject {
             "checkmark.shield"))
         #endif
 
-        if self.state.connectionMode == .remote {
+        if self.state.connectionMode == .remote, self.state.remoteTransport == .ssh {
             entries.append(self.debugItem(
                 "tunnel",
                 String(localized: "Reset Remote Tunnel"),

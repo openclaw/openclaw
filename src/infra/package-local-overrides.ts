@@ -23,6 +23,7 @@ import {
   probeLocalOverrideTarget,
   readLocalOverridePackageRootIdentity,
   resolveSafePackagePath,
+  writeFileWithMode,
   type LocalOverridePackageRoot,
   type LocalPackageOverrideChange,
   type LocalPackageOverrideConflictReason,
@@ -154,28 +155,6 @@ function createLocalOverrideMutationPath(relativePath: string, label: string): s
   );
 }
 
-async function moveLocalOverrideTargetNoReplace(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  sourcePath: string;
-  relativePath: string;
-  onMoved?: () => void;
-}): Promise<void> {
-  await runRequiredFsSafeMove(params);
-}
-
-async function writeRollbackBackup(params: {
-  backupPath: string;
-  content: Buffer;
-  mode: number;
-}): Promise<void> {
-  await fs.mkdir(path.dirname(params.backupPath), { recursive: true });
-  await fs.writeFile(params.backupPath, params.content);
-  if (process.platform !== "win32") {
-    await fs.chmod(params.backupPath, params.mode);
-  }
-}
-
 async function publishLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
   runtimeUrls: readonly string[];
@@ -193,7 +172,7 @@ async function publishLocalOverrideTarget(params: {
     realPackageRoot: params.packageFs.rootReal,
     relativePath: params.relativePath,
   });
-  await moveLocalOverrideTargetNoReplace({ ...params, onMoved: params.onPublished });
+  await runRequiredFsSafeMove({ ...params, onMoved: params.onPublished });
   await assertLocalOverrideMutationTopology({
     packageRoot: params.packageFs.rootDir,
     realPackageRoot: params.packageFs.rootReal,
@@ -265,7 +244,7 @@ async function moveExpectedLocalOverrideTarget(params: {
   const movedPath = createLocalOverrideMutationPath(params.relativePath, "previous");
   let targetMoved = false;
   try {
-    await moveLocalOverrideTargetNoReplace({
+    await runRequiredFsSafeMove({
       packageFs: params.packageFs,
       runtimeUrls: params.runtimeUrls,
       sourcePath: params.relativePath,
@@ -341,11 +320,7 @@ async function replaceLocalOverrideTarget(params: {
       if (replacementMode !== undefined) {
         replacementMode = mergeLocalOverrideFileMode(moved.mode, replacementMode);
       }
-      await writeRollbackBackup({
-        backupPath: params.backupPath,
-        content: moved.content,
-        mode: moved.mode,
-      });
+      await writeFileWithMode(moved.content, params.backupPath, moved.mode);
       backupWritten = true;
     }
     if (replacementMode !== undefined && process.platform !== "win32") {
@@ -405,11 +380,7 @@ async function deleteLocalOverrideTarget(params: {
   });
   let backupWritten = false;
   try {
-    await writeRollbackBackup({
-      backupPath: params.backupPath,
-      content: moved.content,
-      mode: moved.mode,
-    });
+    await writeFileWithMode(moved.content, params.backupPath, moved.mode);
     backupWritten = true;
     await params.packageFs.remove(moved.movedPath);
     await assertLocalOverrideMutationTopology({

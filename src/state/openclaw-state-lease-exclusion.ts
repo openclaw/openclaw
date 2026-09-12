@@ -16,6 +16,11 @@ import type { CaptureOwner, LeaseExclusionParams } from "./openclaw-state-lease-
 // handles; neither a pathname nor inherited serialized data grants admission.
 const activeOwners = new AsyncLocalStorage<readonly CaptureOwner[]>();
 
+/** Independent work must acquire its own lease instead of inheriting a prior file owner. */
+export function runOutsideOpenClawStateLeaseScope<T>(run: () => T): T {
+  return activeOwners.exit(run);
+}
+
 function fail(errors: unknown[]): never {
   if (errors.length === 1) {
     throw errors[0];
@@ -54,7 +59,7 @@ async function perform<T>(
   };
   let result: T | undefined;
   let lifecycle: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-  let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+  let exclusion: Awaited<ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion>> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let generation: SqliteFileGeneration | undefined;
   let active = true;
@@ -68,7 +73,7 @@ async function perform<T>(
     for (const participant of participants) {
       participant.expiresAt = participant.owner.params.readExpiry(databasePath);
     }
-    exclusion = acquireOpenClawStateDatabaseFileExclusion(databasePath);
+    exclusion = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
     generation = readStableSqliteFileGeneration(databasePath);
     const held = exclusion;
     const deadline = Math.min(...participants.map((participant) => participant.expiresAt ?? 0));

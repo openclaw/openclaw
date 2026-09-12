@@ -95,7 +95,7 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
