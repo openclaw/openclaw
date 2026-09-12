@@ -22,9 +22,17 @@ import type {
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+  tryResolveAgentOperationAgentId,
+  tryResolveSoleAgentId,
+} from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
+import { LEGACY_IMPLICIT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { AcpEventLedgerReplay } from "./event-ledger.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveAcpSessionKey } from "./session-mapper.js";
 import { extractReplayChunks, type GatewayTranscriptMessage } from "./translator.replay.js";
@@ -53,6 +61,7 @@ export class AcpTranslatorSessionLifecycle {
   constructor(
     private readonly gateway: GatewayClient,
     private readonly opts: AcpServerOptions,
+    private readonly config: OpenClawConfig,
     private readonly sessionStore: AcpSessionStore,
     private readonly sessionUpdates: AcpTranslatorSessionUpdates,
     private readonly sessionState: AcpTranslatorSessionState,
@@ -71,10 +80,11 @@ export class AcpTranslatorSessionLifecycle {
 
     const sessionId = randomUUID();
     const meta = parseSessionMeta(params["_meta"]);
-    const sessionKey = await this.resolveSessionKeyFromMeta({
-      meta,
-      fallbackKey: `acp-bridge:${sessionId}`,
-    });
+    const generatedFallbackKey = `acp-bridge:${sessionId}`;
+    const fallbackKey = hasExplicitSessionRouting(meta, this.opts)
+      ? generatedFallbackKey
+      : this.resolveGeneratedBridgeSessionKey(generatedFallbackKey);
+    const sessionKey = await this.resolveSessionKeyFromMeta({ meta, fallbackKey });
 
     const session = this.sessionStore.createSession({
       sessionId,
@@ -330,6 +340,29 @@ export class AcpTranslatorSessionLifecycle {
       this.log(`setSessionConfigOption error: ${String(err)}`);
       throw err instanceof Error ? err : new Error(String(err));
     }
+  }
+
+  private resolveGeneratedBridgeSessionKey(sessionKey: string): string {
+    // Remote Gateway targets enforce ownership at the Gateway boundary, so the
+    // local roster must not block bridge startup: an ambiguous local roster
+    // keeps the Gateway-owned default instead of throwing AgentSelectionRequiredError.
+    const agentId = this.opts.skipAgentOwnerRosterValidation
+      ? (tryResolveAgentOperationAgentId(this.config, this.opts.agentId) ??
+        tryResolveSoleAgentId(this.config) ??
+        LEGACY_IMPLICIT_AGENT_ID)
+      : resolveAgentOperationAgentId(this.config, this.opts.agentId, {
+          surface: "ACP bridge session",
+          hint: "Pass --agent <id>, set agents.defaults.systemAgent.agentId, or provide an agent-owned session key or label.",
+        });
+    // Local bridges validate the owner early against the configured roster;
+    // remote Gateway targets enforce ownership at the Gateway boundary instead.
+    const ownerId = this.opts.skipAgentOwnerRosterValidation
+      ? agentId
+      : resolveConfiguredAgentId(this.config, agentId);
+    return toAgentStoreSessionKey({
+      agentId: ownerId,
+      requestKey: sessionKey,
+    });
   }
 
   private async resolveSessionKeyFromMeta(params: {

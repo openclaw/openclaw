@@ -18,12 +18,14 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
@@ -91,10 +93,41 @@ function createStartupInputMonitor(input: ReadableStream<Uint8Array>): {
   };
 }
 
+/**
+ * Whether the bridge targets a Gateway whose agent roster is not the local
+ * config's: an explicit `--url` target or `gateway.mode: "remote"`. Ownership
+ * for those targets is enforced at the Gateway boundary.
+ */
+function isRemoteGatewayTarget(cfg: OpenClawConfig, gatewayUrl?: string): boolean {
+  return Boolean(normalizeOptionalString(gatewayUrl)) || cfg.gateway?.mode === "remote";
+}
+
 /** Starts the ACP Gateway bridge and serves AgentSideConnection over stdio. */
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   routeLogsToStderr();
   const cfg = getRuntimeConfig();
+  const requestedAgentId = normalizeOptionalString(opts.agentId);
+  if (opts.agentId !== undefined && !requestedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  // Defer roster validation to the generated-session path: explicit session
+  // routing never consults --agent, and remote Gateway targets enforce
+  // ownership at the Gateway boundary instead of the client's local roster.
+  const skipAgentOwnerRosterValidation = isRemoteGatewayTarget(cfg, opts.gatewayUrl);
+  const strictAgentId = requestedAgentId ? normalizeAgentIdStrict(requestedAgentId) : undefined;
+  if (strictAgentId && !strictAgentId.ok) {
+    // Reject unrepresentable explicit ids instead of silently selecting main,
+    // which would pass roster validation while targeting the wrong agent.
+    throw new Error(
+      `--agent "${requestedAgentId}" has no valid id characters. Use at least one letter a-z or digit.`,
+    );
+  }
+  const agentId = strictAgentId?.ok ? strictAgentId.value : undefined;
+  const resolvedOpts: AcpServerOptions = {
+    ...opts,
+    ...(agentId ? { agentId } : {}),
+    ...(skipAgentOwnerRosterValidation ? { skipAgentOwnerRosterValidation: true } : {}),
+  };
   const bootstrap = await resolveGatewayClientBootstrap({
     config: cfg,
     gatewayUrl: opts.gatewayUrl,
@@ -256,7 +289,11 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
 
   const connection = new AgentSideConnection(
     (conn: AgentSideConnection) => {
-      agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
+      agent = new AcpGatewayAgent(conn, gateway, {
+        ...resolvedOpts,
+        config: cfg,
+        eventLedger,
+      });
       agent.start();
       return agent;
     },
@@ -325,6 +362,11 @@ function parseArgs(args: string[]): AcpServerOptions {
     }
     if (arg === "--password-file" || arg === "--gateway-password-file") {
       passwordFile = args[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--agent") {
+      opts.agentId = args[i + 1];
       i += 1;
       continue;
     }
@@ -398,6 +440,7 @@ Options:
   --token-file <path>     Read gateway auth token from file
   --password <password>   Gateway auth password
   --password-file <path>  Read gateway auth password from file
+  --agent <id>            Agent owner for generated bridge sessions
   --session <key>         Default session key (e.g. "agent:main:main")
   --session-label <label> Default session label to resolve
   --require-existing      Fail if the session key/label does not exist
