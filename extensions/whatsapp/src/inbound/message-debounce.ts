@@ -4,7 +4,7 @@ import { getPrimaryIdentityId } from "../identity.js";
 import { requireWhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
-import type { AdmittedWebInboundCallbackMessage } from "./types.js";
+import type { AdmittedWebInboundCallbackMessage, WhatsAppInboundMediaPayload } from "./types.js";
 
 export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
   debounceKey?: string;
@@ -68,6 +68,12 @@ export function createWhatsAppInboundMessageDebouncer(options: {
       const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
       return timestampDiff !== 0 ? timestampDiff : (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
+  const resolveMediaItems = (entry: WhatsAppQueuedInboundMessage): WhatsAppInboundMediaPayload[] =>
+    entry.payload.mediaItems?.length
+      ? entry.payload.mediaItems
+      : entry.payload.media
+        ? [entry.payload.media]
+        : [];
 
   const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage & { debounceMs: number }>({
     debounceMs: options.resolveDebounceMs(),
@@ -110,6 +116,10 @@ export function createWhatsAppInboundMessageDebouncer(options: {
               .map((entry) => entry.payload.commandBody ?? entry.payload.body)
               .filter(Boolean)
               .join("\n");
+            const combinedMediaItems = orderedEntries.flatMap(resolveMediaItems);
+            const combinedStructuredContext = orderedEntries.flatMap(
+              (entry) => entry.payload.channelStructuredContext ?? [],
+            );
             const combinedMentions =
               mentioned.size > 0
                 ? { ...last.group?.mentions, jids: Array.from(mentioned) }
@@ -126,6 +136,14 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                   ...last.payload,
                   body: combinedBody,
                   commandBody: combinedCommandBody,
+                  ...(combinedMediaItems.length > 0
+                    ? {
+                        media: combinedMediaItems[0],
+                        mediaItems: combinedMediaItems,
+                      }
+                    : {}),
+                  channelStructuredContext:
+                    combinedStructuredContext.length > 0 ? combinedStructuredContext : undefined,
                 },
                 group: combinedGroup,
                 event: { ...last.event, isBatched: true },

@@ -103,6 +103,7 @@ describe("resolveWhatsAppAuthDir", () => {
                 reactionLevel: "extensive",
                 historyLimit: 42,
                 mediaMaxMb: 12,
+                batchInboundImages: true,
               },
               work: {
                 authDir: "/tmp/work",
@@ -122,6 +123,7 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.reactionLevel).toBe("extensive");
     expect(resolved.historyLimit).toBe(42);
     expect(resolved.mediaMaxMb).toBe(12);
+    expect(resolved.batchInboundImages).toBe(true);
   });
 
   it("prefers account overrides and accounts.default over root defaults", () => {
@@ -141,6 +143,7 @@ describe("resolveWhatsAppAuthDir", () => {
               work: {
                 authDir: "/tmp/work",
                 dmPolicy: "pairing",
+                batchInboundImages: false,
               },
             },
           },
@@ -152,6 +155,7 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.dmPolicy).toBe("pairing");
     expect(resolved.allowFrom).toEqual(["+15550001111"]);
     expect(resolved.groupPolicy).toBe("open");
+    expect(resolved.batchInboundImages).toBe(false);
   });
 
   it("does not inherit default-account authDir for named accounts", () => {

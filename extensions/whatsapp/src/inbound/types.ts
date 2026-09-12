@@ -89,16 +89,19 @@ type WhatsAppInboundStructuredContextEntry = {
   payload: unknown;
 };
 
+export type WhatsAppInboundMediaPayload = {
+  path?: string;
+  type?: string;
+  fileName?: string;
+  url?: string;
+  kind?: ChannelInboundMediaInput["kind"];
+};
+
 type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
-  media?: {
-    path?: string;
-    type?: string;
-    fileName?: string;
-    url?: string;
-    kind?: ChannelInboundMediaInput["kind"];
-  };
+  media?: WhatsAppInboundMediaPayload;
+  mediaItems?: WhatsAppInboundMediaPayload[];
   location?: NormalizedLocation;
   channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
 };

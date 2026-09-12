@@ -95,6 +95,7 @@ export function createWhatsAppIngressMonitor(params: {
   onError?: (error: unknown) => void;
   onActivityChange?: (active: boolean) => void;
   pollIntervalMs: number;
+  releaseDeferredLane?: boolean;
   abortSignal?: AbortSignal;
 }) {
   return createChannelIngressMonitor<
@@ -138,6 +139,7 @@ export function createWhatsAppIngressMonitor(params: {
     },
     drain: {
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
+      ...(params.releaseDeferredLane ? { deferredLaneOccupancy: "release" as const } : {}),
       deriveLaneKey: (record) => {
         try {
           return inspectWhatsAppIngressMessage(

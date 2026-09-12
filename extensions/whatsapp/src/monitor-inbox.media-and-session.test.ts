@@ -1,5 +1,6 @@
 // WhatsApp monitor inbox media and session behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebInboundMessage } from "./inbound/types.js";
 import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
@@ -83,6 +84,43 @@ describe("web monitor inbox", () => {
       },
     ]);
     expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+    await listener.close();
+  });
+
+  it("delivers rapid images as one ordered payload when image debounce is enabled", async () => {
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      debounceMs: 500,
+      shouldDebounce: () => true,
+      releaseDeferredLane: true,
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "batch-image-1", fromMe: false, remoteJid: "888@s.whatsapp.net" },
+          message: { imageMessage: { mimetype: "image/jpeg", caption: "first" } },
+          messageTimestamp: 1_700_000_100,
+        },
+        {
+          key: { id: "batch-image-2", fromMe: false, remoteJid: "888@s.whatsapp.net" },
+          message: { imageMessage: { mimetype: "image/png" } },
+          messageTimestamp: 1_700_000_101,
+        },
+      ],
+    });
+
+    await waitForInboundWorkDrained();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    const combined = onMessage.mock.calls[0]?.[0] as WebInboundMessage | undefined;
+    expect(combined?.payload.body).toBe("first");
+    expect(combined?.payload.mediaItems).toHaveLength(2);
+    expect(combined?.payload.mediaItems?.map((item) => item.type)).toEqual([
+      "image/jpeg",
+      "image/png",
+    ]);
+    expect(sock.readMessages).toHaveBeenCalledTimes(2);
     await listener.close();
   });
 

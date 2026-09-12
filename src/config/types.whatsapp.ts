@@ -50,6 +50,8 @@ type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
   ChannelReactionConfig<never, WhatsAppReactionLevel, WhatsAppAckReactionConfig> & {
     /** Same-phone setup (bot uses your personal WhatsApp number). */
     selfChatMode?: boolean;
+    /** Batch rapid inbound images into one turn using messages.inbound debounce. Default: false. */
+    batchInboundImages?: boolean;
     groups?: Record<string, WhatsAppGroupConfig>;
     /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
     direct?: Record<string, WhatsAppDirectConfig>;

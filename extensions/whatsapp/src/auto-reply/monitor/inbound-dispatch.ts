@@ -432,17 +432,18 @@ export async function prepareWhatsAppInboundContext(params: {
         })
       : undefined;
 
+  const mediaItems = params.msg.payload.mediaItems?.length
+    ? params.msg.payload.mediaItems
+    : params.msg.payload.media
+      ? [params.msg.payload.media]
+      : undefined;
   const media = await toInboundMediaFactsWithMetadata(
-    params.msg.payload.media
-      ? [
-          {
-            path: params.msg.payload.media?.path,
-            url: params.msg.payload.media?.url ?? params.msg.payload.media?.path,
-            contentType: params.msg.payload.media?.type,
-            kind: params.msg.payload.media?.kind,
-          },
-        ]
-      : undefined,
+    mediaItems?.map((entry) => ({
+      path: entry.path,
+      url: entry.url ?? entry.path,
+      contentType: entry.type,
+      kind: entry.kind,
+    })),
     { transcribed: (_entry, index) => params.mediaTranscribedIndexes?.includes(index) === true },
   );
   const control = {

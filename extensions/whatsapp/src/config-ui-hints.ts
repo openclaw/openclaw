@@ -21,6 +21,11 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
+  batchInboundImages: {
+    label: "Batch Inbound WhatsApp Images",
+    help: "Combine rapid images and accompanying text from one sender into one agent turn using the configured inbound debounce window. Default: false.",
+    advanced: true,
+  },
   direct: {
     label: "WhatsApp Direct Chat Overrides",
     help: 'Per-conversation overrides keyed by WhatsApp DM id. Applied after a DM is already admitted by dmPolicy; "*" supplies a default without admitting anyone.',

@@ -93,6 +93,8 @@ type WhatsAppMessageDeliveryOptions = {
   appendReplyWindow?: WhatsAppAppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
+  /** Release durable same-conversation claims after handing work to the debouncer. */
+  releaseDeferredLane?: boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
 };
@@ -496,6 +498,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       kind: await processDurableInboundMessage(admission, lifecycle),
     }),
     pollIntervalMs: WHATSAPP_INGRESS_DRAIN_INTERVAL_MS,
+    releaseDeferredLane: options.releaseDeferredLane,
     onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
     onError: (error) =>
       inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed"),
