@@ -523,11 +523,25 @@ async function collectInstalledPathErrors(params: {
  * Explicit tarball, URL, git, and main-branch specs bypass registry lookup.
  */
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
-  const trimmed = normalizePackageTarget(value);
+  const trimmed = stripPrimaryPackageAlias(value);
   if (!trimmed) {
     return true;
   }
   return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
+}
+
+/** Same-version registry targets are no-ops; explicit artifacts still require validation/install. */
+export function isPackageTargetAlreadyCurrent(params: {
+  currentVersion: string | null;
+  targetVersion: string | null;
+  target: string;
+}): boolean {
+  return (
+    params.currentVersion !== null &&
+    params.targetVersion !== null &&
+    params.currentVersion === params.targetVersion &&
+    canResolveRegistryVersionForPackageTarget(params.target)
+  );
 }
 
 async function resolvePortableGitPathPrepend(): Promise<string[]> {

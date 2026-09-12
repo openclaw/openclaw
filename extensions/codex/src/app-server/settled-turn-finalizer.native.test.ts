@@ -4,7 +4,10 @@ import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readVisibleSessionTranscriptMessageEntries,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
 import * as authBridge from "./auth-bridge.js";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
@@ -818,18 +821,28 @@ describe.skipIf(process.platform === "win32")(
         homeScope: "agent" as const,
         preserveNativeModel: false,
         prepared: true,
+        priorCount: 0,
       },
       {
         label: "preserveNativeModel-only host profile",
         homeScope: "agent" as const,
         preserveNativeModel: true,
         prepared: false,
+        priorCount: 0,
       },
       {
         label: "ordinary user-home private host profile",
         homeScope: "user" as const,
         preserveNativeModel: false,
         prepared: false,
+        priorCount: 0,
+      },
+      {
+        label: "long conversation",
+        homeScope: "agent" as const,
+        preserveNativeModel: false,
+        prepared: true,
+        priorCount: 201,
       },
     ])(
       "persists a host-authorized summary with the actual native selection ($label)",
@@ -879,6 +892,16 @@ describe.skipIf(process.platform === "win32")(
             });
             params.modelId = HOST_MODEL;
             params.model = { ...params.model, id: HOST_MODEL };
+          }
+          for (let index = 0; index < scenario.priorCount; index += 1) {
+            await appendSessionTranscriptMessageByIdentity({
+              ...transcriptTarget(params),
+              message: {
+                role: "user",
+                content: `Earlier synthetic request ${index}.`,
+                timestamp: index + 1,
+              },
+            });
           }
           fixture.setPhase("action");
           params.runId = "run-settled-action";
@@ -938,6 +961,21 @@ describe.skipIf(process.platform === "win32")(
           expect(
             fixture.requests.map(({ body, account }) => ({ model: body.model, account })),
           ).toEqual([{ model: NATIVE_MODEL, account: `Bearer ${HOST_KEY}` }]);
+          expect(fixture.requests[0]?.body.input).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                role: "developer",
+                content: expect.arrayContaining([
+                  expect.objectContaining({
+                    type: "input_text",
+                    text: expect.stringContaining(
+                      "Earlier conversation may be omitted; do not infer missing earlier facts.",
+                    ),
+                  }),
+                ]),
+              }),
+            ]),
+          );
           expect(
             summaryRequests?.mock.calls
               .filter(([method]) => method === "account/login/start")

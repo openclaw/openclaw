@@ -8,7 +8,7 @@ title: "Streaming and chunking"
 ---
 
 OpenClaw has two independent streaming layers, and there is **no true
-token-delta streaming** to channel messages today:
+token-delta streaming** to channel messages:
 
 - **Block streaming (channels):** emit completed **blocks** as the assistant
   writes. These are normal channel messages, not token deltas.
@@ -80,6 +80,14 @@ single-file config meets the [startup migration conditions](/gateway/doctor#deta
   can emit multiple chunks at the end.
 
 ### Media delivery with block streaming
+
+When a plugin uses `before_agent_finalize` to validate the built-in runtime's
+answer, assistant replies stay deferred until that decision completes. A later
+answer supersedes deferred text from earlier tool turns, including when the
+final answer is `NO_REPLY`. This applies to both reply blocks and preview
+updates; it does not retract replies that were already sent. Commentary remains
+live, and media, reasoning, and completed answers to earlier user inputs are
+preserved. Media from a superseded answer is delivered without its old caption.
 
 With block streaming off, media-bearing assistant messages can still be sent at
 message boundaries, with their captions attached. Preview updates do not count
@@ -267,7 +275,8 @@ Slack-only:
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, and approval or failure lines. The same default applies on
+  plan milestones, and approval requests. Intermediate tool failures and nonzero
+  command exits are hidden. The same default applies on
   every progress-draft channel; `streaming.progress.toolProgress: true` adds
   the rolling tool log with its icons.
 - `progress` mode deletes the status draft once the final answer is delivered,
@@ -454,8 +463,10 @@ the same policy under `streaming.progress`:
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop) - the turn lifecycle that emits these stream events
 - [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery
 - [Retry](/concepts/retry) - retry behavior on delivery failure
+- [Typing indicators](/concepts/typing-indicators) - typing state shown while a turn is in flight
 - [Channels](/channels) - per-channel streaming support

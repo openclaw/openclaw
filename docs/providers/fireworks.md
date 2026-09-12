@@ -74,6 +74,11 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
+`--mode` defaults to `local`, so this is the same run as the **Direct flag**
+command above. Run it on the Gateway host: remote-client onboarding
+(`--mode remote`) only configures the local client connection and does not set
+up provider credentials on the server.
+
 ## Built-in catalog
 
 Setup saves connection settings and aliases without copying generated catalog rows into your config.

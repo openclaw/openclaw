@@ -1,10 +1,12 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatCommandErrorForUser } from "../../process/command-error.js";
 import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
+  formatTransportErrorCopy,
   isCloudflareOrHtmlErrorPage,
   isGenericProviderInternalError,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
@@ -65,6 +67,9 @@ export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
 const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
   /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 
+const PROVIDER_CACHE_CONTROL_LIMIT_RE =
+  /^A maximum of (\d{1,6}) blocks with cache_control may be provided\. Found (\d{1,6})\.$/i;
+
 /** Format billing copy with optional provider/model and credential context. */
 export function formatBillingErrorMessage(
   provider?: string,
@@ -94,12 +99,42 @@ export function renderFormatErrorCopy(raw: string): string {
   const normalized =
     extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
   const candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
+  const cacheLimit = candidate.match(PROVIDER_CACHE_CONTROL_LIMIT_RE);
+  if (cacheLimit) {
+    return `LLM request rejected: provider allows at most ${cacheLimit[1]} cache_control blocks; the request contained ${cacheLimit[2]}.`;
+  }
   const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
   const [, value, maximum] = match ?? [];
   if (!value || !maximum) {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
   return `LLM request rejected: configured maxTokens is ${value}, above the provider maximum of ${maximum}. Lower maxTokens and try again.`;
+}
+
+/** Share bounded request-limit facts between live failures and persisted chat history. */
+export function renderAssistantFormatFailureCopy(message: {
+  errorMessage?: unknown;
+  errorBody?: unknown;
+}): string | undefined {
+  for (const raw of [message.errorMessage, message.errorBody]) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const info = parseApiErrorInfo(raw);
+    const status = extractErrorHttpStatus(raw)?.code;
+    if (
+      !info?.type?.toLowerCase().includes("invalid_request") &&
+      status !== 400 &&
+      status !== 422
+    ) {
+      continue;
+    }
+    const copy = renderFormatErrorCopy(info?.message ?? raw);
+    if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
+      return copy;
+    }
+  }
+  return undefined;
 }
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
@@ -173,54 +208,6 @@ export function renderRateLimitOrOverloadedCopy(params: {
   return (
     renderFailoverBaseCopy(params.reason, { raw: params.raw }) ?? RATE_LIMIT_ERROR_USER_MESSAGE
   );
-}
-
-export function formatTransportErrorCopy(raw: string): string | undefined {
-  if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (
-    /\beconnrefused\b/i.test(raw) ||
-    lower.includes("connection refused") ||
-    lower.includes("actively refused")
-  ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
-  }
-  if (
-    /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
-    lower.includes("socket hang up") ||
-    lower.includes("connection reset") ||
-    lower.includes("connection aborted")
-  ) {
-    return "LLM request failed: network connection was interrupted.";
-  }
-  if (
-    /\benotfound\b|\beai_again\b/i.test(raw) ||
-    lower.includes("getaddrinfo") ||
-    lower.includes("no such host") ||
-    lower.includes("dns")
-  ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
-  }
-  if (
-    /\benetunreach\b|\behostunreach\b|\behostdown\b/i.test(raw) ||
-    lower.includes("network is unreachable") ||
-    lower.includes("host is unreachable")
-  ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
-  }
-  if (
-    lower.includes("fetch failed") ||
-    lower.includes("connection error") ||
-    lower.includes("network request failed")
-  ) {
-    return "LLM request failed: network connection error.";
-  }
-  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
-  }
-  return undefined;
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -301,6 +288,10 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
+  const commandError = formatCommandErrorForUser(trimmed);
+  if (commandError) {
+    return commandError;
+  }
   const execDenied = formatExecDeniedUserMessage(trimmed);
   if (execDenied) {
     return execDenied;
@@ -326,6 +317,19 @@ export function renderSanitizedUserFacingText(
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
+  }
+  // Reason-level provider copy is surface-independent: the channel reply path renders
+  // it from failover facts, while session transcripts, run status, and the TUI read
+  // this renderer. Facets stay null so the rate-limit/overload branches above keep
+  // provider retry detail; labeled statuses ("unexpected status 401 ...") never carry
+  // a leading code, so the status is re-read from the full error grammar here.
+  const providerRequestCopy = renderProviderRequestFailureCopy({
+    classification: reason ? { kind: "reason", reason } : null,
+    facet: null,
+    status: extractErrorHttpStatus(trimmed)?.code,
+  });
+  if (providerRequestCopy) {
+    return providerRequestCopy;
   }
   if (isGenericProviderInternalError(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);

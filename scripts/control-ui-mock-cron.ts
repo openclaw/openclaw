@@ -70,6 +70,14 @@ export function buildCronMocks(
       message: "Sync the team calendar and summarize schedule conflicts.",
     },
     delivery: { mode: "announce", channel: "telegram", to: "@operations" },
+    failureAlert: {
+      after: 2,
+      channel: "telegram",
+      to: "@operations",
+      cooldownMs: 3_600_000,
+      includeSkipped: false,
+      mode: "announce",
+    },
     state: {
       nextRunAtMs: baseTime + 5 * hour,
       lastRunAtMs: baseTime - 5 * minute,
@@ -223,7 +231,7 @@ export function buildCronMocks(
     durationMs: job.state?.lastDurationMs,
     error: job.state?.lastError,
     deliveryStatus: "not-requested",
-    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5.6-sol",
+    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5",
     provider: index === 1 ? "anthropic" : "openai",
   }));
   const runs: CronRunLogEntry[] = [
@@ -252,7 +260,8 @@ export function buildCronMocks(
       durationMs: overdueJob.state?.lastDurationMs,
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
+      model: "gpt-5",
       provider: "openai",
     },
   ];
@@ -268,7 +277,7 @@ export function buildCronMocks(
       durationMs: 42_000 + index * 2_500,
       summary: `Completed an on-demand run for ${job.name}.`,
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      model: "gpt-5",
       provider: "openai",
     },
   }));

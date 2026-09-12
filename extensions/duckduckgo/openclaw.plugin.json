@@ -1,5 +1,6 @@
 {
   "id": "duckduckgo",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },

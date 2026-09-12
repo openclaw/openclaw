@@ -1409,6 +1409,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
               writer = runExclusiveSqliteSessionWrite(
                 resolveSqliteScope({ sessionKey, storePath }),
                 async () => await releaseWriter.promise,
+                "session.transcript.batch",
               );
               // Real CLI, Pi, and Codex event producers do not await this callback.
               registration = Promise.resolve(

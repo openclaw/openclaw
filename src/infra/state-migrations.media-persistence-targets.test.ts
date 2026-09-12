@@ -94,6 +94,35 @@ describe("media persistence migration targets", () => {
     ]);
   });
 
+  it("refreshes a retained agent registration after its schema upgrade already committed", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-registry-retry-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "retired";
+    const databasePath = path.join(stateDir, "retained", "openclaw-agent.sqlite");
+    openOpenClawAgentDatabase({ agentId, env, path: databasePath });
+    closeOpenClawAgentDatabasesForTest();
+    registerOpenClawAgentDatabase({
+      agentId,
+      env,
+      path: databasePath,
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
+    });
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+
+    expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
+
+    expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({
+        agentId,
+        path: databasePath,
+        schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      }),
+    ]);
+  });
+
   it("prefers a renamed configured owner over the default-layout directory name", async () => {
     const stateDir = fs.realpathSync.native(
       makeTempDir(tempDirs, "media-persistence-renamed-owner-"),

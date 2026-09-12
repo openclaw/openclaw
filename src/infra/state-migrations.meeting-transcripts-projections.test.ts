@@ -152,7 +152,7 @@ describe("meeting transcript Doctor oversized projections", () => {
       const readListedCapture = async (expectedSelector: string) => {
         closeOpenClawStateDatabaseForTest();
         const reopened = new TranscriptsStore(harness.root, { env: harness.env });
-        const listed = listTranscriptLibrary(reopened, {}).sessions.find(
+        const listed = (await listTranscriptLibrary(reopened, {})).sessions.find(
           (entry) => entry.sessionId === sessionId,
         );
         expect(listed?.selector).toBe(expectedSelector);

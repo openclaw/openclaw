@@ -5,7 +5,6 @@ import type {
   SkillWorkshopMode,
   SkillWorkshopProposal,
 } from "../../lib/skill-workshop/index.ts";
-import { createSkillWorkshopHistoryScanState } from "./state.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
 import { renderSkillWorkshop } from "./view.ts";
 
@@ -94,7 +93,6 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
       canApply: true,
       canRevise: true,
       canReject: true,
-      canScanHistory: true,
     },
     loading: false,
     error: null,
@@ -118,7 +116,6 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     assistantName: "OpenClaw",
     workshopAgentName: "Research",
     selfLearning: null,
-    historyScan: createSkillWorkshopHistoryScanState(),
     onRetry: vi.fn(),
     onQueryChange: vi.fn(),
     onFilePreviewQueryChange: vi.fn(),
@@ -137,7 +134,6 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     onPreviewFile: vi.fn(),
     onClosePreview: vi.fn(),
     onSelfLearningToggle: vi.fn(),
-    onHistoryScan: vi.fn(),
   };
 }
 

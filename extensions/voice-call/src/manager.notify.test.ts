@@ -107,7 +107,7 @@ async function answerCall(
   eventId: string,
   providerCallId = "call-uuid",
 ) {
-  manager.processEvent({
+  await manager.processEvent({
     id: eventId,
     type: "call.answered",
     callId,
@@ -147,7 +147,7 @@ describe("CallManager notify and mapping", () => {
       );
       const callId = await initiateCallWithMessage(manager, "+15550000014", "Notify", "notify");
 
-      manager.processEvent({
+      await manager.processEvent({
         id: "evt-notify-failed-hangup",
         type: "call.answered",
         callId,
@@ -178,7 +178,7 @@ describe("CallManager notify and mapping", () => {
     expect(requireCall(manager, callId).providerCallId).toBe("request-uuid");
     expect(requireMappedCall(manager, "request-uuid").callId).toBe(callId);
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-1",
       type: "call.answered",
       callId,

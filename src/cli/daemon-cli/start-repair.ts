@@ -193,6 +193,10 @@ export async function repairLoadedGatewayServiceForStart(
   if (runtimeInfo?.status === "probe-failed") {
     throw runtimeInfo.error;
   }
+  // An invalid OPENCLAW_SQLITE_LIBRARY is operator state to fix, not grounds to rewrite the service to Node.
+  if (runtimeInfo?.status === "unsupported" && runtimeInfo.sqliteSelectionError) {
+    throw new Error(runtimeInfo.sqliteSelectionError);
+  }
   const runtime = runtimeInfo?.status === "supported" ? "bun" : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayTool } from "../tools/gateway.js";
-import { invokeNativeHookRelay, registerNativeHookRelay, testing } from "./native-hook-relay.js";
+import {
+  invokeNativeHookRelay,
+  registerNativeHookRelay,
+  registerOwnedNativeHookRelay,
+  testing,
+} from "./native-hook-relay.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -11,16 +16,17 @@ const approvalMocks = vi.hoisted(() => ({ loadExecApprovalsReadOnly: vi.fn() }))
 
 vi.mock("../../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnly: approvalMocks.loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnlyAsync: async () => approvalMocks.loadExecApprovalsReadOnly(),
 }));
 
 beforeEach(() => {
   approvalMocks.loadExecApprovalsReadOnly.mockReset().mockReturnValue({ version: 1, agents: {} });
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   mockCallGatewayTool.mockReset();
-  testing.clearNativeHookRelaysForTests();
+  await testing.clearNativeHookRelaysForTests();
 });
 
 describe("native hook relay approval wait handling", () => {
@@ -31,12 +37,13 @@ describe("native hook relay approval wait handling", () => {
       agents: { main: { mcpTools: [grant] }, "*": { mcpTools: [grant] } },
     });
     mockCallGatewayTool.mockResolvedValue({ id: "unexpected-approval", decision: "deny" });
-    const relay = registerNativeHookRelay({
+    const relay = registerOwnedNativeHookRelay({
       provider: "codex",
       agentId: "main",
       sessionId: "session-1",
       runId: "run-1",
     });
+    await relay.ready;
     approvalMocks.loadExecApprovalsReadOnly.mockReturnValue({ version: 1, agents: {} });
     for (const toolName of [
       "mcp__raw_server__raw_tool",

@@ -1,5 +1,6 @@
 {
   "id": "file-transfer",
+  "categories": ["documents-files"],
   "activation": {
     "onStartup": true
   },

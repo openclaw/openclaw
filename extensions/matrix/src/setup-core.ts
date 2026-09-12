@@ -4,6 +4,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   prepareScopedSetupConfig,
+  setSetupChannelEnabled,
   type ChannelSetupAdapter,
   type ChannelSetupWizardAdapter,
 } from "openclaw/plugin-sdk/setup";
@@ -52,13 +53,7 @@ export function createMatrixSetupWizardProxy(
       const promptAllowFrom = (await loadWizard()).dmPolicy?.promptAllowFrom;
       return promptAllowFrom ? await promptAllowFrom(params) : params.cfg;
     }),
-    disable: (cfg) => ({
-      ...(cfg as CoreConfig),
-      channels: {
-        ...(cfg as CoreConfig).channels,
-        matrix: { ...(cfg as CoreConfig).channels?.matrix, enabled: false },
-      },
-    }),
+    disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   };
 }
 

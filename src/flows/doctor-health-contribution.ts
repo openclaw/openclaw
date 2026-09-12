@@ -1,10 +1,11 @@
+import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
 import type {
   DoctorContributionHealthCheck,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
-import type { HealthCheckInput } from "./health-check-runner-types.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthFinding } from "./health-checks.js";
 
 export function createDoctorHealthContribution(params: {
@@ -14,6 +15,7 @@ export function createDoctorHealthContribution(params: {
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   hint?: string;
   required?: true;
+  updatePolicy?: DoctorHealthContribution["updatePolicy"];
   run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   const healthChecks = normalizeHealthChecks(params.id, params.healthChecks);
@@ -34,6 +36,7 @@ export function createDoctorHealthContribution(params: {
     healthChecks,
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
+    ...(params.updatePolicy ? { updatePolicy: params.updatePolicy } : {}),
     run:
       params.run ??
       ((ctx) =>
@@ -48,7 +51,7 @@ export function createDoctorHealthContribution(params: {
 function normalizeHealthChecks(
   contributionId: string,
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[],
-): readonly HealthCheckInput[] {
+): readonly DoctorHealthCheck[] {
   if (healthChecks === undefined) {
     return [];
   }
@@ -62,7 +65,7 @@ function normalizeContributionHealthCheck(
   check: DoctorContributionHealthCheck,
   contributionId: string,
   count: number,
-): HealthCheckInput {
+): DoctorHealthCheck {
   const id = check.id ?? (count === 1 ? deriveCoreHealthCheckId(contributionId) : undefined);
   if (id === undefined) {
     throw new Error(
@@ -74,9 +77,7 @@ function normalizeContributionHealthCheck(
     kind: check.kind ?? "core",
     source: check.source ?? "doctor",
   };
-  return "run" in check
-    ? { ...check, ...identity, sourceContract: "run" }
-    : { ...check, ...identity, sourceContract: "split" };
+  return { ...check, ...identity };
 }
 
 function deriveCoreHealthCheckId(contributionId: string): string {
@@ -88,7 +89,7 @@ function deriveCoreHealthCheckId(contributionId: string): string {
 async function runStructuredDoctorHealthContribution(params: {
   contributionId: string;
   ctx: DoctorHealthFlowContext;
-  checks: readonly HealthCheckInput[];
+  checks: readonly DoctorHealthCheck[];
 }): Promise<void> {
   if (params.checks.length === 0) {
     throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
@@ -96,6 +97,7 @@ async function runStructuredDoctorHealthContribution(params: {
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
   const dryRun = !params.ctx.prompter.shouldRepair;
+  const configBeforeRepair = JSON.stringify(params.ctx.cfg);
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -110,12 +112,39 @@ async function runStructuredDoctorHealthContribution(params: {
   );
   params.ctx.cfg = result.config;
   renderStructuredHealthFindings(params.ctx, result.findings);
+  // Display retains original findings; finalization records only unresolved warnings.
+  recordDoctorHealthWarnings(
+    params.ctx,
+    dryRun ? result.findings : result.remainingFindings,
+    result.warnings,
+  );
   for (const warning of result.warnings) {
     params.ctx.runtime.error(warning);
   }
-  for (const change of result.changes) {
-    params.ctx.runtime.log(change);
+  if (configBeforeRepair !== JSON.stringify(result.config)) {
+    params.ctx.configResult.pendingChangePanels = [
+      ...(params.ctx.configResult.pendingChangePanels ?? []),
+      ...result.changes,
+    ];
+  } else {
+    for (const change of result.changes) {
+      params.ctx.runtime.log(change);
+    }
   }
+}
+
+export function recordDoctorHealthWarnings(
+  ctx: DoctorHealthFlowContext,
+  findings: readonly HealthFinding[],
+  warnings: readonly string[] = [],
+): void {
+  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings([
+    ...(ctx.updateWarnings ?? []),
+    ...findings
+      .filter((finding) => finding.severity === "warning")
+      .map((finding) => `${finding.checkId}: ${finding.message}`),
+    ...warnings,
+  ]);
 }
 
 export function renderStructuredHealthFindings(

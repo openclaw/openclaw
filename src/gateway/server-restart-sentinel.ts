@@ -485,18 +485,25 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (!routedSessionKey) {
-      const controlPlaneOnlyConfigRestart =
-        (payload.kind === "config-patch" || payload.kind === "config-apply") &&
+      const targetlessCliOutcome =
+        payload.kind === "update" &&
+        updateRun?.trigger === "cli" &&
+        !updateRun.origin.sessionKey &&
+        !updateRun.origin.deliveryContext;
+      const controlPlaneOnlyAcknowledgement =
+        (payload.kind === "config-patch" ||
+          payload.kind === "config-apply" ||
+          targetlessCliOutcome) &&
         (typeof payload.message !== "string" || payload.message.trim().length === 0) &&
         !payload.continuation &&
         !payload.deliveryContext &&
         payload.threadId == null;
-      if (controlPlaneOnlyConfigRestart) {
-        // A targetless config acknowledgement has no agent turn to resume.
-        // Synthesizing a main-session wake races real restart recovery and spends a model turn.
+      if (controlPlaneOnlyAcknowledgement) {
+        // A targetless control-plane/CLI acknowledgement has no agent turn to
+        // resume. An inferred wake can bootstrap an unrelated workspace on boot.
         const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
         if (!consumed) {
-          log.info(`${summary}: newer restart sentinel preserved while consuming config restart`);
+          log.info(`${summary}: newer restart sentinel preserved while consuming acknowledgement`);
         }
         return { status: "ran" as const };
       }

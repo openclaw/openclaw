@@ -24,7 +24,7 @@ import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatProps } from "./chat-view.ts";
 import type { BackgroundTasksHost } from "./components/chat-background-tasks.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type { SidebarContent, SidebarSelection } from "./components/chat-sidebar.ts";
 import type { ChatExportResult } from "./export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
@@ -77,6 +77,7 @@ export type ChatPageHost = ChatHost &
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogError: string | null;
+    chatModelCatalogRefreshFailed?: boolean;
     chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
@@ -118,7 +119,7 @@ export type ChatPageHost = ChatHost &
     chatScrollElement?: () => HTMLElement | null;
     chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
     sidebarLayout: SidebarLayout;
-    sidebarContent: SidebarContent | null;
+    sidebarContent: SidebarSelection | null;
     attachmentSidebarContent: Extract<SidebarContent, { kind: "attachment" }> | null;
     sidebarFocusPanelId: string;
     sidebarFocusVersion: number;

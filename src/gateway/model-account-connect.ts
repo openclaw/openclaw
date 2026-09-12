@@ -18,7 +18,7 @@ import {
   listPersonalAccountAuthChoices,
   resolvePersonalAccountAuthMethod,
 } from "../plugins/personal-account-auth.js";
-import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-choice.js";
+import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-method.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   clearUserProfileAuthLink,

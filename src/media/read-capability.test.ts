@@ -46,7 +46,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
     expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots(),
+      ...getDefaultMediaLocalRoots().filter((root) => path.basename(root) !== "sandboxes"),
       "/tmp/media-workspace",
     ]);
     expect(typeof result.readFile).toBe("function");
@@ -62,7 +62,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
     expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots(),
+      ...getDefaultMediaLocalRoots().filter((root) => path.basename(root) !== "sandboxes"),
       "/tmp/explicit-workspace",
     ]);
     expect(typeof result.readFile).toBe("function");
@@ -305,6 +305,60 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     );
     expect(loaded.buffer.toString()).toBe("generated");
     expect(workspaceReadFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects sibling sandbox media for a workspace-only agent", async () => {
+    const baseDir = tempDirs.make("workspace-only-sibling-sandbox-");
+    const stateDir = path.join(baseDir, "state");
+    const workspaceDir = path.join(baseDir, "workspace-main");
+    const siblingFile = path.join(stateDir, "sandboxes", "sibling", "secret.txt");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(path.dirname(siblingFile), { recursive: true });
+    await fs.writeFile(siblingFile, "sibling-secret");
+
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        tools: { fs: { workspaceOnly: true } },
+      } as OpenClawConfig,
+      agentId: "main",
+      workspaceDir,
+      mediaSources: [siblingFile],
+    });
+
+    await expect(
+      loadWebMediaRaw(siblingFile, buildOutboundMediaLoadOptions({ mediaAccess: access })),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows media from the exact active session workspace", async () => {
+    const baseDir = tempDirs.make("active-sandbox-media-");
+    const stateDir = path.join(baseDir, "state");
+    const workspaceDir = path.join(baseDir, "workspace-main");
+    const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "active");
+    const activeFile = path.join(sessionWorkspaceDir, "report.txt");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(sessionWorkspaceDir, { recursive: true });
+    await fs.writeFile(activeFile, "active-report");
+
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        tools: { fs: { workspaceOnly: true } },
+      } as OpenClawConfig,
+      agentId: "main",
+      workspaceDir,
+      sessionWorkspaceDir,
+      mediaSources: [activeFile],
+    });
+
+    const loaded = await loadWebMediaRaw(
+      activeFile,
+      buildOutboundMediaLoadOptions({ mediaAccess: access }),
+    );
+    expect(loaded.buffer.toString()).toBe("active-report");
   });
 
   it("honors plugin-owned group tool policy with channel metadata", () => {

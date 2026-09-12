@@ -81,6 +81,7 @@ suite.define(() => {
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
+      await page.locator(".chat-workspace-rail__group-summary", { hasText: "Artifacts" }).click();
       await page
         .locator(".chat-workspace-rail__file-name", { hasText: "preview.png" })
         .waitFor({ timeout: 10_000 });
@@ -176,7 +177,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps long workspace file sections scrollable inside the rail", async () => {
+  it("scrolls long file groups beneath the search toolbar and filters session files", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -193,9 +194,34 @@ suite.define(() => {
       methodResponses: {
         "sessions.files.list": {
           browser: { entries: browserEntries, path: "" },
-          files: [],
+          files: [
+            ...Array.from({ length: 2 }, (_, index) => ({
+              kind: "modified",
+              name: `changed-${index + 1}.ts`,
+              path: `src/changed-${index + 1}.ts`,
+              missing: false,
+            })),
+            ...["read-file-1.ts", "read-file-2.ts", "notes.md"].map((name) => ({
+              kind: "read",
+              name,
+              path: `src/${name}`,
+              missing: false,
+            })),
+          ],
           root: "/workspace",
           sessionKey: "main",
+        },
+        "artifacts.list": {
+          artifacts: [
+            {
+              id: "artifact-1",
+              title: "preview.png",
+              mimeType: "image/png",
+              sizeBytes: 2048,
+              type: "image",
+              download: { mode: "bytes" },
+            },
+          ],
         },
       },
     });
@@ -208,36 +234,56 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
-      const browserSection = page.locator(".chat-workspace-rail__section", {
+      const rail = page.locator(".chat-workspace-rail");
+      const scroll = rail.locator(".chat-workspace-rail__scroll");
+      const browserGroup = rail.locator(".chat-workspace-rail__group", {
         hasText: "Project files",
       });
       await expect
-        .poll(
-          () =>
-            browserSection.evaluate((section) => {
-              const element = section as HTMLElement;
-              const scroll = element.closest(".chat-workspace-rail__scroll") as HTMLElement | null;
-              if (!scroll) {
-                throw new Error("Expected workspace rail scroll container");
-              }
-              const sectionRect = element.getBoundingClientRect();
-              const scrollRect = scroll.getBoundingClientRect();
-              const style = getComputedStyle(element);
-              return {
-                bottomWithinRail: Math.ceil(sectionRect.bottom) <= Math.ceil(scrollRect.bottom),
-                clientHeight: element.clientHeight,
-                overflowY: style.overflowY,
-                scrollHeight: element.scrollHeight,
-              };
-            }),
-          { timeout: 10_000 },
+        .poll(() =>
+          scroll.evaluate((element) => ({
+            overflows: element.scrollHeight > element.clientHeight,
+            overflowY: getComputedStyle(element).overflowY,
+          })),
         )
-        .toMatchObject({ bottomWithinRail: true, overflowY: "auto" });
-      const sectionMetrics = await browserSection.evaluate((section) => {
-        const element = section as HTMLElement;
-        return { clientHeight: element.clientHeight, scrollHeight: element.scrollHeight };
+        .toEqual({ overflows: true, overflowY: "auto" });
+      expect(await browserGroup.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
+        "visible",
+      );
+      expect(
+        await rail
+          .locator(".chat-workspace-rail__group")
+          .evaluateAll((groups) =>
+            groups.some((group) => ["auto", "scroll"].includes(getComputedStyle(group).overflowY)),
+          ),
+      ).toBe(false);
+      await scroll.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
       });
-      expect(sectionMetrics.scrollHeight).toBeGreaterThan(sectionMetrics.clientHeight);
+      const railBox = await rail.boundingBox();
+      const search = rail.locator('input[type="search"]');
+      const searchBox = await search.boundingBox();
+      expect(railBox).not.toBeNull();
+      expect(searchBox).not.toBeNull();
+      expect(searchBox!.y).toBeGreaterThanOrEqual(railBox!.y);
+      expect(searchBox!.y + searchBox!.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
+
+      await rail.getByRole("button", { name: "3 read", exact: true }).click();
+      const groups = rail.locator(".chat-workspace-rail__group");
+      await expect.poll(() => groups.count()).toBe(1);
+      expect(await groups.locator("summary").textContent()).toContain("Read");
+      expect(await groups.locator(".chat-workspace-rail__file:visible").count()).toBe(3);
+      expect(
+        await rail
+          .getByRole("button", { name: "3 read", exact: true })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+
+      await search.fill("read-file");
+      await expect
+        .poll(() => groups.locator(".chat-workspace-rail__file-name:visible").allTextContents())
+        .toEqual(["src/read-file-1.ts", "src/read-file-2.ts"]);
+      expect(await groups.count()).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

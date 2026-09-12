@@ -6,8 +6,10 @@ read_when:
   - You want the order jobs run in and what blocks what
 ---
 
-OpenClaw CI runs on pushes to `main` (Markdown and `docs/**` paths are ignored
-at the trigger), on every non-draft pull request, and on manual dispatch.
+OpenClaw CI runs on pushes to `main` that change a path outside `**/*.md` and
+`docs/**`, on every non-draft pull request, and on manual dispatch. Docs-only
+main pushes skip CI; mixed docs and code pushes still run it. Pull-request docs
+scoping is unchanged.
 Canonical `main` pushes use a two-slot pipeline keyed by run-number parity, so
 at most two integration runs overlap. Each slot is non-canceling and keeps one
 coalesced pending tip: a new merge replaces that slot's older pending run
@@ -54,10 +56,10 @@ the job's uploaded artifacts.
 | `checks-fast-contracts-plugins`  | One setup shared by two sequential weighted plugin contract processes; frozen targets keep separate rows                                                                                                                                                                                                 | Node-relevant changes                                  |
 | `checks-fast-contracts-channels` | One setup shared by two sequential weighted channel contract envelopes; frozen targets keep separate rows                                                                                                                                                                                                | Node-relevant changes                                  |
 | `checks-node-*`                  | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                                  |
-| `docker-seed-e2e`                | One Docker scheduler job for the executable `mcp-channels`, `cron-mcp-cleanup`, `mcp-code-mode-gateway`, and `update-channel-switch` owner lanes                                                                                                                                                         | PR changes to their E2E helpers or CI gate owners      |
+| `docker-seed-e2e`                | One Docker scheduler job for the executable MCP, update-channel, Fleet cache, and published-upgrade owner lanes; the published upgrade seeds legacy operator state on `openclaw@latest`                                                                                                                  | Owner PR changes; published upgrade on main pushes     |
 | `check-*`                        | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                                  |
 | `check-additional-*`             | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                  |
-| `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                                                                                                                                                                                                                               | Full Release Validation and manual dispatches only     |
+| `checks-node-compat-node24`      | Node 24 minimum compatibility build and smoke lane                                                                                                                                                                                                                                                       | Full Release Validation and manual dispatches only     |
 | `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                                                                                                                                                                                                            | Docs changed (PRs and manual dispatch)                 |
 | `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI                                                                                                                | Native i18n-relevant changes                           |
 | `skills-python`                  | Ruff + pytest for Python-backed skills                                                                                                                                                                                                                                                                   | Python-skill-relevant changes                          |
@@ -72,15 +74,46 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                          |
 
-The rare path-triggered `docker-seed-e2e` job selects only the executable
-owners of changed E2E helpers and runs them through one scheduler invocation.
+Full canonical `main` pushes run the operator config and prior-release state
+startup corpora once through the Node `runtime-config` owner. Other runs that
+select baseline-ratchets retain its explicit **Check startup corpus** step:
+pull requests may select only changed tests, and release-gate dispatches
+also validate a separate merge tree. Both state repair passes and the static
+baseline ratchets remain unchanged.
+
+Ordinary pull requests that change only independent Control UI unit-test entries
+keep all three UI unit rows, performance checks, and existing type/lint gates,
+without repeating dedicated UI E2E jobs. Browser and Node test entries, shared
+fixtures/helpers, production or build inputs, and tests imported by another
+owner retain E2E coverage. Main pushes, manual validation, and frozen targets
+keep their existing selection.
+
+The `docker-seed-e2e` job selects the executable owners of changed E2E helpers
+and the published-upgrade regression gate through one scheduler invocation.
+The published lane runs `legacy-operator-state` against only `openclaw@latest`
+on affected PRs and every canonical `main` push that runs CI. Docs-only pushes
+are excluded at the workflow trigger; mixed docs and code pushes select the lane.
+It uses `auto-auth`: every supported baseline must replace the running managed
+Gateway through its own updater. Schema refusal or rollback fails the gate.
+PR selection includes `src/cli/update-cli/**`, `src/infra/update-*`,
+`src/infra/package-update-*`, `src/plugins/update.ts`, `src/plugins/update-*`,
+`src/commands/doctor*`, `src/commands/doctor/**`, all `src/state/**`, and
+`package.json` (including its packaged schema-version metadata). It also includes
+`scripts/e2e/upgrade-survivor*`, `scripts/e2e/lib/upgrade-survivor/**`, the survivor
+policy and baseline resolver, the Docker planner/catalog, and this gate's CI
+workflow and changed-lane planner. Tests independently pin both state and agent
+schema-version constant owners to the published lane.
 Trusted same-repository pull requests request one 32-vCPU Blacksmith runner with
 main and tail parallelism set to 3. The weighted scheduler still admits only one
-weight-three MCP lane at a time; the larger host supplies package-build and
+weight-three MCP or published-upgrade lane at a time; the larger host supplies package-build and
 container capacity. GitHub-hosted, fork, and retry paths run the same selected
-lanes serially. The job is part of `openclaw/ci-gate`. It adds at
-most one runner registration during an affected pull-request window and adds no
-registrations for unrelated pull requests.
+lanes serially. The complete PR job targets at most 12 minutes, including shared
+package preparation and every selected owner lane; its existing 60-minute
+infrastructure timeout is unchanged. Exact-head CI timings must establish
+whether each selection fits that target.
+The job is part of `openclaw/ci-gate`. It uses at most one runner registration per
+selected run; adding the survivor does not increase the existing full-inventory
+registration cap, job count, or matrix fanout.
 
 Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `OpenClawProtocol/GatewayModels.swift` schema contract is retained as generator-owned code rather than treated as app-local dead code.
 
@@ -128,6 +161,17 @@ Run the timing helper locally; there is no in-workflow timing-summary job (a per
 
 The `Run Node test shard` step prints Bash `time -p` totals: elapsed (`real`), user CPU (`user`), and system CPU (`sys`) seconds, including waited-for child processes. Compare CPU totals with elapsed time across equivalent runs to distinguish extra CPU work from slower execution with similar CPU work. These totals alone do not establish runner contention.
 
+Android test rows retain their existing Gradle JUnit XML for 14 days in
+`android-test-reports-<task>-<checkout-revision>-<run-attempt>` artifacts, including
+failed runs unless canceled. Reports identify test cases and durations; compilation,
+lint, setup, and queue time remain separate in the job log. Read the XML alongside
+that attempt's Gradle task outcomes: reports restored by `FROM-CACHE` or reused by
+`UP-TO-DATE` describe an earlier execution, so their times are historical. They do
+not show fresh test execution or a speedup in the current run. A failure before
+Gradle writes XML can leave no artifact; the upload warns without replacing the
+original failure. The artifact contains only phone and Wear unit-test XML, not
+dependency caches or application build outputs.
+
 Node test shards that need a built CLI run `pnpm build qaRuntime` before starting
 Vitest. This profile builds runtime JavaScript, plugin assets, and freshness and
 provenance metadata. Private QA shards select their private runtime entries. The
@@ -161,6 +205,16 @@ CSS file fails the comparison. The existing largest-file, JavaScript, request-co
 and isolated-renderer ceilings still apply independently. Reports include exact
 bytes, base deltas, and remaining headroom, with an early warning when the largest
 CSS file has less than 1 KiB of headroom.
+
+JavaScript accounting separates ordinary chunks, deferred special-purpose
+chunks, startup assets, and the full bundle total. The 215 KiB ordinary-chunk
+ceiling excludes the isolated Mermaid renderer and configured locale catalogs.
+A locale catalog must match `assets/<locale>-<nonempty-suffix>.js`; each
+configured locale may produce one deferred chunk, with at most 20 locale chunks
+overall and a 300 KiB ceiling per chunk. Locale chunks remain forbidden in the
+startup asset set. Total JavaScript accounting includes ordinary, deferred, and
+startup assets for reporting while enforcement stays on the category-specific
+limits.
 
 CI builds the selected checkout and the exact preflight base with the same
 installed Node, Vite, and dependencies. The temporary base's CSS sidecars are

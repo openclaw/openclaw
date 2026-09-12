@@ -1,11 +1,21 @@
-export function raceNodeWorkerOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+export function raceNodeWorkerOperation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+  messages: { aborted: string; failed?: string } = {
+    aborted: "node worker operation aborted",
+    failed: "node worker operation failed",
+  },
+): Promise<T> {
   const abortError = () =>
-    signal.reason instanceof Error ? signal.reason : new Error("node worker operation aborted");
+    signal.reason instanceof Error ? signal.reason : new Error(messages.aborted);
   if (signal.aborted) {
     return Promise.reject(abortError());
   }
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError());
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
     signal.addEventListener("abort", onAbort, { once: true });
     void operation.then(
       (value) => {
@@ -14,7 +24,7 @@ export function raceNodeWorkerOperation<T>(operation: Promise<T>, signal: AbortS
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error("node worker operation failed"));
+        reject(error instanceof Error ? error : new Error(messages.failed ?? String(error)));
       },
     );
   });

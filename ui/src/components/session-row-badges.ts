@@ -2,12 +2,16 @@ import { html, nothing, type TemplateResult } from "lit";
 // Deep import on purpose: the protocol barrel carries typebox and every
 // schema, which must stay out of the Control UI startup bundle.
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
-import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type {
+  SessionPlacementDiskSpace,
+  SessionPlacementMachine,
+} from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import { sessionMachineParts } from "./session-machine.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
@@ -67,6 +71,7 @@ export function renderSessionRowBadges(params: {
   placementState?: SessionPlacementState;
   placementProviderId?: string;
   placementProfileId?: string;
+  placementMachine?: SessionPlacementMachine;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
 }) {
@@ -115,7 +120,14 @@ export function renderSessionRowBadges(params: {
   }
   const placementLabel = displayedPlacementState
     ? params.placementProviderId && params.placementProfileId
-      ? `${params.placementProviderId} · ${params.placementProfileId} · ${displayedPlacementState}`
+      ? [
+          params.placementProviderId,
+          params.placementProfileId,
+          ...sessionMachineParts(params.placementMachine),
+          displayedPlacementState,
+        ]
+          .filter(Boolean)
+          .join(" · ")
       : t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
     : "";
   const cloudPlacementLabel = hasWorkspaceConflict
@@ -205,6 +217,7 @@ export function renderSessionRowBadges(params: {
 
 export function resolveSidebarConnectionStatus(props: {
   offline: boolean;
+  phase?: ApplicationGatewaySnapshot["phase"];
   restartPending?: boolean;
   suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
 }) {
@@ -218,6 +231,9 @@ export function resolveSidebarConnectionStatus(props: {
     case "prepared":
       return "suspended";
     default:
+      if (props.phase === "connecting" || props.phase === "starting") {
+        return "connecting";
+      }
       return props.offline ? "offline" : null;
   }
 }

@@ -2,6 +2,7 @@
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
@@ -18,7 +19,10 @@ afterEach(async () => {
   await resetComposerFixture();
 });
 
-it("blocks model setup without disabled-reason text", () => {
+it.each([
+  { draft: "Hello", allowed: false },
+  { draft: "/models", allowed: true },
+])("admits $draft during model setup: $allowed", ({ draft, allowed }) => {
   const { pane, state, context } = createRefreshChatPane(
     createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
   );
@@ -30,22 +34,70 @@ it("blocks model setup without disabled-reason text", () => {
     agents: [{ id: "main" }],
   };
   state.handleSendChat = vi.fn();
+  state.chatMessage = draft;
   pane.render();
 
   expect(pane.chatProps?.modelSetupRequired).toBe(true);
   expect(pane.chatProps?.disabledReason).toBeNull();
-  expect(pane.chatProps?.canSend).toBe(false);
+  expect(pane.chatProps?.canSend).toBe(true);
   void pane.chatProps?.onSend();
-  expect(state.handleSendChat).not.toHaveBeenCalled();
+  expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
+});
+
+it("keeps catalog composition independent of local model credentials", () => {
+  const { pane, state, context } = createRefreshChatPane(
+    createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+  );
+  state.sessionKey = buildCatalogSessionKey(
+    { catalogId: "fixture", hostId: "gateway:local", threadId: "thread-1" },
+    "main",
+  );
+  context.agents.state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "global",
+    agents: [{ id: "main", model: { primary: "example/model" } }],
+  };
+  state.chatModelCatalog = [
+    {
+      id: "model",
+      name: "Model",
+      provider: "example",
+      available: false,
+      unavailableReason: "missing-auth",
+    },
+  ];
+  pane.render();
+  expect(pane.chatProps?.modelRequiredReason).toBeUndefined();
 });
 
 describe("subagent composer", () => {
+  it("keeps a spawned persistent dashboard session editable", () => {
+    const { pane, state } = createRefreshChatPane();
+    state.sessionKey = "agent:main:dashboard:01234567-89ab-cdef-0123-456789abcdef";
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults,
+      sessions: [{ key: state.sessionKey, kind: "direct", spawnedBy: "agent:main:parent" }],
+    };
+    state.chatMessage = "Continue this work";
+    pane.render();
+    const container = document.createElement("div");
+    render(renderChatComposer(pane.chatProps!), container);
+
+    expect(container.querySelector("textarea")).not.toBeNull();
+    expect(pane.chatProps?.canSend).toBe(true);
+    expect(container.textContent).not.toContain("View-only subagent");
+  });
+
   it.each([
     { name: "subagent key", key: "agent:main:subagent:reply-owner" },
     {
-      name: "spawn metadata",
+      name: "subagent classification",
       key: "agent:main:reply-owner",
-      row: { spawnedBy: "agent:main:parent" },
+      row: { classification: "subagent", spawnedBy: "agent:main:parent" },
     },
     { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
     {
@@ -95,7 +147,11 @@ describe("subagent composer", () => {
     { spawnedBy: "agent:main:parent" },
     { parentSessionKey: "agent:main:parent" },
     { spawnedBy: "agent:main:controller", parentSessionKey: "agent:main:parent" },
-    { key: "agent:main:worker", spawnedBy: "agent:main:parent" },
+    {
+      key: "agent:main:worker",
+      classification: "subagent" as const,
+      spawnedBy: "agent:main:parent",
+    },
   ])("replaces input with parent navigation for %j", (lineage) => {
     const { pane, state } = createRefreshChatPane();
     const parent: GatewaySessionRow = {

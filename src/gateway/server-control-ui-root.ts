@@ -8,7 +8,10 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  runOutsideGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
@@ -178,8 +181,11 @@ export function createGatewayControlUiRootLifecycle(
         : preparation.promise;
     }
     const controller = new AbortController();
+    // Root drain precedes sidecar.stop; cancel preparation before that wait.
+    // Capture the current generation on each start, including re-enabled dashboards.
+    const signal = AbortSignal.any([controller.signal, getGatewayRestartDrainSignal()]);
     const promise = runOutsideGatewayRootWorkAdmission(() =>
-      Promise.resolve().then(() => prepare(controller.signal)),
+      Promise.resolve().then(() => prepare(signal)),
     ).finally(() => {
       preparation = undefined;
     });

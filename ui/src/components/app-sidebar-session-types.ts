@@ -1,6 +1,9 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type {
+  SessionPlacementDiskSpace,
+  SessionPlacementMachine,
+} from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type {
@@ -107,6 +110,7 @@ export type SidebarRecentSession = {
   placementState?: SessionPlacementState;
   placementProviderId?: string;
   placementProfileId?: string;
+  placementMachine?: SessionPlacementMachine;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
@@ -163,6 +167,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "participants"
   | "placementProviderId"
   | "placementProfileId"
+  | "placementMachine"
   | "status"
   | "startedAt"
   | "updatedAt"

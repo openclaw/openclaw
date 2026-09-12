@@ -116,7 +116,7 @@ it("resolves catalog-row repair hints without rebuilding the manifest registry",
     Object.fromEntries(
       OWNERLESS_CHANNEL_IDS.map((channelId) => [
         channelId,
-        { accounts: [], installed: false, origin: "configured" },
+        { label: channelId, accounts: [], installed: false, origin: "configured" },
       ]),
     ),
   );

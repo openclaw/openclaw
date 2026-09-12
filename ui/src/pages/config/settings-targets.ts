@@ -2,6 +2,8 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
+export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
+
 export const CONNECTION_SETTINGS_TARGET_IDS = {
   host: "settings-connection-host",
 } as const;
@@ -35,6 +37,14 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  sessionStorage: {
+    routeId: "ai-agents",
+    labelKey: "configView.sessionStorage.title",
+    search: "?section=session",
+    hash: `#${SESSION_STORAGE_SETTINGS_TARGET_ID}`,
+    searchKeys: ["configView.sessionStorage.automatic", "configView.sessionStorage.afterDays"],
+    aliases: "database disk size transcripts storage cleanup archive compression retention",
+  },
   meetingCapture: {
     routeId: "communications",
     labelKey: "meetingCapture.title",

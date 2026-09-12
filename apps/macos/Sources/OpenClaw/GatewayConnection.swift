@@ -426,7 +426,7 @@ actor GatewayConnection: Observable {
             try requireCurrentShutdownGeneration(shutdownGeneration)
             switch mode {
             case .local:
-                await MainActor.run { GatewayProcessManager.shared.setActive(true) }
+                await MainActor.run { GatewayProcessManager.shared.setActive(true, source: .recovery) }
                 try requireCurrentShutdownGeneration(shutdownGeneration)
 
                 let lastError: Error
@@ -1319,6 +1319,11 @@ extension GatewayConnection {
         let raw = snapshot.server["version"]?.value as? String
         let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func connectionSummary() -> (connected: Bool, gatewayVersion: String?) {
+        guard case .connected = self.connectionPublication.value else { return (false, nil) }
+        return (true, self.cachedGatewayVersion())
     }
 
     func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {

@@ -84,7 +84,7 @@ async function createLegacyWorkspace(userContent = false, skillsPath = "skills")
     await fs.writeFile(path.join(workspaceDir, "README.md"), "# User project\n");
   }
   await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
-  const before = readWorkspaceStateSnapshot(workspaceDir);
+  const before = await readWorkspaceStateSnapshot(workspaceDir);
   expect(before.attestation).toBeDefined();
   expect(before.attestation?.generatedHashes.size).toBe(0);
   expect(before.setupExists).toBe(false);
@@ -135,7 +135,7 @@ async function interruptPendingWrite(fixture: LegacyWorkspace) {
   await expect(fs.readFile(path.join(fixture.destination, "SKILL.md"), "utf8")).resolves.toBe(
     fixture.content,
   );
-  expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toEqual(
+  expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toEqual(
     fixture.before.attestation,
   );
 }
@@ -163,7 +163,7 @@ describe("Workshop relocation and workspace survival", () => {
       await expect(fs.readFile(path.join(fixture.destination, "SKILL.md"), "utf8")).resolves.toBe(
         fixture.content,
       );
-      expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
+      expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toBeUndefined();
       await expectWorkspaceUsable(fixture.workspaceDir);
     },
   );
@@ -172,7 +172,7 @@ describe("Workshop relocation and workspace survival", () => {
     "imports legacy workspace evidence before relocating (Doctor preflight: %s)",
     async (doctorOnlyStateMigrations) => {
       const fixture = await createLegacyWorkspace();
-      deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
+      await deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
       const marker = resolveLegacyWorkspaceSourcePaths(fixture.workspaceDir, {
         env: state.env,
         homedir: () => state.home,
@@ -204,7 +204,7 @@ describe("Workshop relocation and workspace survival", () => {
         });
         await expect(fs.access(marker)).rejects.toMatchObject({ code: "ENOENT" });
       }
-      expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
+      expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toBeUndefined();
       const detected = await detectLegacyStateMigrations({
         ...migrationInput,
         mode: "doctor",
@@ -223,15 +223,15 @@ describe("Workshop relocation and workspace survival", () => {
         fixture.content,
       );
       await expectWorkspaceUsable(fixture.workspaceDir);
-      expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
+      expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toBeUndefined();
     },
   );
 
   it("captures a new attestation only for remaining filesystem moves", async () => {
     const fixture = await createLegacyWorkspace();
     repairOpenClawStateDatabaseSchemaIfNeeded({ env: state.env });
-    deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
-    const before = readWorkspaceStateSnapshot(fixture.workspaceDir);
+    await deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
+    const before = await readWorkspaceStateSnapshot(fixture.workspaceDir);
     expect(before.attestation).toBeUndefined();
     const name = "remaining-relocation";
     const skillDir = path.join(fixture.workspaceDir, "skills", name);
@@ -277,7 +277,7 @@ describe("Workshop relocation and workspace survival", () => {
       [],
     );
     await ensureAgentWorkspace({ dir: fixture.workspaceDir, ensureBootstrapFiles: false });
-    const attested = readWorkspaceStateSnapshot(fixture.workspaceDir);
+    const attested = await readWorkspaceStateSnapshot(fixture.workspaceDir);
     expect(attested.attestation).toBeDefined();
     expect(attested.attestation?.generatedHashes.size).toBe(0);
 
@@ -287,7 +287,7 @@ describe("Workshop relocation and workspace survival", () => {
     });
 
     expect(resumed.warnings).toEqual([]);
-    expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
+    expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toBeUndefined();
     expect(receipts.all(WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND, fixture.workspaceDir)).toEqual(
       [
         {
@@ -332,7 +332,7 @@ describe("Workshop relocation and workspace survival", () => {
     await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
 
     await expectWorkspaceUsable(fixture.workspaceDir);
-    expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
+    expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toBeUndefined();
   });
 
   it("revokes pending relocation cleanup when the workspace is reset", async () => {
@@ -346,23 +346,23 @@ describe("Workshop relocation and workspace survival", () => {
       [expect.objectContaining({ status: "prepared" })],
     );
 
-    deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
+    await deleteWorkspaceState(prepareWorkspaceStateDeletion(fixture.workspaceDir));
 
     expect(receipts.all(WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND, fixture.workspaceDir)).toEqual(
       [],
     );
-    expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toBeUndefined();
+    expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toBeUndefined();
     const projectFile = path.join(fixture.workspaceDir, "README.md");
     await fs.writeFile(projectFile, "# Project created after reset\n");
     await ensureAgentWorkspace({ dir: fixture.workspaceDir, ensureBootstrapFiles: false });
-    const refreshed = readWorkspaceStateSnapshot(fixture.workspaceDir).attestation;
+    const refreshed = (await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation;
     expect(refreshed).toBeDefined();
     await fs.rm(projectFile);
     closeOpenClawStateDatabaseForTest();
 
     await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
 
-    expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toEqual(refreshed);
+    expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toEqual(refreshed);
     await expect(
       ensureAgentWorkspace({ dir: fixture.workspaceDir, ensureBootstrapFiles: false }),
     ).rejects.toMatchObject({ code: WORKSPACE_VANISHED_ERROR_CODE });
@@ -385,7 +385,7 @@ describe("Workshop relocation and workspace survival", () => {
 
       await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
 
-      expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toEqual(
+      expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toEqual(
         fixture.before.attestation,
       );
       await expect(
@@ -402,7 +402,7 @@ describe("Workshop relocation and workspace survival", () => {
 
     await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
 
-    expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toEqual(
+    expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toEqual(
       fixture.before.attestation,
     );
     await expect(fs.readFile(path.join(fixture.workspaceDir, "README.md"), "utf8")).resolves.toBe(
@@ -418,7 +418,7 @@ describe("Workshop relocation and workspace survival", () => {
       await interruptPendingWrite(fixture);
       const refreshedAtMs =
         Math.max(Date.now(), fixture.before.attestation!.attestedAtMs + 1) + clockOffsetMs;
-      const refreshed = replaceWorkspaceAttestation({
+      const refreshed = await replaceWorkspaceAttestation({
         workspaceDir: fixture.workspaceDir,
         attestedAtMs: refreshedAtMs,
         generatedHashes: new Map(),
@@ -428,7 +428,9 @@ describe("Workshop relocation and workspace survival", () => {
 
       await migrateLegacySkillWorkshopProposals({ config: fixture.config, env: state.env });
 
-      expect(readWorkspaceStateSnapshot(fixture.workspaceDir).attestation).toEqual(refreshed);
+      expect((await readWorkspaceStateSnapshot(fixture.workspaceDir)).attestation).toEqual(
+        refreshed,
+      );
       await expect(
         ensureAgentWorkspace({ dir: fixture.workspaceDir, ensureBootstrapFiles: false }),
       ).rejects.toMatchObject({ code: WORKSPACE_VANISHED_ERROR_CODE });

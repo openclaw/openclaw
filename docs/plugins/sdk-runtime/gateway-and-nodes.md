@@ -191,9 +191,16 @@ Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operati
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
 
+Service cleanup retains the owning plugin's cleanup context so `stop()` can
+release resources after ordinary call admission closes. Keep the resources and
+unsubscribe functions acquired by that startup attempt, and release those exact
+handles. Cleanup failures do not imply that native resources were terminated;
+see [Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup).
+
 Use the service's `start()` and `stop()` methods to own recurring reconciliation.
 They run for service or plugin replacement as well as Gateway startup and shutdown;
-`gateway_start` and `gateway_stop` do not replay on plugin-only reload.
+full plugin replacement also runs `gateway_stop` and `gateway_start` for affected
+plugins. A service-only config reload does not replay those hooks.
 Each returned scheduler handle belongs to one service lifetime and one scheduler
 instance. Calls, including queued writes, reject once service shutdown begins or
 that scheduler is replaced. Call `ctx.getCron()` again to obtain the replacement
@@ -207,6 +214,9 @@ all refresh. Existing equal or narrower restart or no-op policies still take pre
 Each start receives a new capability lease and health reporter. Stop must release
 resources before resolving; failed replacement cleanup or startup triggers
 Gateway recovery. A full plugin replacement subsumes these service restarts.
+The stop hook runs after that attempt's original start settles. A replacement
+deadline can end the caller's wait and revoke service capabilities while final
+cleanup remains owned.
 
 Trusted official diagnostics exporter services can also receive
 `ctx.internalDiagnostics.getRuntimeIdentity?.()`. It returns the hosting
@@ -215,6 +225,14 @@ filesystem lookup or RPC. Capture it during service startup; a retained getter
 throws after the service lease is revoked. Hosts that do not provide this
 optional capability leave runtime identity unavailable. This diagnostic fact
 does not grant authority or identify a service-reload epoch.
+
+Their `ctx.internalDiagnostics.onEvent(listener, filter?, options?)` subscription
+delivers events, trust metadata, and a frozen private-data object. Exporters that
+only need events and metadata can pass `{ includePrivateData: false }` as the
+third registration argument to skip private payload copies and receive a frozen
+empty object instead. This preserves event filters, trusted-only delivery, and
+service lease cleanup. Private data remains enabled by default; older hosts
+ignore the optional argument and retain their existing copying behavior.
 
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the
@@ -229,6 +247,7 @@ api.registerService({
   start(ctx) {
     unsubscribeSessionsChanged = ctx.gatewayEvents?.onSessionsChanged((event) => {
       // event: { sessionKey, agentId?, label?, displayName?, reason?, phase? }
+      // refreshSession is your plugin's own handler, not an SDK export.
       refreshSession(event.sessionKey);
     });
   },
@@ -253,6 +272,8 @@ that intentionally starts required work in the background must report later fail
 through its generation-bound health reporter:
 
 ```typescript
+// startIndexWorker and stopIndexWorker are your plugin's own background-work
+// helpers, not SDK exports.
 api.registerService({
   id: "index-worker",
   start(ctx) {

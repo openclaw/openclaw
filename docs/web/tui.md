@@ -45,7 +45,7 @@ openclaw tui --local
 - `openclaw chat` and `openclaw terminal` are aliases for `openclaw tui --local`.
 - `--local` cannot be combined with `--url`, `--token`, or `--password`.
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
-- Bare `openclaw` (no subcommand) picks a target automatically: an unconfigured install runs inference onboarding; invalid config opens classic doctor guidance; a reachable configured Gateway opens this TUI shell in gateway mode; otherwise a configured local model opens it in local mode.
+- Bare `openclaw` (no subcommand) picks a target automatically. An unconfigured install runs inference onboarding. Invalid config opens classic doctor guidance. A reachable configured Gateway opens this TUI shell in gateway mode. Otherwise, a configured local model opens it in local mode.
 
 ## What you see
 
@@ -69,28 +69,56 @@ openclaw tui --local
 - The current agent + session are always visible in the footer.
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
-- When started without `--session`, gateway-mode TUI resumes the last selected session for the same gateway, agent, and session scope if that session still exists. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
+- When started without `--session`, gateway-mode TUI resumes the last selected session. The gateway, agent, and session scope must match, and that session must still exist. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
 
 ## Sending + delivery
 
-- Messages always go to the Gateway (or embedded runtime in local mode); delivering the assistant's reply back out to a chat provider is a separate, off-by-default step.
-- The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`; explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
-- Delivery is fixed for the whole TUI session at launch: start with `openclaw tui --deliver` to turn it on. There is no `/deliver` slash command or Settings toggle to flip it mid-session; restart the TUI to change it.
+- Messages always go to the Gateway (or embedded runtime in local mode). Delivering the assistant's reply back out to a chat provider is a separate, off-by-default step.
+- The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`. Explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
+- Delivery is fixed for the whole TUI session when it starts. Start with `openclaw tui --deliver` to turn it on. There is no `/deliver` slash command or Settings toggle to flip it mid-session. Restart the TUI to change it.
 
 ## Pickers + overlays
 
-- Model picker: list available models and set the session override.
+- Model picker: list the selected agent's published models and set the session override. Unavailable choices stay visible with their reason. Selecting one shows guidance without changing the session. Choices with unknown availability remain selectable. Gateways predating published catalogs retain their existing selection behavior.
 - Agent picker: choose a different agent.
 - Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
 
-Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter; press again to close it.
+Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
+
+## Questions
+
+When the agent calls [`ask_user`](/tools/ask-user), the TUI opens a question
+prompt for the active session. This works in Gateway mode and local mode
+(`openclaw chat` or `openclaw tui --local`). Prompts with up to three questions
+show one at a time, with a stepper and the time remaining.
+
+Use arrow keys or number keys to choose an option, then Enter to continue.
+For multi-select questions, toggle the choices you want and accept them.
+**Other…** always lets you type your own answer, and **Skip** declines the entire prompt.
+After the final question, the TUI submits the answers and shows a compact
+system notice.
+
+Press Esc to collapse the prompt and return to the composer. The question
+stays pending with a slim status indicator. `/question` reopens it. A normal
+reply still answers eligible pending questions from an active run. Expired
+questions and questions answered elsewhere close automatically. Reconnecting
+or switching sessions restores pending questions for the selected session.
+In local mode, pending questions last only for the current TUI process.
+
+Gateway-connected [`secrets`](/tools/secrets) requests use a masked input that
+renders bullets and keeps the value out of chat and input history. The prompt
+shows the entry name, reason, and proposed allowed hosts. Hosts are read-only
+here: submitting accepts the list as shown. Use the Control UI to edit it.
+Local mode cannot fulfill store-bound requests. Use `openclaw secrets store`
+or the Control UI with a running Gateway. Enter credentials only in a masked
+prompt, never in the composer.
 
 ## Keyboard shortcuts
 
 - Enter: send message
 - Shift+Enter or Ctrl+J: insert a newline without sending
-- Esc: abort active run
+- Esc: collapse an open question prompt, or abort the active run from the composer
 - Ctrl+C: clear input (press twice to exit)
 - Ctrl+D: exit
 - Ctrl+L: model picker
@@ -108,11 +136,12 @@ chat commands such as `/stop` and `/btw` retain their normal meaning.
 Core:
 
 - `/help`
-- `/status` (Gateway-forwarded; shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`; shows Gateway version, channel configuration summaries, and sessions directly)
+- `/status` (Gateway-forwarded, shows session/model summary)
+- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and sessions directly.
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
-- `/model <provider/model|default>` (or `/models`; `default` clears the session override)
+- `/model <provider/model|default>` (or `/models`). `default` clears the session override.
+- `/question` (reopen the active session's pending question)
 
 Gateway-connected model updates honor the optional
 [`agents.defaults.modelSelectionScope`](/gateway/config-agents/models#agentsdefaultsmodelselectionscope)
@@ -121,14 +150,14 @@ for admins. The embedded local TUI stays session-only regardless of this setting
 
 Session controls:
 
-- `/think <off|minimal|low|medium|high|default>` (higher tiers may add levels like `xhigh`/`max` depending on the model; `default` clears the session override)
+- `/think <off|minimal|low|medium|high|default>` (higher tiers may add levels like `xhigh`/`max` depending on the model). `default` clears the session override.
 - `/fast <status|auto|on|off|default>` (`default` clears the session override)
 - `/verbose <on|full|off>`
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
-- `/usage <off|tokens|full|cost|reset>` (`cost` shows session, today, and 30-day costs; `reset`/`inherit`/`clear`/`default` clears the session override)
+- `/usage <off|tokens|full|cost|reset>` (`cost` shows session, today, and 30-day costs). `reset`/`inherit`/`clear`/`default` clears the session override.
 - `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
-- `/btw <side question>` (alias: `/side`; asks without changing future session context)
+- `/btw <side question>` (alias: `/side`) asks without changing future session context.
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/queue <steer|followup|collect|interrupt> [debounce:<duration>] [cap:<n>] [drop:<summarize|old|new>]`
@@ -136,14 +165,14 @@ Session controls:
 
 Session lifecycle:
 
-- `/new` (spawn a fresh, isolated session under a new key; does not affect other TUI clients on the old session)
+- `/new` (spawn a fresh, isolated session under a new key). It does not affect other TUI clients on the old session.
 - `/reset` (reset the current session key in place)
 - `/abort` (abort the active run)
 - `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
 
-When the current session is reset, the TUI confirms it after refreshing the transcript, including resets initiated by another client.
+When the current session is reset, the TUI reports it after refreshing the transcript. This includes resets started by another client.
 
 Local mode only:
 
@@ -153,7 +182,7 @@ Local mode implements the same queue modes inside the embedded runtime. A
 mid-run prompt follows the session's `/queue` policy: `steer` injects when the
 runtime can accept it, `followup` waits for a separate turn, `collect` combines
 pending prompts, and `interrupt` stops the current run before starting the new
-one. Explicit `/steer <message>` is Gateway-only; use `/queue steer` plus a
+one. Explicit `/steer <message>` is Gateway-only. Use `/queue steer` plus a
 normal message in local mode.
 
 OpenClaw:
@@ -165,14 +194,14 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 ## Local shell commands
 
 - Prefix a line with `!` to run a local shell command on the TUI host.
-- The TUI prompts once per session to allow local execution; declining keeps `!` disabled for the session.
+- The TUI prompts once per session to allow local execution. Declining keeps `!` disabled for the session.
 - Commands run in a fresh, non-interactive shell in the TUI working directory (no persistent `cd`/env).
 - Local shell commands receive `OPENCLAW_SHELL=tui-local` in their environment.
-- A lone `!` is sent as a normal message; leading spaces do not trigger local exec.
+- A lone `!` is sent as a normal message. Leading spaces do not trigger local exec.
 
 ## OpenClaw setup and repair helper
 
-OpenClaw is the ring-zero setup/repair assistant, exposed as `openclaw setup` after the configured default model passes a live inference check. If inference is unavailable, an interactive invocation returns to inference onboarding and automation fails with repair guidance. It runs inside the same local TUI shell as `openclaw tui --local`, backed by an AI agent restricted to OpenClaw's typed, approval-gated operations:
+OpenClaw is the ring-zero setup/repair assistant. It is exposed as `openclaw setup` after the configured default model passes a live inference check. If inference is unavailable, an interactive invocation returns to inference onboarding and automation fails with repair guidance. It runs inside the same local TUI shell as `openclaw tui --local`, backed by an AI agent restricted to OpenClaw's typed, approval-gated operations:
 
 ```bash
 openclaw setup                       # start interactively
@@ -180,13 +209,13 @@ openclaw setup -m "status"           # run one request and exit
 openclaw setup -m "set default model openai/gpt-5.2" --yes   # apply a config write
 ```
 
-- Persistent config writes need approval: either confirm interactively or pass `--yes`.
+- Persistent config writes need approval: either approve interactively or pass `--yes`.
 - `--json` prints the startup overview as JSON instead of starting the chat.
-- From inside OpenClaw, an `open-tui` request (for example, asking to talk to a normal agent) exits OpenClaw and opens the regular agent TUI; use `/openclaw` there to come back.
+- From inside OpenClaw, an `open-tui` request exits OpenClaw and opens the regular agent TUI. One example is asking to talk to a normal agent. Use `/openclaw` there to come back.
 
-Use local mode when the current config already validates and you want the embedded agent to inspect it on the same machine, compare it against the docs, and help repair drift without depending on a running Gateway.
+Use local mode when the current config already passes validation and you want the embedded agent to work on it. That agent inspects the config on the same machine, compares it against the docs, and helps repair drift. Local mode does not depend on a running Gateway.
 
-If `openclaw config validate` is already failing, start with `openclaw configure` or `openclaw doctor --fix` first; `openclaw chat` still needs a loadable config to start.
+If `openclaw config validate` is already failing, start with `openclaw configure` or `openclaw doctor --fix` first. `openclaw chat` still needs a loadable config to start.
 
 Typical loop:
 
@@ -229,22 +258,23 @@ Tips:
 ## Terminal colors
 
 - The TUI keeps assistant body text in your terminal's default foreground so dark and light terminals both stay readable.
-- If your terminal uses a light background and auto-detection is wrong, set `OPENCLAW_THEME=light` before launching `openclaw tui`.
+- If your terminal uses a light background and auto-detection is wrong, set `OPENCLAW_THEME=light` before starting `openclaw tui`.
 - To force the original dark palette instead, set `OPENCLAW_THEME=dark`.
 
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
-- Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
+- Reconnect and event-gap recovery reconcile active runs with history. They retain concurrent and newly observed runs. They do not revive runs that exact history has excluded.
 - Streaming responses update in place until finalized.
+- Long words, email addresses, and identifiers wrap to the terminal width without inserting spaces into message text.
 - Failed assistant attachments show an actionable warning alongside any reply text. Attachment summaries use generic media kinds without exposing filenames or source URLs.
 - Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
 
 ## Connection details
 
-- The TUI connects with client id `openclaw-tui` under the coarse `ui` client mode (the same mode Control UI and WebChat use for Gateway policy).
-- Reconnects show a system message; event gaps are surfaced in the log.
+- The TUI connects with client id `openclaw-tui` under the coarse `ui` client mode. Control UI and WebChat use that same mode for Gateway policy.
+- Reconnects show a system message. Event gaps are surfaced in the log.
 
 ## Options
 
@@ -268,10 +298,10 @@ When you set `--url`, the TUI does not fall back to config or environment creden
 
 No output after sending a message:
 
-- Run `/status` in the TUI to confirm the Gateway is connected and idle/busy.
+- Run `/status` in the TUI to check the Gateway is connected and idle/busy.
 - Check the Gateway logs: `openclaw logs --follow`.
-- Confirm the agent can run: `openclaw status` and `openclaw models status`.
-- If you expect messages in a chat channel, confirm the TUI was started with `--deliver` (this cannot be turned on later without restarting).
+- Check the agent can run: `openclaw status` and `openclaw models status`.
+- If you expect messages in a chat channel, check the TUI was started with `--deliver`. Delivery cannot be turned on later without restarting.
 
 ## Connection troubleshooting
 
@@ -285,3 +315,5 @@ No output after sending a message:
 - [Config](/cli/config) — inspect, validate, and edit `openclaw.json`
 - [Doctor](/cli/doctor) — guided repair and migration checks
 - [CLI Reference](/cli) — full CLI command reference
+- [`openclaw resume`](/cli/resume) — attach the TUI to a recent Gateway session
+- [`openclaw tui`](/cli/tui) — command reference and flags for the terminal UI

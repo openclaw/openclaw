@@ -987,20 +987,28 @@ describe("launchd runtime parsing", () => {
 });
 
 describe("launchd runtime state", () => {
-  it.runIf(process.platform === "darwin")(
-    "fails soft within the supplied deadline when launchctl blocks",
-    async () => {
+  it.runIf(process.platform === "darwin").each(["runtime", "enabled"] as const)(
+    "bounds the %s read by the supplied deadline when launchctl blocks",
+    async (read) => {
       const realFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const tempDir = await realFs.mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/openclaw-launchd-`);
-      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nsleep 2\n", { mode: 0o755 });
+      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nexec /bin/sleep 2\n", {
+        mode: 0o755,
+      });
       state.realExecFile = true;
 
       try {
         await withEnvAsync({ PATH: `${tempDir}:${process.env.PATH ?? ""}` }, async () => {
           const startedAt = Date.now();
-          const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
+          if (read === "enabled") {
+            await expect(
+              isLaunchAgentEnabled({ env: { HOME: tempDir }, timeoutMs: 100 }),
+            ).rejects.toThrow("launchctl print-disabled failed");
+          } else {
+            const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
+            expect(runtime.status).toBe("unknown");
+          }
           expect(Date.now() - startedAt).toBeLessThan(1_000);
-          expect(runtime.status).toBe("unknown");
         });
       } finally {
         state.realExecFile = false;
@@ -1050,6 +1058,7 @@ describe("launchd runtime state", () => {
     expect(runtime).toEqual({
       status: "unknown",
       detail: "Operation not permitted while reading launchd state",
+      inspectionReason: "launchd-gui-domain-unavailable",
     });
   });
 
@@ -1074,6 +1083,7 @@ describe("launchd runtime state", () => {
     expect(runtime).toEqual({
       status: "unknown",
       detail: "System LaunchDaemon system/ai.openclaw.gateway already owns this gateway label.",
+      inspectionReason: "launchd-system-owned",
       systemLaunchDaemon: {
         status: "loaded",
         serviceTarget: "system/ai.openclaw.gateway",
@@ -1750,13 +1760,13 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd uninstall", () => {
-  it("rejects an unrecognized launchctl inspection failure", async () => {
+  it("rejects a permission-denied launchctl inspection", async () => {
     state.printError = "launchctl print permission denied";
     state.printFailuresRemaining = 1;
 
-    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
-      "launchctl print failed: launchctl print permission denied",
-    );
+    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toMatchObject({
+      reason: "launchd-gui-domain-unavailable",
+    });
   });
 
   it("refuses an in-band uninstall before bootout or plist removal", async () => {
@@ -2543,6 +2553,19 @@ describe("launchd install", () => {
     expect(plist).toContain("<integer>10</integer>");
   });
 
+  it("points launchd stderr at the stdout log so startup crashes survive", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent(defaultLaunchAgentFixture(env));
+
+    const plist = state.files.get(resolveLaunchAgentPlistPath(env)) ?? "";
+    const logPath = "/Users/test/Library/Logs/openclaw/gateway.log";
+    // readLastGatewayErrorLine only reads stdout on darwin, so a stderr target
+    // that is not the stdout log discards every pre-logger startup failure.
+    expect(plist).toContain(`<key>StandardOutPath</key>\n    <string>${logPath}</string>`);
+    expect(plist).toContain(`<key>StandardErrorPath</key>\n    <string>${logPath}</string>`);
+    expect(plist).not.toContain("<key>StandardErrorPath</key>\n    <string>/dev/null</string>");
+  });
+
   it("rewrites the plist before bootstrap during restart fallback", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
@@ -2563,8 +2586,9 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
-    expect(plist).toContain("<key>StandardErrorPath</key>");
-    expect(plist).toContain("<string>/dev/null</string>");
+    expect(plist).toContain(
+      "<key>StandardErrorPath</key>\n    <string>/Users/test/Library/Logs/openclaw/gateway.log</string>",
+    );
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<string>node</string>");
     expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");
@@ -2755,7 +2779,9 @@ describe("launchd install", () => {
 
     await stopLaunchAgent({ env, stdout, disable });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port, {
+      assertCurrent: expect.any(Function),
+    });
     expect(inspectPortUsage).toHaveBeenCalledWith(port, { probeHosts: ["127.0.0.1"] });
     expect(output).toContain("Stopped LaunchAgent");
   });
@@ -2819,7 +2845,9 @@ describe("launchd install", () => {
 
     await stopLaunchAgent(launchAgentControlFixture(env));
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19006);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19006, {
+      assertCurrent: expect.any(Function),
+    });
     expect(inspectPortUsage).toHaveBeenCalledWith(19006, {
       probeHosts: ["127.0.0.1"],
     });
@@ -2849,7 +2877,9 @@ describe("launchd install", () => {
       );
 
       expect(onMutation).toHaveBeenCalledWith({ mode });
-      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port);
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port, {
+        assertCurrent: expect.any(Function),
+      });
       expect(inspectPortUsage).toHaveBeenCalledWith(port, { probeHosts: ["127.0.0.1"] });
       expect(launchctlCommandNames()).toContain("bootout");
       if (disable) {

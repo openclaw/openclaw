@@ -6,7 +6,9 @@ read_when:
 title: "Health checks"
 ---
 
-Short guide to verify channel connectivity without guessing.
+Short guide to verify Gateway and channel health without guessing. It covers the
+CLI health checks, the HTTP probe endpoints, the dedicated `health` command, and
+uptime monitoring.
 
 ## Quick checks
 
@@ -83,6 +85,11 @@ core equivalents: `1` means one CPU core fully occupied over the interval, and
 parallel work can produce values above `1`. It is not a percentage of the host's
 total CPU capacity.
 
+The Control UI's **System busyness** overlay reads the same sampler through
+`status.eventLoop` on both Node and Bun. Its CPU percentage uses `100%` for one
+fully occupied core. CPU and delay show a dash until the first sample completes;
+a persistent dash means the telemetry is unavailable, not zero CPU usage.
+
 Event-loop delay and utilization describe the main thread separately. A `cpu`
 degradation reason reports process CPU pressure with delay co-evidence; it does
 not identify the thread consuming CPU or prove a main-thread hang. Inspect the
@@ -102,7 +109,7 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 
 - **BetterStack:** Set health check URL to `https://<your-gateway-host>:<port>/health`
 - **UptimeRobot:** Add a new HTTP monitor with URL `https://<your-gateway-host>:<port>/health`
-- **Generic:** Any HTTP GET to `/health` returns 200 with `{"ok":true}` when the gateway is healthy
+- **Generic:** Any HTTP GET to `/health` returns 200 with `{"ok":true,"status":"live"}` while the gateway's HTTP server is live
 
 ## When something fails
 
@@ -115,6 +122,9 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 `openclaw health` asks the running gateway for its health snapshot (no direct channel
 sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
 gateway refreshes that cache in the background; `--verbose` forces a live probe instead.
+Connections and cached health reads share a one-minute background refresh cadence, so
+repeated diagnostic connections do not each rebuild the health snapshot. Explicit live
+probes and refreshes for missing or stale health still run immediately.
 Snapshots describe loaded and configured channels. Stored credentials alone do not
 activate a channel or add it to Gateway health; use channel setup to enable it.
 The command reports linked creds/auth age when available, per-channel probe summaries,
@@ -158,3 +168,4 @@ The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (pr
 - [Gateway runbook](/gateway)
 - [Diagnostics export](/gateway/diagnostics)
 - [Gateway troubleshooting](/gateway/troubleshooting)
+- [`openclaw health`](/cli/health) — request this snapshot over RPC from the CLI

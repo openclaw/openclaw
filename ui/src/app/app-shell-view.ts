@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
@@ -35,6 +35,7 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
@@ -55,6 +56,7 @@ import {
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   isBrowserPanelAvailable,
+  isBrowserPanelSurfaceAvailable,
   isDesktopPanelAvailable,
   isHomePanelAvailable,
 } from "./panel-availability.ts";
@@ -105,7 +107,7 @@ export interface ShellViewHost extends DevicePairSetupHost {
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
   refreshControlUi: () => Promise<boolean>;
-  replaceChatWithCurrentSession(): boolean;
+  recoverNotFoundRoute(): boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
@@ -119,7 +121,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   if (!context || !runtime) {
     return nothing;
   }
-  if (host.routeState.routeId === undefined) {
+  if (host.routeState.routeId === undefined && !host.routeState.routeFailed) {
     return renderConnectingSplash();
   }
   const gatewaySnapshot = context.gateway.snapshot;
@@ -139,7 +141,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const watchUpdateProgress = createUpdateProgressWatcher(context);
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
-  const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
+  const browserPanelAvailable = isBrowserPanelSurfaceAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable =
@@ -149,7 +151,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
   // Session routes have an offline outbox, New Session keeps a local draft, and
-  // Appearance persists local preference intent for replay. Their server actions
+  // Appearance persists local preference intent for replay. Connection settings
+  // must remain usable to replace an unreachable Gateway. Their server actions
   // are independently gated; other pages cannot submit useful disconnected work.
   const reloadRequired = gatewaySnapshot.phase === "reload-required";
   const pageActionsBlocked =
@@ -157,11 +160,16 @@ export function renderApplicationShell(host: ShellViewHost) {
     !gatewayConnected &&
     !sessionRoute &&
     activeRoute !== "new-session" &&
-    activeRoute !== "appearance";
-  // Plugin tabs share one route; the search picks the active item.
+    activeRoute !== "appearance" &&
+    activeRoute !== "connection";
+  // Plugin tabs share one route; the URL picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
-      ? pluginTabRefFromSearch(host.routeState.location?.search ?? "")
+      ? pluginTabRefFromSearch(
+          host.routeState.location?.search ?? "",
+          host.routeState.location?.pathname,
+          context.basePath,
+        )
       : null;
   const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
   // Onboarding renders without any navigation chrome, so the settings takeover
@@ -174,8 +182,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       isSettingsNavigationRoute(activeRoute) ||
       activeRoute === "skills" ||
       activeRoute === "cron");
-  const settingsTakeover =
-    isSettingsNavigationRoute(activeRoute) && !host.onboardingMode && !nativeEmbed;
+  const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
   const runtimeConfig = context.runtimeConfig.state;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
@@ -305,6 +312,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           activeSearch: host.routeState.location?.search ?? "",
           activeHash: host.routeState.location?.hash ?? "",
           offline: gatewaySnapshot.offlineStable,
+          phase: gatewaySnapshot.phase,
           restartPending: gatewaySnapshot.restartPending,
           suspensionPhase: gatewaySnapshot.suspensionPhase,
           queuedOutboxCount: storedOutboxes?.total ?? 0,
@@ -593,7 +601,8 @@ export function renderApplicationShell(host: ShellViewHost) {
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
-          .onNotFound=${() => host.replaceChatWithCurrentSession()}
+          .retentionScope=${gatewayPresentationScope(context.gateway)}
+          .onNotFound=${() => host.recoverNotFoundRoute()}
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
@@ -616,6 +625,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                 data-chat-autotype-exempt
                 .client=${gatewayConnected ? gatewaySnapshot.client : null}
                 .available=${browserPanelAvailable}
+                .remoteAvailable=${isBrowserPanelAvailable(gatewaySnapshot)}
                 .suppressed=${settingsTakeover || nativeEmbed}
                 .resourceBasePath=${context.resourceBasePath}
                 .authToken=${resolveControlUiAuthToken({

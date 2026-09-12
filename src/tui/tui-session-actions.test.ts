@@ -1474,45 +1474,15 @@ describe("tui session actions", () => {
   });
 
   it.each([
-    {
-      description: "a different session",
-      sameSession: false,
-      activeRunIds: undefined,
-      preservesOld: false,
-    },
-    {
-      description: "a same-session replacement with exact active runs",
-      sameSession: true,
-      activeRunIds: ["run-next"],
-      preservesOld: false,
-    },
-    {
-      description: "a same-session concurrent run",
-      sameSession: true,
-      activeRunIds: ["run-previous", "run-next"],
-      preservesOld: true,
-    },
-    {
-      description: "a same-session run with unknown active membership",
-      sameSession: true,
-      activeRunIds: undefined,
-      preservesOld: true,
-    },
-    {
-      description: "a same-session run with null active membership",
-      sameSession: true,
-      activeRunIds: null,
-      preservesOld: true,
-    },
-    {
-      description: "a same-session run with malformed active membership",
-      sameSession: true,
-      activeRunIds: ["run-next", 42],
-      preservesOld: true,
-    },
+    ["a different session", false, undefined, false],
+    ["a same-session replacement with exact active runs", true, ["run-next"], false],
+    ["a same-session concurrent run", true, ["run-previous", "run-next"], true],
+    ["a same-session run with unknown active membership", true, undefined, true],
+    ["a same-session run with null active membership", true, null, true],
+    ["a same-session run with malformed active membership", true, ["run-next", 42], true],
   ])(
-    "reconciles previous run ownership when restoring $description",
-    async ({ sameSession, activeRunIds, preservesOld }) => {
+    "reconciles previous run ownership when restoring %s",
+    async (_description, sameSession, activeRunIds, preservesOld) => {
       vi.useFakeTimers();
       try {
         const previousSessionKey = "agent:main:previous";
@@ -1539,6 +1509,7 @@ describe("tui session actions", () => {
           tui,
           state,
           setActivityStatus,
+          updateFooter: vi.fn(),
           loadHistory: () => loadSelectedHistory(),
           streamingWatchdogMs: 100,
         });
@@ -2265,6 +2236,7 @@ describe("tui session actions", () => {
         btw,
         state,
         setActivityStatus,
+        updateFooter: vi.fn(),
         loadHistory: () => {
           const history = actions.loadHistory();
           histories.push(history);
@@ -2694,70 +2666,46 @@ describe("tui session actions", () => {
   });
 
   it.each([
-    {
-      name: "successful abort after a session switch",
-      initialKey: "agent:main:first",
-      nextKey: "agent:main:second",
-      aborted: true,
-      rejected: false,
-    },
-    {
-      name: "no-active-run abort after a session switch",
-      initialKey: "agent:main:first",
-      nextKey: "agent:main:second",
-      aborted: false,
-      rejected: false,
-    },
-    {
-      name: "rejected abort after a session switch",
-      initialKey: "agent:main:first",
-      nextKey: "agent:main:second",
-      aborted: false,
-      rejected: true,
-    },
-    {
-      name: "successful global abort after an agent switch",
-      initialKey: "global",
-      nextKey: "global",
-      aborted: true,
-      rejected: false,
-    },
-    {
-      name: "no-active-run global abort after an agent switch",
-      initialKey: "global",
-      nextKey: "global",
-      aborted: false,
-      rejected: false,
-    },
-    {
-      name: "rejected global abort after an agent switch",
-      initialKey: "global",
-      nextKey: "global",
-      aborted: false,
-      rejected: true,
-    },
-    {
-      name: "successful abort after the same session is replaced",
-      initialKey: "agent:main:main",
-      nextKey: "agent:main:main",
-      aborted: true,
-      rejected: false,
-    },
-    {
-      name: "no-active-run abort after the same session is replaced",
-      initialKey: "agent:main:main",
-      nextKey: "agent:main:main",
-      aborted: false,
-      rejected: false,
-    },
-    {
-      name: "rejected abort after the same session is replaced",
-      initialKey: "agent:main:main",
-      nextKey: "agent:main:main",
-      aborted: false,
-      rejected: true,
-    },
-  ])("ignores a $name", async ({ initialKey, nextKey, aborted, rejected }) => {
+    [
+      "successful abort after a session switch",
+      "agent:main:first",
+      "agent:main:second",
+      true,
+      false,
+    ],
+    [
+      "no-active-run abort after a session switch",
+      "agent:main:first",
+      "agent:main:second",
+      false,
+      false,
+    ],
+    ["rejected abort after a session switch", "agent:main:first", "agent:main:second", false, true],
+    ["successful global abort after an agent switch", "global", "global", true, false],
+    ["no-active-run global abort after an agent switch", "global", "global", false, false],
+    ["rejected global abort after an agent switch", "global", "global", false, true],
+    [
+      "successful abort after the same session is replaced",
+      "agent:main:main",
+      "agent:main:main",
+      true,
+      false,
+    ],
+    [
+      "no-active-run abort after the same session is replaced",
+      "agent:main:main",
+      "agent:main:main",
+      false,
+      false,
+    ],
+    [
+      "rejected abort after the same session is replaced",
+      "agent:main:main",
+      "agent:main:main",
+      false,
+      true,
+    ],
+  ])("ignores a %s", async (_name, initialKey, nextKey, aborted, rejected) => {
     const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
     const abortChat = vi.fn(() => deferred.promise);
     const loadHistory = vi.fn().mockResolvedValue({

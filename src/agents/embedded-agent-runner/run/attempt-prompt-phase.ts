@@ -1,10 +1,6 @@
 /** Runs prompt assembly, admission, submission, and prompt-local recovery. */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
-  buildHeartbeatOutcomeContext,
-  claimHeartbeatOutcomeForRun,
-} from "../../../infra/heartbeat-outcome-store.js";
-import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   setAgentRunAttemptTerminalFailure,
@@ -18,8 +14,9 @@ import {
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
+import { persistToolResultProjections } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
-import { isOpenClawAbortableWrapper } from "./abortable.js";
+import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
@@ -38,6 +35,7 @@ import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
@@ -180,24 +178,10 @@ export async function runEmbeddedAttemptPromptPhase(
   leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
 
   try {
-    const canClaimHeartbeatOutcome =
-      attempt.trigger === "user" && attempt.sessionPersistence !== "detached";
-    const heartbeatOutcomeContext =
-      canClaimHeartbeatOutcome && attempt.sessionKey
-        ? buildHeartbeatOutcomeContext(
-            claimHeartbeatOutcomeForRun({
-              agentId: sessionAgentId,
-              sessionKey: attempt.sessionKey,
-              storePath: attempt.sessionTarget?.storePath,
-              runId: attempt.runId,
-            }),
-          )
-        : undefined;
-    const promptContext = prepareEmbeddedAttemptPromptContext({
+    const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
-      ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
       messages: activeSession.messages,
       prompt: promptAssembly,
       replaceSessionMessages: (messages) => {
@@ -209,11 +193,14 @@ export async function runEmbeddedAttemptPromptPhase(
       isRawModelRun,
       ...(preparedUserTurnMessage ? { preparedUserTurnMessage } : {}),
       sessionAgentId,
-      setActiveSessionSystemPrompt,
       ...(systemPromptReport ? { systemPromptReport } : {}),
       systemPromptText,
       toolResultPromptProjectionState,
     });
+    if (runAbortController.signal.aborted) {
+      throw createAbortableError(runAbortController.signal);
+    }
+    promptAssembly.assertHostActive?.();
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
     setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
@@ -398,6 +385,9 @@ export async function runEmbeddedAttemptPromptPhase(
       state,
       systemPrompt: promptContext.systemPromptForHook,
       toolResultMaxChars: promptContext.promptToolResultMaxChars,
+      // Use the installed model-facing tool surface (same source as the compaction
+      // request budget) so client tools appended by attempt-client-tools are counted.
+      toolSchemaTokens: estimateToolSchemaTokenPressure(activeSession.agent.state.tools),
     });
     publishDispatchState(state);
 
@@ -416,6 +406,15 @@ export async function runEmbeddedAttemptPromptPhase(
         },
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
+        },
+        persistToolResultProjections: async () => {
+          if (!isRawModelRun && toolResultPromptProjectionState.frozen.size > 0) {
+            await withOwnedTranscriptWrite(() => {
+              persistToolResultProjections(toolResultPromptProjectionState, (customType, data) =>
+                sessionManager.appendCustomEntry(customType, data),
+              );
+            });
+          }
         },
         ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
         ...(promptContext.runtimeContextMessageForCurrentTurn

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import {
   renderUpdateRunNotice,
@@ -31,6 +32,34 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
 }
 
 describe("update run report", () => {
+  it.each(["status", "failure"])(
+    "includes the legacy expiry advisory in the %s report",
+    async (surface) => {
+      const record = run({ status: "failed", reason: "legacy-driver-expired" });
+      const text =
+        surface === "status"
+          ? renderUpdateRunReport(record).markdown
+          : (
+              await prepareUpdateFailureReport(
+                {
+                  attemptId: record.runId,
+                  result: {
+                    status: "error",
+                    mode: "unknown",
+                    reason: record.reason ?? undefined,
+                    steps: [],
+                    durationMs: 0,
+                  },
+                },
+                { stateDir: "/fixture/state", env: {} },
+              )
+            ).body;
+      expect(text).toContain(
+        "A 2026.9.2-era update never progressed past admission; treated as abandoned after 24 h; run `openclaw update` to retry.",
+      );
+    },
+  );
+
   it.each([
     ["requester-revoked", "A current command owner must start a new update"],
     ["repair-requires-config-change", "run openclaw doctor --fix under your own authority"],
@@ -169,7 +198,7 @@ describe("update run report", () => {
     if (reason === "requester-revoked") {
       expect(report.markdown).toContain("Further recovery requires a current command owner.");
     } else if (reason === "repair-requires-config-change") {
-      expect(report.markdown).toContain("Rehearsal config changes were not promoted.");
+      expect(report.markdown).toContain("Doctor could not promote config changes.");
     }
   });
 

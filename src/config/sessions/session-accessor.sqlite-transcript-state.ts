@@ -15,10 +15,48 @@ import {
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
 import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
+import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
+
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+  updatedAt: number | null;
+};
+
+export function readTranscriptContextVersionInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+) {
+  const db = getSessionKysely(database.db);
+  const cold = readSessionColdTranscript(database.db, sessionId);
+  const version = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.max<number | null>("seq").as("rawSeq"),
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where("session_id", "=", sessionId)
+          .as("generation"),
+        eb
+          .selectFrom("session_windows")
+          .select("transcript_updated_at")
+          .where("session_id", "=", sessionId)
+          .as("updatedAt"),
+      ])
+      .where("session_id", "=", sessionId),
+  )!;
+  return cold ? { ...version, rawSeq: cold.last_seq } : version;
+}
 
 function createTranscriptGeneration(): string {
   return randomUUID().replaceAll("-", "");
@@ -203,6 +241,7 @@ export function ensureTranscriptSessionRoot(
 }
 
 export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: string): number {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -280,6 +319,7 @@ export function deleteTranscriptEventsInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): boolean {
+  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   executeSqliteQuerySync(
     database.db,

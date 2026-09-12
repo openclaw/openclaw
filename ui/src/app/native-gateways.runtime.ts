@@ -1,3 +1,5 @@
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
 export type NativeGateway = {
   id: string;
   name: string;
@@ -8,14 +10,8 @@ export type NativeGateway = {
 };
 
 export type NativeGatewaysSnapshot = { gateways: NativeGateway[]; currentId: string };
-type NativeGatewaysMessage =
-  | { type: "select" | "open-window" | "set-primary"; id: string }
-  | { type: "open-settings" };
 type NativeGatewaysWindow = Window & {
   __OPENCLAW_NATIVE_GATEWAYS__?: unknown;
-  webkit?: {
-    messageHandlers?: { openclawGateways?: { postMessage(message: NativeGatewaysMessage): void } };
-  };
 };
 
 const NATIVE_GATEWAYS_CHANGED_EVENT = "openclaw:native-gateways-changed";
@@ -26,6 +22,8 @@ export type NativeGatewaysCapability = {
   select(id: string): void;
   openWindow(id: string): void;
   setPrimary(id: string): void;
+  reconnect(id: string): void;
+  reconnectCancel(id: string): void;
   openSettings(): void;
 };
 
@@ -45,13 +43,15 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
     return null;
   }
   const nativeWindow = window as NativeGatewaysWindow;
-  const handler = nativeWindow.webkit?.messageHandlers?.openclawGateways;
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways;
   if (!handler?.postMessage) {
     return null;
   }
   const post = handler.postMessage.bind(handler);
-  const postWithId = (type: "select" | "open-window" | "set-primary", id: string) =>
-    post({ type, id });
+  const postWithId = (
+    type: "select" | "open-window" | "set-primary" | "reconnect" | "reconnect-cancel",
+    id: string,
+  ) => post({ type, id });
   let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"]);
   const listeners = new Set<(snapshot: NativeGatewaysSnapshot) => void>();
   const onChange = (event: Event) => {
@@ -74,13 +74,15 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
     select: (id) => postWithId("select", id),
     openWindow: (id) => postWithId("open-window", id),
     setPrimary: (id) => postWithId("set-primary", id),
+    reconnect: (id) => postWithId("reconnect", id),
+    reconnectCancel: (id) => postWithId("reconnect-cancel", id),
     openSettings: () => post({ type: "open-settings" }),
   };
 }
 
 let singleton: NativeGatewaysCapability | null | undefined;
 
-// Chat-chunk-owned so this capability never enters the QA-smoke startup bundle.
+// Loaded by native chat features and sidebar menus, outside the startup bundle.
 export function nativeGatewaysCapability(): NativeGatewaysCapability | null {
   if (singleton === undefined) {
     singleton = createNativeGatewaysCapability();

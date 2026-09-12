@@ -117,11 +117,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          path: .mobile-release-authority
+          path: apps/ios/build/mobile-release-ci/authority
           persist-credentials: false
           fetch-depth: 0
           sparse-checkout: |
             .github/actions/mobile-release-authority
+            .github/actions/ios-signing-keychain
             scripts
             apps/mobile/version.json
             apps/android/version.json
@@ -135,7 +136,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Revalidate release authority immediately before signing access
-        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        uses: ./apps/ios/build/mobile-release-ci/authority/.github/actions/mobile-release-authority
         with:
           operation: revalidate
           platform: ios
@@ -157,7 +158,7 @@ jobs:
           permission-contents: read
 
       - name: Revalidate release authority immediately before iOS signing checkout
-        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        uses: ./apps/ios/build/mobile-release-ci/authority/.github/actions/mobile-release-authority
         with:
           operation: revalidate
           platform: ios
@@ -229,11 +230,24 @@ jobs:
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
 
+      - name: Install Watch Rust toolchain
+        if: hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
+      - name: Create job-owned iOS signing keychain
+        uses: ./apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain
+
       - name: Refresh trusted authority before store access
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          path: .mobile-release-sink
+          path: apps/ios/build/mobile-release-ci/sink
           persist-credentials: false
           fetch-depth: 0
           sparse-checkout: |
@@ -245,8 +259,29 @@ jobs:
             apps/android/fastlane/metadata/android/en-US/release_notes.txt
             apps/ios/CHANGELOG.md
 
+      - name: Revalidate release authority immediately before signing proof
+        uses: ./apps/ios/build/mobile-release-ci/sink/.github/actions/mobile-release-authority
+        with:
+          operation: revalidate
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
+
+      - name: Validate readonly iOS signing key access
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          source ./scripts/lib/ios-fastlane.sh
+          (cd apps/ios && run_ios_fastlane ios signing_check)
+          node apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain/keychain.mjs probe
+
       - name: Revalidate release authority immediately before upload
-        uses: ./.mobile-release-sink/.github/actions/mobile-release-authority
+        uses: ./apps/ios/build/mobile-release-ci/sink/.github/actions/mobile-release-authority
         with:
           operation: revalidate
           platform: ios
@@ -269,6 +304,8 @@ jobs:
           OPENCLAW_MOBILE_RELEASE_INTENT_PATH: ${{ runner.temp }}/mobile-release-intent-ios/intent.json
           OPENCLAW_MOBILE_RELEASE_REF_MODE: intent
           OPENCLAW_MOBILE_RELEASE_TARGET_REF: ${{ needs.authorize.outputs.target_ref }}
+          SCAN_APP_NAME: OpenClaw
+          SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
           TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
         run: |
           set -euo pipefail

@@ -44,7 +44,8 @@ Copilot CLI environment.
 
 The Copilot runtime ships as an external plugin so the core `openclaw`
 package does not carry `@github/copilot-sdk` or its platform-specific
-`@github/copilot-<platform>-<arch>` CLI binary (roughly 260 MB together).
+`@github/copilot-sdk-<platform>-<arch>` runtime package. Keep optional
+dependencies enabled during installation so the native runtime is included.
 Install it only for agents that opt into this runtime:
 
 ```bash
@@ -167,9 +168,10 @@ Precedence, applied per agent during `runCopilotAttempt`:
    profile (`src/infra/provider-usage.auth.ts:resolveProviderAuths`) before
    invoking the harness, so a `github-copilot:<profile>` auth profile works
    end-to-end for headless, cron, or multi-profile setups without env vars.
-4. **Env-var fallback**, checked in this order (first non-empty value wins,
-   empty strings count as absent; mirrors the shipped `github-copilot`
-   provider precedence in `extensions/github-copilot/auth.ts`):
+4. **Harness env-var fallback**, checked in this order (first non-empty value
+   wins; empty strings count as absent). This applies to the explicitly selected
+   Copilot harness. The `github-copilot` provider accepts only
+   `COPILOT_GITHUB_TOKEN` as its automatic environment credential:
    1. `OPENCLAW_GITHUB_TOKEN` — harness-specific override; lets you pin a
       token for the OpenClaw harness without disturbing system-wide `gh` /
       Copilot CLI config.
@@ -258,6 +260,11 @@ failed, aborts the in-flight SDK session, and flags the attempt's replay as
 unvalidated so the next run creates a fresh SDK session instead of trusting a
 partial transcript. Only the post-append transcript update notification is
 best-effort and logged.
+
+Native subagent task updates retain their original completion or failure result
+when task persistence fails. A later terminal event or parent cleanup retries
+that same result instead of replacing it with cancellation. Bookkeeping is
+retired only after the tracked task is durably terminal or no longer exists.
 
 ## Side questions (`/btw`)
 

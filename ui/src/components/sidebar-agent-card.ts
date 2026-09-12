@@ -34,11 +34,11 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   }
 
   private renderContent() {
-    const avatarUrl = this.avatarUrl?.startsWith("/")
-      ? this.avatarAuthReady
-        ? this.avatarLoader.resolve(this.avatarUrl)
-        : null
-      : this.avatarUrl;
+    const sourceUrl = this.avatarUrl;
+    const avatarUrl =
+      sourceUrl && (!sourceUrl.startsWith("/") || this.avatarAuthReady)
+        ? this.avatarLoader.resolve(sourceUrl)
+        : null;
     const menuLabel = this.switcherAvailable
       ? t("agentChip.switchAgent")
       : t("agentChip.menuLabel");
@@ -73,7 +73,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               this.environment ? "sidebar-agent-card__avatar--environment" : ""
             }"
           >
-            ${renderAgentIdentityAvatar({ id: this.agentId, avatar: avatarUrl, textAvatar: this.avatarText })}
+            ${renderAgentIdentityAvatar({ id: this.agentId, avatar: avatarUrl, textAvatar: this.avatarText }, "", sourceUrl ? this.avatarLoader.imageErrorHandler(sourceUrl) : undefined)}
             ${
               this.menuUnread && !this.menuOpen
                 ? html`<span

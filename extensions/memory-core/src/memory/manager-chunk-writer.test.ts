@@ -11,10 +11,12 @@ const CHUNK_WRITE_TABLES = [
   "memory_index_chunk_provenance",
 ];
 
+const PREPARED_WRITE_TABLES = [...CHUNK_WRITE_TABLES, "memory_index_chunks_fts"];
+
 function chunkWriteTables(sqls: string[]): string[] {
   return sqls.flatMap((sql) => {
     const table = /^\s*INSERT INTO "?(\w+)"?\s*\(/i.exec(sql)?.[1];
-    return table && CHUNK_WRITE_TABLES.includes(table) ? [table] : [];
+    return table && PREPARED_WRITE_TABLES.includes(table) ? [table] : [];
   });
 }
 
@@ -82,7 +84,7 @@ describe("memory chunk publication", () => {
         const nonemptyFiles = db
           .prepare("SELECT DISTINCT path, source FROM memory_index_chunks")
           .all().length;
-        for (const table of CHUNK_WRITE_TABLES) {
+        for (const table of PREPARED_WRITE_TABLES) {
           expect(
             preparedTables.filter((prepared) => prepared === table),
             table,
@@ -126,11 +128,13 @@ describe("memory chunk publication", () => {
           [
             "memory_index_sources",
             ...CHUNK_WRITE_TABLES,
-            "memory_embedding_cache",
             "memory_index_chunks_fts",
             "memory_index_state",
           ].map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
         const before = snapshot();
+        const cacheSnapshot = () =>
+          db.prepare("SELECT * FROM memory_embedding_cache ORDER BY rowid").all();
+        const cacheBefore = cacheSnapshot();
         expect(before[1]?.some((row) => String(row.text).includes("Alpha memory line."))).toBe(
           true,
         );
@@ -158,9 +162,16 @@ describe("memory chunk publication", () => {
           prepare.mockRestore();
         }
         expect(snapshot()).toEqual(before);
+        // Completed provider work is durable even when index publication rolls back.
+        const retainedCache = cacheSnapshot();
+        expect(retainedCache).toEqual(expect.arrayContaining(cacheBefore));
+        expect(retainedCache).toHaveLength(cacheBefore.length + 1);
+        const completedRequests = fixture.provider.embedBatchCalls;
 
         db.exec("DROP TRIGGER fail_chunk_publication");
         await manager.sync({ reason: "retry" });
+        expect(fixture.provider.embedBatchCalls).toBe(completedRequests);
+        expect(cacheSnapshot()).toEqual(retainedCache);
         expect(
           db
             .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")

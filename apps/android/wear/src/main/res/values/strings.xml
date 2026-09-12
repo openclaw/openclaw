@@ -81,6 +81,8 @@
     <string name="message_not_sent">Action not accepted</string>
     <string name="something_went_wrong">Something went wrong</string>
     <string name="refresh_and_try_again">Refresh the lists and try again.</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation">Some models could not be refreshed. Listed models are still available.</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation">Update OpenClaw on your phone and Gateway to choose models for this chat.</string>
     <string name="try_again">Try again from the watch.</string>
     <string name="update_required">Update required</string>
     <string name="update_required_detail">Update OpenClaw on both phone and watch.</string>

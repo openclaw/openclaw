@@ -50,9 +50,12 @@ vi.mock("node:fs/promises", () => {
   return { ...mocked, default: mocked };
 });
 
-const execLaunchctl = vi.hoisted(() => vi.fn(async () => state.launchctl));
+const execLaunchctl = vi.hoisted(() =>
+  vi.fn(async () => ({ ...state.launchctl, termination: "exit" as const })),
+);
 
-vi.mock("./launchd-exec.js", () => ({
+vi.mock("./launchd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./launchd-exec.js")>()),
   execLaunchctl,
   isLaunchctlNotLoaded: (result: { stdout: string; stderr: string }) =>
     /could not find service|no such process|not found/i.test(result.stderr || result.stdout),
@@ -207,6 +210,7 @@ describe("system LaunchDaemon ownership", () => {
       serviceTarget: "system/ai.openclaw.gateway",
       operation: "launchctl",
       detail: "Operation not permitted",
+      reason: "launchd-system-domain-unavailable",
     });
   });
 
@@ -329,8 +333,18 @@ describe("system LaunchDaemon ownership", () => {
 
   it("rechecks the system domain after a negative plist snapshot", async () => {
     execLaunchctl
-      .mockResolvedValueOnce({ stdout: "", stderr: "Could not find service", code: 113 })
-      .mockResolvedValueOnce({ stdout: "state = running", stderr: "", code: 0 });
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "Could not find service",
+        code: 113,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "state = running",
+        stderr: "",
+        code: 0,
+        termination: "exit",
+      });
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
       status: "loaded",

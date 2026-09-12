@@ -1,8 +1,4 @@
-import type {
-  SessionsCatalogStartTerminalParams,
-  SessionsCatalogStartTerminalResult,
-  UiCommandParams,
-} from "@openclaw/gateway-protocol";
+import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -24,19 +20,10 @@ export type UiCommandDetail = UiCommandParams;
 export type TerminalPanelToggleDetail = {
   agentId?: string | null;
   dock?: "bottom" | "right";
+  newSession?: boolean;
   open?: boolean;
   terminalSessionId?: string;
   agentOwned?: boolean;
-  catalog?: {
-    catalogId: string;
-    hostId: string;
-    threadId: string;
-  };
-  catalogStart?: {
-    params: SessionsCatalogStartTerminalParams;
-    isCurrent: () => boolean;
-    respondWith: (result: Promise<SessionsCatalogStartTerminalResult>) => void;
-  };
 };
 
 export type BrowserPanelToggleDetail = {
@@ -46,6 +33,8 @@ export type BrowserPanelToggleDetail = {
   /** Existing tab to focus when the panel opens (browser-tab chat cards). */
   browserTab?: BrowserTabTarget;
   url?: string;
+  /** User-opened WKWebView tab on the native macOS host. */
+  native?: boolean;
 };
 
 export type DesktopPanelToggleDetail = {

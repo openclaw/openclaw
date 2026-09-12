@@ -65,15 +65,11 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionState(session: SidebarRecentSession) {
-  if (session.hasActiveRun) {
-    const queued = session.hasActiveRun && session.status === "queued";
-    return renderSessionGlyph({ content: nothing, running: true, queued });
-  }
+export function renderSessionIdleState(session: SidebarRecentSession) {
   if (!session.isChild) {
     return session.unread
       ? html`<span
-          class="session-unread-dot sidebar-recent-session__unread"
+          class="session-unread-dot"
           role="img"
           aria-label=${t("sessionsView.unread")}
         ></span>`
@@ -173,7 +169,7 @@ export function renderTeamSessionSlots(
           : active
             ? renderSessionGlyph({ content: nothing, running: true, queued: active === queued })
             : rows.length === 1 && rows[0]?.isChild
-              ? renderSessionState(rows[0])
+              ? renderSessionIdleState(rows[0])
               : nothing;
   if ((!includeChildren || childCount === 0) && unread === 0 && state === nothing) {
     return nothing;

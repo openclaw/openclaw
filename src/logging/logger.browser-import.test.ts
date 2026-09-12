@@ -74,9 +74,13 @@ describe("logging/logger import", () => {
     expect(module.DEFAULT_LOG_DIR).toBe("/tmp/openclaw");
     expect(module.DEFAULT_LOG_FILE).toBe("/tmp/openclaw/openclaw.log");
 
-    module.setLoggerConfigLoaderForTests(() => undefined);
-    expect(path.dirname(module.getResolvedLoggerSettings().file)).toBe(secureLogDir);
-    expect(resolvePreferredOpenClawTmpDir).toHaveBeenCalledOnce();
+    module.applyLoggingConfig(undefined);
+    try {
+      expect(path.dirname(module.getResolvedLoggerSettings().file)).toBe(secureLogDir);
+      expect(resolvePreferredOpenClawTmpDir).toHaveBeenCalledOnce();
+    } finally {
+      module.resetLogger();
+    }
   });
 
   it("disables file logging when imported in a browser-like environment", async () => {

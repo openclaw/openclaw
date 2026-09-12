@@ -143,7 +143,7 @@ export function projectSidebarAgentSessionRows({
     (session) =>
       (grouped ? inScope(session) : selected === routeAgentId || lineageAgentId === selected) &&
       session.key === navigationState.activeRowKey &&
-      !isSessionHidden(session.key) &&
+      !isSessionHidden(session) &&
       !adopted.has(session.key) &&
       (!isMainSession(session.key) ||
         (grouped && navigationState.toSidebarSession(session).visuallyActive)),
@@ -161,7 +161,7 @@ export function projectSidebarAgentSessionRows({
   );
   if (
     lineageRoot &&
-    !isSessionHidden(lineageRoot.key) &&
+    !isSessionHidden(lineageRoot) &&
     (areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey) ||
       sessionMatchesArchivedFilter(lineageRoot, host.sessionsStatusFilter)) &&
     (grouped

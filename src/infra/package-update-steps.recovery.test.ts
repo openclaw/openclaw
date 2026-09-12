@@ -2,6 +2,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import {
@@ -260,17 +261,17 @@ describe("package update recovery safety", () => {
             activationFailed ? "old launcher\n" : "new launcher\n",
           );
           if (outcome !== "confirm") {
-            const restored = await transaction.rollback();
+            const restored = await transaction.rollback(() => {});
             expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
-            expect(await transaction.rollback()).toEqual(restored);
+            expect(await transaction.rollback(() => {})).toEqual(restored);
             await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
           }
-          await transaction.complete({ activationVerified: outcome === "confirm" });
-          await transaction.complete({ activationVerified: outcome === "confirm" });
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
+          await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain(`"version":"${outcome === "confirm" ? "2.0.0" : "1.0.0"}"`);
-          expect((await transaction.rollback()).exitCode).toBe(1);
+          expect((await transaction.rollback(() => {})).exitCode).toBe(1);
         }
         expect((await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."))).toEqual([]);
       });
@@ -303,6 +304,7 @@ describe("package update recovery safety", () => {
           const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
           await writePackageRoot(stageRoot, "1.0.0");
           await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "new runtime\n");
+          await writePackageDistInventory(stageRoot);
           await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
           await fs.writeFile(path.join(stagePrefix, "bin", "openclaw"), "new launcher\n");
           return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
@@ -660,7 +662,7 @@ describe("package update recovery safety", () => {
       const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
         const source = String(args[0]);
         if (
-          String(args[1]) === targetCmdShim &&
+          path.basename(source) === "openclaw.cmd" &&
           path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
         ) {
           throw Object.assign(new Error("launcher restoration denied"), { code: "EACCES" });
@@ -724,7 +726,7 @@ describe("package update recovery safety", () => {
       });
       expect(result.afterVersion).toBe("1.0.0");
       await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old openclaw\n");
-      await expect(fs.readFile(targetCmdShim, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(targetCmdShim, "utf8")).resolves.toBe("new openclaw.cmd\n");
       const backupDirs = (await fs.readdir(globalRoot)).filter((entry) =>
         entry.startsWith(".openclaw.shim-backup-"),
       );

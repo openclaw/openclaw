@@ -26,8 +26,8 @@ OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.
 ## Claude Fable 5
 
 Use `anthropic-vertex/claude-fable-5` where the model is available in your Google Cloud region.
-Fable 5 always uses adaptive thinking and defaults to `high` effort. `/think off` and
-`/think minimal` use `low` effort because the model does not support disabling thinking.
+Fable 5 always uses adaptive thinking; OpenClaw defaults to `medium` effort. Stored `off`
+and `minimal` settings map to `low` because the model does not support disabling thinking.
 
 ## Claude Sonnet 5
 

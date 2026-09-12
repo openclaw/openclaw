@@ -63,7 +63,7 @@ export type ResolveQueueSettingsParams = {
   pluginDebounceMs?: number;
 };
 
-export type QueueDedupeMode = "message-id" | "prompt" | "none";
+export type QueueDedupeMode = "message-id" | "none";
 
 type QueueInsertPosition = "tail" | "front";
 
@@ -79,10 +79,22 @@ export type QueuedFollowupReplyBatch = {
   runId: string;
   originatingChannel: string | undefined;
   payloads: ReplyPayload[];
+  completion:
+    | { kind: "progress" }
+    | { kind: "completed"; stopReason?: string; allowCanvasOnly?: true }
+    | { kind: "failed"; error: string; stopReason?: string; errorKind?: "timeout" }
+    | { kind: "aborted"; stopReason?: string };
+};
+
+export type QueuedFollowupReplyDelivery = ((
+  batch: QueuedFollowupReplyBatch,
+) => Promise<void> | void) & {
+  ownsCompletion?: (originatingChannel: string | undefined) => boolean;
+  createSourceRetry?: () => QueuedFollowupReplyDelivery;
 };
 
 type QueuedFollowupReplyDisposition =
-  | { kind: "deliver"; deliver: (batch: QueuedFollowupReplyBatch) => Promise<void> | void }
+  | { kind: "deliver"; deliver: QueuedFollowupReplyDelivery }
   | { kind: "drop"; reason: "source-unavailable" };
 
 export class FollowupRunDeferredError extends Error {

@@ -726,7 +726,7 @@ export function createSlackCommandHandler(params: {
           cfg,
           session: menuRoute,
           ...menuModelContext,
-          ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+          catalog: menuModelCatalog,
         });
         if (menu) {
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;
@@ -923,7 +923,7 @@ export function createSlackCommandHandler(params: {
               );
             } catch (error) {
               const unsettledError = isChannelPartialDeliveryError(error)
-                ? ((error as Error).cause ?? error)
+                ? (error.cause ?? error)
                 : error;
               for (const [replyIndex, entry] of pending.entries()) {
                 if (!settled.has(replyIndex)) {

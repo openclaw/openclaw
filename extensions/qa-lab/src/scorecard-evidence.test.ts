@@ -8,9 +8,12 @@ import {
   type QaEvidenceSummaryJson,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
-import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
+import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
-import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
+import {
+  qaMaturityTaxonomyIdentity,
+  type QaScorecardCategoryCoverageReport,
+} from "./scorecard-taxonomy.js";
 
 function evidenceEntry(
   coverage: QaEvidenceSummaryEntry["coverage"],
@@ -60,6 +63,8 @@ function categoryInventory(coverageIds: string[]): QaScorecardCategoryCoverageRe
 
 async function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
+  profilePlan?: QaProfileEvidencePlan;
+  evidenceMode?: "full" | "slim";
   filters: { surface?: string; category?: string };
   categories: readonly QaScorecardCategoryCoverageReport[];
 }) {
@@ -70,23 +75,26 @@ async function buildQaProfileScorecardEvidence(params: {
     const scorecard = await attachQaProfileScorecardEvidenceToFile({
       evidencePath,
       profile: "release",
-      profilePlan: {
-        profile: "release",
-        membership: [],
-        selected: [],
-        excluded: [],
-        expectedCells: [],
-        observedCells: [],
-        missingCells: [],
-        counts: {
-          membership: 0,
-          selected: 0,
-          excluded: 0,
-          expectedCells: 0,
-          observedCells: 0,
-          missingCells: 0,
-        },
-      } satisfies QaProfileEvidencePlan,
+      evidenceMode: params.evidenceMode,
+      profilePlan:
+        params.profilePlan ??
+        ({
+          profile: "release",
+          membership: [],
+          selected: [],
+          excluded: [],
+          expectedCells: [],
+          observedCells: [],
+          missingCells: [],
+          counts: {
+            membership: 0,
+            selected: 0,
+            excluded: 0,
+            expectedCells: 0,
+            observedCells: 0,
+            missingCells: 0,
+          },
+        } satisfies QaProfileEvidencePlan),
       filters: params.filters,
       categories: params.categories,
     });
@@ -101,6 +109,38 @@ async function buildQaProfileScorecardEvidence(params: {
 }
 
 describe("profile scorecard evidence", () => {
+  it.each(["full", "slim"] as const)(
+    "preserves captured identity in %s evidence without duplicating it in the scorecard",
+    async (evidenceMode) => {
+      const profilePlan = qaProfileEvidencePlan.build({
+        profile: "release",
+        taxonomyIdentity: qaMaturityTaxonomyIdentity({
+          version: 1,
+          title: "Evidence fixture",
+          profiles: [],
+          levels: [],
+          surfaces: [],
+        }),
+        membershipScenarios: [],
+        selectedScenarios: [],
+        excludedScenarios: [],
+        expectedCells: [],
+        observedCells: [],
+      });
+      const { writtenEvidence, scorecard } = await buildQaProfileScorecardEvidence({
+        evidence: evidenceSummary([evidenceEntry([{ id: "coverage.one", role: "primary" }])]),
+        evidenceMode,
+        profilePlan,
+        filters: {},
+        categories: [categoryInventory(["coverage.one"])],
+      });
+      expect(writtenEvidence.evidenceMode).toBe(evidenceMode);
+      expect(writtenEvidence.profilePlan).toEqual(profilePlan);
+      expect(scorecard).not.toHaveProperty("taxonomyIdentity");
+      expect(scorecard.coverageIds.fulfilled).toBe(1);
+    },
+  );
+
   it("scores atomic feature coverage by its one exact coverage ID", async () => {
     const category: QaScorecardCategoryCoverageReport = {
       id: "surface.category",

@@ -227,7 +227,7 @@ describe("status.command-sections", () => {
       "  Session selected: deepseek/deepseek-v4-flash",
       "  Reason: session override",
       "  Clear with: /model default",
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
     ]);
   });
 
@@ -263,7 +263,7 @@ describe("status.command-sections", () => {
       "  Session selected: ollama/qwen3.6-blue:35b-a3b",
       "  Reason: fallback selected",
       "  Action: check provider availability or retry with /model",
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
     ]);
   });
 
@@ -318,6 +318,11 @@ describe("status.command-sections", () => {
       account: { configured: false },
       status: "muted(OFF)",
       detail: "not configured",
+    },
+    {
+      account: { enabled: false, lastError: "previous start failed" },
+      status: "muted(OFF)",
+      detail: "disabled (previous start failed)",
     },
   ])("classifies the real channel health detail $detail", ({ account, status, detail }) => {
     const health: HealthSummary = {

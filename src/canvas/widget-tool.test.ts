@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
-import { createTestBoardStore } from "../boards/board-store.test-support.js";
+import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
@@ -662,7 +662,7 @@ describe("show_widget", () => {
       const broadcast = vi.fn();
       const target = { sessionKey, agentId };
       const sibling = { sessionKey: "global", agentId: agentId === "main" ? "research" : "main" };
-      const siblingBefore = store.getSnapshot(sibling);
+      const siblingBefore = await store.getSnapshot(sibling);
       const boardBroadcastScope = { sessionKeys: [sessionKey], agentId };
       const eventSessionKey = sessionKey === "global" ? `agent:${agentId}:global` : sessionKey;
       const cfg: OpenClawConfig = {
@@ -718,12 +718,12 @@ describe("show_widget", () => {
       const result = await pinWidget("<p>ready</p>", true);
       const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
-      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
         html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
         revision: 1,
       });
-      expect(store.getSnapshot(target).widgets[0]?.title).toBe(pinnedTitle);
-      expect(store.getSnapshot(target).widgets[0]?.presentation).toBe("frameless");
+      expect((await store.getSnapshot(target)).widgets[0]?.title).toBe(pinnedTitle);
+      expect((await store.getSnapshot(target)).widgets[0]?.presentation).toBe("frameless");
       expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
       expect(result.boardWidgetName).toBe("release-status");
       expect(broadcast).toHaveBeenCalledWith(
@@ -739,11 +739,11 @@ describe("show_widget", () => {
           content: { kind: "plugin", pluginKind: "workboard:card" },
         }),
       ).rejects.toThrow(/same content kind.*remove/i);
-      expect(store.readWidgetHtml(target, "release-status")?.revision).toBe(1);
+      expect((await readBoardHtml(store, target, "release-status"))?.revision).toBe(1);
 
       const refreshed = await pinWidget("<p>refreshed</p>");
 
-      expect(store.readWidgetHtml(target, "release-status")).toMatchObject({
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
         html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
         revision: 2,
       });
@@ -753,7 +753,7 @@ describe("show_widget", () => {
         { sessionKey: eventSessionKey, revision: 2, widget: "release-status" },
         boardBroadcastScope,
       );
-      expect(store.getSnapshot(sibling)).toEqual(siblingBefore);
+      expect(await store.getSnapshot(sibling)).toEqual(siblingBefore);
     },
   );
 
@@ -803,7 +803,7 @@ describe("show_widget", () => {
       path.join(resolveCanvasDocumentDir(stateDir, result.viewId), "index.html"),
       "utf8",
     );
-    const pinned = store.readWidgetHtml({ sessionKey: "agent:main:weather" }, "weather");
+    const pinned = await readBoardHtml(store, { sessionKey: "agent:main:weather" }, "weather");
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
@@ -935,7 +935,7 @@ describe("show_widget", () => {
       }),
     ]);
     expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
-    expect(store.getSnapshot({ sessionKey }).widgets).toHaveLength(2);
+    expect((await store.getSnapshot({ sessionKey })).widgets).toHaveLength(2);
 
     const composed = await executeWidget({
       stateDir,
@@ -954,7 +954,9 @@ describe("show_widget", () => {
       callGateway,
     });
     expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
-    expect(store.readWidgetHtml({ sessionKey }, composed.boardWidgetName ?? "")).toMatchObject({
+    expect(
+      await readBoardHtml(store, { sessionKey }, composed.boardWidgetName ?? ""),
+    ).toMatchObject({
       revision: 2,
     });
   });

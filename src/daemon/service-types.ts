@@ -1,5 +1,7 @@
-/** Shared daemon service argument, state, and command config contracts. */
+import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+/** Shared daemon service argument, state, and command config contracts. */
+import type { GatewayServiceStagedFiles } from "./service-stage.js";
 
 /** Environment map passed to service renderers and platform supervisors. */
 export type GatewayServiceEnv = Record<string, string | undefined>;
@@ -17,6 +19,8 @@ export type GatewayServiceInstallArgs = {
   // Verified before a config rewrite; Windows uses this to bridge a transient
   // listener gap while replacing a Startup-folder fallback.
   startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
+  /** Await durable caller sealing before native load; currently systemd only. */
+  beforeLoad?: (staged: GatewayServiceStagedFiles) => Promise<void>;
 };
 
 export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
@@ -31,6 +35,10 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
   disable?: boolean;
   preserveDefinition?: boolean;
+  /** Start the captured manager without changing its separately restored enable policy. */
+  preserveAutoStart?: boolean;
+  /** Original live caller fence, rechecked at native mutation boundaries. */
+  assertCurrent?: () => void;
   warn?: (message: string) => void;
   onMutation?: (mutation: GatewayLifecycleMutation) => void;
 };
@@ -80,10 +88,25 @@ export type GatewayServiceEnvArgs = {
   timeoutMs?: number;
 };
 
+/** Live recovery custody, never reconstructed from a saved record alone. Loading
+ * permits native definition inspection, not enablement, start, or readiness. */
+export type GatewayServiceUnitInspection = {
+  managerUid: number;
+  /** Full current-claim authority immediately around a possible LoadUnit. */
+  assertCurrent: () => void;
+  /** Live exclusion for passive queries; omitted callers retain the full check. */
+  assertReadCurrent?: () => void;
+};
+
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Report failed effective inspection even when a read-only caller accepts the local definition. */
+  onInspectionFailure?: (reason: ServiceInspectionReason) => void;
+  /** Command inspection must not load an unloaded native unit. */
+  requireLoaded?: boolean;
+  loadForInspection?: GatewayServiceUnitInspection;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
@@ -91,7 +114,7 @@ export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-a
 export type GatewayServiceLoadState =
   | { status: "loaded" }
   | { status: "not-loaded" }
-  | { status: "unknown"; detail: string };
+  | { status: "unknown"; detail: string; inspectionReason?: ServiceInspectionReason };
 
 const SERVICE_DEFINITION_ARTIFACTS = {
   "service-directory":
@@ -272,6 +295,7 @@ export function resolveManagedGatewayServiceProcessEnv(
 }
 
 export type GatewayServiceState = {
+  inspectionReason?: ServiceInspectionReason;
   installed: boolean;
   loadState: GatewayServiceLoadState;
   running: boolean;

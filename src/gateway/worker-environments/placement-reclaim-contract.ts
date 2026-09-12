@@ -1,6 +1,7 @@
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerPlacementAuthorization,
+  WorkerPlacementCancellationTarget,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
@@ -12,10 +13,6 @@ type WorkerReclaimStartPlacement = Extract<
 export type WorkerReclaimPlacement = Extract<
   WorkerSessionPlacementRecord,
   { state: "local" | "reclaimed" }
->;
-
-export type WorkerPlacementCancellationTarget = Readonly<
-  Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
 >;
 
 export function matchesWorkerPlacementTarget(

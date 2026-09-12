@@ -105,10 +105,13 @@ pnpm android:release:upload
 `Android Beta Release` is a separate, manual workflow. Dispatch it from trusted
 `main` with a canonical `release/YYYY.M.PATCH-mobile` branch and that branch's
 exact full commit SHA. The workflow derives the frozen Code SHA from the release
-branch and the current trusted Tooling SHA. Every later candidate commit must be
-linear and may change only the five generated mobile release metadata files.
-All five target files must byte-match regeneration using current trusted tooling
-and the frozen Code SHA metadata. Approval of the `android-beta-release`
+branch and the dispatch's trusted Tooling SHA. That Tooling SHA must be an
+ancestor of the observed `main` head, and `main` may only advance forward while
+authority validates the candidate. Divergence, rewind, or an unstable ancestry
+lookup fails closed. Every later candidate commit must be linear and may change
+only the five generated mobile release metadata files. All five target files
+must byte-match regeneration using the dispatch's trusted tooling and the frozen
+Code SHA metadata. Approval of the `android-beta-release`
 environment gates all access to signing assets, Google Play credentials, and
 immutable release-ref mutation.
 
@@ -129,8 +132,11 @@ After the committed edit, the workflow records
 the exact candidate SHA. A failed post-upload recording step may be recovered
 with the workflow's `record-only` operation, the original failed run ID, and the
 same release ref/SHA tuple. Recovery enters `android-beta-release`, executes
-only trusted workflow-SHA tooling, and fails on missing artifacts, replay,
-moved refs, mismatched digests, or a conflicting immutable ref.
+only trusted workflow-SHA tooling, and admits the recovery dispatch against the
+current `main` lineage. Candidate regeneration, receipts, and attestations remain
+bound to the original upload run's Tooling SHA. Recovery fails on missing
+artifacts, replay, moved refs, mismatched digests, divergent or rewound `main`,
+or a conflicting immutable ref.
 
 Direct Fastlane entry point:
 

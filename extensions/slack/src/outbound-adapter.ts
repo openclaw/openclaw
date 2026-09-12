@@ -37,6 +37,7 @@ import {
 } from "./reply-action-ids.js";
 import {
   parseSlackReplyBlockSegments,
+  normalizeSlackReplyPayload,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyDeliveryMessages,
   type SlackReplyBlockResolution,
@@ -60,6 +61,7 @@ function toSlackOutboundResult<T extends { channelId?: string }>(result: T) {
 }
 
 type SlackOutboundChannelData = Record<string, unknown> & {
+  authoredPresentationText?: string;
   authoredTextPlacement?: SlackAuthoredTextPlacement;
   blocks?: unknown;
   renderedPresentationProvenance?: unknown;
@@ -168,6 +170,7 @@ function withSlackRenderedPresentation(
   resolution: SlackReplyBlockResolution,
 ): ReplyPayload {
   const {
+    authoredPresentationText: _authoredPresentationText,
     authoredTextPlacement: _authoredTextPlacement,
     blocks: _blocks,
     renderedPresentationProvenance: _renderedPresentationProvenance,
@@ -257,11 +260,16 @@ export const slackOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
+  normalizePayload: ({ payload }) => normalizeSlackReplyPayload(payload),
   renderPresentation: ({ payload }) => {
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
-    const resolution = resolveSlackOutboundBlockResolution(payload);
+    const renderPayload =
+      payload.presentationTextMode === "fallback"
+        ? { ...payload, text: payload.text ?? slackData?.authoredPresentationText }
+        : payload;
+    const resolution = resolveSlackOutboundBlockResolution(renderPayload);
     return resolution.segments.length > 0
-      ? withSlackRenderedPresentation(payload, slackData, resolution)
+      ? withSlackRenderedPresentation(renderPayload, slackData, resolution)
       : null;
   },
   sendPayload: async (ctx) => {

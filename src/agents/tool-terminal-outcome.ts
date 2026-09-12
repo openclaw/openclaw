@@ -4,6 +4,7 @@ import {
   peekAdjustedParamsForToolCall,
   peekPreExecutionBlockedToolCall,
 } from "./agent-tools.before-tool-call.state.js";
+import { projectPluginMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { buildToolEffectReceipt, readToolEffectReceipt } from "./tool-effect-receipt.js";
 import { createToolErrorState } from "./tool-error-state.js";
@@ -50,6 +51,12 @@ export function createToolTerminalObserver(
         mutatingAction,
       };
       lastToolError = errors.recordFailure(failure).lastToolError;
+    } else if (
+      observation.toolName === "message" &&
+      projectPluginMessageDeliveryFact(observation.result)?.status === "suppressed"
+    ) {
+      // A handled omission does not recover an earlier failed delivery.
+      lastToolError = errors.read().lastToolError;
     } else {
       lastToolError = errors.recordSuccess(observation.toolName).lastToolError;
     }

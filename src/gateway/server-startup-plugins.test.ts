@@ -3,10 +3,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { disposePluginRegistryInstances } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import "./server-startup-bootstrap.test-support.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -19,10 +25,12 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 const initSubagentRegistry = vi.hoisted(() => vi.fn());
 const getActivePluginRegistry = vi.hoisted(() => vi.fn<() => PluginRegistry | undefined>());
 const setActivePluginRegistry = vi.hoisted(() => vi.fn());
-const loadGatewayStartupPlugins = vi.hoisted(() =>
-  vi.fn((_params: unknown) => ({
-    pluginRegistry: { diagnostics: [], gatewayHandlers: {}, plugins: [] },
+const prepareGatewayPluginLoad = vi.hoisted(() =>
+  vi.fn((params: { cfg: OpenClawConfig }) => ({
+    pluginRegistry: createEmptyPluginRegistry(),
     gatewayMethods: ["ping"],
+    resolvedConfig: params.cfg,
+    retireGatewayRuntimeBindings: vi.fn(),
   })),
 );
 const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
@@ -65,6 +73,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -179,7 +188,7 @@ vi.mock("./server-methods-list.js", () => ({
 }));
 
 vi.mock("./server-plugin-bootstrap.js", () => ({
-  loadGatewayStartupPlugins: (params: unknown) => loadGatewayStartupPlugins(params),
+  prepareGatewayPluginLoad,
 }));
 
 vi.mock("./server-startup-session-migration.js", () => ({
@@ -313,7 +322,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     setActivePluginRegistry.mockClear();
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
-    loadGatewayStartupPlugins.mockClear();
+    prepareGatewayPluginLoad.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
     loadPluginLookUpTable.mockClear().mockReturnValue({
       ...pluginMetadataSnapshot,
@@ -441,7 +450,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       dreaming: { enabled: false },
     });
 
-    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+    expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -450,10 +459,14 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     { minimalTestGateway: true, pluginsEnabled: true, reuseAmbientRegistry: true },
     { minimalTestGateway: true, pluginsEnabled: false, reuseAmbientRegistry: false },
   ])(
-    "publishes the startup registry without runtime loading (minimal=$minimalTestGateway, enabled=$pluginsEnabled)",
+    "keeps the pre-bind registry local without runtime loading (minimal=$minimalTestGateway, enabled=$pluginsEnabled)",
     async ({ minimalTestGateway, pluginsEnabled, reuseAmbientRegistry }) => {
+      const { capturePluginRegistryLifecycleEpoch, markPluginRegistryActive } =
+        await import("../plugins/registry-lifecycle.js");
       const ambientRegistry = createEmptyPluginRegistry();
       ambientRegistry.gatewayHandlers.fixture = vi.fn();
+      markPluginRegistryActive(ambientRegistry);
+      const ambientEpoch = capturePluginRegistryLifecycleEpoch(ambientRegistry);
       getActivePluginRegistry.mockReturnValue(ambientRegistry);
 
       const result = await prepareBootstrapWithRuntimeConfig(
@@ -466,8 +479,11 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       } else {
         expect(result.pluginRegistry.gatewayHandlers).toEqual({});
       }
-      expect(setActivePluginRegistry).toHaveBeenCalledWith(result.pluginRegistry);
-      expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+      expect(capturePluginRegistryLifecycleEpoch(result.pluginRegistry)).toBeDefined();
+      expect(capturePluginRegistryLifecycleEpoch(ambientRegistry)).toBe(ambientEpoch);
+      expect(setActivePluginRegistry).not.toHaveBeenCalled();
+      expect(getActivePluginRegistry()).toBe(ambientRegistry);
+      expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
     },
   );
 
@@ -537,17 +553,109 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(result.baseGatewayMethods).toEqual(["ping"]);
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+    expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
   });
 });
 
 describe("loadGatewayStartupPluginRuntime", () => {
   beforeEach(() => {
-    loadGatewayStartupPlugins.mockClear().mockReturnValue({
-      pluginRegistry: { diagnostics: [], gatewayHandlers: {}, plugins: [] },
+    prepareGatewayPluginLoad.mockReset().mockImplementation((params) => ({
+      pluginRegistry: createEmptyPluginRegistry(),
       gatewayMethods: ["ping"],
-    });
+      resolvedConfig: params.cfg,
+      retireGatewayRuntimeBindings: vi.fn(),
+    }));
   });
+
+  it.each(["valid", "invalid", "invalid with failed cleanup"] as const)(
+    "validates %s bindings inside the unpublished candidate and owns its disposal",
+    async (outcome) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({
+        id: "binding-owner",
+        source: "startup-binding-fixture",
+        origin: "workspace",
+        enabled: true,
+        configSchema: false,
+      });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { registry, record });
+      const validationError = new Error("synthetic invalid binding");
+      const cleanupError = new Error("synthetic candidate cleanup failure");
+      const cleanup = vi.fn(() => {
+        if (outcome === "invalid with failed cleanup") {
+          throw cleanupError;
+        }
+      });
+      instance.lifecycle.onDispose(cleanup);
+      let validationAuthority: (() => boolean) | undefined;
+      const compileConfiguredBinding = vi.fn(() => {
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+        validationAuthority = capturePluginLifecycleAuthority(registry, record);
+        expect(validationAuthority?.()).toBe(true);
+        if (outcome !== "valid") {
+          throw validationError;
+        }
+        return null;
+      });
+      registry.channels.push({
+        pluginId: record.id,
+        source: record.source,
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord" }),
+          bindings: { compileConfiguredBinding, matchInboundConversation: () => null },
+        },
+      });
+      const config: OpenClawConfig = {
+        bindings: [
+          {
+            type: "acp",
+            agentId: "main",
+            match: { channel: "discord", peer: { kind: "channel", id: "fixture-room" } },
+          },
+        ],
+      };
+      const retireGatewayRuntimeBindings = vi.fn();
+      const candidate = {
+        pluginRegistry: registry,
+        gatewayMethods: [],
+        resolvedConfig: config,
+        retireGatewayRuntimeBindings,
+      };
+      prepareGatewayPluginLoad.mockReturnValueOnce(candidate);
+      const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+      try {
+        const loading = loadGatewayStartupPluginRuntime({
+          cfg: config,
+          log: createLog(),
+          baseMethods: [],
+          startupPluginIds: [record.id],
+        });
+        if (outcome === "valid") {
+          await expect(loading).resolves.toBe(candidate);
+          expect(cleanup).not.toHaveBeenCalled();
+          expect(retireGatewayRuntimeBindings).not.toHaveBeenCalled();
+        } else {
+          await expect(loading).rejects.toBe(validationError);
+          expect(cleanup).toHaveBeenCalledOnce();
+          expect(instance.lifecycle.signal.aborted).toBe(true);
+          expect(retireGatewayRuntimeBindings).toHaveBeenCalledOnce();
+        }
+        expect(compileConfiguredBinding).toHaveBeenCalledOnce();
+        expect(validationAuthority?.()).toBe(false);
+      } finally {
+        retireGatewayRuntimeBindings();
+        const disposed = await disposePluginRegistryInstances(registry);
+        expect(disposed.failures).toEqual(
+          outcome === "invalid with failed cleanup"
+            ? [{ pluginId: record.id, hookId: "instance", error: cleanupError }]
+            : [],
+        );
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(instance.lifecycle.signal.aborted).toBe(true);
+      }
+    },
+  );
 
   it("warns after a full startup runtime load when configured memory embedding providers stay unregistered", async () => {
     const log = createLog();
@@ -571,10 +679,12 @@ describe("loadGatewayStartupPluginRuntime", () => {
       startupPluginIds: ["voyage"],
     });
 
-    const startupInput = firstCallArg<{ channelPluginLoadIntent?: "full" | "setup" }>(
-      loadGatewayStartupPlugins,
-    );
+    const startupInput = firstCallArg<{
+      channelPluginLoadIntent?: "full" | "setup";
+      loadIntent: "startup" | "replacement";
+    }>(prepareGatewayPluginLoad);
     expect(startupInput.channelPluginLoadIntent).toBe("full");
+    expect(startupInput.loadIntent).toBe("startup");
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('memory.search.provider="voyage"'),
     );

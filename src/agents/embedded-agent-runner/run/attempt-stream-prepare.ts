@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
+import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
@@ -125,6 +126,7 @@ export function prepareEmbeddedAttemptStream(input: {
   replaySafeToolNames: ReadonlySet<string>;
   codeModeExecToolNames?: ReadonlySet<string>;
   sideEffectToolOwners?: ReadonlyMap<string, string>;
+  trustedLocalMediaToolNames: ReadonlySet<string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
   trajectoryRecorder?: Parameters<
     typeof createEmbeddedAttemptDeferredLifecycleOwner
@@ -285,7 +287,6 @@ export function prepareEmbeddedAttemptStream(input: {
   let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
-  const getQueueHandle = (): AttemptStreamQueueHandle => queueHandle;
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
   const subscription = subscribeEmbeddedAgentSession({
     session: input.activeSession,
@@ -307,6 +308,7 @@ export function prepareEmbeddedAttemptStream(input: {
     onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
     onAgentToolResult: attempt.onAgentToolResult,
     observeToolTerminal: attempt.observeToolTerminal,
+    trajectoryRecorder: input.trajectoryRecorder,
     onToolResult: attempt.onToolResult,
     onReasoningStream: attempt.onReasoningStream,
     streamReasoningInNonStreamModes: attempt.streamReasoningInNonStreamModes,
@@ -339,11 +341,10 @@ export function prepareEmbeddedAttemptStream(input: {
       ) {
         return;
       }
-      // Clear embedded-run activity before emitting terminal lifecycle events so
-      // post-completion cleanup does not observe a logically finished run as active.
+      // Clear active-run state before terminal events and post-completion cleanup.
       clearActiveEmbeddedRun(
         attempt.sessionId,
-        getQueueHandle(),
+        queueHandle,
         attempt.sessionKey,
         attempt.sessionFile,
       );
@@ -373,6 +374,7 @@ export function prepareEmbeddedAttemptStream(input: {
     replaySafeToolNames: input.replaySafeToolNames,
     ...(input.codeModeExecToolNames ? { codeModeExecToolNames: input.codeModeExecToolNames } : {}),
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
+    trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,
   });
   toolMetasForTerminal = subscription.toolMetas;
@@ -396,6 +398,7 @@ export function prepareEmbeddedAttemptStream(input: {
       subscription.runToolLifecycle({
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
+        parentToolCallId: toolParams.parentToolCallId,
         args: toolParams.input,
         replaySafe: toolParams.replaySafe ?? input.isReplaySafeTool(toolParams.tool),
         hideFromChannelProgress:
@@ -444,9 +447,9 @@ export function prepareEmbeddedAttemptStream(input: {
           );
           notifyToolActivity(attempt.runId);
         },
-        execute: async (onImplementationStart) => {
-          // Acceptance belongs inside execution: observers must never see a rejected success.
-          return await raceWithAbortSignal(
+        // Acceptance belongs inside execution: observers must never see a rejected success.
+        execute: async (onImplementationStart) =>
+          await raceWithAbortSignal(
             (async () => {
               signal.throwIfAborted();
               const preparer = getInternalToolExecutionPreparer(toolParams.tool);
@@ -493,8 +496,7 @@ export function prepareEmbeddedAttemptStream(input: {
             }),
             signal,
             yieldRunSignal,
-          );
-        },
+          ),
       }),
       signal,
       yieldRunSignal,
@@ -687,6 +689,13 @@ export function prepareEmbeddedAttemptStream(input: {
     deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: attempt.runId,
       sessionId: attempt.sessionId,
+      diagnosticOwner: input.diagnosticOwner,
+      onRetryWaitCompleted: () => attempt.replyOperation?.recordActivity(),
+      isCurrent: () =>
+        registration?.delegatedAuthority !== undefined &&
+        validateAgentRunDelegatedAuthority(registration.delegatedAuthority) &&
+        ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
+        ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle,
       trajectoryRecorder: input.trajectoryRecorder ?? null,
       clearActiveRun: () =>
         clearActiveEmbeddedRun(

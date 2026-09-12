@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewaySuspension } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -89,7 +90,10 @@ export type GatewayRestartSignalAdmissionLease = {
 
 const GATEWAY_ROOT_WORK_ORIGIN_MAX_CHARS = 80;
 
-function createGatewayRootWorkAdmission(origin: string): GatewayRootWorkAdmissionLease {
+function createGatewayRootWorkAdmission(
+  origin: string,
+  detachedWork = false,
+): GatewayRootWorkAdmissionLease {
   const normalizedOrigin = origin
     .trim()
     .replaceAll(/\s+/g, " ")
@@ -105,7 +109,9 @@ function createGatewayRootWorkAdmission(origin: string): GatewayRootWorkAdmissio
     ownsRoot: true,
     release,
     run: async <T>(run: () => Promise<T>) =>
-      await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(admission, run),
+      await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(admission, () =>
+        detachedWork ? runWithDetachedAsyncWork(admission, run) : run(),
+      ),
   };
 }
 
@@ -123,6 +129,37 @@ function createGatewayRootWorkRelease(admission: GatewayRootWorkAdmission): () =
     admission.released = true;
     GATEWAY_WORK_ADMISSION_STATE.activeRootWork.delete(admission);
   };
+}
+
+async function runWithDetachedAsyncWork<T>(
+  admission: GatewayRootWorkAdmission,
+  run: () => Promise<T>,
+): Promise<T> {
+  // Timers can inherit a completed request's scope. Retain cleanup under this
+  // detached root without delaying its caller's existing result boundary.
+  admission.references += 1;
+  const releaseWork = createGatewayRootWorkRelease(admission);
+  const result = createDeferredCore<T>();
+  const work = new AsyncWorkScope();
+  void work
+    .run(async () => {
+      try {
+        result.resolve(await work.track(run));
+      } catch (error) {
+        result.reject(error);
+      } finally {
+        try {
+          await AsyncWorkScope.runWhenAllIdle(
+            () => [work],
+            () => work.drain(),
+          );
+        } finally {
+          releaseWork();
+        }
+      }
+    })
+    .catch(result.reject);
+  return await result.promise;
 }
 
 function invalidateSuspendAdmission(): void {
@@ -362,7 +399,7 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
   return createGatewayRootWorkAdmission("restart-prepared");
 }
 
-/** Independent detached work counts separately even when launched by an admitted parent. */
+/** Independent roots count separately even when launched by an admitted parent. */
 export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
 ): GatewayRootWorkAdmissionLease | null {
@@ -402,10 +439,29 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(
   }
 }
 
-export async function runWithGatewayIndependentRootWorkAdmission<T>(
+/** Keeps the caller's async-resource owner, including server shutdown cancellation. */
+export function runWithGatewayIndependentRootWorkAdmission<T>(
   run: () => Promise<T>,
   origin?: string,
   signal?: AbortSignal,
+): Promise<T> {
+  return runWithGatewayNewRootWorkAdmission(run, origin, signal, false);
+}
+
+/** Delayed producers outlive their triggering request and own their async cleanup. */
+export function runWithGatewayDetachedWorkAdmission<T>(
+  run: () => Promise<T>,
+  origin?: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  return runWithGatewayNewRootWorkAdmission(run, origin, signal, true);
+}
+
+async function runWithGatewayNewRootWorkAdmission<T>(
+  run: () => Promise<T>,
+  origin: string | undefined,
+  signal: AbortSignal | undefined,
+  detachedWork: boolean,
 ): Promise<T> {
   while (true) {
     // Cancellation retires admission only; an admitted operation still owns its full completion.
@@ -413,7 +469,9 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError("gateway is draining for restart");
     }
-    const admission = tryBeginGatewayIndependentRootWorkAdmission(origin);
+    const admission = isGatewayWorkAdmissionClosed()
+      ? null
+      : createGatewayRootWorkAdmission(origin ?? "independent", detachedWork);
     if (admission) {
       try {
         return await admission.run(run);

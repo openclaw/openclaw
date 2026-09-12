@@ -29,11 +29,9 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
-import {
-  persistPluginInstall,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+import { persistPluginInstall } from "./install-persistence.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import {
@@ -52,6 +50,7 @@ import {
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "./install.js";
+import { PluginInstallPersistedError, type PluginLifecycleRuntimeApply } from "./lifecycle.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { getOfficialExternalPluginCatalogEntryForPackage } from "./official-external-plugin-catalog.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -171,6 +170,7 @@ async function persistManagedSourceInstall(params: {
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
   successMessage?: string;
+  applyRuntime?: PluginLifecycleRuntimeApply;
   beforePersistentApply?: () => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{ config: OpenClawConfig; warnings: string[] }> {
@@ -184,6 +184,7 @@ async function persistManagedSourceInstall(params: {
       invalidateRuntimeCache: params.invalidateRuntimeCache,
       runtime: params.runtime,
       persistenceLogger: { warn: (message) => warnings.push(message) },
+      applyRuntime: params.applyRuntime,
       beforePersistentApply: params.beforePersistentApply,
       beforePersistentEffect: params.beforePersistentEffect,
       // Only the persistence owner can distinguish rejection from a late refresh failure.
@@ -194,18 +195,20 @@ async function persistManagedSourceInstall(params: {
     });
     return { config, warnings };
   } catch (error) {
-    if (!committed) {
-      try {
-        await params.transaction?.rollback();
-      } catch (rollbackError) {
-        // Both errors are retained; the install failure remains the primary cause.
-        const aggregate = new AggregateError(
-          [error, rollbackError],
-          "Plugin install failed and payload rollback failed",
-        );
-        aggregate.cause = error;
-        throw aggregate;
-      }
+    if (committed) {
+      // Runtime application and cleanup cannot undo the artifact/config commit above.
+      throw new PluginInstallPersistedError(params.pluginId, error);
+    }
+    try {
+      await params.transaction?.rollback();
+    } catch (rollbackError) {
+      // Both errors are retained; the install failure remains the primary cause.
+      const aggregate = new AggregateError(
+        [error, rollbackError],
+        "Plugin install failed and payload rollback failed",
+      );
+      aggregate.cause = error;
+      throw aggregate;
     }
     throw error;
   } finally {
@@ -291,6 +294,7 @@ type ManagedPluginSourceInstallParams = {
   invalidateRuntimeCache?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  applyRuntime?: PluginLifecycleRuntimeApply;
   beforePersistentApply?: () => void;
   /** Revalidate the initiating owner after artifact review and before durable activation. */
   beforePersistentEffect?: () => void | Promise<void>;

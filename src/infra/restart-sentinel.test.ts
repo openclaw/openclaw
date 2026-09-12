@@ -48,7 +48,6 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
-  buildRestartSuccessContinuation,
   clearRestartSentinel,
   clearRestartSentinelIfRevision,
   finalizeUpdateRestartSentinelRunningVersion,
@@ -819,28 +818,6 @@ describe("restart sentinel error visibility", () => {
         "Failed to check restart sentinel: SQLITE_BUSY: database is locked",
       );
     });
-  });
-});
-
-describe("restart success continuation", () => {
-  it("does not infer an agent turn from session context alone", () => {
-    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toBeNull();
-  });
-
-  it("keeps explicit continuation messages", () => {
-    expect(
-      buildRestartSuccessContinuation({
-        sessionKey: "agent:main:main",
-        continuationMessage: "wake after restart",
-      }),
-    ).toEqual({
-      kind: "agentTurn",
-      message: "wake after restart",
-    });
-  });
-
-  it("stays silent without session context", () => {
-    expect(buildRestartSuccessContinuation({})).toBeNull();
   });
 });
 

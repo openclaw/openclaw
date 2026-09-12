@@ -23,6 +23,7 @@ import { projectSidebarAgentSessionRows } from "./app-sidebar-agent-session-rows
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import {
   adoptedCatalogSessionKeys,
+  projectSidebarSessionCatalogs,
   visibleSessionCatalogProjection,
 } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -184,6 +185,18 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       this.sessionsStatusFilter === "archived",
     );
 
+  protected catalogLiveRows = () => [
+    ...(this.sessionData.sessionsResult?.sessions ?? []),
+    ...Object.values(this.sessionData.sessionResultsByAgent).flatMap((result) => result.sessions),
+  ];
+
+  protected sidebarSessionCatalogs = () =>
+    projectSidebarSessionCatalogs(
+      this.visibleSessionCatalogs(),
+      this.activeSessionOwnerId,
+      this.catalogLiveRows(),
+    );
+
   private sessionSelectionAnchor: string | null = null;
   private readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
   private readonly attention = new SessionAttentionController(this);
@@ -228,6 +241,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     if (isSessionRouteId(this.activeRouteId)) {
       void this.sessionData.loadActiveSessionLineage(activeRouteKey);
     }
+    const revalidating = new Set<string>();
     const pending = [...this.visibleSessionRowsInOrder()];
     while (pending.length > 0) {
       const session = pending.shift();
@@ -237,25 +251,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       pending.push(...session.children);
       if (
         session.childSessionKeys.length > 0 &&
-        (session.visuallyActive || this.isSessionChildrenExpanded(session)) &&
-        !this.sessionData.loadedChildSessionKeys.has(session.key) &&
-        !this.sessionData.childSessionErrorsByParent.has(session.key) &&
-        !this.sessionData.loadingChildSessionKeys.has(session.key)
+        (session.visuallyActive || this.isSessionChildrenExpanded(session))
       ) {
+        revalidating.add(session.key);
         // Selected collapsed rows need child liveness so delegated work does not look finished.
         void this.sessionData.loadChildSessions(session.key);
       }
     }
     const mainRow = this.mainSessionRow();
-    if (
-      mainRow &&
-      (mainRow.childSessions?.length ?? 0) > 0 &&
-      !this.sessionData.loadedChildSessionKeys.has(mainRow.key) &&
-      !this.sessionData.childSessionErrorsByParent.has(mainRow.key) &&
-      !this.sessionData.loadingChildSessionKeys.has(mainRow.key)
-    ) {
+    if (mainRow && (mainRow.childSessions?.length ?? 0) > 0) {
+      revalidating.add(mainRow.key);
       void this.sessionData.loadChildSessions(mainRow.key);
     }
+    this.sessionData.retireStaleChildSessions(revalidating);
   }
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) =>
@@ -380,7 +388,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   };
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
-  protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
+  protected zonedVisibleSections(
+    rows: SidebarRecentSession[],
+    catalogs = this.sidebarSessionCatalogs(),
+  ): SidebarVisibleSections {
     const grouping = this.effectiveSessionsGrouping();
     const roster = this.groupedSessionSource;
     const sections = roster?.agentIds.flatMap((agentId) => {
@@ -403,10 +414,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       selfOwnerId: this.context?.gateway.snapshot.selfUser?.id ?? null,
       // Normalize gateway order without dropping catalog-lagging categories.
       sectionOrder: this.knownSectionOrder(),
-      catalogIds:
-        this.sessionsStatusFilter === "archived"
-          ? []
-          : this.visibleSessionCatalogs().map((catalog) => catalog.id),
+      catalogIds: catalogs.map((catalog) => catalog.id),
       collapsedSections,
       hideEmptyGroups: this.sessionsHideEmptyGroups || this.sessionOwnerFilterActive,
       visibleSessionLimits: roster
@@ -582,7 +590,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   switchChipAgent(agentId: string) {
     this.closeAgentMenu();
     this.expandAgent(agentId);
-    this.openAgentConversation(agentId);
+    // Skills uses the shared agent selection in place; opening chat would
+    // discard the discovery page instead of updating its workspace scope.
+    if (this.activeRouteId !== "skills") {
+      this.openAgentConversation(agentId);
+    }
   }
 
   askAgentCapabilities(agentId: string) {

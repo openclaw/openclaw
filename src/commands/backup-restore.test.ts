@@ -6,7 +6,6 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createBackupArchive } from "../infra/backup-create.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -15,14 +14,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import { verifyBackupArchive } from "./backup-verify.js";
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 async function listArchiveLeafEntries(archivePath: string): Promise<string[]> {
   const entries: string[] = [];
@@ -152,7 +144,7 @@ describe("backupRestoreCommand", () => {
 
           await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({ ok: true });
           await expect(
-            backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+            backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
           ).resolves.toMatchObject({ ok: true, entryCount: 3 });
           const original = path.join(targetPath, payloadPath);
           const linked = path.join(targetPath, hardlinkPath);
@@ -195,7 +187,7 @@ describe("backupRestoreCommand", () => {
             includeWorkspace: false,
             nowMs: Date.UTC(2026, 7, 12, 12, 0, 0),
           });
-          const runtime = createRuntime();
+          const runtime = createTestRuntime();
           const restored = await backupRestoreCommand(runtime, {
             archive: backup.archivePath,
             target: targetPath,
@@ -327,7 +319,7 @@ describe("backupRestoreCommand", () => {
         expect(archiveEntries.some((entry) => entry.includes("external-runtime"))).toBe(false);
         expect(archiveEntries.some((entry) => entry.endsWith("/sessions/session.json"))).toBe(true);
 
-        const restored = await backupRestoreCommand(createRuntime(), {
+        const restored = await backupRestoreCommand(createTestRuntime(), {
           archive: backup.archivePath,
           target: targetPath,
         });
@@ -395,10 +387,13 @@ describe("backupRestoreCommand", () => {
         await fs.writeFile(path.join(nonEmptyTarget, "keep.txt"), "keep\n");
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: emptyTarget }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: emptyTarget }),
         ).resolves.toMatchObject({ targetPath: emptyTarget });
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: nonEmptyTarget }),
+          backupRestoreCommand(createTestRuntime(), {
+            archive: archivePath,
+            target: nonEmptyTarget,
+          }),
         ).rejects.toThrow(/target directory must be empty/iu);
         await expect(fs.readFile(path.join(nonEmptyTarget, "keep.txt"), "utf8")).resolves.toBe(
           "keep\n",
@@ -421,7 +416,7 @@ describe("backupRestoreCommand", () => {
         await state.writeConfig({ agents: { entries: { main: { agentDir } } } });
 
         await expect(
-          backupRestoreCommand(createRuntime(), {
+          backupRestoreCommand(createTestRuntime(), {
             archive: state.path("missing-backup.tar.gz"),
             target: targetPath,
           }),
@@ -447,7 +442,7 @@ describe("backupRestoreCommand", () => {
         await fs.writeFile(state.configPath, '{"agents":{"entries":', "utf8");
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
         ).resolves.toMatchObject({ targetPath });
       },
     );
@@ -474,7 +469,7 @@ describe("backupRestoreCommand", () => {
         await fs.mkdir(targetPath);
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
         ).rejects.toThrow(/manifest is not valid JSON/iu);
         await expect(fs.readdir(targetPath)).resolves.toEqual([]);
       },
@@ -555,7 +550,7 @@ describe("backupRestoreCommand", () => {
           });
 
           await expect(
-            backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+            backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
           ).rejects.toThrow(error);
           await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
           await new Promise<void>((resolve) => {
@@ -595,7 +590,7 @@ describe("backupRestoreCommand", () => {
         });
 
         await expect(
-          backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
         ).rejects.toThrow(/incomplete target was cleaned/iu);
         await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
         await new Promise<void>((resolve) => {
@@ -635,7 +630,7 @@ describe("backupRestoreCommand", () => {
         const cleanupError = new Error("cleanup denied");
         vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
 
-        const restoreError = await backupRestoreCommand(createRuntime(), {
+        const restoreError = await backupRestoreCommand(createTestRuntime(), {
           archive: archivePath,
           target: targetPath,
         }).catch((error: unknown) => error);

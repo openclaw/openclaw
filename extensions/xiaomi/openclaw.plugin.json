@@ -1,5 +1,6 @@
 {
   "id": "xiaomi",
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

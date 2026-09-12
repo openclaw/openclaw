@@ -1275,7 +1275,6 @@ export async function installPluginFromMarketplace(
 
     const result = await installPluginFromPath(
       copyPluginInstallTransactionRequest(params, {
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         config: params.config,
         path: resolved.path,

@@ -10,6 +10,14 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+Use **Search settings** to find pages and configuration fields. Add `tag:storage`, for example, to filter configuration fields by tag. Tags can appear before, within, or after a text phrase: `Log File tag:storage` and `Log tag:storage File` both find **Log File Path**. Multiple tags require a field to match every tag.
+
+Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
+
+In **Models**, **Connect** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. **Model setup** opens the separate [setup and activation flow](/start/onboarding). If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
+
+Model pickers show the authentication methods available to the selected agent. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
+
 ## Environment identity
 
 When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:
@@ -60,7 +68,28 @@ Set an agent's display name, emoji, and avatar under **Agent settings → Overvi
 
 ## Gateway host status
 
-Open **Settings → Connection** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card.
+The connection settings use one **Gateway secret** field for the configured
+token or password. The Gateway accepts either wire field; its auth mode selects
+the configured secret. After a successful token-mode connection, the UI remembers
+the secret in session storage for the current browser tab and Gateway only.
+Passwords stay in memory and are never persisted.
+
+**Settings → Gateway** shows **Connected** without a Connect action when the
+connection is healthy and unchanged. Editing the URL or secret reveals **Apply
+and reconnect** and **Discard changes**. While a connection attempt is running,
+unchanged settings show a disabled **Connecting…** or **Reconnecting…** action.
+Editing the URL or secret enables **Apply and reconnect**, so you can replace a
+connection that is stuck retrying. A disconnected connection offers **Connect**
+or **Retry connection**.
+Open **Connection details** for authentication and heartbeat information, or use
+its **Reconnect** action to troubleshoot the current connection.
+
+The separate **Session** section saves the **Default session** for the current
+Gateway in this browser without reconnecting. Session edits and connection edits
+have independent Save/Apply and Discard actions. Switching Gateways restores
+that Gateway's saved session selection.
+
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. A loading indicator appears while stats are being fetched; refreshes keep the previous readings visible. Disk paths appear in their labels without duplicate tooltips.
 
 ## Language support
 
@@ -87,6 +116,8 @@ The **Typography** block lets you choose an **Interface** face and a separate **
 
 Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
+Appearance also carries the **Lobster visits** and **Lobster sounds** toggles and the Lobsterdex. Both toggles are browser-local. See [The Lobster](/web/lobster) for what the sidebar visitor does and how to turn it off for good.
+
 When your connection is bound to an authenticated Gateway profile, theme, theme mode, and accent color are saved to that profile instead of the gateway config. They follow you across devices without changing anyone else's appearance, override gateway-wide `ui.prefs` values, and update your connected clients live. Connections without an authenticated profile continue syncing these preferences through the gateway config exactly as before. Language and chat display preferences remain gateway-config preferences for every connection. Each browser keeps a local mirror for instant boot, and text size remains browser-local. An explicitly read-only connection applies preference changes only in that browser. Changes made while offline remain queued until a later connection can write their applicable preferences; on a read-only reconnect, they continue to behave as browser-local preferences. See [Configuration reference](/gateway/configuration-reference#ui).
 
 ## Manage plugins
@@ -108,6 +139,7 @@ overview counts. Each row opens a detail view; its overflow (`…`) menu enables
 or disables the plugin and offers **Remove** for externally installed plugins.
 It also lists configured [MCP servers](/cli/mcp) and supports adding, disabling,
 and removing them inline. The same server controls live on **Settings → MCP**.
+Your selected detail tab stays open as additional plugin information loads.
 The **Discover** tab is the store: featured plugins included with OpenClaw,
 official external plugins, and one-click MCP connectors for popular services.
 Typing in the search box queries
@@ -117,13 +149,11 @@ target the store directly with `/settings/plugins/discover`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
-**Workshop** tab keeps the Skill Workshop board and Today review flow for
-[skill proposals](/tools/skill-workshop). **Find skill ideas** reviews a bounded
-window of substantial sessions from newest to oldest and leaves any results as
-pending proposals. The panel shows cumulative coverage; **Scan earlier work**
-continues from the persisted cursor, then becomes **Scan new work** after older
-history is exhausted. Manual history review works while autonomous self-learning
-is disabled and uses the selected agent's configured model.
+**Workshop** tab shows installed skills and pending
+[skill proposals](/tools/skill-workshop). **Learn from past conversations** opens
+a normal session with the selected agent's configured model and permitted tools.
+The agent chooses which history and skills to inspect, following the current
+Workshop mode. Chat shows progress, results, and normal stop and follow-up controls.
 
 Included plugins are already present on the Gateway and show **Enable** or
 **Disable** instead of **Install**. For example, Workboard is included with
@@ -190,7 +220,11 @@ Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts 
 
 Choice fields that accept an explicit `null` value show it as a dropdown option. For optional fields, `null` remains distinct from clearing the setting or selecting its default. Rejected choices, such as a duplicate in a unique-value list, leave the previous selection in place.
 
-On desktop web, the expanded sidebar header places the agent identity beside the sidebar collapse toggle (⌘B), command-palette search button (⌘K), and **New conversation** button. Clicking the identity opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity shows the agent's avatar (identity image or emoji), name, optional environment pill, and unread dot; active-run status appears on the owning session row instead of beneath the agent name. Its agent-scoped menu contains the inline agent switcher (multi-agent setups), **New agent**, "What can this agent do?", and **Agent settings**. The agent switcher lists pinned agents first and does not show a filter field; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own [URL selection](/web/urls#route-table) and does not follow the shared page scope. The footer is one full-width identity card that remains available offline and shows **Reconnecting…** beneath the last-known account name. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Usage**, mobile pairing, **Get the apps**, **Help** (help, Discord, Docs, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B) hides it entirely for a full-width workspace; the top-left content cluster then provides expand, search, and new-session controls — mirroring what the macOS app hosts natively in its titlebar. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls, while the sidebar header retains the agent identity and right-aligned **New conversation** button. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and **New conversation** buttons while it is collapsed.
+For an empty integer field without a default, step buttons initialize positive-only or negative-only ranges at the permitted endpoint, matching keyboard arrows. For example, a field with a minimum of 1 starts at 1 on the first increment.
+
+Incomplete array-row edits stay with their item when you remove earlier rows or edit other settings. Correct the field to save its new value.
+
+On desktop web, the expanded sidebar header places the agent identity beside the sidebar collapse toggle (⌘B), command-palette search button (⌘K), and **New conversation** button. Clicking the identity opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity shows the agent's avatar (identity image or emoji), name, optional environment pill, and unread dot; active-run status appears on the owning session row instead of beneath the agent name. Its agent-scoped menu contains the inline agent switcher (multi-agent setups), **New agent**, "What can this agent do?", and **Agent settings**. You can also create an agent from **Settings → Agents**: choose the standalone **New agent** button with zero or one agent, or the item at the bottom of the agent selector with multiple agents. Creation requires administrator access. The agent switcher lists pinned agents first and does not show a filter field; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own [URL selection](/web/urls#route-table) and does not follow the shared page scope. The footer is one full-width identity card that remains available offline and shows **Reconnecting…** beneath the last-known account name. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Usage**, mobile pairing, **Get the apps**, **Help** (help, Discord, Docs, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B) hides it entirely for a full-width workspace; the top-left content cluster then provides expand, search, and new-session controls — mirroring what the macOS app hosts natively in its titlebar. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls, while the sidebar header retains the agent identity and right-aligned **New conversation** button. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and **New conversation** buttons while it is collapsed.
 
 The bottom-left account footer, including the Settings sidebar, shows **Suspending…** while the Gateway prepares or drains work and **Suspended** once suspension is ready. Restart status takes precedence. During reconnect, fresh suspension reports from the Gateway keep that state visible; unexplained disconnects show **Offline**. The suspension indicator clears when the Gateway accepts work again or its last suspension report expires.
 
@@ -259,6 +293,8 @@ Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
 ## Custom plugin UI
 
+Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.
+
 **Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
 and view replacements from user-installed plugins. It defaults to off and
 writes `gateway.controlUi.experimental.customPlugins`. Restart the Gateway and
@@ -307,6 +343,11 @@ or replace conflicts. It reports each source's confirmed copy count and warns
 when a failure may have happened after a partial copy. Use the dedicated Import
 Memory page when you need destination selection, a file preview, or replacement.
 
+If an error says that apply completed but its result could not be returned,
+inspect the migration report and destination files before starting another
+import. Retrying the same pending request reuses its recorded outcome while
+the Gateway retains it. A plugin cleanup warning does not undo completed copies.
+
 Planning and applying require `operator.admin`. Every apply creates a verified
 OpenClaw backup when state exists, writes a redacted migration report, and keeps
 item-level backups before replacing existing destination files. See
@@ -334,6 +375,7 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 Open **Activity** from the sidebar's page picker, or visit `/activity` under the Control UI's base path. It has two tabs plus a deep-link inspector:
 
 - **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
+- Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.
 - **Live activity** shows running and queued sessions above the ephemeral browser-local tool stream. The session snapshot comes from the Gateway; the tool stream uses the same `session.tool` and tool events that power Chat tool cards.
 - **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` safe-only projection. The RPC contains required `decisionDisplays` and never a raw `decisions` field. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
 

@@ -81,6 +81,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
   workspaceDir: string;
   phase: Exclude<MemoryDreamingPhaseName, "deep">;
   bodyLines: string[];
+  hasContent: boolean;
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
@@ -91,26 +92,29 @@ export async function writeDailyDreamingPhaseBlock(params: {
   let reportPath: string | undefined;
 
   if (shouldWriteInline(params.storage)) {
-    inlinePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
-    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
-    const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
+    const candidatePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
+    const original = await fs.readFile(candidatePath, "utf-8").catch((err: unknown) => {
       if (extractErrorCode(err) === "ENOENT") {
-        return "";
+        return undefined;
       }
       throw err;
     });
-    const markers = resolvePhaseMarkers(params.phase);
-    const updated = replaceManagedMarkdownBlock({
-      original,
-      heading: DAILY_PHASE_HEADINGS[params.phase],
-      startMarker: markers.start,
-      endMarker: markers.end,
-      body,
-    });
-    await replaceDreamingMarkdownFile(inlinePath, withTrailingNewline(updated));
+    // An existing empty file still owns its managed block; absence does not.
+    if (params.hasContent || original !== undefined) {
+      inlinePath = candidatePath;
+      const markers = resolvePhaseMarkers(params.phase);
+      const updated = replaceManagedMarkdownBlock({
+        original: original ?? "",
+        heading: DAILY_PHASE_HEADINGS[params.phase],
+        startMarker: markers.start,
+        endMarker: markers.end,
+        body,
+      });
+      await replaceDreamingMarkdownFile(inlinePath, withTrailingNewline(updated));
+    }
   }
 
-  if (shouldWriteSeparate(params.storage)) {
+  if (params.hasContent && shouldWriteSeparate(params.storage)) {
     reportPath = resolveSeparateReportPath(
       params.workspaceDir,
       params.phase,
@@ -146,18 +150,21 @@ export async function writeDailyDreamingPhaseBlock(params: {
 export async function writeDeepDreamingReport(params: {
   workspaceDir: string;
   bodyLines: string[];
+  hasContent: boolean;
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
 }): Promise<string | undefined> {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  const inlinePath = await updateDeepDreamsFile({
-    workspaceDir: params.workspaceDir,
-    bodyLines: params.bodyLines,
-  });
+  const inlinePath = params.hasContent
+    ? await updateDeepDreamsFile({
+        workspaceDir: params.workspaceDir,
+        bodyLines: params.bodyLines,
+      })
+    : undefined;
   let reportPath: string | undefined;
-  if (shouldWriteSeparate(params.storage)) {
+  if (params.hasContent && shouldWriteSeparate(params.storage)) {
     reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
     await replaceDreamingMarkdownFile(reportPath, `# Deep Sleep\n\n${body}\n`);
   }

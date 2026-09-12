@@ -12,6 +12,7 @@ import {
   type SessionFileEntryMigrationState,
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -19,10 +20,15 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  parseOpaqueLeafEntry,
+  parseParentLinkedOpaqueEntry,
+} from "../config/sessions/session-entry-codec.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
@@ -32,6 +38,7 @@ export type ExistingAgentDatabaseTarget = SessionStoreTarget & { sqlitePath: str
 
 export type ReadOnlySqliteValidationSnapshot = {
   sessionIdsBySessionKey: ReadonlyMap<string, string>;
+  sessionKeysBySessionId: ReadonlyMap<string, string>;
   transcriptEventCountsBySessionId: ReadonlyMap<string, number>;
 };
 
@@ -97,6 +104,65 @@ export function resolveLegacyTranscriptPaths(
     path.join(sessionsDir, path.basename(file)),
   );
   return { transcriptPath, transcriptDependencies };
+}
+
+/** Validate an unregistered primary without retaining transcript payloads in memory. */
+export function readLegacyPrimaryTranscriptIdentity(
+  filePath: string,
+  originalPath: string,
+  retainedSharedAliasIds?: ReadonlySet<string>,
+): { sessionId: string; updatedAt: number } | undefined {
+  const filename = path.basename(originalPath);
+  const filenameId =
+    extractGeneratedTranscriptSessionId(filename) ?? filename.slice(0, -".jsonl".length);
+  let sessionId: string | undefined;
+  let version = 1;
+  let messages = 0;
+  for (const { event: raw } of iterateTranscriptEvents(filePath, false)) {
+    if (!isRecord(raw) || raw.traceSchema !== undefined) {
+      return undefined;
+    }
+    if (!sessionId) {
+      const id = raw.id ?? raw.sessionId;
+      if (
+        raw.type !== "session" ||
+        typeof id !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
+      ) {
+        return undefined;
+      }
+      if (id !== filenameId) {
+        // Shared aliases retained by an earlier migration are not unregistered primaries.
+        if (retainedSharedAliasIds?.has(id)) {
+          return undefined;
+        }
+        throw new Error("Primary transcript header does not match its original filename");
+      }
+      version = typeof raw.version === "number" ? raw.version : 1;
+      if (!Number.isInteger(version) || version < 1 || version > 3) {
+        throw new Error("Unsupported primary transcript version");
+      }
+      sessionId = id;
+      continue;
+    }
+    if (raw.type === "session") {
+      throw new Error("Multiple primary transcript headers");
+    }
+    const classified = classifySessionFileEntry(raw, version);
+    if (
+      !classified.recognized &&
+      !parseOpaqueLeafEntry(raw) &&
+      !parseParentLinkedOpaqueEntry(raw)
+    ) {
+      throw new Error("Unrecognized primary transcript record");
+    }
+    if (classified.recognized && classified.entry.type === "message") {
+      messages += 1;
+    }
+  }
+  return sessionId && messages > 0
+    ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
+    : undefined;
 }
 
 export function countTranscriptEventsForPath(
@@ -325,6 +391,7 @@ export function readOnlySqliteValidationSnapshot(
 ): ReadOnlySqliteValidationSnapshotResult {
   const empty: ReadOnlySqliteValidationSnapshot = {
     sessionIdsBySessionKey: new Map(),
+    sessionKeysBySessionId: new Map(),
     transcriptEventCountsBySessionId: new Map(),
   };
   const result = readSessionDatabase(target, (database) => {
@@ -341,6 +408,16 @@ export function readOnlySqliteValidationSnapshot(
         sessionIdsBySessionKey.set(row.session_key, row.session_id);
       }
     }
+    const sessionKeysBySessionId = new Map<string, string>();
+    if (tableExists(database, "session_windows")) {
+      for (const row of database
+        .prepare("SELECT session_id, session_key FROM session_windows")
+        .iterate()) {
+        if (typeof row.session_id === "string" && typeof row.session_key === "string") {
+          sessionKeysBySessionId.set(row.session_id, row.session_key);
+        }
+      }
+    }
     const transcriptEventCountsBySessionId = new Map<string, number>();
     if (tableExists(database, "transcript_events")) {
       const statement = database.prepare(
@@ -354,6 +431,7 @@ export function readOnlySqliteValidationSnapshot(
     }
     return {
       sessionIdsBySessionKey,
+      sessionKeysBySessionId,
       transcriptEventCountsBySessionId,
     };
   });
@@ -527,6 +605,9 @@ export function projectExistingAgentDatabaseTargets(
 ): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
   return targets.flatMap((target) => {
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      return [];
+    }
     const sqlitePath = resolveTargetSqlitePath(target, env);
     if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       return [];

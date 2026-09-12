@@ -39,11 +39,9 @@ import {
 import { icons } from "./icons.ts";
 import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import {
-  describeSessionTrailingState,
-  renderSessionLeadingState,
-} from "./session-leading-indicator.ts";
+import { describeSessionState, renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
@@ -55,7 +53,7 @@ const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 export interface SessionListHost {
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
-  readonly sessionDataContext: Pick<ApplicationContext, "gateway"> | undefined;
+  readonly sessionDataContext: Pick<ApplicationContext, "gateway" | "agentSelection"> | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowPreview: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
@@ -85,6 +83,7 @@ export interface SessionListHost {
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
+    | "setSessionsStatusFilter"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
@@ -101,6 +100,9 @@ export interface SessionListHost {
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionOwnerFilterActive: boolean;
+  readonly sessionOwnerFilterId: string | null;
+  readonly sessionInvolvingMeFilterActive: boolean;
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (
@@ -110,6 +112,7 @@ export interface SessionListHost {
 
   readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
   mainSessionRow(): { key: string } | null;
+  setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
@@ -118,7 +121,11 @@ export interface SessionListHost {
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
-  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void;
+  toggleSessionMenu(
+    session: SidebarRecentSession,
+    trigger: HTMLElement,
+    catalogMenu?: CatalogSessionMenuRequest,
+  ): void;
   showMoreChildren(sessionKey: string): void;
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
   sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
@@ -216,23 +223,18 @@ function renderSidebarSessionIndicators(
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedIdentities } =
-    renderSessionLeadingState(
-      session,
-      leadingOwner,
-      ownerAttribution,
-      ownerViewing,
-      channelAvatarAuth,
-      team,
-    );
-  const trailingDescription = session.isChild
-    ? running && session.unread
-      ? t("sessionsView.unread")
-      : ""
-    : describeSessionTrailingState(session);
+  const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
+    session,
+    leadingOwner,
+    ownerAttribution,
+    ownerViewing,
+    channelAvatarAuth,
+    team,
+  );
+  const stateDescription = describeSessionState(session);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = !team && trailingDescription ? sidebarSessionStateId(session.key) : undefined;
+  const stateId = !team && stateDescription ? sidebarSessionStateId(session.key) : undefined;
   const persistentIndicator =
     team && leadingIndicator === nothing && session.visibility !== "draft"
       ? nothing
@@ -292,6 +294,7 @@ function renderSidebarSessionIndicators(
         placementState: session.placementState,
         placementProviderId: session.placementProviderId,
         placementProfileId: session.placementProfileId,
+        placementMachine: session.placementMachine,
         diskSpaceStatus: session.diskSpaceStatus,
         workspaceConflictCount: session.workspaceConflictCount,
         outboxAttentionCount: session.outboxAttentionCount,
@@ -307,26 +310,7 @@ function renderSidebarSessionIndicators(
           ? renderTeamSessionSlots([session], !childrenExpanded, session.childSessionKeys.length)
           : nothing
       }
-      ${
-        team
-          ? nothing
-          : trailingIndicator === nothing
-            ? trailingDescription
-              ? html`<span class="sr-only" id=${stateId} aria-hidden="true"
-                  >${trailingDescription}</span
-                >`
-              : nothing
-            : html`<span class="session-row-aside">
-                <span
-                  class="session-row-state"
-                  aria-hidden="true"
-                  id=${stateId}
-                  role="img"
-                  aria-label=${trailingDescription}
-                  >${trailingIndicator}</span
-                >
-              </span>`
-      }
+      ${!team && stateDescription ? html`<span class="sr-only" id=${stateId} aria-hidden="true">${stateDescription}</span>` : nothing}
       ${team ? nothing : trail}
     </span>`,
   };
@@ -362,7 +346,13 @@ export function renderRecentSession(params: {
     handleContextMenuEvent(
       event,
       (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
-      (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
+      (trigger, x, y) => {
+        if (display?.catalogMenu) {
+          host.openCatalogMenu(display.catalogMenu, x, y, trigger ?? undefined);
+          return;
+        }
+        host.sidebarMenus.openSessionMenu(session, x, y, trigger);
+      },
     );
   const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const menuTooltip = t("chat.sidebar.openSessionMenu");
@@ -536,7 +526,7 @@ export function renderRecentSession(params: {
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 const trigger = event.currentTarget as HTMLElement;
-                host.toggleSessionMenu(session, trigger);
+                host.toggleSessionMenu(session, trigger, display?.catalogMenu);
               }}
             >
               ${icons.moreHorizontal}

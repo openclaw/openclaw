@@ -6,6 +6,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import type { ApplicationPlacementStartup } from "../../app/session-placement-startup.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
@@ -100,7 +101,6 @@ export async function moveChatPanePlacement(params: {
     placement.runner?.kind === "device" && placement.runner.status === "offline";
   let target: SessionMoveTarget | null;
   if (abandonSource) {
-    const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
     const confirmed = await showConfirmDialog({
       message: t("sessionsView.continueOnGatewayConfirm", {
         session: params.row.label || params.row.key,
@@ -203,6 +203,7 @@ export async function restartChatPanePlacement(params: {
       ...(target.kind === "profile"
         ? {
             profileId: target.profileId,
+            ...(target.os ? { os: target.os } : {}),
             ...(target.machineClass ? { machineClass: target.machineClass } : {}),
           }
         : { deviceId: target.deviceId }),
@@ -248,19 +249,15 @@ export async function reclaimChatPanePlacement(params: {
     reclaiming ||
     deviceOffline ||
     (action?.blocksActiveRun && params.row.hasActiveRun === true) ||
-    action?.method !== "sessions.reclaim"
+    !action
   ) {
     return;
   }
-  const access = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
+  const access = readSessionMethodAccess(params.gatewaySnapshot, action);
   if (!access.allowed) {
     params.publishError(access.reason);
     return;
   }
-  const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
   const worker = resolveChatPaneWorkerPresentation(
     params.row,
     params.placementStartup.get(params.row.key),

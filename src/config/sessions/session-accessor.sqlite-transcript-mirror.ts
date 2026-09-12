@@ -12,6 +12,7 @@ import {
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
@@ -81,6 +82,7 @@ function readTranscriptMirrorFactsInSnapshot(
     idempotencyKeys: readonly string[];
   },
 ): TranscriptMirrorFacts {
+  assertSessionTranscriptHot(database.db, resolved.sessionId);
   const idempotencyKeys = [...new Set(params.idempotencyKeys)];
   const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
   if (fallbackEvents !== undefined) {

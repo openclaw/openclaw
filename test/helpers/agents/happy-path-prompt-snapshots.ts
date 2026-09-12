@@ -113,12 +113,13 @@ type CodexPromptSnapshotApi = {
     turnScopedDeveloperInstructions?: string;
   }) => {
     developerInstructions: string;
+    parentLocalInstructions: string | null;
     threadStartParams: Record<string, unknown>;
     threadResumeParams: Record<string, unknown>;
     turnStartParams: Record<string, unknown> & {
       input?: unknown;
       additionalContext?: Record<string, { kind: "application" | "untrusted"; value: string }>;
-      collaborationMode?: { settings?: { developer_instructions?: string } };
+      collaborationMode?: { settings?: { developer_instructions?: string | null } };
     };
   };
   createCodexDynamicToolSpecsForPromptSnapshot: (params: {
@@ -257,7 +258,7 @@ const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
 ] as const;
 
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are prepared separately from user input and are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -719,6 +720,7 @@ function renderModelBoundPromptLayers(params: {
       ? params.codexSnapshot.threadStartParams.config.instructions
       : "";
   const openClawDeveloperInstructions = params.codexSnapshot.developerInstructions;
+  const parentLocalInstructions = params.codexSnapshot.parentLocalInstructions ?? "";
   const codexCollaborationModeInstructions =
     typeof params.codexSnapshot.turnStartParams.collaborationMode?.settings
       ?.developer_instructions === "string"
@@ -742,6 +744,7 @@ function renderModelBoundPromptLayers(params: {
   const additionalContextText = additionalContextLayers.map(({ text }) => text).join("\n\n");
   const textOnlyTotal = [
     codexModelInstructions,
+    parentLocalInstructions,
     CODEX_YOLO_PERMISSION_INSTRUCTIONS,
     codexConfigInstructions,
     openClawDeveloperInstructions,
@@ -756,7 +759,7 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, native collaboration-mode instructions, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
@@ -778,6 +781,7 @@ function renderModelBoundPromptLayers(params: {
             "extensions/codex app-server turn/start input OpenClaw runtime context",
           developerInstructionsFrom:
             "extensions/codex app-server thread/start developerInstructions",
+          parentLocalInstructionsFrom: "extensions/codex inference relay Responses.instructions",
           collaborationModeDeveloperInstructionsFrom:
             "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions",
           additionalContextFrom: "extensions/codex app-server turn/start additionalContext",
@@ -801,6 +805,7 @@ function renderModelBoundPromptLayers(params: {
         codexPermissionDeveloperInstructions: textStats(CODEX_YOLO_PERMISSION_INSTRUCTIONS),
         codexWorkspaceBootstrapConfigInstructions: textStats(codexConfigInstructions),
         openClawDeveloperInstructions: textStats(openClawDeveloperInstructions),
+        openClawParentLocalInstructions: textStats(parentLocalInstructions),
         codexCollaborationModeDeveloperInstructions: textStats(codexCollaborationModeInstructions),
         additionalContext: textStats(additionalContextText),
         userInputText: textStats(turnInputText),
@@ -813,6 +818,12 @@ function renderModelBoundPromptLayers(params: {
     `### System: Codex Model Instructions (${MODEL_ID}, ${CODEX_PROMPT_PERSONALITY})`,
     "",
     markdownFence("text", codexModelInstructions),
+    "",
+    "### Request Instructions: OpenClaw Parent-Local Context",
+    "",
+    "Appended to the same top-level model request instructions, not to native conversation history.",
+    "",
+    markdownFence("text", parentLocalInstructions),
     "",
     "### Developer: Codex Permission Instructions",
     "",
@@ -919,7 +930,7 @@ function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.",
+    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as parent-local request instructions, and `MEMORY.md` in turn input.",
     "",
     "## Scenario Metadata",
     "",
@@ -939,7 +950,7 @@ function renderScenarioSnapshot(
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
-        simulatedWorkspaceTurnScopedDeveloperInstructionFiles:
+        simulatedWorkspaceParentLocalInstructionFiles:
           CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
       }),
     ),
@@ -998,7 +1009,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
     "",
-    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
+    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how managed OpenClaw inference adds profile files to parent-only request instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",

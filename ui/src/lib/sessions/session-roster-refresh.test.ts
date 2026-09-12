@@ -1,8 +1,10 @@
 // @vitest-environment node
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createGatewayHarness,
@@ -11,7 +13,130 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
+const requireRecord = createRequireRecord("object", "expected-label");
+
 describe("session roster refresh", () => {
+  it.each(["All", "primary"] as const)(
+    "uses a newer search observation when an older %s query completes",
+    async (owner) => {
+      const managed = owner === "All";
+      const archivedKey = "agent:main:archived-overlap";
+      const primaryRow = {
+        key: "agent:main:primary-only",
+        agentId: "main",
+        sessionId: "primary-only-session",
+        kind: "direct" as const,
+        archived: false,
+        updatedAt: 1,
+      };
+      const oldRow = {
+        key: archivedKey,
+        agentId: "main",
+        sessionId: "archived-overlap-session",
+        kind: "direct" as const,
+        archived: managed,
+        ...(managed ? { archivedAt: 5 } : {}),
+        updatedAt: 10,
+        label: "Earlier archived label",
+      };
+      const newerRow = { ...oldRow, updatedAt: 20, label: "Newer archived label" };
+      const latestRow = { ...oldRow, updatedAt: 30, label: "Latest All-query label" };
+      const completingQuery = {
+        agentId: "main",
+        archivedFilter: managed ? "all" : "active",
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      } as const;
+      const searchQuery = {
+        ...completingQuery,
+        archivedFilter: "all" as const,
+        search: archivedKey,
+        limit: 50,
+        includeDerivedTitles: false,
+        includeLastMessage: false,
+      };
+      const oldAll = {
+        ...sessionsResult([{ ...oldRow }, { ...primaryRow }], 10),
+        totalCount: 2,
+        hasMore: false,
+        nextOffset: null,
+      };
+      const delayed = createDeferred<typeof oldAll>();
+      const allDispatched = createDeferred();
+      let holdAll = true;
+      let initialPrimary = true;
+      const unexpectedMethods: string[] = [];
+      const client = createTestGatewayClient(async (method, params) => {
+        if (method !== "sessions.list") {
+          unexpectedMethods.push(method);
+          throw new Error(`Unexpected Gateway method: ${method}`);
+        }
+        const query = requireRecord(params, "sessions.list params");
+        if (query.search === archivedKey) {
+          return sessionsResult([{ ...newerRow }], 20);
+        }
+        if (initialPrimary) {
+          initialPrimary = false;
+          return sessionsResult([{ ...primaryRow }], 1);
+        }
+        if (holdAll) {
+          allDispatched.resolve();
+          return delayed.promise;
+        }
+        return sessionsResult([{ ...latestRow }, { ...primaryRow }], 30);
+      });
+      const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+      const stopAll = sessions.subscribeList(completingQuery, () => {});
+      const stopSearch = sessions.subscribeList(searchQuery, () => {});
+      let older: Promise<void> | undefined;
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        const primary = sessions.state.result;
+        const primaryRevision = sessions.canonicalListRevision;
+        older = sessions.refreshList({ ...completingQuery, force: true });
+        await allDispatched.promise;
+        await sessions.refreshList({ ...searchQuery, force: true });
+        const searchResult = sessions.listSnapshot(searchQuery).result;
+        expect(searchResult?.sessions).toEqual([expect.objectContaining(newerRow)]);
+        expect(sessions.state.result).toBe(primary);
+
+        delayed.resolve(oldAll);
+        await older;
+        expect(sessions.listSnapshot(completingQuery).result).toMatchObject({
+          ts: 10,
+          count: 2,
+          totalCount: 2,
+          hasMore: false,
+          nextOffset: null,
+          sessions: [newerRow, primaryRow],
+        });
+        expect(sessions.listSnapshot(searchQuery).result).toBe(searchResult);
+        if (managed) {
+          expect(sessions.state.result).toBe(primary);
+        }
+        expect(sessions.canonicalListRevision).toBe(primaryRevision + (managed ? 0 : 1));
+
+        holdAll = false;
+        await sessions.refreshList({ ...completingQuery, force: true });
+        expect(sessions.listSnapshot(completingQuery).result?.sessions).toEqual([
+          expect.objectContaining(latestRow),
+          expect.objectContaining(primaryRow),
+        ]);
+        expect(sessions.listSnapshot(searchQuery).result).toBe(searchResult);
+        if (managed) {
+          expect(sessions.state.result).toBe(primary);
+        }
+        expect(unexpectedMethods).toEqual([]);
+      } finally {
+        stopAll();
+        stopSearch();
+        sessions.dispose();
+        delayed.resolve(oldAll);
+        await older;
+      }
+    },
+  );
+
   it.each([
     { name: "primary", scope: { agentId: " Main " } },
     { name: "owner-first", scope: { agentId: "main", ownerFirst: true } },

@@ -12,6 +12,11 @@ import { isBuiltInDefaultSecretProviderRef, isValidSecretRef } from "../secrets/
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { buildSecretInputSchema, registerSensitiveConfigSchema } from "./secret-input-schema.js";
 
+export {
+  readProviderEnvValue,
+  resolveNonEnvSecretRefApiKeyMarker,
+} from "../secrets/provider-credential-values.js";
+
 export type {
   SecretInput,
   SecretInputStringResolution,

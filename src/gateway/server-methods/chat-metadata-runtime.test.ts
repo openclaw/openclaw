@@ -734,6 +734,7 @@ describe("gateway chat metadata runtime", () => {
       routeVariants: [...owner.modelCatalog.routeVariants, dynamicModel],
     });
     setPreparedModelFullCatalogAuth(fullCatalog, {
+      providerAuthLabels: new Map(),
       authStore: preparedAuthStore,
       authModes: owner.authModes,
     });

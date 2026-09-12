@@ -208,7 +208,7 @@ function createModelCatalogModuleMock() {
     loadProviderScopedThinkingCatalog: async () => [],
     // A run's captured config goes stale after any Gateway config republish; the exact
     // loader then throws, and session_status must read the published owner instead.
-    loadPreparedModelCatalog: async () => {
+    readPreparedModelCatalog: async () => {
       throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
     },
     loadPublishedPreparedModelCatalog: async () => [
@@ -363,9 +363,6 @@ vi.mock("../auto-reply/group-activation.js", () => ({
 vi.mock("../auto-reply/reply/queue.js", () => ({
   getFollowupQueueDepth: () => 0,
   resolveQueueSettings: resolveQueueSettingsMock,
-}));
-vi.mock("../auto-reply/status.js", () => ({
-  buildStatusMessage: buildStatusMessageMock,
 }));
 vi.mock("../tasks/task-owner-access.js", () => ({
   listTasksForRelatedSessionKeyForOwner: (params: {
@@ -2724,8 +2721,44 @@ describe("session_status tool", () => {
     const saved = savedStore.main as Record<string, unknown>;
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
+    expect(saved.modelOverrideSource).toBe("default");
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
+  });
+
+  it("rejects a colliding provider-wildcard model change without writing the session", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "custom/team",
+        modelOverride: "Reader",
+        modelOverrideSource: "user",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          modelPolicy: { allow: ["custom/*"] },
+        },
+      },
+    };
+
+    await expect(
+      getSessionStatusTool().execute("literal-denied", { model: "Reader" }),
+    ).rejects.toThrow('Model "custom/team/Reader" is not allowed.');
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+
+    await getSessionStatusTool().execute("literal-allowed", { model: "custom/team/Reader" });
+    const saved = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    expect(saved.main).toMatchObject({
+      providerOverride: "custom",
+      modelOverride: "team/Reader",
+      modelOverrideSource: "user",
+    });
   });
 
   it("resolves a model alias configured only on the target agent", async () => {

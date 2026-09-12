@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
@@ -23,11 +24,15 @@ export async function repairUpdateService(params: {
   nodeRunner?: string;
   timeoutMs: number;
   invocationCwd?: string;
-  expectedService: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  expectedService: Pick<
+    PreManagedServiceStop,
+    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+  >;
   recoveryStop?: PreManagedServiceStop;
   onVerified?: (verifiedAtMs: number) => void;
 }): Promise<UpdateRunResult> {
   const root = params.result.root ?? params.root;
+  let result = params.result;
   let turnPendingValidation = false;
   let pinnedService: typeof params.expectedService | undefined;
   const inspectOwner = async (signal: AbortSignal) => {
@@ -35,6 +40,7 @@ export async function repairUpdateService(params: {
     const state = await readGatewayServiceState(resolveGatewayService(), {
       env: params.env,
       requireEffective: true,
+      requireLoadedCommand: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
@@ -50,6 +56,7 @@ export async function repairUpdateService(params: {
     // A refreshed definition is observed once before inference. Later turns
     // must retain this exact launcher, rather than inherit refresh authority.
     pinnedService = {
+      serviceManagerUid: params.expectedService.serviceManagerUid,
       serviceEnv: state.env,
       serviceUpdateVerdict:
         verdict.kind === "owned" ? { ...verdict, refreshDefinition: false } : verdict,
@@ -78,11 +85,13 @@ export async function repairUpdateService(params: {
           opts: params.opts,
           serviceEnv: params.env,
           gatewayPort: params.gatewayPort,
+          timeoutMs: params.timeoutMs,
           nodeRunner: params.nodeRunner,
           expectedVersion: params.result.after?.version ?? undefined,
           expectedBuildId: params.result.after?.buildId ?? undefined,
           requireRunningService: true,
           signal,
+          assertCurrent,
           onVerified: params.onVerified,
         });
       let validation = await verify();
@@ -122,7 +131,9 @@ export async function repairUpdateService(params: {
               true,
             );
           } catch (error) {
-            signal.throwIfAborted();
+            // A stale restart error is not permission to append diagnostics or
+            // start a new serving turn under the superseded repair attempt.
+            assertCurrent();
             if (params.opts.run) {
               recordUpdateRunStep(
                 params.opts.run.runId,
@@ -137,15 +148,18 @@ export async function repairUpdateService(params: {
             }
           }
 
-          signal.throwIfAborted();
+          assertCurrent();
           validation = await verify();
           assertCurrent();
         }
+      }
+      if (validation.ok && validation.pluginWarnings?.length) {
+        result = appendPluginUpdateWarnings(result, validation.pluginWarnings);
       }
       return validation;
     },
   });
   return repair.status === "repaired"
-    ? { ...params.result, status: "ok", reason: undefined, recovery: undefined }
-    : params.result;
+    ? { ...result, status: "ok", reason: undefined, recovery: undefined }
+    : result;
 }

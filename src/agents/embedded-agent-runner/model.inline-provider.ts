@@ -1,11 +1,15 @@
 /**
  * Converts inline provider model config into runtime model definitions.
  */
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveMergedModelProviderModels } from "../../config/model-provider-config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -153,12 +157,17 @@ export function buildInlineProviderModels(
       stripSecretRefMarkers: true,
     });
     const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
-    return (entry?.models ?? []).map((model) => {
+    // Provider defaults must not mask omissions before exact duplicate rows merge.
+    const models = resolveMergedModelProviderModels({
+      models: entry?.models,
+      normalizeModelId: (modelId) => modelId.trim(),
+    });
+    return Array.from(models.values()).map((model) => {
       const transport = resolveInlineProviderTransport({
         api: model.api ?? entry?.api,
-        baseUrl: (model as InlineModelEntry).baseUrl ?? entry?.baseUrl,
+        baseUrl: model.baseUrl ?? entry?.baseUrl,
       });
-      const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+      const modelHeaders = sanitizeModelHeaders(model.headers, {
         stripSecretRefMarkers: true,
       });
       const requestConfig = resolveProviderRequestConfig({
@@ -201,4 +210,29 @@ export function buildInlineProviderModels(
       );
     });
   });
+}
+
+/** Completes captured inline definitions with the same contract used by static catalogs. */
+export function completeInlineProviderModel(
+  model: InlineModelEntry,
+  providerConfig: ModelProviderConfig,
+): ProviderRuntimeModel {
+  return {
+    ...model,
+    name: model.name || model.id,
+    api: model.api ?? providerConfig.api ?? "openai-responses",
+    baseUrl: model.baseUrl ?? "",
+    reasoning: model.reasoning ?? false,
+    input: resolveProviderModelInput({
+      provider: model.provider,
+      modelId: model.id,
+      modelName: model.name,
+      input: model.input,
+    }),
+    cost: model.cost ?? normalizeResolvedPricing({}),
+    contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: model.contextTokens,
+    maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
+  };
 }

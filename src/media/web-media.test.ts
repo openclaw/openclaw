@@ -13,6 +13,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createImageProcessor,
@@ -407,6 +408,44 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
+  it("resolves hosted media from the request registry, including an empty selection", async () => {
+    const mediaUrl = "/__test__/scoped-hosted-media";
+    const files = [
+      path.join(fixtureRoot, "owner-a.txt"),
+      path.join(fixtureRoot, "owner-b.txt"),
+    ] as const;
+    await Promise.all(files.map((file, index) => fs.writeFile(file, `OWNER_${index}`)));
+    const selected = createEmptyPluginRegistry();
+    selected.hostedMediaResolvers.push({
+      pluginId: "scoped-owner",
+      source: "test",
+      resolver: (url) => (url === mediaUrl ? files[0] : null),
+    });
+    const active = createEmptyPluginRegistry();
+    const activeResolver = vi.fn((url: string) => (url === mediaUrl ? files[1] : null));
+    active.hostedMediaResolvers.push({
+      pluginId: "global-owner",
+      source: "test",
+      resolver: activeResolver,
+    });
+    setActivePluginRegistry(active);
+    try {
+      expect((await loadWebMediaRaw(mediaUrl)).buffer.toString()).toBe("OWNER_1");
+      const scoped = await withPluginRuntimeRegistryScope(selected, () =>
+        loadWebMediaRaw(mediaUrl),
+      );
+      expect(scoped.buffer.toString()).toBe("OWNER_0");
+      await expect(
+        withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+          loadWebMediaRaw(mediaUrl),
+        ),
+      ).rejects.toBeInstanceOf(LocalMediaAccessError);
+      expect(activeResolver).toHaveBeenCalledTimes(1);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
   it("surfaces Rastermill decode failures when image optimization cannot produce a JPEG", async () => {
     await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
       /Unable to determine image dimensions/,
@@ -485,9 +524,13 @@ describe("loadWebMedia", () => {
     expect(many.qualities).toEqual([70, 60, 50, 40]);
   });
 
-  it.each(["png", "jpeg", "webp"] as const)(
-    "preserves accepted original %s bytes and metadata with and without hard limits",
-    async (format) => {
+  it.each(
+    (["png", "jpeg", "webp"] as const).flatMap((format) =>
+      [format, "heic", "heif"].map((extension) => ({ format, extension })),
+    ),
+  )(
+    "preserves original $format bytes with .$extension filename and image limits",
+    async ({ format, extension }) => {
       const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
       const sourcePng = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
       let buffer =
@@ -504,11 +547,22 @@ describe("loadWebMedia", () => {
       }
       const original = Buffer.from(buffer);
       const contentType = `image/${format}`;
-      const fileName = `portrait.${format}`;
+      const fileName = `portrait.${extension}`;
+      const filePath = path.join(fixtureRoot, fileName);
+      await fs.writeFile(filePath, buffer);
       for (const imageCompression of [
         undefined,
         { models: [{ maxSidePx: 32, maxPixels: 1024 }] },
       ]) {
+        const loaded = await loadWebMedia(filePath, {
+          localRoots: [fixtureRoot],
+          maxBytes: 1024 * 1024,
+          imageCompression,
+        });
+        expect(loaded.buffer).toEqual(original);
+        expect(loaded.contentType).toBe(contentType);
+        expect(loaded.fileName).toBe(fileName);
+
         const result = await optimizeImageBufferForWebMedia({
           buffer,
           contentType,
@@ -1668,11 +1722,12 @@ describe("loadWebMedia", () => {
     async (swapOpen, expectedCode) => {
       const id = `signal-hardlink-race-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
       const filePath = path.join(stateDir, "media", "inbound", id);
-      const outsidePath = path.join(fixtureRoot, `${id}.outside`);
+      const outsidePath = path.join(stateDir, `${id}.outside`);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, "inside");
       await fs.writeFile(outsidePath, "outside-secret");
       let matchingOpens = 0;
+      let linkCreated = false;
       __setFsSafeTestHooksForTest({
         afterPreOpenLstat: async (openedPath) => {
           if (path.basename(openedPath) !== id) {
@@ -1684,6 +1739,7 @@ describe("loadWebMedia", () => {
           }
           await fs.rm(filePath);
           await fs.link(outsidePath, filePath);
+          linkCreated = true;
         },
       });
 
@@ -1693,6 +1749,7 @@ describe("loadWebMedia", () => {
           expectedCode,
         );
         expect(matchingOpens).toBe(swapOpen);
+        expect(linkCreated).toBe(true);
       } finally {
         await fs.rm(filePath, { force: true });
         await fs.rm(outsidePath, { force: true });

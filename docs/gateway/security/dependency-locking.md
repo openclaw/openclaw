@@ -7,6 +7,8 @@ read_when:
 title: "Dependency locking"
 ---
 
+Read this page as a dependency reviewer or a release engineer: it covers reviewing dependency changes for supply-chain risk, and validating root and plugin npm packages before publishing.
+
 OpenClaw uses `pnpm-lock.yaml` as its committed product dependency review boundary. It records the resolved dependency graph used by source checkouts and CI, so transitive changes remain visible in code review.
 
 OpenClaw does not commit npm-format locks for product packages or publish them in package tarballs. [npm 12 removed shrinkwrap support](https://github.com/npm/cli/releases/tag/v12.0.0), including the `npm shrinkwrap` command and loading `npm-shrinkwrap.json` from package roots or dependency tarballs.
@@ -68,3 +70,7 @@ tar -tf /tmp/openclaw-plugin-pack/openclaw-discord-<version>.tgz | grep -E '^pac
 ```
 
 The `node_modules` entries prove that the plugin carries its bundled runtime payload. The final check proves that neither npm lockfile format ships in the tarball.
+
+## Related
+
+- [Release performance sweep](/reference/release-performance-sweep) - the May 2026 package-size, dependency, and shrinkwrap audit this policy came out of

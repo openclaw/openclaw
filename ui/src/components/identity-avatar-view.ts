@@ -115,12 +115,14 @@ export function renderIdentityAvatarImage({
   className,
   alt = "",
   ariaHidden = false,
+  onImageError,
 }: {
   view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl">;
   fallbackSelector: string;
   className?: string;
   alt?: string;
   ariaHidden?: boolean;
+  onImageError?: () => void;
 }) {
   if (!view.imageUrl) {
     return nothing;
@@ -131,7 +133,10 @@ export function renderIdentityAvatarImage({
     alt=${alt}
     aria-hidden=${ariaHidden ? "true" : nothing}
     referrerpolicy="no-referrer"
-    @error=${(event: Event) => settleIdentityAvatarImage(event, fallbackSelector, true)}
+    @error=${(event: Event) => {
+      settleIdentityAvatarImage(event, fallbackSelector, true);
+      onImageError?.();
+    }}
     @load=${(event: Event) => settleIdentityAvatarImage(event, fallbackSelector, false)}
   />`;
 }
@@ -140,6 +145,7 @@ export function renderIdentityAvatarImage({
 export function renderAgentIdentityAvatar(
   agent: { id: string; name?: string; avatar?: string | null; textAvatar?: string | null },
   className = "",
+  onImageError?: () => void,
 ) {
   if (isReservedSystemAgentId(agent.id)) {
     return html`<img
@@ -161,7 +167,7 @@ export function renderAgentIdentityAvatar(
     aria-label=${agent.name ?? nothing}
     aria-hidden=${agent.name ? nothing : "true"}
   >
-    ${renderIdentityAvatarImage({ view, fallbackSelector: ".identity-avatar--agent", className: "identity-avatar__image" })}
+    ${renderIdentityAvatarImage({ view, fallbackSelector: ".identity-avatar--agent", className: "identity-avatar__image", onImageError })}
     <span class="identity-avatar__fallback">
       ${guard([agent.id, agent.textAvatar], () =>
         until(

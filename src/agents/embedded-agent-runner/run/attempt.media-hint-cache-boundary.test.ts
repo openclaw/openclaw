@@ -29,15 +29,15 @@ beforeEach(() => {
   vi.spyOn(
     mediaTaskStatus,
     "buildActiveImageGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
+  ).mockResolvedValue(undefined);
   vi.spyOn(
     mediaTaskStatus,
     "buildActiveVideoGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
+  ).mockResolvedValue(undefined);
   vi.spyOn(
     mediaTaskStatus,
     "buildActiveMusicGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
+  ).mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -92,7 +92,7 @@ async function createTurnFixture(systemPromptOverride?: string) {
   return async (progress?: string) => {
     vi.mocked(
       mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockReturnValue(
+    ).mockResolvedValue(
       progress
         ? `- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
         : undefined,
@@ -128,7 +128,6 @@ async function createTurnFixture(systemPromptOverride?: string) {
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
       sessionAgentId: "main",
-      setActiveSessionSystemPrompt,
       systemPromptText,
       toolResultPromptProjectionState: {
         replacements: new Map(),

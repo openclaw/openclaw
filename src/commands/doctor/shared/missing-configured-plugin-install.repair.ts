@@ -8,6 +8,7 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
+import { formatSourceBundledPluginNotice } from "../../../plugins/dev-source-root.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
@@ -41,6 +42,11 @@ import {
   isLegacyPackageUpdateDoctorPass,
   shouldDeferConfiguredPluginInstallRepair,
 } from "./update-phase.js";
+
+type PluginInstallRepairWarning = {
+  message: string;
+  pluginId?: string;
+};
 
 type RepairMissingPluginInstallsResult = {
   /** User-facing repair notes for installed or recovered plugin records. */
@@ -76,6 +82,8 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onWarning?: (warning: PluginInstallRepairWarning) => void;
+  beforePersistentEffect?: () => void | Promise<void>;
   /**
    * Optional pre-seeded records. When provided, this map is used instead of
    * the disk-loaded install-record snapshot. Pass the in-memory records
@@ -91,6 +99,8 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
+    onWarning: params.onWarning,
+    beforePersistentEffect: params.beforePersistentEffect,
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
@@ -105,6 +115,7 @@ export async function repairMissingPluginInstallsForIds(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
@@ -124,6 +135,7 @@ export async function repairMissingPluginInstallsForIds(params: {
         .filter((pluginId) => pluginId),
     ),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+    onWarning: params.onWarning,
     beforePersistentEffect: params.beforePersistentEffect,
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
@@ -137,12 +149,38 @@ async function repairMissingPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
-  // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, () =>
-    repairMissingPluginInstallsWithLease(params),
-  );
+  // Install attempts can normalize exceptions into ordinary repair outcomes.
+  // Preserve the initiating owner's first refusal, including transient read
+  // failures, across that conversion and every later persistent effect.
+  let effectFailure: { error: unknown } | undefined;
+  const beforePersistentEffect = params.beforePersistentEffect
+    ? async () => {
+        if (effectFailure) {
+          throw effectFailure.error;
+        }
+        try {
+          await params.beforePersistentEffect?.();
+        } catch (error) {
+          effectFailure ??= { error };
+          throw effectFailure.error;
+        }
+      }
+    : undefined;
+  try {
+    // Baseline, awaited review, package publication, and the index write share one generation.
+    const result = await withPluginLifecycleLease({ env: params.env }, () =>
+      repairMissingPluginInstallsWithLease({ ...params, beforePersistentEffect }),
+    );
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
+    return result;
+  } catch (error) {
+    throw effectFailure ? effectFailure.error : error;
+  }
 }
 
 async function repairMissingPluginInstallsWithLease(
@@ -173,6 +211,11 @@ async function repairMissingPluginInstallsWithLease(
   const changes: string[] = [];
   const notices: string[] = [];
   const warnings: string[] = [];
+  const warn = (message: string, pluginId?: string) => {
+    warnings.push(message);
+    params.onWarning?.({ message, ...(pluginId ? { pluginId } : {}) });
+  };
+  const sourceOutcomes: PluginUpdateOutcome[] = [];
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
@@ -202,7 +245,9 @@ async function repairMissingPluginInstallsWithLease(
         `Kept installed plugin "${pluginId}"; replacement deferred. ${messages.join(" ")}`,
       );
     } else {
-      warnings.push(...messages);
+      for (const message of messages) {
+        warn(message, pluginId);
+      }
       if (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED) {
         outcome = { pluginId, status: "error", code, message: messages.join(" ") };
       }
@@ -213,6 +258,17 @@ async function repairMissingPluginInstallsWithLease(
   for (const [pluginId, record] of Object.entries(records)) {
     const bundled = bundledPluginsById.get(pluginId);
     if (!bundled || !recordMatchesBundledPackage(record, bundled)) {
+      continue;
+    }
+    if (bundled.preserveExternalInstallRecord) {
+      const message = formatSourceBundledPluginNotice(pluginId);
+      notices.push(message);
+      sourceOutcomes.push({
+        pluginId,
+        status: "unchanged",
+        code: "source-bundled-plugin",
+        message,
+      });
       continue;
     }
     if (nextRecords === records) {
@@ -294,9 +350,9 @@ async function repairMissingPluginInstallsWithLease(
             notices.push(stripAnsi(message));
             return;
           }
-          warnings.push(message);
+          warn(message);
         },
-        error: (message) => warnings.push(message),
+        error: (message) => warn(message),
       },
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
       beforePersistentEffect: params.beforePersistentEffect,
@@ -407,10 +463,12 @@ async function repairMissingPluginInstallsWithLease(
         (!installedRecord?.installPath ||
           !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
+        // Authority refusal is not a recoverable package-cleanup warning.
+        await params.beforePersistentEffect?.();
         try {
           await rm(removalPath, { recursive: true, force: true });
         } catch (error) {
-          warnings.push(
+          warn(
             `Failed to remove broken installed plugin "${candidate.pluginId}" at ${removalPath}: ${String(error)}`,
           );
         }
@@ -430,7 +488,9 @@ async function repairMissingPluginInstallsWithLease(
     if (installed.failedPluginId) {
       recordFailure(installed.failedPluginId, installed.warnings, installed.code);
     } else {
-      warnings.push(...installed.warnings);
+      for (const message of installed.warnings) {
+        warn(message);
+      }
     }
   }
 
@@ -442,7 +502,10 @@ async function repairMissingPluginInstallsWithLease(
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
   const pluginInventoryChanged = nextRecords !== persistedRecords || repairedPluginIds.size > 0;
-  const outcomes = [...failedPlugins.values()].filter((outcome) => outcome !== undefined);
+  const outcomes = [
+    ...sourceOutcomes,
+    ...[...failedPlugins.values()].filter((outcome) => outcome !== undefined),
+  ];
   return {
     changes,
     warnings,

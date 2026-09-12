@@ -1,4 +1,3 @@
-// Terminal Core module implements health style behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "./theme.js";
 
@@ -15,12 +14,12 @@ export function styleHealthChannelLine(line: string, rich: boolean): string {
     return line;
   }
 
-  const label = line.slice(0, colon + 1);
   const detail = line.slice(colon + 1).trimStart();
-  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  // Only the longest recognized status prefix needs case normalization.
+  const normalized = normalizeLowercaseStringOrEmpty(detail.slice(0, "not configured".length));
 
   const applyPrefix = (prefix: string, color: (value: string) => string) =>
-    `${label} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
+    `${line.slice(0, colon + 1)} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
 
   if (normalized.startsWith("failed")) {
     return applyPrefix("failed", theme.error);

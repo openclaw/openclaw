@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createWorkerPlacementInitialRecovery,
+  installWorkerPlacementReconcileGuard,
+} from "../server-worker-placement-reconcile-guard.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   MANIFEST_REF,
   REQUEST,
@@ -87,12 +92,34 @@ describe("worker placement shutdown replay", () => {
       stop: vi.fn(),
     }));
     const attach = vi.spyOn(restarted, "attachSession");
-    const recovery = createRecoveryService(placements, restarted);
+    const recovery = coordinateWorkerPlacementDispatch(
+      createRecoveryService(placements, restarted),
+      (_request, run) => run(),
+      createWorkerPlacementInitialRecovery({
+        placements,
+        environments: restarted,
+        isStopping: () => false,
+      }),
+    );
+    const uninstallGuard = installWorkerPlacementReconcileGuard({
+      placements,
+      environments: restarted,
+      dispatch: recovery,
+      isStopping: () => false,
+    });
     const owner = placements.get(REQUEST.sessionId)!;
     if (owner.state !== "provisioning") {
       throw new Error("restart lost its provisioning owner");
     }
-    await recovery.resumeProvisioning(owner, () => restarted.reconcileEnvironment(environmentId));
+    try {
+      const ready = await Promise.all([
+        recovery.waitForInitialPlacement(owner),
+        recovery.waitForInitialPlacement(owner),
+      ]);
+      expect(ready).toEqual([placements.get(REQUEST.sessionId), placements.get(REQUEST.sessionId)]);
+    } finally {
+      await uninstallGuard();
+    }
 
     expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", environmentId });
     expect(support.testState.store.get(environmentId)).toMatchObject({
@@ -163,7 +190,7 @@ describe("worker placement shutdown replay", () => {
     new WorkerDispatchTargetChangedError("session runtime changed"),
   ])("tears down an invalid recovery owner during shutdown: %s", async (error) => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const harness = createHarness(placements, {
+    const harness = createHarness(support.testState.stateDb, placements, {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });

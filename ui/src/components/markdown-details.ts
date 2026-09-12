@@ -1,7 +1,7 @@
 import type { MarkdownIt, StateBlock } from "markdown-it";
 import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
 
-export const MAX_MARKDOWN_DETAILS_DEPTH = 32;
+const MAX_MARKDOWN_DETAILS_DEPTH = 32;
 const DISCLOSURE_TAG_RE = /<\/?(?:details|summary)(?=[\s>])[^>]*>/gi;
 const DETAILS_OPEN_RE = /^<details( open)?>$/i;
 const DETAILS_CLOSE_RE = /^<\/details>$/i;
@@ -9,8 +9,8 @@ const SUMMARY_OPEN_RE = /^<summary>$/i;
 const SUMMARY_CLOSE_RE = /^<\/summary>$/i;
 const DETAILS_STACK = Symbol("markdownDetailsStack");
 
-type DetailsFrame = { hasSummary: boolean };
-type DetailsBlockState = StateBlock & { [DETAILS_STACK]?: DetailsFrame[] };
+export type MarkdownDetailsFrame = { hasSummary: boolean };
+type DetailsBlockState = StateBlock & { [DETAILS_STACK]?: MarkdownDetailsFrame[] };
 type DetailsToken = ReturnType<StateBlock["push"]>;
 type DetailsTokenSink = {
   push(type: string, tag: string, nesting: -1 | 0 | 1): DetailsToken;
@@ -50,7 +50,7 @@ function isInsideMarkdownCode(
   return codeSpans.some(([start, end]) => index >= start && index < end);
 }
 
-export function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKind | null {
+function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKind | null {
   const detailsOpen = DETAILS_OPEN_RE.exec(raw);
   if (detailsOpen) {
     return detailsOpen[1] ? "details_open_expanded" : "details_open";
@@ -111,16 +111,17 @@ function pushSummary(state: DetailsTokenSink, label: string, line: number): void
   state.push("summary_close", "summary", -1);
 }
 
-function pushDisclosureLine(
-  state: DetailsTokenSink,
-  line: string,
-  lineNumber: number,
-  stack: DetailsFrame[],
+/** Share nesting decisions between rendered blocks and streaming-tail repair. */
+export function walkMarkdownDisclosureTags(
+  tags: readonly MarkdownDisclosureTag[],
+  stack: MarkdownDetailsFrame[],
+  options: {
+    allowPendingSummary?: boolean;
+    onOpen?: (tag: MarkdownDisclosureTag, expanded: boolean) => void;
+    onClose?: (tag: MarkdownDisclosureTag) => void;
+    onSummary?: (open: MarkdownDisclosureTag, close: MarkdownDisclosureTag) => void;
+  } = {},
 ): boolean {
-  const tags = scanMarkdownDisclosureLine(line);
-  if (!tags) {
-    return false;
-  }
   const kinds = tags.map((tag) => markdownDisclosureTagKind(tag.raw));
   const nextSummaryClose = Array.from({ length: tags.length }, () => -1);
   let nearestSummaryClose = -1;
@@ -130,55 +131,74 @@ function pushDisclosureLine(
       nearestSummaryClose = index;
     }
   }
-  let cursor = 0;
-  let pendingText = "";
-  const flushText = () => {
-    pushInlineParagraph(state, pendingText, lineNumber);
-    pendingText = "";
-  };
-
   for (let index = 0; index < tags.length; index += 1) {
     const tag = tags[index];
     if (!tag) {
       continue;
     }
-    pendingText += line.slice(cursor, tag.start);
-
     const kind = kinds[index];
     if (
       (kind === "details_open" || kind === "details_open_expanded") &&
       stack.length < MAX_MARKDOWN_DETAILS_DEPTH
     ) {
-      flushText();
-      const token = state.push("details_open", "details", 1);
-      if (kind === "details_open_expanded") {
-        token.attrSet("open", "");
-      }
+      options.onOpen?.(tag, kind === "details_open_expanded");
       stack.push({ hasSummary: false });
     } else if (kind === "details_close" && stack.length > 0) {
-      flushText();
-      state.push("details_close", "details", -1);
+      options.onClose?.(tag);
       stack.pop();
     } else if (kind === "summary_open") {
       const frame = stack.at(-1);
-      const closeIndex = nextSummaryClose[index] ?? -1;
-      const close = closeIndex >= 0 ? tags[closeIndex] : undefined;
-      if (frame && !frame.hasSummary && close) {
-        flushText();
-        pushSummary(state, line.slice(tag.end, close.start), lineNumber);
-        frame.hasSummary = true;
-        cursor = close.end;
-        index = closeIndex;
+      if (!frame || frame.hasSummary) {
         continue;
       }
-      pendingText += tag.raw;
-    } else {
-      pendingText += tag.raw;
+      const closeIndex = nextSummaryClose[index] ?? -1;
+      const close = closeIndex >= 0 ? tags[closeIndex] : undefined;
+      if (close) {
+        options.onSummary?.(tag, close);
+        frame.hasSummary = true;
+        index = closeIndex;
+      } else if (options.allowPendingSummary) {
+        return true;
+      }
     }
-    cursor = tag.end;
   }
-  pendingText += line.slice(cursor);
-  flushText();
+  return false;
+}
+
+function pushDisclosureLine(
+  state: DetailsTokenSink,
+  line: string,
+  lineNumber: number,
+  stack: MarkdownDetailsFrame[],
+): boolean {
+  const tags = scanMarkdownDisclosureLine(line);
+  if (!tags) {
+    return false;
+  }
+  let cursor = 0;
+  const flushText = (tag: MarkdownDisclosureTag, end = tag.end) => {
+    // Unaccepted tags stay in the literal span between structural events.
+    pushInlineParagraph(state, line.slice(cursor, tag.start), lineNumber);
+    cursor = end;
+  };
+  walkMarkdownDisclosureTags(tags, stack, {
+    onOpen(tag, expanded) {
+      flushText(tag);
+      const token = state.push("details_open", "details", 1);
+      if (expanded) {
+        token.attrSet("open", "");
+      }
+    },
+    onClose(tag) {
+      flushText(tag);
+      state.push("details_close", "details", -1);
+    },
+    onSummary(open, close) {
+      flushText(open, close.end);
+      pushSummary(state, line.slice(open.end, close.start), lineNumber);
+    },
+  });
+  pushInlineParagraph(state, line.slice(cursor), lineNumber);
   return true;
 }
 
@@ -250,7 +270,7 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
   // open, but leave raw HTML block types 1-5 entirely literal.
   markdownParser.core.ruler.after("block", "details_balance", (state) => {
     const output: DetailsToken[] = [];
-    const stack: DetailsFrame[] = [];
+    const stack: MarkdownDetailsFrame[] = [];
 
     for (const token of state.tokens) {
       if (token.type === "details_open") {

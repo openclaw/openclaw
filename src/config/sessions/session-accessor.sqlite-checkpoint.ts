@@ -12,7 +12,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
@@ -126,33 +126,37 @@ async function applySqliteCompactionCheckpointSessionOperation(
     sessionKey: sourceKey,
     ...(operation.storePath ? { storePath: operation.storePath } : {}),
   });
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const committed = runOpenClawAgentWriteTransaction((database) => {
-      const identityKeys = uniqueStrings([
-        ...collectSessionEntryLookupKeys(database, sourceKey),
-        ...collectSessionEntryLookupKeys(database, targetKey),
-      ]);
-      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const result = applySqliteCompactionCheckpointSessionOperationInTransaction(
-        database,
-        resolved,
-        operation,
-        sourceKey,
-        targetKey,
-      );
-      return {
-        previousIdentity,
-        currentIdentity: readSessionIdentitySnapshot(database, identityKeys),
-        result,
-      };
-    }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(
-      resolved.agentId,
-      committed.previousIdentity,
-      committed.currentIdentity,
-    );
-    return committed.result;
-  });
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      const committed = runOpenClawAgentWriteTransaction((database) => {
+        const identityKeys = uniqueStrings([
+          ...collectSessionEntryLookupKeys(database, sourceKey),
+          ...collectSessionEntryLookupKeys(database, targetKey),
+        ]);
+        const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        const result = applySqliteCompactionCheckpointSessionOperationInTransaction(
+          database,
+          resolved,
+          operation,
+          sourceKey,
+          targetKey,
+        );
+        return {
+          publish: prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            readSessionIdentitySnapshot(database, identityKeys),
+          ),
+          result,
+        };
+      }, toDatabaseOptions(resolved));
+      committed.publish();
+      return committed.result;
+    },
+    operation.kind === "branch" ? "session.checkpoint.branch" : "session.checkpoint.restore",
+  );
 }
 
 function applySqliteCompactionCheckpointSessionOperationInTransaction(

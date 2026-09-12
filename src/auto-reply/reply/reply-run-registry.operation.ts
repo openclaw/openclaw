@@ -24,11 +24,13 @@ import {
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
+  clearReplyOperationByOperation,
   clearReplyRunState,
   createUserAbortError,
   evictReplyOperationByOperation,
   expireReplyOperationByOperation,
   flushReplyOperationAfterClear,
+  forceClearReplyOperation,
   getAttachedBackend,
   hasCommittedReplyOperationOutcome,
   isReplyOperationAbortable,
@@ -148,17 +150,17 @@ export function createReplyOperation(params: {
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
     evictReplyOperationByOperation.delete(operation);
+    clearReplyOperationByOperation.delete(operation);
     detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
       ? registerFollowupAdmissionBarrier(
-          currentSessionKey,
-          currentSessionId,
+          operation,
           afterClearBarrier,
           followupAdmissionBarrierTimeout,
         )
       : pendingClearBarrier;
     pendingClearBarrier = undefined;
-    updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+    updateFollowupAdmissionSessionId(operation);
     // Recovery-owner handoff must begin before the old slot wakes a successor;
     // otherwise that successor can snapshot durable state the handoff then mutates.
     startReplyOperationSuccessorBarriers(operation);
@@ -177,7 +179,7 @@ export function createReplyOperation(params: {
       return;
     }
     void registeredBarrier.settled.then(() =>
-      flushReplyOperationAfterClear(operation, registeredBarrier.sessionId),
+      flushReplyOperationAfterClear(operation, registeredBarrier.source.sessionId),
     );
   };
 
@@ -274,6 +276,9 @@ export function createReplyOperation(params: {
     hasOwnedSessionId(candidateSessionId) {
       const normalizedSessionId = normalizeOptionalString(candidateSessionId);
       return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
+    },
+    captureOwnedSessionIds() {
+      return new Set(ownedSessionIds);
     },
     recordActivity() {
       finalizationLease.recordActivity();
@@ -403,7 +408,7 @@ export function createReplyOperation(params: {
       registerWaitSessionId(currentSessionKey, currentSessionId);
       currentSessionId = normalizedNextSessionId;
       ownedSessionIds.add(currentSessionId);
-      updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+      updateFollowupAdmissionSessionId(operation);
       updateSuccessorAdmissionSessionId(operation, currentSessionId);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -562,6 +567,7 @@ export function createReplyOperation(params: {
     },
   };
 
+  clearReplyOperationByOperation.set(operation, clearState);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
@@ -592,8 +598,7 @@ export function createReplyOperation(params: {
       // Prepare the recovery fence before cancellation, but retain exact lane
       // ownership until cancel returns or the backend re-enters completion.
       pendingClearBarrier = registerFollowupAdmissionBarrier(
-        currentSessionKey,
-        currentSessionId,
+        operation,
         options.afterClearBarrier,
         options.followupAdmissionBarrierTimeout,
       );
@@ -726,13 +731,4 @@ export function createReplyOperation(params: {
   }
 
   return operation;
-}
-
-export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
-  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
-    return false;
-  }
-  operation.fail("run_failed", cause);
-  operation.complete();
-  return true;
 }

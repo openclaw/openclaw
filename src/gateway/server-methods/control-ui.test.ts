@@ -49,11 +49,21 @@ describe("controlUi.githubPreview", () => {
   it("uses the selected agent's Settings identity for public metadata", async () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
+    const assertSelected = vi.fn();
     const identity = {
       token: "selected-agent-github-token",
+      selection: {
+        source: "agent-override" as const,
+        profileId: `ghp_${"a".repeat(32)}`,
+        accountId: 101,
+      },
       cacheScope: "selected-agent-preview",
-      assertSelected: vi.fn(),
+      assertSelected,
       revalidate: vi.fn().mockResolvedValue(undefined),
+      start: async <T>(start: () => T): Promise<Awaited<T>> => {
+        assertSelected();
+        return await start();
+      },
     };
     const prepare = vi
       .spyOn(githubIdentity, "prepareGitHubReadIdentity")

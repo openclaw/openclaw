@@ -21,6 +21,7 @@ export const tuiPtyTestFiles = [
   "src/tui/tui-error-pty.e2e.test.ts",
   "src/tui/tui-hyperlinks-pty.e2e.test.ts",
   "src/tui/tui-picker-cancel-pty.e2e.test.ts",
+  "src/tui/tui-text-wrap-pty.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
 ];
 
@@ -164,6 +165,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.extension-providers.config.ts",
       "test/vitest/vitest.extension-signal.config.ts",
       "test/vitest/vitest.extension-slack.config.ts",
+      "test/vitest/vitest.extension-database-workers.config.ts",
       "test/vitest/vitest.extension-telegram.config.ts",
       "test/vitest/vitest.extension-voice-call.config.ts",
       "test/vitest/vitest.extension-whatsapp.config.ts",

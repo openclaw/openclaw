@@ -24,6 +24,38 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
+## Review changes
+
+When the connected Gateway advertises `sessions.diff`, open a conversation's
+three-dot **Chat actions** menu and choose **Review changes**. If the action is
+missing, update the Gateway before reviewing changes on Android.
+The full-screen native viewer loads the same `sessions.diff` snapshot as the web Review panel.
+Close it with Android Back or **Close review**; pulling down does not dismiss it.
+Review shows **Uncommitted** changes only. The scope label is static; branch-base
+and historical commit comparisons are outside this Android viewer's scope.
+Tap a file header to collapse it. Line numbers are hidden by default. Start a new
+rightward swipe of at least 64dp with the code already at its left edge to reveal them;
+swipe left at least 64dp to hide them, then start a fresh swipe to pan the code. A swipe that starts away
+from the left edge only pans, even after reaching that edge: lift your finger before swiping again to
+reveal numbers. Addition/deletion markers remain visible.
+Long-press a code line, then drag to select more lines. Release to choose **To
+chat** (append `path:start-end (Before | Uncommitted)` or the corresponding
+After context, followed by all selected text in a fenced
+code block, to your draft without sending it) or
+**Copy** (copy the selected text). A pulse marks the start of selection; a toast
+confirms either action. Drag any of the four selection handles to refine the range before
+choosing an action. Selection stays in one hunk and uses the starting line's
+side: **Before** for deleted lines, **After** otherwise. It skips the opposite
+side and never includes omitted context. Tap outside the actions to cancel.
+Use **Copy patch** to copy that file's returned patch.
+**Refresh changes** requests a new snapshot; the viewer does not stream updates.
+
+The Gateway owns repository selection and session-start filtering. This is a
+checkout snapshot, not an exact audit of the assistant's edits. Binary files,
+truncated patches, stopped workspaces, and unavailable repositories are identified
+in the viewer. Switching conversation or Gateway closes the review; safe fold
+layout changes preserve the opening.
+
 ## Foldable layout
 
 With a full-height vertical separator reported by AndroidX WindowManager, the
@@ -66,14 +98,26 @@ menu, it closes without choosing an action. Reopen it explicitly when space
 permits; it does not reopen automatically when the layout recovers. Dismissing
 the menu does not reset Chat's draft, editor, or reader state.
 
-Chat's Model picker and its Permissions page initially use the largest safe
-region with usable sheet space, not the trigger's region. They keep that region
-while it remains usable. Valid geometry changes retain the same sheet and local
-state. An invalid opening closes without selecting an option and stays closed
-until explicitly reopened.
+Chat's Model picker, its Permissions page, Thinking effort, Background tasks, and Switch branch sheets initially
+use the largest safe region with usable sheet space, not the trigger's region.
+They keep that region while it remains usable. Valid geometry changes retain
+the same sheet and local state. An invalid opening closes without selecting an
+option and stays closed until explicitly reopened.
 
-The Thinking effort sheet, background-task and branch-switching sheets, and
-other dialogs, sheets, and popup menus are not fold-adapted yet.
+Background tasks remains an agent-wide, read-only list and detail view. Safe
+layout changes retain the opening and its reading state. Switching Gateway,
+agent, or chat closes it; a same-owner disconnect leaves read errors visible
+with Refresh available.
+
+Switch branch keeps its list and reading position through safe layout changes;
+the title and rows scroll together in short panes. Changing Gateway, agent, or
+chat retires the opening. Reading remains available when a run is pending,
+outbox restoration is incomplete, the current session has outbox items, or a
+branch switch is already in flight. Mutation rows stay disabled in those
+states. Closing or retiring the sheet does not cancel an admitted switch,
+and its completion cannot dismiss a replacement opening.
+
+Other dialogs, sheets, and popup menus are not fold-adapted yet.
 
 ## Wear OS companion
 
@@ -165,6 +209,13 @@ animations, captures the screenshots, then shuts down the emulator it started.
 Install the API 36 Google APIs and API 34 Wear OS system images in the local
 Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
 explicitly capture one form factor from another emulator.
+
+For local branch-switching proof, launch a debug build with the intent extras
+`openclaw.screenshotMode=true` and `openclaw.screenshotScene=branches`. This Chat
+scene has 12 local branch alternatives and no active run. Switching updates the
+selected branch and transcript only in fixture memory, never on a live Gateway.
+Start a fresh app process before choosing a scene; restarting only the Activity
+reuses the process runtime. Same-scene re-entry retains the selected branch.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
@@ -335,6 +386,12 @@ openclaw devices approve <requestId>
 ```
 
 More details: `docs/platforms/android.md`.
+
+If the gateway cannot be reached, the app keeps the connection error visible during automatic retries.
+For an address that may use Tailscale, **Set up Tailscale** opens the Android installation guide.
+Open Tailscale and connect to the gateway's tailnet. Check that the gateway computer is online and OpenClaw is running, then retry.
+This advice does not verify Tailscale's connection state or change certificate trust.
+If an earlier network request is still stopping, the app waits for it before starting another request.
 
 ## Permissions
 

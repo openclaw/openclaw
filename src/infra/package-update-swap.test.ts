@@ -35,7 +35,7 @@ describe("retained package backup retirement", () => {
         }
         expect(transaction).toBeDefined();
         expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
-        const completion = await transaction!.complete({ activationVerified });
+        const completion = await transaction!.complete({ activationVerified }, () => {});
         await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
           "export {};\n",
         );
@@ -58,14 +58,17 @@ describe("retained package backup retirement", () => {
         const { result, transaction, packageRoot } = await createRetainedPackageSwap(base);
         expect(result.status).toBe("committed");
         if (outcome === "verified rollback") {
-          expect(await transaction.rollback()).toMatchObject({
+          expect(await transaction.rollback(() => {})).toMatchObject({
             exitCode: 0,
             activePackageRoot: packageRoot,
           });
         }
-        const completion = await transaction.complete({
-          activationVerified: outcome === "verified activation",
-        });
+        const completion = await transaction.complete(
+          {
+            activationVerified: outcome === "verified activation",
+          },
+          () => {},
+        );
         await expect(
           fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
         ).resolves.toContain(`"version":"${outcome === "verified rollback" ? "1.0.0" : "2.0.0"}"`);

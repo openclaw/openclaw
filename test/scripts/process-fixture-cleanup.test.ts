@@ -34,8 +34,9 @@ async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   vi.resetModules();
   const bodies = new Map<string, () => Promise<void>>();
   const register = (name: string, body: () => Promise<void>) => bodies.set(name, body);
+  const collectSuite = (_name: string, body: () => void) => body();
   vi.doMock("vitest", () => ({
-    describe: (_name: string, body: () => void) => body(),
+    describe: Object.assign(collectSuite, { runIf: () => collectSuite }),
     it: Object.assign(register, { each: () => () => {}, runIf: () => register, skip: register }),
     expect,
     vi,

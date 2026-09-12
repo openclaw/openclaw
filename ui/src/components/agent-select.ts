@@ -28,6 +28,7 @@ export function renderAgentSelectAvatar(
   option: AgentSelectOption,
   identity: AgentIdentityResult | null = null,
   imageUrl?: string | null,
+  onImageError?: () => void,
 ) {
   const resolvedImageUrl =
     imageUrl === undefined && option.agent
@@ -45,6 +46,7 @@ export function renderAgentSelectAvatar(
       textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
     },
     "agent-select__avatar",
+    onImageError,
   );
 }
 
@@ -88,7 +90,12 @@ export class AgentSelect extends OpenClawLightDomElement {
     const identity = agentId ? (this.identityById[agentId] ?? null) : null;
     const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
     const imageUrl = url ? this.avatarLoader.resolve(url) : null;
-    return renderAgentSelectAvatar(option, identity, imageUrl);
+    return renderAgentSelectAvatar(
+      option,
+      identity,
+      imageUrl,
+      url ? this.avatarLoader.imageErrorHandler(url) : undefined,
+    );
   }
 
   private readonly handleSelect = (event: WebAwesomeSelectEvent) => {

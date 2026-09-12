@@ -71,6 +71,7 @@ function startWorkerFixture(
   workerHostingDisabledReason?: string,
   options: {
     prepared?: PreparedRuntime;
+    initialWorkerCapacity?: { total: number; available: number } | null;
     gatewayResponse?: (
       message: Record<string, unknown>,
     ) => { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } };
@@ -104,8 +105,10 @@ function startWorkerFixture(
     return true;
   });
   fixture.start.mockImplementation((callbacks) => {
-    if (workerHostingEnabled) {
-      callbacks.onRunnerCapacityChanged?.({ total: 2, available: 2 });
+    if (workerHostingEnabled && options.initialWorkerCapacity !== null) {
+      callbacks.onRunnerCapacityChanged?.(
+        options.initialWorkerCapacity ?? { total: 2, available: 2 },
+      );
     }
     return fixture.runtime;
   });
@@ -144,10 +147,53 @@ function startWorkerFixture(
   };
 }
 
+it("refreshes runner facts only for the current private bridge generation", async () => {
+  const { input, messages, stop } = startWorkerFixture();
+  try {
+    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    input.emit(
+      "line",
+      JSON.stringify({
+        type: "gateway-connection",
+        generation: 2,
+        connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
+      }),
+    );
+    await setImmediate();
+    const publications = () =>
+      messages.filter((message) => message.method === "node.runnerInventory.update");
+    expect(publications()).toHaveLength(1);
+    const cancelsBefore = fixture.runtime.cancelAll.mock.calls.length;
+    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 1 }));
+    await setImmediate();
+    expect(publications()).toHaveLength(1);
+    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 2 }));
+    await setImmediate();
+    expect(publications()).toHaveLength(2);
+    expect(publications().at(-1)).toMatchObject({
+      generation: 2,
+      params: { workerHost: { enabled: true, capacity: { total: 2, available: 2 } } },
+    });
+    expect(fixture.runtime.cancelAll).toHaveBeenCalledTimes(cancelsBefore);
+    input.emit(
+      "line",
+      JSON.stringify({ type: "gateway-connection", generation: 3, connection: null }),
+    );
+    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 3 }));
+    await setImmediate();
+    expect(publications()).toHaveLength(2);
+  } finally {
+    await stop();
+  }
+});
+
 it("publishes hosting through the app route and retires it on disconnect", async () => {
   const { input, messages, stderr, stop } = startWorkerFixture();
   try {
     await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    expect(messages.find((message) => message.type === "ready")).toMatchObject({
+      workerHostingEnabled: true,
+    });
     expect(fixture.prepare).toHaveBeenCalledWith(
       expect.objectContaining({ enableWorkerRuns: true }),
     );
@@ -203,6 +249,8 @@ it("publishes hosting through the app route and retires it on disconnect", async
         }),
       ),
     );
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
     input.emit(
       "line",
@@ -218,6 +266,34 @@ it("publishes hosting through the app route and retires it on disconnect", async
     await stop();
   }
 });
+
+it.each([null, { total: 2, available: 0 }])(
+  "reports hosting only after supervisor capacity exists: %j",
+  async (initialWorkerCapacity) => {
+    const { messages, stop } = startWorkerFixture(true, undefined, { initialWorkerCapacity });
+    try {
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.type === "ready")).toBe(true),
+      );
+      expect(messages.find((message) => message.type === "ready")).toMatchObject({
+        workerHostingEnabled: initialWorkerCapacity !== null,
+      });
+      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
+      const callbacks = fixture.start.mock.calls[0]?.[0];
+      callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+      callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
+      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
+        initialWorkerCapacity === null ? [{ type: "worker-hosting", enabled: true }] : [],
+      );
+    } finally {
+      await stop();
+    }
+    expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({
+      type: "worker-hosting",
+      enabled: false,
+    });
+  },
+);
 
 it.runIf(process.platform !== "win32").each([
   { scenario: "same Gateway reconnect", target: "a", elapsedMs: 0, rejectRefresh: false },
@@ -511,6 +587,7 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
         expect(messages.some((message) => message.type === "ready")).toBe(true),
       );
       expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({ type: "ready", workerHostingEnabled: laterFailure });
       if (preparedFailure) {
         expectDiagnostic();
         expect(stderr.mock.invocationCallOrder[0]).toBeLessThan(
@@ -532,6 +609,7 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
         expect(inventories()).toHaveLength(1);
         expect(inventories()[0]?.params).toMatchObject({ workerHost: { enabled: true } });
         fixture.start.mock.calls[0]?.[0].onWorkerHostingDisabled(reason);
+        fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 2 });
         await setImmediate();
         expectDiagnostic();
       }
@@ -558,6 +636,9 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
       expect(output).not.toContain("worker hosting disabled");
       expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
       expect(messages.some((message) => message.type === "manifest")).toBe(false);
+      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
+        laterFailure ? [{ type: "worker-hosting", enabled: false }] : [],
+      );
     } finally {
       await stop();
     }

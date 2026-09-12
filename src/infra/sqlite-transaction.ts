@@ -1,6 +1,7 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isMainThread, threadId } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -12,16 +13,14 @@ import {
   runWithSqliteBusyTimeout,
   shouldReportSqliteLockFailure,
 } from "./sqlite-busy-timeout.js";
+import {
+  isSqliteLockError,
+  sqliteErrorCode,
+  sqliteExtendedResultCode,
+  sqlitePrimaryResultCode,
+} from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 
-const SQLITE_LOCK_ERROR_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
-// Node reports SQLite failures with a generic string code and the extended
-// SQLite result in `errcode`; the low byte identifies BUSY or LOCKED.
-const SQLITE_BUSY_RESULT_CODE = 5;
-const SQLITE_LOCKED_RESULT_CODE = 6;
-const SQLITE_CORRUPT_RESULT_CODE = 11;
-const SQLITE_NOTADB_RESULT_CODE = 26;
-const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
 
@@ -68,12 +67,32 @@ export async function withSqliteWriteAdmissionService<T>(
   }
 }
 
-function beginImmediateTransaction(db: DatabaseSync): void {
+type SqliteBeginAdmissionDiagnostics = {
+  nativeAttempts: number;
+  nativeMs: number;
+  serviceCalls: number;
+  serviceMs: number;
+};
+
+function execNativeBegin(db: DatabaseSync, diagnostics: SqliteBeginAdmissionDiagnostics): void {
+  const startedAt = Date.now();
+  diagnostics.nativeAttempts += 1;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+  } finally {
+    diagnostics.nativeMs += Date.now() - startedAt;
+  }
+}
+
+function beginImmediateTransaction(
+  db: DatabaseSync,
+  diagnostics: SqliteBeginAdmissionDiagnostics,
+): void {
   // Native location identifies reopened handles without probing the filesystem.
   const location = writeAdmissionServices.size > 0 ? db.location() : null;
   const services = location === null ? undefined : writeAdmissionServices.get(location);
   if (!services) {
-    db.exec("BEGIN IMMEDIATE");
+    execNativeBegin(db, diagnostics);
     return;
   }
   const deadline = performance.now() + readSqliteBusyTimeout(db);
@@ -82,7 +101,7 @@ function beginImmediateTransaction(db: DatabaseSync): void {
       runWithSqliteBusyTimeout(
         db,
         Math.min(25, Math.max(0, Math.ceil(deadline - performance.now()))),
-        () => db.exec("BEGIN IMMEDIATE"),
+        () => execNativeBegin(db, diagnostics),
       );
       return;
     } catch (error) {
@@ -92,7 +111,13 @@ function beginImmediateTransaction(db: DatabaseSync): void {
       // Only admission repeats. Services retain their own authority and settlement
       // rules; caller mutations and postcommit publication have not started yet.
       for (const service of services) {
-        service();
+        const startedAt = Date.now();
+        diagnostics.serviceCalls += 1;
+        try {
+          service();
+        } finally {
+          diagnostics.serviceMs += Date.now() - startedAt;
+        }
       }
       if (performance.now() >= deadline) {
         throw error;
@@ -107,6 +132,8 @@ export type SqliteTransactionOptions = {
   logger?: Pick<SubsystemLogger, "warn">;
   operationLabel?: string;
   slowTransactionHoldMs?: number;
+  /** Enclose the physical commit in an owner's synchronous authority guard. */
+  withCommit?: (commit: () => void) => void;
 };
 
 type SqliteTransactionStep = "begin" | "commit";
@@ -118,37 +145,6 @@ function assertSyncTransactionResult(value: unknown): void {
       "SQLite write transactions must be synchronous; Promise returns are not supported.",
     );
   }
-}
-
-function sqliteErrorCode(error: unknown): string | undefined {
-  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
-  return typeof code === "string" ? code : undefined;
-}
-
-function sqliteExtendedResultCode(error: unknown): number | undefined {
-  const errcode =
-    error && typeof error === "object" ? (error as { errcode?: unknown }).errcode : undefined;
-  return typeof errcode === "number" && Number.isInteger(errcode) ? errcode : undefined;
-}
-
-function sqlitePrimaryResultCode(error: unknown): number | undefined {
-  const errcode = sqliteExtendedResultCode(error);
-  return errcode === undefined ? undefined : errcode & SQLITE_PRIMARY_RESULT_CODE_MASK;
-}
-
-export function isSqliteLockError(error: unknown): boolean {
-  const code = sqliteErrorCode(error);
-  if (code !== undefined && SQLITE_LOCK_ERROR_CODES.has(code)) {
-    return true;
-  }
-  const primaryCode = sqlitePrimaryResultCode(error);
-  return primaryCode === SQLITE_BUSY_RESULT_CODE || primaryCode === SQLITE_LOCKED_RESULT_CODE;
-}
-
-/** Report proven file damage (corrupt page or non-database header), not transient failure. */
-export function isSqliteCorruptionError(error: unknown): boolean {
-  const primaryCode = sqlitePrimaryResultCode(error);
-  return primaryCode === SQLITE_CORRUPT_RESULT_CODE || primaryCode === SQLITE_NOTADB_RESULT_CODE;
 }
 
 function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined): number {
@@ -179,13 +175,16 @@ function logSlowTransactionHold(params: {
     async: false,
     ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
     elapsedMs: params.elapsedMs,
+    isMainThread,
     ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
     pid: process.pid,
+    threadId,
     thresholdMs: slowTransactionHoldThresholdMs(params.options),
   });
 }
 
 function logSlowTransactionStep(params: {
+  beginAdmission?: SqliteBeginAdmissionDiagnostics;
   elapsedMs: number;
   options?: SqliteTransactionOptions;
   step: SqliteTransactionStep;
@@ -200,10 +199,26 @@ function logSlowTransactionStep(params: {
       : {}),
     ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
     elapsedMs: params.elapsedMs,
+    isMainThread,
     ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
     pid: process.pid,
     step: params.step,
+    threadId,
+    ...beginAdmissionLogFields(params.beginAdmission),
   });
+}
+
+function beginAdmissionLogFields(diagnostics: SqliteBeginAdmissionDiagnostics | undefined) {
+  return diagnostics
+    ? {
+        beginAdmission: {
+          nativeAttempts: diagnostics.nativeAttempts,
+          nativeMs: diagnostics.nativeMs,
+          serviceCalls: diagnostics.serviceCalls,
+          serviceMs: diagnostics.serviceMs,
+        },
+      }
+    : {};
 }
 
 function execTimedTransactionStep(params: {
@@ -213,14 +228,19 @@ function execTimedTransactionStep(params: {
   step: SqliteTransactionStep;
 }): number {
   const startedAt = Date.now();
+  const beginAdmission =
+    params.sql === "BEGIN IMMEDIATE"
+      ? { nativeAttempts: 0, nativeMs: 0, serviceCalls: 0, serviceMs: 0 }
+      : undefined;
   try {
-    if (params.sql === "BEGIN IMMEDIATE") {
-      beginImmediateTransaction(params.db);
+    if (beginAdmission) {
+      beginImmediateTransaction(params.db, beginAdmission);
     } else {
       params.db.exec(params.sql);
     }
     const elapsedMs = Date.now() - startedAt;
     logSlowTransactionStep({
+      beginAdmission,
       elapsedMs,
       options: params.options,
       step: params.step,
@@ -240,11 +260,14 @@ function execTimedTransactionStep(params: {
         code: sqliteErrorCode(error),
         elapsedMs,
         failureKind: "lock-contention",
+        isMainThread,
         ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
         pid: process.pid,
         ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
         ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
         step: params.step,
+        threadId,
+        ...beginAdmissionLogFields(beginAdmission),
       });
     }
     throw error;
@@ -344,7 +367,13 @@ function runSqliteTransactionSync<T>(
       elapsedMs: Date.now() - transactionStartedAt,
       options,
     });
-    commitImmediateTransaction(db, options);
+    if (options?.withCommit) {
+      assertSyncTransactionResult(
+        options.withCommit(() => commitImmediateTransaction(db, options)),
+      );
+    } else {
+      commitImmediateTransaction(db, options);
+    }
     return result;
   } catch (error) {
     abortImmediateTransaction(db, error);

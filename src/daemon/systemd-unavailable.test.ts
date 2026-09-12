@@ -79,7 +79,11 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       const env = systemctlEnv(dir);
       await expect(isSystemctlAvailable(env)).resolves.toBe(false);
       await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(false);
-      await expect(assertSystemdAvailable(env)).rejects.toThrow("systemctl not available");
+      await expect(assertSystemdAvailable(env)).rejects.toThrow(
+        errorCode === "EACCES"
+          ? "service-manager probe could not start"
+          : "systemctl not available",
+      );
 
       const result = await execFileUtf8("systemctl", ["private-argument"], { env });
       expect(result).toMatchObject({ stdout: "", code: 1, errorCode });
@@ -111,7 +115,9 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       if (available) {
         await expect(assertSystemdAvailable(env)).resolves.toBeUndefined();
       } else {
-        await expect(assertSystemdAvailable(env)).rejects.toThrow("systemctl --user unavailable");
+        await expect(assertSystemdAvailable(env)).rejects.toMatchObject({
+          reason: "systemd-user-bus-unavailable",
+        });
       }
     });
   });

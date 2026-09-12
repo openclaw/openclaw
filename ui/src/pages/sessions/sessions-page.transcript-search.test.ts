@@ -64,11 +64,15 @@ describe("Sessions transcript search scope", () => {
       ],
       indexing: true,
       truncated: true,
+      archivedTranscriptsExcluded: 3,
     };
     response.resolve(result);
     await pending;
     await page.updateComplete;
 
+    expect(page.textContent).toContain(
+      "3 archived transcripts excluded; open a session to restore its searchable history.",
+    );
     expect(page.transcriptSearchQuery).toBe("launch code");
     expect(page.querySelector(".sessions-transcript-search__snippet")?.textContent).toBe(
       "launch code",
@@ -86,6 +90,7 @@ describe("Sessions transcript search scope", () => {
 
   it("fans all-agent transcript search out by owning agent and merges ranked results", async () => {
     const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
+      archivedTranscriptsExcluded: params.agentId === "writer" ? 2 : 1,
       results: [
         {
           sessionKey: `agent:${params.agentId}:one`,
@@ -120,6 +125,9 @@ describe("Sessions transcript search scope", () => {
     await page.runTranscriptSearch();
     await page.updateComplete;
 
+    expect(page.textContent).toContain(
+      "3 archived transcripts excluded; open a session to restore its searchable history.",
+    );
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith(
       "sessions.search",

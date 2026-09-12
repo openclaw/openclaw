@@ -229,6 +229,12 @@ describe("context-engine turn outbox", () => {
       database,
       engineId: "test",
       isHeartbeat: true,
+      runtimeContext: {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        tokenBudget: 180_000,
+        modelContextWindow: 200_000,
+      },
     });
     const current = await appendTranscriptMessage(target, {
       message: { role: "user", content: "second" },
@@ -292,6 +298,12 @@ describe("context-engine turn outbox", () => {
       expect.objectContaining({
         advancementKey: admission.logicalTurnId,
         isHeartbeat: true,
+        runtimeContext: {
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-6",
+          tokenBudget: 180_000,
+          modelContextWindow: 200_000,
+        },
         messages: [
           { role: "user", content: "first" },
           { role: "assistant", content: "first answer" },
@@ -643,10 +655,18 @@ describe("context-engine turn outbox", () => {
       sequence: 1,
       sessionId: "session-a",
     });
+    Object.assign(payload, {
+      runtimeContext: {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        tokenBudget: 180_000,
+        modelContextWindow: 200_000,
+      },
+    });
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
 
     let blocked = true;
-    const commitTurn = vi.fn(async () => {
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => {
       if (blocked) {
         throw new Error("temporary failure");
       }
@@ -691,6 +711,11 @@ describe("context-engine turn outbox", () => {
     });
 
     expect(commitTurn).toHaveBeenCalledTimes(2);
+    for (const [call] of commitTurn.mock.calls) {
+      expect(call).toMatchObject({
+        runtimeContext: { tokenBudget: 180_000, modelContextWindow: 200_000 },
+      });
+    }
     expect(degradeBeforeStart).not.toHaveBeenCalled();
 
     enqueueContextEngineTurnCommit({

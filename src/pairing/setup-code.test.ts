@@ -256,12 +256,8 @@ describe("pairing setup code", () => {
     options?: ResolveSetupOptions;
     expectedError: string;
   }) {
-    try {
-      const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
-      expectResolvedSetupError(resolved, params.expectedError);
-    } catch (error) {
-      expect(String(error)).toContain(params.expectedError);
-    }
+    const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
+    expectResolvedSetupError(resolved, params.expectedError);
   }
 
   async function expectResolveCustomGatewayRejects(params: {
@@ -516,7 +512,35 @@ describe("pairing setup code", () => {
       expectedError: "MISSING_GW_PASSWORD",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
-    await expectResolvedSetupFailureCase({ config, options, expectedError });
+    await expect(resolvePairingSetupFromConfig(config, options)).rejects.toThrow(expectedError);
+  });
+
+  it.each(["none", "trusted-proxy"] as const)(
+    "names gateway.auth.mode %s when setup code generation lacks a shared secret",
+    async (mode) => {
+      await expectResolvedSetupFailureCase({
+        config: createCustomGatewayConfig({ mode }),
+        options: { env: {} },
+        expectedError: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
+      });
+      expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the unconfigured-auth error when gateway.auth.mode is unset", async () => {
+    await expectResolvedSetupFailureCase({
+      config: createCustomGatewayConfig({}),
+      options: { env: {} },
+      expectedError: "Gateway auth is not configured (no token or password).",
+    });
+  });
+
+  it("keeps the configured-password fallback for trusted-proxy mode", async () => {
+    await expectResolvedCustomGatewaySetupOk({
+      auth: { mode: "trusted-proxy", password: "secret" },
+      env: {},
+      expectedAuthLabel: "password",
+    });
   });
 
   async function resolveInferredModeWithPasswordEnv(token: SecretInput) {
@@ -959,6 +983,35 @@ describe("pairing setup code", () => {
       expectedRunCommandCalls,
     });
   });
+
+  it.each([false, true])(
+    "keeps local server pairing on its own endpoint and TLS pin (local=%s)",
+    async (useLocalGateway) => {
+      const config = createCustomGatewayConfig({ mode: "token", token: "local-token" });
+      config.gateway = {
+        ...config.gateway,
+        mode: "remote",
+        port: 19443,
+        tls: { enabled: true },
+        remote: { url: "wss://primary.example", tlsFingerprint: "cd".repeat(32) },
+      };
+      const resolved = await resolvePairingSetupFromConfig(config, {
+        env: {},
+        useLocalGateway,
+        localTlsFingerprint: TLS_FINGERPRINT,
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      expect(resolved.payload.url).toBe(
+        useLocalGateway ? "wss://127.0.0.1:19443" : "wss://primary.example",
+      );
+      expect(resolved.payload.tlsFingerprint).toBe(
+        useLocalGateway ? TLS_FINGERPRINT : "cd".repeat(32),
+      );
+    },
+  );
 
   it("pins the prepared leaf only for a direct TLS gateway URL", async () => {
     const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });

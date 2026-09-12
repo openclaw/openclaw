@@ -1,3 +1,4 @@
+import type { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // Voice Call plugin module implements context behavior.
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
@@ -29,10 +30,15 @@ type CallManagerRuntimeDeps = {
 };
 
 type CallManagerTransientState = {
+  mutationQueue: KeyedAsyncQueue;
+  pendingCallAdmissions: Set<CallId>;
+  trackCallWork: (work: Promise<unknown>) => void;
+  isStopping: () => boolean;
   activeTurnCalls: Set<CallId>;
   endCallOperations: Map<CallId, Promise<CallEndResult>>;
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
+  notifyHangupTimers: Map<CallId, NodeJS.Timeout>;
   initialMessageInFlight: Set<CallId>;
 };
 

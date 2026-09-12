@@ -1,5 +1,5 @@
-import path from "node:path";
 /** Compact current-turn snapshots; instructions belong in the stable system prompt. */
+import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
@@ -23,17 +23,22 @@ type RuntimeFactsParams = {
 };
 
 /** Shared by embedded carriers and CLI current-turn context. */
-export function buildMediaTaskRuntimeContext(
+export async function buildMediaTaskRuntimeContext(
   params: Pick<RuntimeFactsParams, "capabilityToolNames" | "sessionKey" | "agentId">,
-): string | undefined {
+): Promise<string | undefined> {
   const sections = [
     ["image_generate", buildActiveImageGenerationTaskPromptContextForSession],
     ["music_generate", buildActiveMusicGenerationTaskPromptContextForSession],
     ["video_generate", buildActiveVideoGenerationTaskPromptContextForSession],
   ] as const;
-  const facts = sections
-    .filter(([tool]) => params.capabilityToolNames.has(tool))
-    .map(([tool, build]) => build(params.sessionKey, params.agentId) ?? `- tool=${tool}; none`);
+  const facts = await Promise.all(
+    sections
+      .filter(([tool]) => params.capabilityToolNames.has(tool))
+      .map(
+        async ([tool, build]) =>
+          (await build(params.sessionKey, params.agentId)) ?? `- tool=${tool}; none`,
+      ),
+  );
   return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
 }
 
@@ -44,12 +49,7 @@ function buildApprovedExecutablesRuntimeContext(agentId: string): string {
     const hints = allowlist
       .flatMap((entry) => {
         const pattern = entry.pattern.trim();
-        if (
-          !pattern ||
-          pattern === "*" ||
-          pattern.startsWith("=command:") ||
-          !/[\\/~]/.test(pattern)
-        ) {
+        if (pattern.startsWith("=command:") || !/[\\/~]/.test(pattern)) {
           return [];
         }
         // Keep absolute approval tokens exact; a basename can resolve to another binary.
@@ -79,7 +79,9 @@ function buildApprovedExecutablesRuntimeContext(agentId: string): string {
   }
 }
 
-export function buildRuntimeFactsContext(params: RuntimeFactsParams): RuntimeContextFragment[] {
+export async function buildRuntimeFactsContext(
+  params: RuntimeFactsParams,
+): Promise<RuntimeContextFragment[]> {
   const sections: string[] = [];
   if (process.platform === "win32" && params.capabilityToolNames.has("exec")) {
     sections.push(buildApprovedExecutablesRuntimeContext(params.agentId));
@@ -112,7 +114,7 @@ export function buildRuntimeFactsContext(params: RuntimeFactsParams): RuntimeCon
       }) ?? "## Active Subagents\nnone",
     );
   }
-  const media = buildMediaTaskRuntimeContext(params);
+  const media = await buildMediaTaskRuntimeContext(params);
   if (media) {
     sections.push(media);
   }

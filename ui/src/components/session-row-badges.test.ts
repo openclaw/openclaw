@@ -47,6 +47,8 @@ function expectTooltipText(badge: Element | null | undefined, text: string) {
 
 describe("sidebar connection status", () => {
   it.each([
+    { phase: "starting", offline: true, restartPending: true, expected: "restarting" },
+    { phase: "connecting", offline: true, suspensionPhase: "prepared", expected: "suspended" },
     { offline: true, restartPending: true, suspensionPhase: "prepared", expected: "restarting" },
     { offline: false, restartPending: true, expected: "restarting" },
     { offline: true, suspensionPhase: "preparing", expected: "suspending" },
@@ -71,20 +73,35 @@ describe("sidebar connection status", () => {
   });
 });
 
+describe("sidebar initial connection", () => {
+  it.each([false, true])("labels the first connection while offlineStable is %s", (offline) => {
+    const kind = resolveSidebarConnectionStatus({ phase: "connecting", offline });
+    expect(kind).not.toBeNull();
+    if (!kind) {
+      throw new Error("Expected initial connection status");
+    }
+    render(renderSidebarConnectionStatus({ kind, onRetry: () => undefined }), container);
+    expect(container.textContent?.trim()).toBe("Connecting…");
+    expect(container.querySelector("[role=status]")).not.toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+  });
+});
+
 describe("session row placement badges", () => {
-  it("names the service and profile without losing conflict or disk attention", () => {
+  it("names the service, profile, and machine without losing conflict or disk attention", () => {
     render(
       renderSessionRowBadges({
         placementState: "active",
         placementProviderId: "machine0",
         placementProfileId: "team",
+        placementMachine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
         workspaceConflictCount: 2,
         diskSpaceStatus: "warning",
       }),
       container,
     );
     const label =
-      "machine0 · team · active · 2 workspace conflicts · Cloud session disk space is low";
+      "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active · 2 workspace conflicts · Cloud session disk space is low";
     const badge = container.querySelector(".session-row-badge--cloud");
     expect(badge?.getAttribute("aria-label")).toBe(label);
     expectTooltipText(badge, label);

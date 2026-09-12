@@ -2118,9 +2118,14 @@ private fun ContextPickerOverlay(
       }
 
       WearContextPicker.Model -> {
+        if (!snapshot.sessionModelCatalogSupported) {
+          item { InlineError(text = stringResource(R.string.model_catalog_update_required)) }
+        } else if (snapshot.modelCatalogRefreshFailed) {
+          item { InlineError(text = stringResource(R.string.model_catalog_refresh_failed)) }
+        }
         val models =
           if (snapshot.modelSearchQuery == null) snapshot.models else snapshot.modelSearchResults
-        if (models.isEmpty()) {
+        if (snapshot.sessionModelCatalogSupported && models.isEmpty()) {
           item { PickerEmptyResult() }
         }
         models.forEach { model ->

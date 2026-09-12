@@ -15,6 +15,8 @@ import type {
   CodexConfigRequirementsReadResponse,
   CodexConfigValueWriteParams,
   CodexConfigWriteResponse,
+  CodexExperimentalFeatureListParams,
+  CodexExperimentalFeatureListResponse,
   CodexHooksListParams,
   CodexHooksListResponse,
   CodexInstalledApp,
@@ -157,6 +159,7 @@ export type CodexTurnEnvironmentParams = JsonObject & {
 };
 
 export type CodexThreadStartParams = JsonObject & {
+  threadSource?: string | null;
   input?: CodexUserInput[];
   cwd?: string;
   projectId?: string | null;
@@ -391,7 +394,10 @@ type CodexTurnInterruptParams = JsonObject & {
 
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
+  turnTrigger?: string | null;
   input: CodexUserInput[];
+  /** Native 0.153.4 flattens these entries into its Responses turn-metadata object. */
+  responsesapiClientMetadata?: Record<string, string> | null;
   additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
   cwd?: string;
   runtimeWorkspaceRoots?: string[] | null;
@@ -452,6 +458,7 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   forkedFromId?: string | null;
+  parentThreadId?: string | null;
   sessionId?: string;
   path?: string | null;
   projectId: string | null;
@@ -691,6 +698,7 @@ type CodexAppServerRequestParamsOverride = {
   "config/read": CodexConfigReadParams;
   "config/value/write": CodexConfigValueWriteParams;
   "environment/add": { environmentId: string; execServerUrl: string };
+  "experimentalFeature/list": CodexExperimentalFeatureListParams;
   "plugin/installed": CodexPluginInstalledParams;
   "plugin/install": CodexPluginInstallParams;
   "plugin/list": CodexPluginListParams;
@@ -734,6 +742,7 @@ type CodexAppServerRequestResultMap = {
   "configRequirements/read": CodexConfigRequirementsReadResponse;
   "config/value/write": CodexConfigWriteResponse;
   "environment/add": JsonValue;
+  "experimentalFeature/list": CodexExperimentalFeatureListResponse;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;

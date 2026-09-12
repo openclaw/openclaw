@@ -164,6 +164,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     sandboxSessionKey: input.setup.sandboxSessionKey,
     builtinToolNames: sessionRuntime.agentSession.builtinToolNames,
     coreBuiltinToolNames: sessionRuntime.agentSession.coreBuiltinToolNames,
+    trustedLocalMediaToolNames: sessionRuntime.agentSession.trustedLocalMediaToolNames,
     replaySafeToolNames: sessionRuntime.agentSession.replaySafeToolNames,
     codeModeExecToolNames: sessionRuntime.agentSession.codeModeExecToolNames,
     sideEffectToolOwners: sessionRuntime.agentSession.sideEffectToolOwners,

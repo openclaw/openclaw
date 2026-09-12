@@ -753,6 +753,7 @@ describe("prepare gate changed-file plan", () => {
         "  PREPARE_GATE_CHANGED_FILES=$'CHANGELOG.md\\nchangelog/fragments/stale.md'",
         "  PREPARE_GATE_DOCS_ONLY=true",
         "  PREPARE_GATE_CHANGELOG_ONLY=false",
+        "  PREPARE_GATE_CHANGELOG_UPDATE=true",
         "  PREPARE_GATE_CHANGELOG_REQUIRED=false",
         "}",
         "prepare_gates 4242",

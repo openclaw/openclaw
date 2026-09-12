@@ -7,7 +7,7 @@ import {
 import {
   loadManifestModelCatalog,
   loadProviderScopedThinkingCatalog,
-  loadPreparedModelCatalog as loadModelCatalogLocal,
+  readPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -62,7 +62,7 @@ vi.mock("../../agents/cli-backends.js", () => ({
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: catalogRuntimeMocks.loadModelCatalog,
+  readPreparedModelCatalog: catalogRuntimeMocks.loadModelCatalog,
   loadPreparedModelCatalogSnapshot: catalogRuntimeMocks.loadModelCatalogSnapshot,
 }));
 
@@ -525,10 +525,10 @@ describe("createModelSelectionState catalog loading", () => {
     },
   );
 
-  it("uses manifest metadata before hydrating the runtime thinking catalog", async () => {
+  it("uses published metadata without a second manifest inventory", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadManifestModelCatalog).mockClear();
-    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
     ]);
     const cfg = {
@@ -554,14 +554,12 @@ describe("createModelSelectionState catalog loading", () => {
     await expect(state.resolveThinkingCatalog()).resolves.toEqual([
       expect.objectContaining({ provider: "openai", id: "gpt-5.5", reasoning: true }),
     ]);
-    expect(loadManifestModelCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      fallbackToMetadataScan: false,
-    });
+    expect(loadManifestModelCatalog).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledOnce();
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("keeps configured compat when manifest thinking metadata is used", async () => {
+  it("keeps configured compat in published thinking metadata", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
       { provider: "vllm", id: "Qwen/Qwen3-8B", name: "Qwen3", reasoning: true },
@@ -702,7 +700,7 @@ describe("createModelSelectionState catalog loading", () => {
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("minimal");
   });
 
-  it("loads the full catalog for explicit model directives", async () => {
+  it("reads published catalog for explicit model directives", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     const cfg = {
       agents: {
@@ -714,7 +712,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    await createModelSelectionState({
+    const state = await createModelSelectionState({
       cfg,
       agentCfg: cfg.agents?.defaults,
       defaultProvider: "openai",
@@ -725,7 +723,10 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
-    expect(vi.mocked(loadModelCatalogLocal).mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
+    expect(vi.mocked(loadModelCatalogLocal).mock.calls[0]?.[0]).toHaveProperty("readOnly", true);
+    expect(state.allowedModelCatalog).toContainEqual(
+      expect.objectContaining({ provider: "openai", id: "gpt-4o" }),
+    );
   });
 
   it("carries catalog context limits into cold model selection", async () => {
@@ -760,40 +761,46 @@ describe("createModelSelectionState catalog loading", () => {
     ).toBe(272_000);
   });
 
-  it("uses the first visible provider wildcard model when the configured primary is filtered out", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
-      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
-      { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
-    ]);
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
-          models: {
-            "openai/*": {},
-            "vllm/*": {},
+  it.each([
+    ["anthropic", "claude-opus-4-5", "openai/*", "gpt-5.5-codex", 1],
+    ["openai/team", "claude-opus-4-5", "openai/*", "gpt-5.5-codex", 1],
+    ["openai", "openai/team/Reader", "openai/team/*", "team/Reader", 1],
+    ["openai", "team/Reader", "openai/team/*", "team/Reader", 0],
+  ] as const)(
+    "selects %s/%s with wildcard %s",
+    async (defaultProvider, defaultModel, allow, selectedModel, catalogLoads) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      if (catalogLoads) {
+        vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
+          { provider: defaultProvider, id: defaultModel, name: "Configured primary" },
+          { provider: "openai", id: selectedModel, name: "Allowed model" },
+          { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+        ]);
+      }
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: `${defaultProvider}/${defaultModel}` },
+            models: { [allow]: {}, "vllm/*": {} },
           },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      hasModelDirective: false,
-    });
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider,
+        defaultModel,
+        provider: defaultProvider,
+        model: defaultModel,
+        hasModelDirective: false,
+      });
 
-    expect(state.provider).toBe("openai");
-    expect(state.model).toBe("gpt-5.5-codex");
-    expect(state.allowedModelKeys.has("anthropic/claude-opus-4-5")).toBe(false);
-    expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
-  });
+      expect(state.provider).toBe("openai");
+      expect(state.model).toBe(selectedModel);
+      expect(loadModelCatalogLocal).toHaveBeenCalledTimes(catalogLoads);
+    },
+  );
 
   it("does not reject wildcard-only policy before an explicit model directive is resolved", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
@@ -2387,10 +2394,10 @@ describe("createModelSelectionState auth-profile override flapping regression", 
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
-  it("uses manifest metadata before hydrating the runtime reasoning catalog", async () => {
+  it("uses published reasoning without a second manifest inventory", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadManifestModelCatalog).mockClear();
-    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
       { provider: "local", id: "fast-reasoner", name: "Fast Reasoner", reasoning: true },
     ]);
     const state = await createModelSelectionState({
@@ -2404,10 +2411,8 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     });
 
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
-    expect(loadManifestModelCatalog).toHaveBeenCalledWith({
-      config: {},
-      fallbackToMetadataScan: false,
-    });
+    expect(loadManifestModelCatalog).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledOnce();
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 

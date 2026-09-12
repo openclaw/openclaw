@@ -25,11 +25,8 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { copyProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
-import {
-  resolveAnthropicVertexAdcCredentials,
-  resolveAnthropicVertexClientRegion,
-  resolveAnthropicVertexProjectId,
-} from "./region.js";
+import { resolveAnthropicVertexClientRegion } from "./region-endpoint.js";
+import { resolveAnthropicVertexAdcCredentials, resolveAnthropicVertexProjectId } from "./region.js";
 
 const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
@@ -209,8 +206,7 @@ export function createAnthropicVertexStreamFn(
     const reasoning =
       requestedReasoning === "off" && mandatoryAdaptiveThinking
         ? "low"
-        : (requestedReasoning ??
-          (mandatoryAdaptiveThinking || adaptiveDefaultClaude5 ? "high" : undefined));
+        : (requestedReasoning ?? (adaptiveDefaultClaude5 ? "high" : undefined));
     const adaptiveThinking =
       mandatoryAdaptiveThinking ||
       Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));
@@ -262,7 +258,6 @@ export function createAnthropicVertexStreamFn(
       }
     } else if (mandatoryAdaptiveThinking) {
       opts.thinkingEnabled = true;
-      opts.effort = "high";
     } else {
       opts.thinkingEnabled = false;
     }

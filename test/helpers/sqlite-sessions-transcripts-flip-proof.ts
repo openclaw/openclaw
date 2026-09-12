@@ -470,6 +470,7 @@ function buildMockOpenAiConfig(mockPort: number) {
     gateway: { mode: "local" },
     models: {
       mode: "merge",
+      catalogRefresh: { enabled: false },
       providers: {
         openai: {
           agentRuntime: { id: "openclaw" },
@@ -839,7 +840,7 @@ async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: 
     message = error instanceof Error ? error.message : String(error);
   }
   if (
-    !message.startsWith("gateway exited before readiness (code=1 signal=null)") ||
+    !message.startsWith("gateway exited before readiness (code=78 signal=null)") ||
     !message.includes("Gateway failed to start: Legacy session store requires migration:") ||
     !message.includes(path.join(context.legacySessionsDir, "sessions.json")) ||
     !message.includes('Run "openclaw doctor --fix"')
