@@ -315,6 +315,7 @@ export const OpenClawSchemaShape = {
       "worktreeRoot must be an absolute path or a path starting with ~",
     )
     .optional(),
+  worktreeAcceleration: z.boolean().optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,

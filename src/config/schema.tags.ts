@@ -25,6 +25,7 @@ type ConfigTag = (typeof TAG_ORDER)[number];
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   worktreeRoot: ["storage", "advanced"],
+  worktreeAcceleration: ["performance", "storage", "advanced"],
   cloudWorkers: ["network", "automation"],
   "gateway.roles": ["security", "auth", "access", "advanced"],
   "gateway.auth.token": ["security", "auth", "access", "network"],

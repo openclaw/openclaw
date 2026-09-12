@@ -303,6 +303,14 @@ recovery path; committed rows remain governed by SQLite's normal transactions.
 This change requires no schema migration. See the
 [accepted initialization design](https://github.com/openclaw/openclaw/pull/144155).
 
+### Managed worktree acceleration templates
+
+[Managed worktree acceleration](/concepts/managed-worktrees#filesystem-acceleration) uses the first-use `worktree_templates` table in the shared state database. Each row records a reconstructible source template: repository and Git common directory, destination root, filesystem backend, artifact path, source commit, checkout content key, preparation status, and creation and last-use timestamps. The cache key allows one template per repository and destination root. The template contains no provisioned ignored files or repository setup output.
+
+The worktree service owns template creation, reuse, invalidation, and cleanup under its existing allocation lease. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Durable mutations recheck the lease inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
+
+The additive table is ensured on first use and does not change the numeric database schema version. Existing worktree and snapshot records retain their meaning; no existing checkout is migrated or moved. Template artifacts are reconstructible, while registered worktree contents and recovery snapshots retain their existing preservation rules.
+
 ### Cloud repository workspaces
 
 Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.

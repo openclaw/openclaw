@@ -34,6 +34,11 @@ import {
   requireWorktreeDiskSpace,
   WORKTREE_SETUP_HEADROOM_BYTES,
 } from "./capacity.js";
+import {
+  addManagedWorktree,
+  collectWorktreeTemplates,
+  WORKTREE_TEMPLATE_DIRECTORY,
+} from "./checkout.js";
 import { lockState, lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import {
   commandError,
@@ -44,7 +49,6 @@ import {
   requireGitBuffer,
   resolveGitRepositoryPaths,
   runGit,
-  WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
@@ -211,7 +215,7 @@ function startRemovalTiming() {
 type ServiceOptions = {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  getConfig?: () => Pick<OpenClawConfig, "worktreeRoot">;
+  getConfig?: () => Pick<OpenClawConfig, "worktreeRoot" | "worktreeAcceleration">;
 };
 
 export type WorktreeCleanupLimits = {
@@ -1108,11 +1112,21 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
-    const worktreeAddArgs = () => ["worktree", "add", "-b", branch, "--", worktreePath, gitBase];
-    let added = await runGit(repository.repoRoot, worktreeAddArgs(), {
-      timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-      signal: params.signal,
-    });
+    const addCheckout = () =>
+      addManagedWorktree({
+        env: this.env,
+        now: this.now,
+        enabled: this.getConfig?.().worktreeAcceleration !== false,
+        repoRoot: repository.repoRoot,
+        commonDir: repository.commonDir,
+        worktreeRoot: path.dirname(root),
+        destination: worktreePath,
+        branch,
+        base: gitBase,
+        signal: params.signal,
+        commitGuard: () => params.commitGuard?.(),
+      });
+    let added = await addCheckout();
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
         throw commandError("git worktree add", added);
@@ -1122,10 +1136,7 @@ export class ManagedWorktreeService {
       params.commitGuard?.();
       gitBase = "HEAD";
       recordBase = "HEAD";
-      added = await runGit(repository.repoRoot, worktreeAddArgs(), {
-        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-        signal: params.signal,
-      });
+      added = await addCheckout();
     }
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
@@ -1520,11 +1531,21 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     await fs.mkdir(path.dirname(record.path), { recursive: true });
     params.commitGuard?.();
-    await requireGit(
-      record.repoRoot,
-      ["worktree", "add", "--detach", record.path, record.snapshotRef],
-      { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, signal: params.signal },
-    );
+    const added = await addManagedWorktree({
+      env: this.env,
+      now: this.now,
+      enabled: this.getConfig?.().worktreeAcceleration !== false,
+      repoRoot: record.repoRoot,
+      commonDir: repository.commonDir,
+      worktreeRoot: path.dirname(path.dirname(record.path)),
+      destination: record.path,
+      base: record.snapshotRef,
+      signal: params.signal,
+      commitGuard: () => params.commitGuard?.(),
+    });
+    if (added.code !== 0) {
+      throw commandError("git worktree add", added);
+    }
     let branchCreated = false;
     let restoredProvisionedPaths: string[];
     try {
@@ -1729,6 +1750,12 @@ export class ManagedWorktreeService {
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
+    await this.withAllocationLease({}, async (guard) => {
+      await collectWorktreeTemplates(this.env, now - IDLE_GC_MS, {
+        signal: guard.signal,
+        commitGuard: () => guard.commitGuard?.(),
+      });
+    });
     removed = removed.concat(await this.enforceCleanupLimits(params));
     const orphansDeleted = await this.reconcileOrphans(records);
     let snapshotsPruned = 0;
@@ -1966,7 +1993,7 @@ export class ManagedWorktreeService {
     }
     let deleted = 0;
     for (const fingerprint of fingerprints) {
-      if (!fingerprint.isDirectory()) {
+      if (!fingerprint.isDirectory() || fingerprint.name === WORKTREE_TEMPLATE_DIRECTORY) {
         continue;
       }
       const fingerprintPath = path.join(worktreesRoot, fingerprint.name);

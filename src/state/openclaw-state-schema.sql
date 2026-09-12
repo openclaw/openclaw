@@ -1846,6 +1846,21 @@ CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   PRIMARY KEY (worktree_id, path, chunk_index)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS worktree_templates (
+  cache_key TEXT NOT NULL PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  repo_root TEXT NOT NULL,
+  common_dir TEXT NOT NULL,
+  worktree_root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  source_commit TEXT NOT NULL,
+  content_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('preparing', 'ready')),
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT NOT NULL PRIMARY KEY,
   display_name TEXT NOT NULL,

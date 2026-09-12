@@ -7,6 +7,7 @@ import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   worktreeRoot: "Worktree Root",
+  worktreeAcceleration: "Worktree Acceleration",
   "channels.discord.activities": "Discord Activities",
   "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
   "channels.discord.activities.applicationId": "Discord Activities Application ID",
