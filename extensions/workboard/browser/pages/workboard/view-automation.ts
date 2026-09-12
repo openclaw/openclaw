@@ -1,13 +1,16 @@
 import type { CronJob } from "@openclaw/gateway-protocol";
 import type { WorkboardMetadata } from "@openclaw/workboard-contract";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { automationNextRunTime } from "./view-card-time.ts";
 import { formatUpdatedTime, type BoardAutomationState } from "./view-helpers.ts";
+import { workboardPopoverRef } from "./view-popover.ts";
 
 export async function loadBoardAutomation(
   client: GatewayBrowserClient,
@@ -47,17 +50,7 @@ export function renderBoardAutomationHeading(automation: BoardAutomationState | 
     return nothing;
   }
   const job = automation.status === "loaded" ? automation.job : undefined;
-  const metadata = job
-    ? [
-        automationSchedule(job),
-        t("workboard.automationUpdated", { time: formatUpdatedTime(job.updatedAtMs) }),
-        !job.enabled
-          ? t("workboard.automationPaused")
-          : job.state.nextRunAtMs
-            ? t("workboard.automationNextRun", { time: formatUpdatedTime(job.state.nextRunAtMs) })
-            : undefined,
-      ].filter(Boolean)
-    : [];
+  const infoId = `workboard-automation-${encodeURIComponent(automation.jobId)}`;
   const ageMinutes = job ? Math.floor(Math.max(0, Date.now() - job.updatedAtMs) / 60_000) : 0;
   const updated = ageMinutes
     ? t("workboard.automationUpdatedAgo", {
@@ -71,37 +64,93 @@ export function renderBoardAutomationHeading(automation: BoardAutomationState | 
       aria-label=${t("workboard.boardAutomation")}
       aria-busy=${automation.status === "loading"}
     >
-      <span class="workboard-heading__automation-icon" aria-hidden="true"
-        >${icons.calendarClock}</span
-      >
       ${
         job
-          ? html`<a
-              class="workboard-heading__automation-name"
-              href=${`${workboardHost().basePath}/automations?job=${encodeURIComponent(automation.jobId)}`}
-              title=${[job.displayName ?? job.name, ...metadata].join(" · ")}
-              aria-label=${t("workboard.openNamedAutomation", {
-                name: job.displayName ?? job.name,
-              })}
-              >${job.displayName ?? job.name}</a
-            >`
-          : html`<span
-              class="workboard-heading__automation-name"
-              title=${
-                automation.status === "unavailable" ? t("workboard.automationRefreshHint") : nothing
-              }
-              >${t(
-                automation.status === "loading"
-                  ? "workboard.automationLoading"
-                  : "workboard.automationUnavailable",
-              )}</span
-            >`
+          ? html`
+              <a
+                class="workboard-heading__automation-name"
+                href=${`${workboardHost().basePath}/automations?job=${encodeURIComponent(automation.jobId)}`}
+                aria-describedby=${infoId}
+                aria-label=${t("workboard.openNamedAutomation", {
+                  name: job.displayName ?? job.name,
+                })}
+              >
+                <span class="workboard-heading__automation-icon" aria-hidden="true"
+                  >${icons.calendarClock}</span
+                >
+                <span class="workboard-heading__automation-label"
+                  >${job.displayName ?? job.name}</span
+                >
+              </a>
+              <div
+                id=${infoId}
+                class="workboard-automation-info"
+                popover="auto"
+                role="tooltip"
+                ${ref(workboardPopoverRef("start", true))}
+              >
+                <strong>${t("workboard.boardAutomation")}</strong>
+                ${job.description ? html`<p>${job.description}</p>` : nothing}
+                <dl>
+                  <dt>${t("workboard.automationState")}</dt>
+                  <dd>
+                    ${t(job.enabled ? "workboard.automationEnabled" : "workboard.automationPaused")}
+                  </dd>
+                  <dt>${t("workboard.automationFrequency")}</dt>
+                  <dd>${automationSchedule(job)}</dd>
+                  <dt>${t("workboard.automationNextRunLabel")}</dt>
+                  <dd>
+                    ${
+                      job.enabled && job.state.nextRunAtMs
+                        ? formatUpdatedTime(job.state.nextRunAtMs)
+                        : t("workboard.automationNotScheduled")
+                    }
+                  </dd>
+                  <dt>${t("workboard.detailUpdated")}</dt>
+                  <dd>${formatUpdatedTime(job.updatedAtMs)}</dd>
+                </dl>
+              </div>
+            `
+          : html`
+              <span
+                class="workboard-heading__automation-name"
+                title=${
+                  automation.status === "unavailable"
+                    ? t("workboard.automationRefreshHint")
+                    : nothing
+                }
+              >
+                <span class="workboard-heading__automation-icon" aria-hidden="true"
+                  >${icons.calendarClock}</span
+                >
+                <span class="workboard-heading__automation-label"
+                  >${t(
+                    automation.status === "loading"
+                      ? "workboard.automationLoading"
+                      : "workboard.automationUnavailable",
+                  )}</span
+                >
+              </span>
+            `
       }
       ${
         job
-          ? html`<span class="workboard-heading__automation-updated"
-              >${job.enabled ? updated : t("workboard.automationPaused")}</span
-            >`
+          ? html`
+              <span class="workboard-heading__automation-meta">
+                <span>${job.enabled ? updated : t("workboard.automationPaused")}</span>
+                ${
+                  job.enabled && job.state.nextRunAtMs
+                    ? html`<span class="workboard-heading__automation-next-run">
+                        <time
+                          datetime=${new Date(job.state.nextRunAtMs).toISOString()}
+                          title=${formatUpdatedTime(job.state.nextRunAtMs)}
+                          >${automationNextRunTime(job.state.nextRunAtMs, Date.now())}</time
+                        >
+                      </span>`
+                    : nothing
+                }
+              </span>
+            `
           : nothing
       }
     </div>

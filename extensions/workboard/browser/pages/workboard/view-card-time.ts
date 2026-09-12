@@ -1,5 +1,6 @@
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
+import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 
@@ -46,16 +47,20 @@ function formatCardTime(value: number, now: number) {
   });
 }
 
-class CardRelativeTimeDirective extends AsyncDirective {
+class RelativeTimeDirective extends AsyncDirective {
   private timestamp = 0;
-  private readonly updateTime = () => this.setValue(formatCardTime(this.timestamp, Date.now()));
+  private readonly updateTime = () => this.setValue(this.formatTime(this.timestamp, Date.now()));
+
+  protected formatTime(timestamp: number, now: number) {
+    return formatCardTime(timestamp, now);
+  }
 
   render(timestamp: number, now: number) {
     this.timestamp = timestamp;
     if (this.isConnected) {
       this.subscribe();
     }
-    return formatCardTime(timestamp, now);
+    return this.formatTime(timestamp, now);
   }
 
   protected override disconnected() {
@@ -75,10 +80,28 @@ class CardRelativeTimeDirective extends AsyncDirective {
     if (!subscribers.size) {
       document.addEventListener("visibilitychange", onVisibilityChange);
     }
-    // Columns, list rows, and widgets share one clock; only their text parts update.
+    // Cards and automation headings share one clock; only their text parts update.
     subscribers.set(this.updateTime, this.timestamp);
     schedule();
   }
 }
 
-export const cardRelativeTime = directive(CardRelativeTimeDirective);
+class AutomationNextRunTimeDirective extends RelativeTimeDirective {
+  protected override formatTime(timestamp: number, now: number) {
+    const remaining = timestamp - now;
+    if (remaining <= 0) {
+      return t("workboard.automationNextRunDue");
+    }
+    const unit = remaining >= 86_400_000 ? "day" : remaining >= 3_600_000 ? "hour" : "minute";
+    const unitMs = unit === "day" ? 86_400_000 : unit === "hour" ? 3_600_000 : 60_000;
+    return t("workboard.automationNextRun", {
+      time: new Intl.RelativeTimeFormat(workboardLocale(), { numeric: "always" }).format(
+        Math.ceil(remaining / unitMs),
+        unit,
+      ),
+    });
+  }
+}
+
+export const cardRelativeTime = directive(RelativeTimeDirective);
+export const automationNextRunTime = directive(AutomationNextRunTimeDirective);
