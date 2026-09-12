@@ -41,7 +41,7 @@ export type SharedCodexAppServerClientState = {
 type CodexAppServerClientStartMetadata = {
   requestedStartOptions: CodexAppServerStartOptions;
   startOptions: CodexAppServerStartOptions;
-  agentDir: string;
+  agentDir?: string;
   nativeCommand?: string;
   desktopGeneration?: CodexDesktopGeneration;
 };

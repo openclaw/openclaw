@@ -155,7 +155,7 @@ extensions/clickclack/src/setup-verify.ts	4
 extensions/cloudflare-ai-gateway/onboard.ts	1
 extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
-extensions/codex/index.ts	27
+extensions/codex/index.ts	26
 extensions/codex/src/app-server/approval-bridge.ts	1
 extensions/codex/src/app-server/attempt-context.ts	1
 extensions/codex/src/app-server/attempt-diagnostics.ts	3

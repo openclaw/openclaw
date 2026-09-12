@@ -132,6 +132,9 @@ function resolveCodexCatalogHomes(params: {
 
 type CodexCatalogHomeResolver = {
   forAgent(agentId: string): readonly CodexCatalogHome[];
+  forNode(): Pick<CodexCatalogHome, "appServer" | "localSessionsRoot" | "sourceHomeId"> & {
+    codexHome: string;
+  };
 };
 
 /** Discovers Codex homes once per immutable Gateway config generation. */
@@ -144,6 +147,10 @@ export function createCodexCatalogHomeResolver(params: {
 }): CodexCatalogHomeResolver {
   const env = params.env ?? process.env;
   const homesByConfig = new WeakMap<OpenClawConfig, Map<string, readonly CodexCatalogHome[]>>();
+  const nodeHomesByConfig = new WeakMap<
+    OpenClawConfig,
+    ReturnType<CodexCatalogHomeResolver["forNode"]>
+  >();
   const buildSnapshot = (config: OpenClawConfig) => {
     const pluginConfig = params.getPluginConfig();
     const homesByAgent = new Map(
@@ -174,6 +181,33 @@ export function createCodexCatalogHomeResolver(params: {
   };
   let lastSnapshot = buildSnapshot(params.config);
   return {
+    forNode() {
+      const config = params.getRuntimeConfig() ?? params.config;
+      const cached = nodeHomesByConfig.get(config);
+      if (cached) {
+        return cached;
+      }
+      const pluginConfig = params.getPluginConfig();
+      const appServer = params.resolveRuntimeOptions({ pluginConfig, config, env });
+      if (appServer.start.transport !== "stdio" || appServer.start.homeScope !== "user") {
+        throw new Error("Native Codex node catalogs require a user-home stdio app-server");
+      }
+      const codexHome = canonicalCodexCatalogHome(resolveCodexAppServerUserHomeDir(env));
+      const source = {
+        sourceHomeId: codexCatalogHomeId(codexHome),
+        codexHome,
+        localSessionsRoot: path.join(codexHome, "sessions"),
+        appServer: {
+          ...appServer,
+          start: {
+            ...appServer.start,
+            env: { ...appServer.start.env, CODEX_HOME: codexHome },
+          },
+        },
+      };
+      nodeHomesByConfig.set(config, source);
+      return source;
+    },
     forAgent(agentId) {
       // agents.entries hot-reloads without plugin re-registration. Config identity therefore owns
       // both filesystem discovery and the supervised-binding connection-home snapshot.

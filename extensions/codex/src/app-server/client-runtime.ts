@@ -11,8 +11,7 @@ import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import { withTimeout } from "./timeout.js";
 
-type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
-  agentDir: string;
+type ClientRuntimeContext = CodexAppServerAuthProfileLookup & {
   authMode?: "prepared-api-key" | "profile";
   onAuthRefreshFailure?: () => void;
 };
@@ -204,6 +203,9 @@ export function ensureCodexAppServerClientRuntime(
     }
     if (runtime.context.authMode === "prepared-api-key") {
       throw new Error("ChatGPT token refresh is unavailable for prepared Codex API-key auth.");
+    }
+    if (!runtime.context.agentDir) {
+      throw new Error("ChatGPT token refresh requires an OpenClaw-owned auth profile.");
     }
     const previousAccountId =
       isJsonObject(request.params) && typeof request.params.previousAccountId === "string"

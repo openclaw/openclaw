@@ -1,6 +1,8 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { bridgeCodexAppServerStartOptions } from "./app-server/auth-bridge.js";
+import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import { MAX_HOST_COUNT } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 import {
@@ -225,6 +227,7 @@ describe("Codex supervision catalog", () => {
       {
         agentDir: resolveDefaultAgentDir(config),
         config,
+        authProfileId: null,
         startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
         timeoutMs: expect.any(Number),
       },
@@ -236,6 +239,58 @@ describe("Codex supervision catalog", () => {
       "thread/resume",
     );
   });
+
+  it.each(["direct", "pinned"] as const)(
+    "lists the primary native store through %s requests without importing its auth file",
+    async (connectionKind) => {
+      const agentDir = resolveDefaultAgentDir(config);
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+      await fs.mkdir(codexHome, { recursive: true });
+      await fs.writeFile(path.join(codexHome, "auth.json"), "{}");
+      const prepareNativeRead = async (options: {
+        agentDir: string;
+        config?: OpenClawConfig;
+        authProfileId?: string | null;
+        startOptions: CodexAppServerStartOptions;
+      }) => {
+        const start = await bridgeCodexAppServerStartOptions({
+          ...options,
+          authProfileStore: { version: 1, profiles: {} },
+        });
+        expect(start.env?.CODEX_HOME).toBe(codexHome);
+      };
+      commandRpcMocks.codexControlRequest.mockImplementation(
+        async (
+          _pluginConfig: unknown,
+          _method: string,
+          _params: unknown,
+          options: Parameters<typeof prepareNativeRead>[0],
+        ) => {
+          await prepareNativeRead(options);
+          return { data: [] };
+        },
+      );
+      pinnedConnectionMocks.getClient.mockImplementation(
+        async (options: Parameters<typeof prepareNativeRead>[0]) => {
+          await prepareNativeRead(options);
+          return pinnedConnectionMocks.client;
+        },
+      );
+      pinnedConnectionMocks.request.mockResolvedValue({ data: [] });
+      const factory = createCodexSessionCatalogControlFactory({
+        getPluginConfig: () => ({ appServer: { homeScope: "agent" } }),
+        getRuntimeConfig: () => config,
+      });
+      const control = factory.forRequest("main", factory.homesForAgent("main")[0]);
+
+      await expect(
+        connectionKind === "pinned"
+          ? control.withPinnedConnection((pinned) => pinned.listPage({}))
+          : control.listPage({}),
+      ).resolves.toEqual({ sessions: [] });
+      expect(await fs.readFile(path.join(codexHome, "auth.json"), "utf8")).toBe("{}");
+    },
+  );
 
   it("preserves the retained owner directory across normal cloned requests", async () => {
     const runtimeConfig = compatibilityOwnerConfig();

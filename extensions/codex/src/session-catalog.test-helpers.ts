@@ -62,7 +62,6 @@ import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
-  type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
   CodexSessionCatalogControl,
@@ -168,6 +167,11 @@ function asControlFactory(
   const forRequest = "forRequest" in control ? control.forRequest : () => control;
   return {
     forRequest,
+    forNode: () => ({
+      control: forRequest("main"),
+      sourceHomeId: "node-native",
+      codexHome: resolveCodexAppServerUserHomeDir(),
+    }),
     homesForAgent: () => [],
     forUpstream: (agentId) => forRequest(agentId),
   };
@@ -267,17 +271,9 @@ export function createCodexSessionCatalogNodeHostCommands(
     | CodexSessionCatalogControl
     | CodexSessionCatalogControlFactory
     | CodexSessionCatalogControlFactoryStub,
-  configSources: Omit<CodexTerminalConfigSources, "resolveRuntimeOptions"> = {
-    getPluginConfig: () => undefined,
-    getRuntimeConfig: () => config,
-  },
   bindingStore?: CodexAppServerBindingStore,
 ) {
-  return createCodexSessionCatalogNodeHostCommandsRuntime(
-    asControlFactory(control),
-    { ...configSources, resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions },
-    bindingStore,
-  );
+  return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), bindingStore);
 }
 
 type CreateSessionEntryParams = Parameters<

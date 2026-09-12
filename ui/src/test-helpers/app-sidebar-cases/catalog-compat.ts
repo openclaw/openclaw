@@ -56,37 +56,49 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("hides catalog groups that have no sessions", async () => {
-    vi.useFakeTimers();
-    try {
-      const codex = catalogPage([]);
-      const claude = catalogPage([], undefined, "claude");
-      const request = vi.fn().mockResolvedValue({
-        catalogs: [...codex.catalogs, ...claude.catalogs],
-      });
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+  it.each(["empty", "catalog error", "host error", "native start"] as const)(
+    "hides catalog groups that have no sessions with %s",
+    async (state) => {
+      vi.useFakeTimers();
+      try {
+        const codex = catalogPage([]);
+        const claude = catalogPage([], undefined, "claude");
+        for (const catalog of [...codex.catalogs, ...claude.catalogs]) {
+          if (state === "catalog error") {
+            catalog.error = { code: "UNAVAILABLE", message: "Catalog unavailable" };
+          } else if (state === "host error") {
+            catalog.hosts[0]!.error = { code: "NODE_INVOKE_FAILED", message: "Node unavailable" };
+          } else if (state === "native start") {
+            catalog.capabilities.startTerminal = true;
+          }
+        }
+        const request = vi.fn().mockResolvedValue({
+          catalogs: [...codex.catalogs, ...claude.catalogs],
+        });
+        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+        gateway.publish({
+          hello: {
+            features: { methods: ["sessions.catalog.list"] },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+        const { sidebar } = await mountSidebar(
+          gateway.gateway,
+          createSessions("main", ["agent:main:main"]),
+        );
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
 
-      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-      expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+        expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
-  it("shows actionable catalog errors once and hides empty offline hosts", async () => {
+  it("keeps populated catalogs visible with actionable errors and hides empty offline hosts", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn().mockResolvedValue({
@@ -95,7 +107,8 @@ describe("AppSidebar session catalog pagination", () => {
             id: "codex",
             label: "Codex",
             capabilities: { continueSession: true, archive: true },
-            hosts: [],
+            hosts: catalogPage([{ threadId: "local-session", name: "Local session" }]).catalogs[0]!
+              .hosts,
             error: { code: "unavailable", message: "Codex provider unavailable" },
           },
           {
@@ -107,6 +120,8 @@ describe("AppSidebar session catalog pagination", () => {
               createSession: { model: "anthropic/claude-opus-4-8" },
             },
             hosts: [
+              ...catalogPage([{ threadId: "remote-session", name: "Remote session" }]).catalogs[0]!
+                .hosts,
               {
                 hostId: "node:offline-a",
                 label: "Offline A",
@@ -184,7 +199,9 @@ describe("AppSidebar session catalog pagination", () => {
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title") ?? "";
       expect(claudeTitle).not.toContain("NODE_OFFLINE");
       expect(claudeTitle.match(/NODE_LIST_FAILED/g)).toHaveLength(1);
-      expect(claudeSection?.querySelectorAll("[data-session-catalog-host]")).toHaveLength(0);
+      expect(claudeSection?.querySelectorAll("[data-session-catalog-host]")).toHaveLength(1);
+      expect(codexSection?.textContent).toContain("Local session");
+      expect(claudeSection?.textContent).toContain("Remote session");
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
       ).toContain("Settings > Plugins");
@@ -195,7 +212,7 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("keeps an empty catalog reachable while a later page remains", async () => {
+  it("hides an empty catalog with more pages until a refresh discovers sessions", async () => {
     vi.useFakeTimers();
     try {
       const request = vi
@@ -217,9 +234,9 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
 
-      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
-      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      await vi.advanceTimersByTimeAsync(0);
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+      expect(request).toHaveBeenCalledTimes(1);
+      await sidebar.sessionData.refreshSessionCatalogs();
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Later session");
     } finally {

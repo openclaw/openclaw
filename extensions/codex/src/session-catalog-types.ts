@@ -90,6 +90,12 @@ export type CodexSessionCatalogControl = {
 
 export type CodexSessionCatalogControlFactory = {
   forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
+  /** Native node source; Gateway agent IDs never select a node-local store. */
+  forNode(): {
+    control: CodexSessionCatalogControl;
+    sourceHomeId: string;
+    codexHome: string;
+  };
   homesForAgent(agentId: string): readonly CodexCatalogHome[];
   forUpstream(
     agentId: string,

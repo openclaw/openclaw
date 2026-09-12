@@ -511,11 +511,9 @@ describe("Codex exact local eligibility", () => {
             action === "node transcript"
               ? CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND
               : CODEX_TERMINAL_RESUME_COMMAND;
-          const command = createCodexSessionCatalogNodeHostCommands(
-            f.factory,
-            sources,
-            bindingStore,
-          ).find((c) => c.command === commandId)!;
+          const command = createCodexSessionCatalogNodeHostCommands(f.factory, bindingStore).find(
+            (c) => c.command === commandId,
+          )!;
           const io = {
             signal: new AbortController().signal,
             emitChunk: async () => {},

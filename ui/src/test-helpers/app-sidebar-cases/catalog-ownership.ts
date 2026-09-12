@@ -39,6 +39,8 @@ describe("AppSidebar session catalog ownership", () => {
       ]);
       // Adoption replaces creator provenance with the loaded session's owner.
       page.catalogs[0]!.hosts[0]!.sessions[0]!.createdActor = adopted ? ada : bob;
+      page.catalogs[0]!.hosts[0]!.nextCursor = "more-owner-filtered-sessions";
+      page.catalogs[0]!.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
       sidebar.sessionData.sessionCatalogs = page.catalogs;
       sidebar.sessionData.requestSessionDataUpdate();
       await sidebar.updateComplete;

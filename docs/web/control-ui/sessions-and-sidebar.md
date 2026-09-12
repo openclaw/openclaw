@@ -106,7 +106,7 @@ Enable **Hide empty groups** in the same menu to hide custom groups with no sess
 
 Selecting a specific owner or **Involving me** automatically hides session sections with no matching sessions, including empty custom groups, **Groups**, and **Other**. Populated sections stay visible even when collapsed. Clearing the filter restores the normal collaborator and drag-target behavior without changing the **Hide empty groups** preference.
 
-Native CLI catalogs with no rows matching the owner filter are hidden unless they have more pages to load or a discovery error to show. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section.
+Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 

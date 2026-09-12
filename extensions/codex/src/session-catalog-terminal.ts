@@ -117,11 +117,10 @@ export function codexNodeTerminalCapability(node: {
 
 export function createCodexTerminalNodeHostCommand(
   bindRequest: (paramsJSON?: string | null) => {
-    agentId: string;
+    codexHome: string;
     control: CodexSessionCatalogControl;
     paramsJSON: string;
   },
-  configSources: CodexTerminalConfigSources,
 ): OpenClawPluginNodeHostCommand {
   return {
     command: CODEX_TERMINAL_RESUME_COMMAND,
@@ -166,10 +165,7 @@ export function createCodexTerminalNodeHostCommand(
             args: ["resume", resume.threadId],
             ...(record.cwd ? { cwd: record.cwd } : {}),
             env: {
-              CODEX_HOME: resolveCodexCatalogTerminalHome({
-                ...configSources,
-                agentId: request.agentId,
-              }),
+              CODEX_HOME: request.codexHome,
             },
             cols: resume.cols,
             rows: resume.rows,
@@ -229,7 +225,6 @@ export async function openCodexCatalogTerminal(
     throw new CatalogParamsError("paired-node Codex terminal is unavailable");
   }
   const lookup = await lookupNodeCodexCatalogRecord({
-    agentId: params.agentId,
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
@@ -243,7 +238,7 @@ export async function openCodexCatalogTerminal(
     nodeId,
     command: CODEX_TERMINAL_RESUME_COMMAND,
     uploadPathStyle: "native",
-    paramsJSON: JSON.stringify({ agentId: params.agentId, threadId: params.threadId }),
+    paramsJSON: JSON.stringify({ threadId: params.threadId }),
     ...(record.cwd ? { cwd: record.cwd } : {}),
     title,
   };
