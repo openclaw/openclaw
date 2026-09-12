@@ -1298,11 +1298,14 @@ function resolveExplicitSourceTestTargets(
   if (isTestFileTarget(relative)) {
     return null;
   }
-  const preciseTargets = resolvePreciseChangedTestTargets(relative, {
-    cwd,
-    forceFullImportGraph: options.forceFullImportGraph === true,
-  });
-  if (preciseTargets && preciseTargets.length > 0) {
+  const preciseTargets = [
+    ...(resolvePreciseChangedTestTargets(relative, {
+      cwd,
+      forceFullImportGraph: options.forceFullImportGraph === true,
+    }) ?? []),
+    ...resolveKovaSchemaTestTargets(relative),
+  ];
+  if (preciseTargets.length > 0) {
     return [...new Set(preciseTargets)].toSorted((left, right) => left.localeCompare(right));
   }
   if (!isTestSupportFileTarget(relative)) {
@@ -3341,6 +3344,14 @@ function resolveAppcastTargets(changedPath: string) {
   return changedPath === "appcast.xml" ? APPCAST_TEST_TARGETS : null;
 }
 
+function resolveKovaSchemaTestTargets(changedPath: string) {
+  // The workflow fixture reads schema bytes, so imports cannot express this dependency.
+  return changedPath === "src/config/zod-schema.agent-defaults.ts" ||
+    changedPath === "src/config/zod-schema.agent-defaults-base.ts"
+    ? ["test/scripts/openclaw-performance-workflow.test.ts"]
+    : [];
+}
+
 function resolvePreciseChangedTestTargets(
   changedPath: string,
   options: ChangedTestTargetOptions & { skipImportGraph?: boolean },
@@ -3463,7 +3474,10 @@ export function resolveChangedTestTargetPlan(
   }
   const plan: ChangedTestTargetPlan = {
     mode: "targets",
-    targets: [...new Set(targets)],
+    targets: uniqueOrdered([
+      ...targets,
+      ...executableChangedPaths.flatMap(resolveKovaSchemaTestTargets),
+    ]),
   };
   if (skippedBroadFallbackPaths.length > 0) {
     plan.skippedBroadFallbackPaths = [...new Set(skippedBroadFallbackPaths)];
