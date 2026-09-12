@@ -29,6 +29,7 @@ function createDmPlugin(
     id?: "telegram" | "whatsapp";
     accounts?: Record<string, { policy?: string; allowFrom: Array<string | number> }>;
     dmRouting?: NonNullable<ChannelPlugin["security"]>["dmRouting"];
+    normalizeEntry?: (raw: string) => string;
   } = {},
 ): ChannelPlugin {
   const id = params.id ?? "whatsapp";
@@ -47,6 +48,7 @@ function createDmPlugin(
             policyPath: `channels.${id}.accounts.${resolvedAccountId}.dmPolicy`,
             allowFromPath: `channels.${id}.accounts.${resolvedAccountId}.`,
             approveHint: `approve ${resolvedAccountId}`,
+            ...(params.normalizeEntry ? { normalizeEntry: params.normalizeEntry } : {}),
           }
         : null;
     },
@@ -587,5 +589,66 @@ describe("security audit channel dm policy", () => {
 
     expect(requireFinding(findings, "channels.whatsapp.dm.open").severity).toBe("critical");
     expect(collisionFindings(findings)).toHaveLength(1);
+  });
+});
+
+describe("security audit channel dm wildcard allowlists", () => {
+  const stripChannelPrefix = (raw: string): string =>
+    raw
+      .trim()
+      .replace(/^(whatsapp|user):/i, "")
+      .trim();
+
+  async function lockedFindings(params: {
+    policy: string;
+    allowFrom: Array<string | number>;
+  }): Promise<ChannelSecurityFinding[]> {
+    const findings = await collectChannelSecurityFindingsCore({
+      cfg: { agents: { entries: { main: {} } } },
+      plugins: [
+        createDmPlugin({
+          accounts: { default: { policy: params.policy, allowFrom: params.allowFrom } },
+          normalizeEntry: stripChannelPrefix,
+        }),
+      ],
+    });
+    return findings.filter((finding) => finding.checkId === "channels.whatsapp.dm.locked");
+  }
+
+  it.each([
+    { policy: "allowlist", allowFrom: ["whatsapp:*"] },
+    { policy: "allowlist", allowFrom: ["user:*"] },
+    { policy: "allowlist", allowFrom: ["*"] },
+    { policy: "pairing", allowFrom: ["whatsapp:*"] },
+  ])("does not report DMs as locked for $policy with $allowFrom", async (params) => {
+    await expect(lockedFindings(params)).resolves.toHaveLength(0);
+  });
+
+  it.each([
+    { policy: "allowlist", allowFrom: [] },
+    { policy: "pairing", allowFrom: [] },
+  ])("still reports DMs as locked for $policy with no admitted senders", async (params) => {
+    const findings = await lockedFindings(params);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ severity: "info" });
+  });
+
+  it("evaluates the anyone principal for a prefixed wildcard", async () => {
+    const findings = await collectChannelSecurityFindingsCore({
+      cfg: { agents: { entries: { main: {}, research: {} } } },
+      plugins: [
+        createDmPlugin({
+          accounts: { default: { policy: "allowlist", allowFrom: ["whatsapp:*"] } },
+          normalizeEntry: stripChannelPrefix,
+        }),
+      ],
+    });
+
+    expect(findings.some((finding) => finding.checkId === "channels.whatsapp.dm.locked")).toBe(
+      false,
+    );
+    expect(
+      requireFinding(findings, "channels.whatsapp.routing.owner_missing.default").severity,
+    ).toBe("warn");
   });
 });
