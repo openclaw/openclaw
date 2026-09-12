@@ -11,6 +11,7 @@ import {
   resolveBundledPluginSourcePublicSurfacePath,
   resolvePluginRootPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
+import type { PluginRecord } from "../plugins/registry-types.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 
 export type BundledPluginPublicSurfaceParams = {
@@ -27,6 +28,8 @@ export type FacadeModuleLocationLike = {
   origin?: PluginManifestRecord["origin"];
 };
 
+const RUNTIME_FACADE_MATCH_TIERS = ["id", "folder", "channel"] as const;
+
 /** An executing instance wins over metadata and bundled fallbacks, including a missing surface. */
 export function resolveRuntimeFacadeModuleLocation(
   params: BundledPluginPublicSurfaceParams,
@@ -34,24 +37,39 @@ export function resolveRuntimeFacadeModuleLocation(
   if (params.env !== undefined && params.env !== process.env) {
     return undefined;
   }
-  const records =
-    getPluginRegistryForContext()?.plugins.filter(
-      (record) => record.status === "loaded" && record.rootDir,
-    ) ?? [];
-  const candidates = [
-    records.filter((record) => record.id === params.dirName),
-    records.filter((record) => path.basename(record.rootDir!) === params.dirName),
-    records.filter((record) => record.channelIds.includes(params.dirName)),
-  ].find((matches) => matches.length);
-  if (!candidates) {
+  const records = getPluginRegistryForContext()?.plugins;
+  if (!records) {
     return undefined;
   }
-  if (candidates.length !== 1) {
-    throw new Error(
-      `Plugin public surface ${params.dirName} has ambiguous runtime ownership; use its plugin id.`,
-    );
+  let owner: PluginRecord | undefined;
+  for (const tier of RUNTIME_FACADE_MATCH_TIERS) {
+    for (const record of records) {
+      if (record.status !== "loaded" || !record.rootDir) {
+        continue;
+      }
+      const matches =
+        tier === "id"
+          ? record.id === params.dirName
+          : tier === "folder"
+            ? path.basename(record.rootDir) === params.dirName
+            : record.channelIds.includes(params.dirName);
+      if (!matches) {
+        continue;
+      }
+      if (owner) {
+        throw new Error(
+          `Plugin public surface ${params.dirName} has ambiguous runtime ownership; use its plugin id.`,
+        );
+      }
+      owner = record;
+    }
+    if (owner) {
+      break;
+    }
   }
-  const owner = candidates[0]!;
+  if (!owner) {
+    return undefined;
+  }
   const modulePath = resolvePluginRootPublicSurfacePath({
     pluginRoot: owner.rootDir!,
     pluginId: owner.id,
