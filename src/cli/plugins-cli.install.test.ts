@@ -2173,6 +2173,22 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
+  it("installs Telnyx through its integrity-pinned catalog artifact", async () => {
+    primeSuccessfulPluginPersistence("telnyx");
+    findBundledPluginSourceMock.mockReturnValue(undefined);
+    installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult("telnyx"));
+
+    await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", "telnyx"]);
+
+    expect(npmInstallCall().spec).toBe("@telnyx/openclaw-provider@0.1.0");
+    expect(npmInstallCall().expectedPluginId).toBe("telnyx");
+    expect(npmInstallCall().expectedIntegrity).toBe(
+      "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+    );
+    expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+  });
+
   it.each(
     [false, true].flatMap((npmAbsent) =>
       ["matrix", "@openclaw/matrix@latest"].map((arg) => ({ npmAbsent, arg })),
