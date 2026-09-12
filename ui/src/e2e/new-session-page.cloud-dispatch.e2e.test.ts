@@ -366,9 +366,11 @@ suite.define(() => {
         await trigger.click();
         await writeFile(
           path.join(suite.artifactDir, "cloud-profile-refresh-retention", "01-before-refresh.png"),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            place.locator('[data-value="cloud:aws"]'),
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator('wa-popup.popover > [part="popup"]'),
+            [place.locator('[data-value="cloud:aws"]')],
+          ),
         );
         await page.keyboard.press("Escape");
       }
@@ -430,9 +432,11 @@ suite.define(() => {
             "cloud-profile-refresh-retention",
             "03-after-retry-exhaustion.png",
           ),
-          await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            retainedCloudProfile,
-          ]),
+          await takeControlUiViewportScreenshot(
+            page,
+            place.locator(".new-session-page__cloud-configuration"),
+            [retainedCloudProfile, retainedMachine],
+          ),
         );
       }
       await page.keyboard.press("Escape");

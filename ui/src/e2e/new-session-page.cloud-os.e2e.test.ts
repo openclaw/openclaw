@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
   captureUiProofEnabled,
@@ -49,9 +49,9 @@ suite.define(() => {
           if (captureUiProofEnabled) {
             await writeFile(
               path.join(suite.artifactDir, fileName),
-              await takeControlUiElementScreenshot(
+              await takeControlUiViewportScreenshot(
                 page,
-                picker.locator('wa-popup [part="popup"]'),
+                picker.locator(".new-session-page__cloud-configuration"),
                 [picker.locator('[data-value="machine:standard"]')],
               ),
             );

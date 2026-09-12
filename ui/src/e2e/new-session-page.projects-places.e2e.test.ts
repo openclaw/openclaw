@@ -245,7 +245,9 @@ suite.define(() => {
             page,
             `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
             {
-              surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+              surface: page.locator(
+                '.new-session-page__where-popover wa-popup.popover > [part="popup"]',
+              ),
               content: [page.locator('.new-session-page__where-popover [data-value="gateway"]')],
             },
           );
