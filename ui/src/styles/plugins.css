@@ -703,6 +703,57 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
   flex: 0 0 auto;
 }
 
+/* Loading skeleton: same grid, same card slots (40px art, title, author, action,
+   two summary lines), so the loaded cards land exactly where the placeholders were. */
+.plugin-catalog-card--skeleton {
+  /* Lighter than the default skeleton fill: eight cards of solid bars read as a wall. */
+  --skeleton-base: color-mix(in srgb, var(--bg-muted) 55%, var(--bg-elevated));
+
+  pointer-events: none;
+}
+
+.plugin-catalog-card__skeleton-art {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.plugin-catalog-card__skeleton-title,
+.plugin-catalog-card__skeleton-action,
+.plugin-catalog-card__skeleton-line {
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
+.plugin-catalog-card__skeleton-title {
+  width: min(60%, 128px);
+  height: 12px;
+}
+
+.plugin-catalog-card__skeleton-action {
+  width: 52px;
+  height: 26px;
+  border-radius: var(--radius-md);
+}
+
+.plugin-catalog-card__skeleton-summary {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: calc(2 * 1.4em);
+  padding-top: 2px;
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugin-catalog-card__skeleton-line {
+  width: 84%;
+  height: 9px;
+}
+
+.plugin-catalog-card__skeleton-line:last-child {
+  width: 52%;
+}
+
 @media (max-width: 1100px) {
   .plugin-catalog-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));

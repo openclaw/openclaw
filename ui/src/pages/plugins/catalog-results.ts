@@ -3,7 +3,6 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
-import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -213,6 +212,42 @@ function renderCatalogCard(
   </article>`;
 }
 
+// Mirrors renderCatalogCard's geometry (art tile, title, action slot, two summary
+// lines) inside the real grid so the layout does not jump on load. Fills are kept
+// light and sparse on purpose: eight cards of solid bars read as a wall.
+function renderCatalogGridSkeleton(params: { label?: string; cards: number }): TemplateResult {
+  return html`<div
+    class="plugin-catalog-grid plugin-catalog-grid--skeleton"
+    role="status"
+    aria-busy="true"
+    aria-label=${params.label ?? t("common.loading")}
+  >
+    ${Array.from(
+      { length: params.cards },
+      () => html`<div
+        class="plugin-catalog-card oc-card plugin-catalog-card--skeleton"
+        aria-hidden="true"
+      >
+        <div class="plugin-catalog-card__head">
+          <div class="installed-plugins-card__head">
+            <span class="skeleton plugin-catalog-card__skeleton-art"></span>
+            <div class="installed-plugins-card__identity">
+              <span class="skeleton plugin-catalog-card__skeleton-title"></span>
+            </div>
+          </div>
+          <div class="plugin-catalog-card__action">
+            <span class="skeleton plugin-catalog-card__skeleton-action"></span>
+          </div>
+        </div>
+        <span class="plugin-catalog-card__skeleton-summary">
+          <span class="skeleton plugin-catalog-card__skeleton-line"></span>
+          <span class="skeleton plugin-catalog-card__skeleton-line"></span>
+        </span>
+      </div>`,
+    )}
+  </div>`;
+}
+
 function renderError(error: string, onRetry: () => void): TemplateResult {
   return html`<div class="callout danger oc-banner oc-banner-error" role="alert">
     <span>${formatUiExternalText(error)}</span>
@@ -259,7 +294,7 @@ function renderSection(params: {
     </header>
     ${
       params.loading
-        ? renderSettingsLoadingSkeleton({ rows: 4, carapace: true })
+        ? renderCatalogGridSkeleton({ cards: SECTION_SIZE })
         : params.error && params.onRetry
           ? renderError(params.error, params.onRetry)
           : html`<div class="plugin-catalog-grid">
@@ -318,10 +353,9 @@ function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
 function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
   const items = props.result?.items ?? [];
   if (props.loading) {
-    return renderSettingsLoadingSkeleton({
+    return renderCatalogGridSkeleton({
       label: t("pluginsPage.loadingDiscovery"),
-      rows: 8,
-      carapace: true,
+      cards: SECTION_SIZE,
     });
   }
   if (props.error) {
