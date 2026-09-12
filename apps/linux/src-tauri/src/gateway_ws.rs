@@ -2483,7 +2483,7 @@ esac
                 .await;
                 let controller = controller(&fixture.client, |_| std::future::ready(()));
                 let cycle = async {
-                    controller.will_sleep().await;
+                    controller.will_sleep().1.await;
                     controller.did_wake().await;
                 };
                 fixture.drive(cycle).await;
@@ -2583,7 +2583,7 @@ esac
                     let mut fixture =
                         SleepSocketFixture::new(dashboard_handoff::local_ws_config).await;
                     let controller = controller(&fixture.client, |_| std::future::ready(()));
-                    let mut sleeping = Box::pin(controller.will_sleep());
+                    let mut sleeping = Box::pin(controller.will_sleep().1);
                     assert!(futures_util::poll!(&mut sleeping).is_pending());
                     let command = fixture.next_request().await;
                     fixture.dispatch(command).await;
@@ -2614,7 +2614,7 @@ esac
                     }
                     std::future::ready(())
                 });
-                fixture.drive(controller.will_sleep()).await;
+                fixture.drive(controller.will_sleep().1).await;
                 fixture.fail_resume.store(true, Ordering::SeqCst);
                 fixture.drive(controller.did_wake()).await;
                 let frames = fixture.finish().await;
