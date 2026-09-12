@@ -451,6 +451,26 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   });
 
   describe("context token fallback", () => {
+    function makeResultWithoutContextWindow() {
+      return {
+        result: {
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+              },
+            },
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    }
+
     it("prefers the harness-reported runtime window and provenance", async () => {
       const session = makeCronSession({
         sessionEntry: makeCronSessionEntry({
@@ -501,23 +521,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       resolveContextTokensForModelMock.mockReturnValue(undefined);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-              },
-            },
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
+      runWithModelFallbackMock.mockResolvedValueOnce(makeResultWithoutContextWindow());
 
       const result = await runSkillFilterCase();
 
@@ -538,23 +542,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       resolveContextTokensForModelMock.mockReturnValue(512_000);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-              },
-            },
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
+      runWithModelFallbackMock.mockResolvedValueOnce(makeResultWithoutContextWindow());
 
       const result = await runSkillFilterCase();
 
@@ -575,23 +563,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       resolveContextTokensForModelMock.mockReturnValue(512_000);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-              },
-            },
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
+      runWithModelFallbackMock.mockResolvedValueOnce(makeResultWithoutContextWindow());
 
       const result = await runSkillFilterCase();
 
@@ -612,23 +584,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       resolveContextTokensForModelMock.mockReturnValue(512_000);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-              },
-            },
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
+      runWithModelFallbackMock.mockResolvedValueOnce(makeResultWithoutContextWindow());
 
       const result = await runSkillFilterCase({
         cfg: {
@@ -662,23 +618,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       resolveContextTokensForModelMock.mockReturnValue(undefined);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-              },
-            },
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
+      runWithModelFallbackMock.mockResolvedValueOnce(makeResultWithoutContextWindow());
 
       const result = await runSkillFilterCase();
 
@@ -704,23 +644,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       resolveContextTokensForModelMock.mockReturnValue(undefined);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-              },
-            },
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
+      runWithModelFallbackMock.mockResolvedValueOnce(makeResultWithoutContextWindow());
 
       const result = await runSkillFilterCase();
 

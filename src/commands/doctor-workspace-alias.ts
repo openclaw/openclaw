@@ -16,7 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-function configuredWorkspaceDirs(cfg: OpenClawConfig): string[] {
+async function configuredWorkspaceDirs(cfg: OpenClawConfig): Promise<string[]> {
   return listWorkspaceStateDirs({
     cfg,
     env: process.env,
@@ -54,11 +54,11 @@ const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, s
 };
 
 /** Read-only findings include failed inspection so health cannot report a false success. */
-export function collectRepointedWorkspaceAliasFindings(
+export async function collectRepointedWorkspaceAliasFindings(
   cfg: OpenClawConfig,
-): WorkspaceAliasFinding[] {
+): Promise<WorkspaceAliasFinding[]> {
   const findings: WorkspaceAliasFinding[] = [];
-  for (const workspaceDir of configuredWorkspaceDirs(cfg)) {
+  for (const workspaceDir of await configuredWorkspaceDirs(cfg)) {
     let message: string;
     try {
       const facts = detectRepointedWorkspaceAlias(workspaceDir);
@@ -87,7 +87,7 @@ async function maybeRepairRepointedWorkspaceAliases(params: {
   if (!params.prompter.shouldRepair) {
     return;
   }
-  const workspaceDirs = configuredWorkspaceDirs(params.cfg);
+  const workspaceDirs = await configuredWorkspaceDirs(params.cfg);
   const configuration = await readConfigFileSnapshot();
   const verifyConfiguration = async () => {
     const current = await readConfigFileSnapshot();
@@ -155,12 +155,12 @@ export function createWorkspaceAliasMigrationRepair(
     return undefined;
   }
   return async (cfg) => {
-    if (collectRepointedWorkspaceAliasFindings(cfg).length === 0) {
+    if ((await collectRepointedWorkspaceAliasFindings(cfg)).length === 0) {
       return;
     }
     beforePrompt();
     await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
-    const unresolved = collectRepointedWorkspaceAliasFindings(cfg);
+    const unresolved = await collectRepointedWorkspaceAliasFindings(cfg);
     if (unresolved.length > 0) {
       throw new Error(
         unresolved.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),

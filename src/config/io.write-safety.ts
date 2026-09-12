@@ -9,6 +9,48 @@ import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import { captureConfigWriteLockGuard } from "./write-lock.js";
+
+/** Fence shared atomic-write effects without blocking cleanup of owned temporary files. */
+export function createGuardedConfigFileSystem(
+  configPath: string,
+  fsModule: typeof fs,
+  assertCurrent?: () => void,
+): typeof fs {
+  if (!assertCurrent) {
+    return fsModule;
+  }
+  const directory = path.dirname(path.resolve(configPath));
+  return {
+    ...fsModule,
+    promises: {
+      ...fsModule.promises,
+      // Preserve mkdir's overloads while checking immediately at native dispatch.
+      mkdir: new Proxy(fsModule.promises.mkdir, {
+        apply(target, thisArg, args) {
+          assertCurrent();
+          return Reflect.apply(target, thisArg, args);
+        },
+      }),
+      rename: (source, destination) => {
+        assertCurrent();
+        return fsModule.promises.rename(source, destination);
+      },
+      open: async (filePath, flags, mode) => {
+        const handle = await fsModule.promises.open(filePath, flags, mode);
+        if (filePath === directory) {
+          // fs-safe observes this directory handle before applying its mode.
+          const chmod = handle.chmod.bind(handle);
+          handle.chmod = (nextMode) => {
+            assertCurrent();
+            return chmod(nextMode);
+          };
+        }
+        return handle;
+      },
+    },
+  };
+}
 
 export function assertBaseSnapshotStillCurrent(
   snapshot: ConfigFileSnapshot,
@@ -49,7 +91,9 @@ export async function tightenStateDirPermissionsIfNeeded(params: {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   fsModule: typeof fs;
+  assertConfigPathForWrite?: () => void;
 }): Promise<void> {
+  const assertCurrent = captureConfigWriteLockGuard(params.configPath);
   if (process.platform === "win32") {
     return;
   }
@@ -61,9 +105,13 @@ export async function tightenStateDirPermissionsIfNeeded(params: {
   try {
     const stat = await params.fsModule.promises.stat(configDir);
     if ((stat.mode & 0o077) !== 0) {
+      assertCurrent?.();
+      params.assertConfigPathForWrite?.();
       await params.fsModule.promises.chmod(configDir, 0o700);
     }
   } catch {
+    assertCurrent?.();
+    params.assertConfigPathForWrite?.();
     // Best-effort hardening only; the config write must still proceed.
   }
 }
@@ -73,15 +121,22 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
   previousSnapshot: ConfigFileSnapshot;
   committedHash: string;
   fsModule: typeof fs;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
+  // Restore the original target, even when another config path is now selected.
+  // The captured owner and committed hash, not current selection, authorize compensation.
+  const assertCurrent = params.assertCurrent;
+  assertCurrent?.();
   let currentRaw: string | null = null;
   try {
     currentRaw = await params.fsModule.promises.readFile(params.configPath, "utf-8");
   } catch (error) {
+    assertCurrent?.();
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
     }
   }
+  assertCurrent?.();
   if (hashConfigRaw(currentRaw) !== params.committedHash) {
     return false;
   }
@@ -92,8 +147,8 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
       dirMode: 0o700,
       mode: 0o600,
       tempPrefix: path.basename(params.configPath),
-      copyFallbackOnPermissionError: true,
-      fileSystem: params.fsModule,
+      copyFallbackOnPermissionError: !assertCurrent,
+      fileSystem: createGuardedConfigFileSystem(params.configPath, params.fsModule, assertCurrent),
     });
     return true;
   }
@@ -103,6 +158,7 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
   try {
     await params.fsModule.promises.unlink(params.configPath);
   } catch (error) {
+    assertCurrent?.();
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
     }

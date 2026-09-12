@@ -820,6 +820,7 @@ function isSystemOwnedCronJob(job: CronJob | null | undefined): boolean {
 }
 
 function renderJobRow(job: CronJob, props: CronProps) {
+  const displayName = job.displayName ?? job.name;
   const description = job.description?.trim();
   const systemOwned = isSystemOwnedCronJob(job);
   const nextRunAtMs = job.state?.nextRunAtMs;
@@ -839,7 +840,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
         ${renderJobStateIndicator(job)}
         <span class="cron-table__name-copy">
           <span class="cron-table__name-line">
-            <span class="cron-table__name-text">${job.name}</span>
+            <span class="cron-table__name-text">${displayName}</span>
             ${job.trigger ? renderTriggerIndicator() : nothing}
           </span>
           ${
@@ -881,8 +882,8 @@ function renderJobRow(job: CronJob, props: CronProps) {
                   type="button"
                   class="btn btn--sm btn--ghost cron-row-run"
                   data-test-id=${`cron-row-run-${job.id}`}
-                  title=${t("cron.actions.runNowJob", { name: job.name })}
-                  aria-label=${t("cron.actions.runNowJob", { name: job.name })}
+                  title=${t("cron.actions.runNowJob", { name: displayName })}
+                  aria-label=${t("cron.actions.runNowJob", { name: displayName })}
                   ?disabled=${props.busy}
                   @click=${() => props.onRun(job, "force")}
                 >
@@ -1026,6 +1027,7 @@ function renderJobMenu(props: CronProps, job: CronJob) {
     return nothing;
   }
   const systemOwned = isSystemOwnedCronJob(job);
+  const displayName = job.displayName ?? job.name;
   return html`
     <wa-dropdown
       class="cron-job-menu"
@@ -1057,8 +1059,8 @@ function renderJobMenu(props: CronProps, job: CronJob) {
         slot="trigger"
         type="button"
         class="btn btn--sm btn--ghost cron-job-menu__trigger"
-        aria-label=${t("cron.actions.moreJob", { name: job.name })}
-        title=${t("cron.actions.moreJob", { name: job.name })}
+        aria-label=${t("cron.actions.moreJob", { name: displayName })}
+        title=${t("cron.actions.moreJob", { name: displayName })}
       >
         ${icon("moreHorizontal")}
       </button>
@@ -1160,7 +1162,10 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
 }
 
 function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?: CronJob) {
-  const title = mode === "job" ? (selectedJob?.name ?? props.form.name) : t("cron.detail.newTitle");
+  const title =
+    mode === "job"
+      ? (selectedJob?.displayName ?? selectedJob?.name ?? props.form.name)
+      : t("cron.detail.newTitle");
   const description = mode === "job" ? selectedJob?.description?.trim() : undefined;
   const systemOwned = isSystemOwnedCronJob(selectedJob);
   // Header describes the SAVED job (schedule + next run); the form's live
@@ -1225,7 +1230,7 @@ function renderEnabledSwitch(
 ) {
   const stateLabel = job.enabled ? t("cron.detail.active") : t("cron.detail.paused");
   const actionLabel = t(job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
-    name: job.name,
+    name: job.displayName ?? job.name,
   });
   return html`
     <span

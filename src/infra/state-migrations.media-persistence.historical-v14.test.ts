@@ -115,6 +115,7 @@ describe("legacy media persistence Doctor migration from historical v14", () => 
       expect(
         migrated.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
       ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+      expect(migrated.prepare("SELECT * FROM session_transcript_cold_archives").all()).toEqual([]);
       expect(
         migrated
           .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")

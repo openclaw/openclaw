@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
+import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import {
   readSessionIdentityMutationVersion,
@@ -21,6 +22,7 @@ import { readSessionTitleProjectionUnavailableVersion } from "../session-transcr
 import type { SessionListModelCatalog, SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
+import type { SessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type SessionListFence = {
@@ -37,11 +39,15 @@ type SessionListFence = {
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
   workerEnvironmentInventoryVersion: number;
+  workerMachineShapeVersion: number;
   workerPlacementDiskSpaceVersion: number;
   workerPlacementRunnerAvailabilityVersion: number;
 };
 type CatalogFence = { modelCatalogRevision: string };
-type SessionListOperation = CatalogFence & { promise: Promise<SessionsListResult> };
+type SessionListOperation = CatalogFence & {
+  promise: Promise<SessionsListResult>;
+  workTrace?: DiagnosticTraceContext;
+};
 type SessionListCompleted = CatalogFence & { expiresAt?: number; result: SessionsListResult };
 type SessionListState = SessionListFence & {
   completed: Map<string, SessionListCompleted>;
@@ -104,6 +110,7 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
     workerEnvironmentInventoryVersion: context.workerEnvironmentService?.inventoryVersion() ?? 0,
+    workerMachineShapeVersion: context.workerEnvironmentService?.machineShapeVersion() ?? 0,
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
     workerPlacementRunnerAvailabilityVersion:
       context.workerPlacementRunnerAvailabilityReader?.version() ?? 0,
@@ -125,6 +132,7 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
     value.workerEnvironmentInventoryVersion === fence.workerEnvironmentInventoryVersion &&
+    value.workerMachineShapeVersion === fence.workerMachineShapeVersion &&
     value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion &&
     value.workerPlacementRunnerAvailabilityVersion ===
       fence.workerPlacementRunnerAvailabilityVersion
@@ -206,6 +214,7 @@ export async function respondWithCachedSessionList(params: {
   request: SessionsListParams;
   respond: RespondFn;
   run: () => Promise<SessionsListResult>;
+  diagnostics?: SessionListDiagnostics;
 }): Promise<void> {
   const workKey = sessionListWorkKey(params.request, params.client, params.config);
   const state = sessionListState(params.context, params.config);
@@ -223,17 +232,23 @@ export async function respondWithCachedSessionList(params: {
     ? readCompletedSessionList(state, workKey, modelCatalogRevision)
     : undefined;
   if (completed) {
+    params.diagnostics?.setCacheRole("completed-hit");
+    params.diagnostics?.setSelectedRowCount(completed.count);
     params.respond(true, completed, undefined);
     return;
   }
   const pending = state.inFlight.get(workKey);
   if (pending?.modelCatalogRevision === modelCatalogRevision) {
-    params.respond(true, await pending.promise, undefined);
+    params.diagnostics?.setCacheRole("in-flight-follower", pending.workTrace);
+    const result = await pending.promise;
+    params.diagnostics?.setSelectedRowCount(result.count);
+    params.respond(true, result, undefined);
     return;
   }
 
   // A request may share only work begun at the same fence. A transition during projection
   // leaves current callers intact but fences every later caller and cache write.
+  params.diagnostics?.setCacheRole("projection-owner");
   const promise = Promise.resolve()
     .then(params.run)
     .then((result) => {
@@ -252,10 +267,12 @@ export async function respondWithCachedSessionList(params: {
       }
       return result;
     });
-  const operation = { modelCatalogRevision, promise };
+  const operation = { modelCatalogRevision, promise, workTrace: params.diagnostics?.trace };
   state.inFlight.set(workKey, operation);
   try {
-    params.respond(true, await promise, undefined);
+    const result = await promise;
+    params.diagnostics?.setSelectedRowCount(result.count);
+    params.respond(true, result, undefined);
   } finally {
     if (state.inFlight.get(workKey) === operation) {
       state.inFlight.delete(workKey);

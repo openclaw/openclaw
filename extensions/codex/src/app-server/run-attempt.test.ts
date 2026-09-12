@@ -489,6 +489,9 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     onYieldDetected: () => undefined,
   });
   const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, layers: [] };
+    }
     if (method === "thread/start") {
       return threadStartResult();
     }
@@ -1174,6 +1177,9 @@ describe("runCodexAppServerAttempt", () => {
       onYieldDetected: () => undefined,
     });
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -3408,6 +3414,7 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    params.inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" };
     params.config = {
       ...params.config,
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -3439,6 +3446,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(hookContext).toMatchObject({
       modelProviderId: params.provider,
       modelId: params.modelId,
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
     });
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
@@ -5092,7 +5100,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("reports hook-supplied bootstrap files that only expose path and content", async () => {
+  it("reports hook-supplied bootstrap files with unverified delivery on an external connection", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const soulPath = path.join(workspaceDir, "SOUL.md");
     const soulGuidance = "Hook supplied soul guidance.";
@@ -5122,10 +5130,13 @@ describe("runCodexAppServerAttempt", () => {
         name: "SOUL.md",
         path: soulPath,
         rawChars: soulGuidance.length,
-        injectedChars: soulGuidance.length,
-        truncated: false,
+        missing: false,
+        injectionStatus: "native_unverified",
+        injectedChars: null,
+        truncated: null,
       }),
     ]);
+    expect(result.systemPromptReport?.source).toBe("estimate");
   });
   it.each([
     { name: "non-empty legacy HEARTBEAT.md", contents: "Heartbeat checklist goes here." },
@@ -5515,20 +5526,36 @@ describe("runCodexAppServerAttempt", () => {
         completedCount: 2,
         activeCount: 0,
       });
-      if (expectedContext && oversizedHistory) {
-        expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
-      } else if (result.settledTurnFinalizationContext) {
-        expect(result.settledTurnFinalizationContext).toMatchObject({
+      if (expectedContext) {
+        const context = result.settledTurnFinalizationContext;
+        expect(context).toMatchObject({
           source: "harness",
           selection: { ...sourceSelection, authProfileId: selectedProfile },
-          data: [
-            expect.objectContaining({ role: "user" }),
-            expect.objectContaining({ type: "function_call" }),
-            expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
-          ],
         });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+        if (!(context instanceof settledTurnContext.CodexSettledTurnContext)) {
+          throw new Error("Expected complete settled-turn evidence from the harness");
+        }
+        expect(context.data).toHaveLength(oversizedHistory ? 200 : 3);
+        if (oversizedHistory) {
+          expect(context.data[0]).toMatchObject({
+            content: [{ text: expect.stringContaining("Earlier conversation was omitted") }],
+          });
+        }
+        expect(context.data.slice(-3)).toEqual([
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: expect.stringContaining(params.prompt) }],
+          },
+          {
+            type: "function_call",
+            call_id: "tool-settled",
+            name: "bash",
+            arguments: JSON.stringify({ command: "echo sent-to-alice", cwd: workspaceDir }),
+          },
+          { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice" },
+        ]);
+        expect(Object.isFrozen(context)).toBe(true);
       }
     },
   );

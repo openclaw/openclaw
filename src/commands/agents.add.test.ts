@@ -447,7 +447,7 @@ describe("agents add command", () => {
     },
   );
 
-  it("uses the explicit agent target and skips catalog validation", async () => {
+  it("uses the explicit agent target for auth checks and creation", async () => {
     setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
     const prompter = {
       intro: vi.fn(),
@@ -470,7 +470,6 @@ describe("agents add command", () => {
       expect.any(Object),
       expect.objectContaining({
         agentId: "jon",
-        validateCatalog: false,
       }),
     );
     expect(checkAgentCreationGateMock).toHaveBeenCalledWith("jon");

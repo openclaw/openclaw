@@ -5,6 +5,86 @@ import Testing
 
 @Suite(.serialized)
 struct ConfigureRemoteCommandTests {
+    @Test(arguments: ["configure-remote", "connect", "wizard", "status", "discover"])
+    func `all commands share profile selection before dispatch`(command: String) throws {
+        let home = URL(fileURLWithPath: "/synthetic-home", isDirectory: true)
+        for arguments in [["--profile", "research", command], [command, "--profile", "research"]] {
+            let context = try MacCLIContext(
+                arguments: arguments, environment: ["OPENCLAW_PROFILE": "other"], homeDirectory: home)
+            #expect(context.arguments == [command])
+            #expect(context.profile.name == "research")
+            #expect(context.configURL.path == "/synthetic-home/.openclaw-research/openclaw.json")
+            #expect(context.defaultsSuites == ["ai.openclaw.mac.profile.research"])
+        }
+    }
+
+    @Test func `offline profile paths and suites preserve override precedence`() throws {
+        let home = URL(fileURLWithPath: "/synthetic-home", isDirectory: true)
+        let cases: [(arguments: [String], environment: [String: String], path: String, suites: [String])] = [
+            ([], [:], ".openclaw/openclaw.json", ["ai.openclaw.mac", "ai.openclaw.mac.debug"]),
+            (
+                [],
+                ["OPENCLAW_PROFILE": "research"],
+                ".openclaw-research/openclaw.json",
+                ["ai.openclaw.mac.profile.research"]),
+            (
+                ["--profile", "default"],
+                ["OPENCLAW_PROFILE": "research"],
+                ".openclaw/openclaw.json",
+                ["ai.openclaw.mac", "ai.openclaw.mac.debug"]),
+            (
+                ["--profile", "research"],
+                ["OPENCLAW_STATE_DIR": "/synthetic-home/state"],
+                "state/openclaw.json",
+                ["ai.openclaw.mac.profile.research"]),
+            (
+                ["--profile", "research"],
+                [
+                    "OPENCLAW_CONFIG_PATH": "/synthetic-home/explicit.json",
+                    "OPENCLAW_STATE_DIR": "/synthetic-home/state",
+                ],
+                "explicit.json",
+                ["ai.openclaw.mac.profile.research"]),
+        ]
+        for testCase in cases {
+            let context = try MacCLIContext(
+                arguments: testCase.arguments, environment: testCase.environment, homeDirectory: home)
+            #expect(context.configURL.path == home.appendingPathComponent(testCase.path).path)
+            #expect(context.defaultsSuites == testCase.suites)
+        }
+    }
+
+    @Test(arguments: ["ssh", "direct"])
+    func `offline write and legacy reads use the same profile config`(transport: String) throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let context = try MacCLIContext(
+            arguments: ["configure-remote", "--profile", "research"], environment: [:], homeDirectory: home)
+        let options = transport == "ssh"
+            ? ConfigureRemoteOptions(sshTarget: "alice@gateway.example")
+            : ConfigureRemoteOptions(directUrl: "wss://gateway.example")
+        let output = try configureRemote(options, configURL: context.configURL, defaultsSuites: [])
+        #expect(output.configPath == home.appendingPathComponent(".openclaw-research/openclaw.json").path)
+        for command in ["connect", "wizard"] {
+            let reader = try MacCLIContext(
+                arguments: [command], environment: ["OPENCLAW_PROFILE": "research"], homeDirectory: home)
+            let config = loadGatewayConfig(from: reader.configURL)
+            #expect(config.mode == "remote")
+            #expect(config.remoteUrl == output.remoteUrl)
+        }
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".openclaw").path))
+    }
+
+    @Test(arguments: [
+        ["--profile"], ["--profile", "--json"], ["--profile", "research", "--profile", "other"],
+        ["--profile", "../other"], ["--profile", "Research"], ["--profile", "mac"],
+    ])
+    func `offline commands reject invalid profile arguments`(arguments: [String]) {
+        #expect(throws: Error.self) {
+            try MacCLIContext(arguments: ["configure-remote"] + arguments, environment: [:])
+        }
+    }
+
     @Test(arguments: ["token", "password"], ["file", "stdin", "argv"])
     @MainActor func `configure remote reads secret sources and warns only for argv`(
         kind: String,
@@ -48,7 +128,7 @@ struct ConfigureRemoteCommandTests {
             let configure: () throws -> Void = {
                 try configureRemote(
                     ConfigureRemoteOptions.parse(transportArguments + secretArguments),
-                    defaultsSuites: [])
+                    configURL: configURL, defaultsSuites: [])
             }
             if source == "stdin" {
                 let input = try FileHandle(forReadingFrom: secretURL)
@@ -97,10 +177,18 @@ struct ConfigureRemoteCommandTests {
         try body()
     }
 
-    @Test @MainActor func `configure remote writes ssh config and app defaults`() async throws {
+    @Test(arguments: [nil, 18790])
+    @MainActor func `configure remote writes ssh config and app defaults preserving the local gateway port`(
+        localGatewayPort: Int?) async throws
+    {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-remote-\(UUID().uuidString).json")
         defer { try? FileManager().removeItem(at: configURL) }
+
+        if let localGatewayPort {
+            let initial = ["gateway": ["mode": "local", "port": localGatewayPort]] as [String: Any]
+            try JSONSerialization.data(withJSONObject: initial).write(to: configURL)
+        }
 
         let defaultSuites = [
             "ConfigureRemoteCommandTests.release.\(UUID().uuidString)",
@@ -127,7 +215,7 @@ struct ConfigureRemoteCommandTests {
                     identity: nil,
                     projectRoot: nil,
                     cliPath: "/opt/homebrew/bin/openclaw"),
-                defaultsSuites: defaultSuites)
+                configURL: configURL, defaultsSuites: defaultSuites)
 
             #expect(output.status == "ok")
             #expect(output.localUrl == "ws://127.0.0.1:19089")
@@ -139,7 +227,7 @@ struct ConfigureRemoteCommandTests {
             let gateway = try #require(root["gateway"] as? [String: Any])
             let remote = try #require(gateway["remote"] as? [String: Any])
             #expect(gateway["mode"] as? String == "remote")
-            #expect(gateway["port"] as? Int == 19089)
+            #expect(gateway["port"] as? Int == localGatewayPort)
             #expect(remote["transport"] as? String == "ssh")
             #expect(remote["url"] as? String == "ws://127.0.0.1:19089")
             #expect(remote["remotePort"] as? Int == 18789)
@@ -173,30 +261,31 @@ struct ConfigureRemoteCommandTests {
                     identity: "/tmp/first-identity",
                     projectRoot: "/srv/first",
                     cliPath: "/opt/first/openclaw"),
-                defaultsSuites: [suite])
-            try configureRemote(.init(sshTarget: "alice@first.example"), defaultsSuites: [suite])
+                configURL: configURL, defaultsSuites: [suite])
+            try configureRemote(.init(sshTarget: "alice@first.example"), configURL: configURL, defaultsSuites: [suite])
             #expect(defaults.string(forKey: "openclaw.remoteIdentity") == "/tmp/first-identity")
             #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == "/srv/first")
             #expect(defaults.string(forKey: "openclaw.remoteCliPath") == "/opt/first/openclaw")
 
             try configureRemote(
                 .init(sshTarget: "alice@second.example", cliPath: "/opt/second/openclaw"),
-                defaultsSuites: [suite])
+                configURL: configURL, defaultsSuites: [suite])
             #expect(defaults.string(forKey: "openclaw.remoteIdentity") == nil)
             #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
             #expect(defaults.string(forKey: "openclaw.remoteCliPath") == "/opt/second/openclaw")
 
-            try configureRemote(.init(directUrl: "wss://third.example"), defaultsSuites: [suite])
+            try configureRemote(.init(directUrl: "wss://third.example"), configURL: configURL, defaultsSuites: [suite])
             #expect(defaults.string(forKey: "openclaw.remoteTarget") == nil)
             #expect(defaults.string(forKey: "openclaw.remoteIdentity") == nil)
             #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
             #expect(defaults.string(forKey: "openclaw.remoteCliPath") == nil)
 
             try configureRemote(
-                .init(directUrl: "wss://third.example", projectRoot: "/srv/third"), defaultsSuites: [suite])
-            try configureRemote(.init(directUrl: "wss://third.example"), defaultsSuites: [suite])
+                .init(directUrl: "wss://third.example", projectRoot: "/srv/third"), configURL: configURL,
+                defaultsSuites: [suite])
+            try configureRemote(.init(directUrl: "wss://third.example"), configURL: configURL, defaultsSuites: [suite])
             #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == "/srv/third")
-            try configureRemote(.init(directUrl: "wss://fourth.example"), defaultsSuites: [suite])
+            try configureRemote(.init(directUrl: "wss://fourth.example"), configURL: configURL, defaultsSuites: [suite])
             #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
         }
     }
@@ -221,7 +310,7 @@ struct ConfigureRemoteCommandTests {
         try initialData.write(to: configURL)
 
         try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
-            try configureRemote(.init(sshTarget: "alice@gateway.example"), defaultsSuites: [])
+            try configureRemote(.init(sshTarget: "alice@gateway.example"), configURL: configURL, defaultsSuites: [])
 
             let data = try Data(contentsOf: configURL)
             let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -250,7 +339,10 @@ struct ConfigureRemoteCommandTests {
         try initialData.write(to: configURL)
 
         try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
-            let output = try configureRemote(.init(sshTarget: "gateway-alias"), defaultsSuites: [])
+            let output = try configureRemote(
+                .init(sshTarget: "gateway-alias"),
+                configURL: configURL,
+                defaultsSuites: [])
 
             #expect(output.sshHostKeyPolicy == "strict")
             let data = try Data(contentsOf: configURL)
@@ -286,10 +378,16 @@ struct ConfigureRemoteCommandTests {
 
     @Test func `configure remote rejects ssh targets without a host`() throws {
         #expect(throws: Error.self) {
-            try configureRemote(.init(sshTarget: "user@"))
+            try configureRemote(
+                .init(sshTarget: "user@"),
+                configURL: URL(fileURLWithPath: "/unused"),
+                defaultsSuites: [])
         }
         #expect(throws: Error.self) {
-            try configureRemote(.init(sshTarget: "alice@:2222"))
+            try configureRemote(
+                .init(sshTarget: "alice@:2222"),
+                configURL: URL(fileURLWithPath: "/unused"),
+                defaultsSuites: [])
         }
     }
 
@@ -313,7 +411,7 @@ struct ConfigureRemoteCommandTests {
                 .init(
                     directUrl: "ws://192.168.0.202:18789",
                     token: "test-token"), // pragma: allowlist secret
-                defaultsSuites: [])
+                configURL: configURL, defaultsSuites: [])
 
             #expect(output.transport == "direct")
             #expect(output.remoteUrl == "ws://192.168.0.202:18789")
@@ -346,12 +444,12 @@ struct ConfigureRemoteCommandTests {
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": stateDir.path,
         ]) {
-            try #require(resolveOpenClawConfigURL().path == configURL.path)
+            try #require(MacCLIContext(arguments: []).configURL.path == configURL.path)
             let output = try configureRemote(
                 .init(
                     directUrl: "ws://192.168.0.203:18789",
                     token: "state-dir-token"), // pragma: allowlist secret
-                defaultsSuites: [])
+                configURL: configURL, defaultsSuites: [])
 
             #expect(output.configPath == configURL.path)
             let data = try Data(contentsOf: configURL)
@@ -372,10 +470,16 @@ struct ConfigureRemoteCommandTests {
 
         _ = await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
             #expect(throws: Error.self) {
-                try configureRemote(.init(directUrl: "ws://fd-example.com:18789"))
+                try configureRemote(
+                    .init(directUrl: "ws://fd-example.com:18789"),
+                    configURL: configURL,
+                    defaultsSuites: [])
             }
             #expect(throws: Error.self) {
-                try configureRemote(.init(directUrl: "ws://192.168.0.202.attacker.example:18789"))
+                try configureRemote(
+                    .init(directUrl: "ws://192.168.0.202.attacker.example:18789"),
+                    configURL: configURL,
+                    defaultsSuites: [])
             }
         }
     }
@@ -401,11 +505,11 @@ struct GatewayConfigTests {
             remoteURL: "wss://state-config.example:19102",
             token: "state-config-token") // pragma: allowlist secret
 
-        await TestIsolation.withEnvValues([
+        try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": explicitConfigURL.path,
             "OPENCLAW_STATE_DIR": stateConfigURL.deletingLastPathComponent().path,
         ]) {
-            let config = loadGatewayConfig()
+            let config = try loadGatewayConfig(from: MacCLIContext(arguments: []).configURL)
 
             #expect(config.port == 19101)
             #expect(config.remoteUrl == "wss://explicit-config.example:19101")
@@ -413,15 +517,16 @@ struct GatewayConfigTests {
         }
     }
 
-    @Test @MainActor func `config path trims surrounding whitespace and expands tilde`() async {
+    @Test @MainActor func `config path trims surrounding whitespace and expands tilde`() async throws {
         let relativePath = ".openclaw-cli-config-\(UUID().uuidString)/openclaw.json"
 
-        await TestIsolation.withEnvValues([
+        try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": "  ~/\(relativePath)\n",
             "OPENCLAW_STATE_DIR": "/tmp/openclaw-unused-state-dir",
         ]) {
             let expectedURL = FileManager().homeDirectoryForCurrentUser.appendingPathComponent(relativePath)
-            #expect(resolveOpenClawConfigURL().path == expectedURL.path)
+            let configURL = try MacCLIContext(arguments: []).configURL
+            #expect(configURL.path == expectedURL.path)
         }
     }
 
@@ -438,11 +543,11 @@ struct GatewayConfigTests {
             remotePort: 19203,
             token: "state-profile-token") // pragma: allowlist secret
 
-        await TestIsolation.withEnvValues([
+        try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": "\t\(stateDir.path)  ",
         ]) {
-            let config = loadGatewayConfig()
+            let config = try loadGatewayConfig(from: MacCLIContext(arguments: []).configURL)
 
             #expect(config.mode == "remote")
             #expect(config.port == 19201)

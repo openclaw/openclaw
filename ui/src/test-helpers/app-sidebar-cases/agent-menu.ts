@@ -212,6 +212,10 @@ describe("AppSidebar agent chip", () => {
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu).not.toBeNull();
     expect(menu?.querySelector(".sidebar-pair-mobile")).toBeNull();
+    expect(menu?.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    expect(menu?.querySelector('[role="separator"]')?.previousElementSibling?.className).toBe(
+      "sidebar-agent-menu__agent-grid",
+    );
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
     expect(
@@ -221,7 +225,7 @@ describe("AppSidebar agent chip", () => {
     ).toEqual([
       "agent:main",
       "agent:research",
-      "command:new-agent",
+      "command:all-agents",
       "command:capabilities",
       "command:agent-settings",
     ]);
@@ -463,7 +467,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it("collapses a single-agent roster to the three agent actions", async () => {
+  it.each([0, 1])("keeps only the three agent actions with %i configured agents", async (count) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -473,7 +477,7 @@ describe("AppSidebar agent chip", () => {
         defaultId: "main",
         mainKey: "main",
         scope: "per-sender",
-        agents: [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
+        agents: count === 0 ? [] : [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
       },
     );
     sidebar.connected = true;
@@ -483,16 +487,20 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
+    expect(menu?.querySelector('[role="separator"]')).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
     expect(
       [...(menu?.children ?? [])]
         .filter((element) => element.localName === "wa-dropdown-item")
         .map((element) => element.getAttribute("value")),
-    ).toEqual(["command:new-agent", "command:capabilities", "command:agent-settings"]);
+    ).toEqual(["command:all-agents", "command:capabilities", "command:agent-settings"]);
   });
 
-  it("navigates to the agents settings page with the active agent preselected", async () => {
+  it.each([
+    { label: "All agents", navigation: ["agents-home", undefined] },
+    { label: "Agent settings", navigation: ["agents", { pathname: "/settings/agents/main" }] },
+  ])("navigates to $label and closes the agent menu", async ({ label, navigation }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -507,13 +515,13 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    const settingsRow = [
+    const actionRow = [
       ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
-    ].find((row) => row.textContent?.includes("Agent settings"));
-    expect(settingsRow).toBeDefined();
-    settingsRow?.click();
+    ].find((row) => row.textContent?.includes(label));
+    expect(actionRow).toBeDefined();
+    actionRow?.click();
     await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith("agents", { pathname: "/settings/agents/main" });
+    expect(onNavigate).toHaveBeenCalledWith(...navigation);
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 

@@ -14,6 +14,7 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
   submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
+  type RealtimeTalkTranscript,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
   type RealtimeTalkTransportStartResult,
@@ -301,16 +302,37 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     }
     switch (event.type) {
+      case "session.input_transcript.delta":
+        this.emitFramelessTranscript("user", event.delta, false, { textMode: "verbatim" });
+        return;
+      case "session.output_transcript.delta":
+        this.emitFramelessTranscript("assistant", event.delta, false, { textMode: "verbatim" });
+        return;
+      case "session.closed":
+        if (event.reason === "content" || event.reason === "connection_lost") {
+          this.failConnection("Realtime connection closed");
+          return;
+        }
+        try {
+          this.ctx.callbacks.onStatus?.("idle");
+        } finally {
+          this.stop();
+        }
+        return;
       case "input_transcript.added":
-        this.emitFramelessTranscript("user", event.item?.text, false, event.item?.id);
+        this.emitFramelessTranscript("user", event.item?.text, false, { itemId: event.item?.id });
         return;
       case "output_transcript.added":
-        this.emitFramelessTranscript("assistant", event.item?.text, false, event.item?.id);
+        this.emitFramelessTranscript("assistant", event.item?.text, false, {
+          itemId: event.item?.id,
+        });
         return;
       case "turn.done": {
         const role = event.turn?.role;
         if (role === "user" || role === "assistant") {
-          this.emitFramelessTranscript(role, event.turn?.transcript, true, event.turn?.id);
+          this.emitFramelessTranscript(role, event.turn?.transcript, true, {
+            itemId: event.turn?.id,
+          });
           if (this.closed) {
             return;
           }
@@ -473,12 +495,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     role: "user" | "assistant",
     text: string | undefined,
     final: boolean,
-    itemId?: string,
+    { itemId, textMode }: Pick<RealtimeTalkTranscript, "itemId" | "textMode"> = {},
   ): void {
     if (!text) {
       return;
     }
-    this.ctx.callbacks.onTranscript?.({ role, text, final });
+    this.ctx.callbacks.onTranscript?.({ role, text, final, ...(textMode ? { textMode } : {}) });
     if (this.closed) {
       return;
     }

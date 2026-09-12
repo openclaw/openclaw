@@ -333,14 +333,12 @@ describe("createCodexDynamicToolBridge", () => {
     expect((contentItem.text as string).length).toBeLessThanOrEqual(800);
   });
 
-  it("bounds aggregated unexpected-property details returned to Codex", async () => {
-    const invalidArguments = Object.fromEntries(
-      Array.from({ length: 20 }, (_, index) => [`unexpected_property_${index}`, true]),
-    );
+  it("bounds oversized unexpected-property details returned to Codex", async () => {
+    const propertyName = `unexpected_property_${"x".repeat(240)}`;
     const { execute, response } = await runSchemaToolCall({
-      arguments: invalidArguments,
-      callId: "call-many-unexpected-fields",
-      name: "bounded_additional_properties_tool",
+      arguments: { [propertyName]: true },
+      callId: "call-oversized-validation-detail",
+      name: "bounded_validation_detail_tool",
       parameters: {
         type: "object",
         properties: {},
@@ -2233,7 +2231,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
   });
 
-  it("does not grant auto-delivery to a plugin tool named tts", async () => {
+  it("does not grant local media or auto-delivery to a plugin tool named tts", async () => {
     const tool = createOwnerBackedContractTool({
       pluginId: "tts-collision",
       name: "tts",
@@ -2262,9 +2260,39 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { text: "hello" },
     });
 
-    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/plugin.opus"]);
+    expect(bridge.telemetry.toolMediaUrls).toEqual([]);
     expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
   });
+
+  it.each([
+    { name: "dir_fetch", trustedLocalMedia: true, expected: ["/tmp/plugin-file.txt"] },
+    { name: "browser", trustedLocalMedia: false, expected: [] },
+  ])(
+    "applies concrete plugin metadata to local media from $name",
+    async ({ name, trustedLocalMedia, expected }) => {
+      const tool = createOwnerBackedContractTool({
+        pluginId: "file-transfer",
+        name,
+        result: mediaResult("/tmp/plugin-file.txt"),
+        trustedLocalMedia,
+      });
+      const bridge = createCodexDynamicToolBridge({
+        tools: [tool],
+        signal: new AbortController().signal,
+      });
+
+      await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: name,
+        arguments: {},
+      });
+
+      expect(bridge.telemetry.toolMediaUrls).toEqual(expected);
+    },
+  );
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {
     const toolResult = {

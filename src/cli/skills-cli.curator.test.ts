@@ -50,17 +50,6 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
 }));
-vi.mock("../terminal/links.js", () => ({ formatDocsLink: () => "docs.openclaw.ai/cli/skills" }));
-vi.mock("../terminal/theme.js", () => ({
-  theme: {
-    command: (value: string) => value,
-    error: (value: string) => value,
-    heading: (value: string) => value,
-    muted: (value: string) => value,
-    success: (value: string) => value,
-    warn: (value: string) => value,
-  },
-}));
 
 const status = {
   lastAttemptAtMs: 1,

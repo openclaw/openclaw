@@ -5,6 +5,7 @@ import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { listenServer, withNativeSsConnection } from "./ports.test-support.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -89,7 +90,7 @@ function mockWindowsCommands(params: {
   powershell?: CommandReply;
   wmic?: CommandReply;
 }): void {
-  setPlatform("win32");
+  mockProcessPlatform("win32");
   runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
     const command = argv[0];
     const reply =
@@ -103,45 +104,6 @@ function mockWindowsCommands(params: {
               ? params.wmic
               : undefined;
     return resolveCommandReply(reply);
-  });
-}
-
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
-
-async function listenServer(
-  server: net.Server,
-  port: number,
-  host?: string,
-): Promise<net.AddressInfo | null> {
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      if (host) {
-        server.listen(port, host, resolve);
-        return;
-      }
-      server.listen(port, resolve);
-    });
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "EACCES" || code === "EADDRNOTAVAIL") {
-      return null;
-    }
-    throw err;
-  }
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected tcp address");
-  }
-  return address;
-}
-
-async function closeServer(server: net.Server): Promise<void> {
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
   });
 }
 
@@ -167,26 +129,20 @@ describe("ports helpers", () => {
     expect(source).toContain('await import("./ports-inspect.js")');
   });
 
-  it("ensurePortAvailable rejects when port busy", async () => {
-    const server = net.createServer();
-    const address = await listenServer(server, 0);
-    if (!address) {
-      return;
-    }
+  it("ensurePortAvailable rejects when port busy", async ({ skip }) => {
+    await using server = net.createServer();
+    const address = await listenServer(skip, server, 0);
     const port = address.port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
-    await closeServer(server);
   });
 
-  it("ensurePortAvailable rejects when an explicitly scoped IPv4 loopback is busy", async () => {
-    const server = net.createServer();
-    const address = await listenServer(server, 0, "127.0.0.1");
-    if (!address) {
-      return;
-    }
+  it("ensurePortAvailable rejects when an explicitly scoped IPv4 loopback is busy", async ({
+    skip,
+  }) => {
+    await using server = net.createServer();
+    const address = await listenServer(skip, server, 0, "127.0.0.1");
     const port = address.port;
     await expect(ensurePortAvailable(port, "127.0.0.1")).rejects.toBeInstanceOf(PortInUseError);
-    await closeServer(server);
   });
 
   it("handlePortError exits nicely on EADDRINUSE", async () => {
@@ -225,18 +181,11 @@ describe("ports helpers", () => {
 });
 
 describeUnix("inspectPortUsage", () => {
-  it("distinguishes a socat forward from a Gateway profile named socat", async () => {
-    const gatewayServer = net.createServer();
-    const gatewayAddress = await listenServer(gatewayServer, 0, "127.0.0.1");
-    if (!gatewayAddress) {
-      return;
-    }
-    const socatServer = net.createServer();
-    const socatAddress = await listenServer(socatServer, gatewayAddress.port, "127.0.0.2");
-    if (!socatAddress) {
-      await closeServer(gatewayServer);
-      return;
-    }
+  it("distinguishes a socat forward from a Gateway profile named socat", async ({ skip }) => {
+    await using gatewayServer = net.createServer();
+    const gatewayAddress = await listenServer(skip, gatewayServer, 0, "127.0.0.1");
+    await using socatServer = net.createServer();
+    await listenServer(skip, socatServer, gatewayAddress.port, "127.0.0.2");
     const port = gatewayAddress.port;
 
     mockUnixCommands({
@@ -250,30 +199,22 @@ describeUnix("inspectPortUsage", () => {
           : `socat -lpopenclaw TCP-LISTEN:${port},bind=127.0.0.2,fork TCP:127.0.0.1:${port}`,
     });
 
-    try {
-      const result = await inspectPortUsage(port, {
-        probeHosts: ["127.0.0.2", "127.0.0.1"],
-      });
+    const result = await inspectPortUsage(port, {
+      probeHosts: ["127.0.0.2", "127.0.0.1"],
+    });
 
-      expect(result.status).toBe("busy");
-      expect(result.listeners).toHaveLength(2);
-      expect(result.hints).toEqual([
-        expect.stringContaining("Gateway already running locally"),
-        "Another process is listening on this port.",
-        expect.stringContaining("Multiple listeners detected"),
-      ]);
-    } finally {
-      await closeServer(socatServer);
-      await closeServer(gatewayServer);
-    }
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toHaveLength(2);
+    expect(result.hints).toEqual([
+      expect.stringContaining("Gateway already running locally"),
+      "Another process is listening on this port.",
+      expect.stringContaining("Multiple listeners detected"),
+    ]);
   });
 
-  it("keeps only listener rows that can block a scoped bind", async () => {
-    const server = net.createServer();
-    const address = await listenServer(server, 0, "127.0.0.1");
-    if (!address) {
-      return;
-    }
+  it("keeps only listener rows that can block a scoped bind", async ({ skip }) => {
+    await using server = net.createServer();
+    const address = await listenServer(skip, server, 0, "127.0.0.1");
     const port = address.port;
 
     mockUnixCommands({
@@ -283,118 +224,93 @@ describeUnix("inspectPortUsage", () => {
       ),
     });
 
-    try {
-      const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+    const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
 
-      expect(result.status).toBe("busy");
-      expect(result.listeners).toHaveLength(1);
-      expect(result.listeners[0]).toMatchObject({
-        pid: 111,
-        address: `TCP 127.0.0.1:${port} (LISTEN)`,
-      });
-    } finally {
-      await closeServer(server);
-    }
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toHaveLength(1);
+    expect(result.listeners[0]).toMatchObject({
+      pid: 111,
+      address: `TCP 127.0.0.1:${port} (LISTEN)`,
+    });
   });
 
-  it.each([
+  it.for([
     { probeHost: "127.0.0.1", unrelatedWildcard: "[::]" },
     { probeHost: "::1", unrelatedWildcard: "0.0.0.0" },
   ])(
     "does not attribute an opposite-family wildcard listener to $probeHost",
-    async ({ probeHost, unrelatedWildcard }) => {
-      const server = net.createServer();
-      const address = await listenServer(server, 0, probeHost);
-      if (!address) {
-        return;
-      }
+    async ({ probeHost, unrelatedWildcard }, { skip }) => {
+      await using server = net.createServer();
+      const address = await listenServer(skip, server, 0, probeHost);
       const port = address.port;
 
       mockUnixCommands({
         lsof: commandOutput(`p222\ncother\nnTCP ${unrelatedWildcard}:${port} (LISTEN)\n`),
       });
 
-      try {
-        const result = await inspectPortUsage(port, { probeHosts: [probeHost] });
+      const result = await inspectPortUsage(port, { probeHosts: [probeHost] });
 
-        expect(result.status).toBe("busy");
-        expect(result.listeners).toEqual([]);
-      } finally {
-        await closeServer(server);
-      }
+      expect(result.status).toBe("busy");
+      expect(result.listeners).toEqual([]);
     },
   );
 
-  it("ignores another interface when inspection is scoped to the gateway loopback", async () => {
-    const server = net.createServer();
-    const address = await listenServer(server, 0, "127.0.0.2");
-    if (!address) {
-      return;
-    }
+  it("ignores another interface when inspection is scoped to the gateway loopback", async ({
+    skip,
+  }) => {
+    await using server = net.createServer();
+    const address = await listenServer(skip, server, 0, "127.0.0.2");
     const port = address.port;
 
     mockUnixCommands({
       lsof: commandOutput(`p${process.pid}\ncnode\nnTCP 127.0.0.2:${port} (LISTEN)\n`),
     });
 
-    try {
-      const allInterfaces = await inspectPortUsage(port);
-      const gatewayLoopback = await inspectPortUsage(port, {
-        probeHosts: ["127.0.0.1"],
-      });
+    const allInterfaces = await inspectPortUsage(port);
+    const gatewayLoopback = await inspectPortUsage(port, {
+      probeHosts: ["127.0.0.1"],
+    });
 
-      expect(allInterfaces.status).toBe("busy");
-      expect(gatewayLoopback).toMatchObject({
-        status: "free",
-        listeners: [],
-        hints: [],
-      });
-    } finally {
-      await closeServer(server);
-    }
+    expect(allInterfaces.status).toBe("busy");
+    expect(gatewayLoopback).toMatchObject({
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
   });
 
-  it("reports busy when lsof is missing but loopback listener exists", async () => {
-    const server = net.createServer();
-    const address = await listenServer(server, 0, "127.0.0.1");
-    if (!address) {
-      return;
-    }
+  it("reports busy when lsof is missing but loopback listener exists", async ({ skip }) => {
+    await using server = net.createServer();
+    const address = await listenServer(skip, server, 0, "127.0.0.1");
     const port = address.port;
 
     runCommandWithTimeoutMock.mockRejectedValueOnce(
       Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
     );
 
-    try {
-      const result = await inspectPortUsage(port);
-      expect(result.status).toBe("busy");
-      const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
-      expect(enoentErrors.length).toBeGreaterThan(0);
-    } finally {
-      await closeServer(server);
-    }
+    const result = await inspectPortUsage(port);
+    expect(result.status).toBe("busy");
+    const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
+    expect(enoentErrors.length).toBeGreaterThan(0);
   });
 
-  it.each(["single", "batch"])("falls back to ss when lsof is unavailable (%s)", async (mode) => {
-    const server = net.createServer();
-    const address = await listenServer(server, 0, "127.0.0.1");
-    if (!address) {
-      return;
-    }
-    const port = address.port;
+  it.for(["single", "batch"])(
+    "falls back to ss when lsof is unavailable (%s)",
+    async (mode, { skip }) => {
+      await using server = net.createServer();
+      const address = await listenServer(skip, server, 0, "127.0.0.1");
+      const port = address.port;
 
-    mockUnixCommands({
-      lsof: Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
-      ss: commandOutput(
-        `LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=${process.pid},fd=23))`,
-      ),
-      commandLine: "node /tmp/openclaw/dist/index.js gateway --port 18789",
-      user: "debian",
-      parentPid: "1",
-    });
+      mockUnixCommands({
+        lsof: Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
+        ss: commandOutput(
+          `LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=${process.pid},fd=23))`,
+        ),
+        commandLine: "node /tmp/openclaw/dist/index.js gateway --port 18789",
+        user: "debian",
+        parentPid: "1",
+      });
 
-    try {
       const result =
         mode === "single"
           ? await inspectPortUsage(port)
@@ -405,12 +321,10 @@ describeUnix("inspectPortUsage", () => {
       expect(result?.listeners[0]?.pid).toBe(process.pid);
       expect(result?.listeners[0]?.commandLine).toContain("openclaw");
       expect(result?.errors).toBeUndefined();
-    } finally {
-      await closeServer(server);
-    }
-  });
+    },
+  );
 
-  it.each(
+  it.for(
     [
       { name: "successful empty scan", lsof: commandOutput(""), ssCalls: 0 },
       { name: "quiet exit one", lsof: commandOutput("ignored output", 1, " \n"), ssCalls: 0 },
@@ -435,36 +349,29 @@ describeUnix("inspectPortUsage", () => {
     ].flatMap((scenario) =>
       ["single", "batch"].map((mode) => ({ name: scenario.name, scenario, mode })),
     ),
-  )("preserves $name diagnostics ($mode)", async ({ scenario, mode }) => {
+  )("preserves $name diagnostics ($mode)", async ({ scenario, mode }, { skip }) => {
     const { lsof, ss, ssCalls, errors } = scenario;
-    const server = net.createServer();
-    const address = await listenServer(server, 0, "127.0.0.1");
-    if (!address) {
-      return;
-    }
+    await using server = net.createServer();
+    const address = await listenServer(skip, server, 0, "127.0.0.1");
     mockUnixCommands({ lsof, ss });
 
-    try {
-      const result =
-        mode === "single"
-          ? await inspectPortUsage(address.port)
-          : (await inspectPortUsages([address.port])).get(address.port);
-      expect(result).toMatchObject({
-        port: address.port,
-        status: "busy",
-        listeners: [],
-        detail: undefined,
-        errors,
-      });
-      expect(result?.hints).toContain(
-        "Port is in use but process details are unavailable (install lsof or run as an admin user).",
-      );
-      expect(
-        runCommandWithTimeoutMock.mock.calls.filter(([argv]) => argv[0] === "ss"),
-      ).toHaveLength(ssCalls);
-    } finally {
-      await closeServer(server);
-    }
+    const result =
+      mode === "single"
+        ? await inspectPortUsage(address.port)
+        : (await inspectPortUsages([address.port])).get(address.port);
+    expect(result).toMatchObject({
+      port: address.port,
+      status: "busy",
+      listeners: [],
+      detail: undefined,
+      errors,
+    });
+    expect(result?.hints).toContain(
+      "Port is in use but process details are unavailable (install lsof or run as an admin user).",
+    );
+    expect(runCommandWithTimeoutMock.mock.calls.filter(([argv]) => argv[0] === "ss")).toHaveLength(
+      ssCalls,
+    );
   });
 
   it.each(["lsof", "ss"])(
@@ -853,6 +760,98 @@ describeUnix("inspectPortUsage", () => {
     ).toBeLessThanOrEqual(4);
   });
 
+  it("keeps ss quoted process names out of established connection endpoints", async () => {
+    mockUnixCommands({
+      lsof: commandOutput("", 1, "lsof: not found\n"),
+      // ss quotes the kernel task name without splitting its spaces or colons.
+      ss: commandOutput(
+        '0 0 127.0.0.1:50123 127.0.0.1:18789 users:(("node worker:1",pid=111,fd=12))\n',
+      ),
+      commandLine: "node fixture-client",
+      user: "tester",
+      parentPid: "1",
+    });
+
+    const result = await inspectPortConnections(18789);
+
+    expect(result.connections).toEqual([
+      {
+        address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+        direction: "client",
+        pid: 111,
+        command: "node worker:1",
+        commandLine: "node fixture-client",
+        user: "tester",
+        ppid: 1,
+      },
+    ]);
+    expect(result.errors).toBeUndefined();
+  });
+
+  it("preserves ss rows with IPv6, unknown processes, and multiple process owners", async () => {
+    mockUnixCommands({
+      lsof: commandOutput("", 2),
+      ss: commandOutput(
+        [
+          '0 0 [::1]:50123 [::1]:18789 users:(("node users:1",pid=111,fd=12),("other",pid=222,fd=13))',
+          '0 0 [::]:18789 [::1]:50124 users:(("node worker:2",pid=333,fd=14))',
+          "0 0 127.0.0.1:50125 [::ffff:127.0.0.1]:18789",
+          '0 0 127.0.0.1:50126 198.51.100.7:18789 users:(("remote :1",pid=444,fd=15))',
+          "0 0 127.0.0.1:50127 127.0.0.1:187890",
+          "0 0 127.0.0.1:50128 127.0.0.1:18789abc",
+          "0 0 127.0.0.1:50129 127.0.0.1:99999",
+          "malformed row",
+          "",
+        ].join("\n"),
+      ),
+    });
+
+    const result = await inspectPortConnections(18789);
+
+    expect(result.connections).toEqual([
+      {
+        address: "TCP [::1]:50123->[::1]:18789 (ESTABLISHED)",
+        direction: "client",
+        pid: 111,
+        command: "node users:1",
+      },
+      {
+        address: "TCP [::]:18789->[::1]:50124 (ESTABLISHED)",
+        direction: "server",
+        pid: 333,
+        command: "node worker:2",
+      },
+      {
+        address: "TCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)",
+        direction: "client",
+      },
+    ]);
+    expect(result.errors).toBeUndefined();
+  });
+
+  it("preserves ss rows for exact-port listeners without reading process text as socket fields", async () => {
+    mockUnixCommands({
+      lsof: commandOutput("", 2),
+      ss: commandOutput(
+        [
+          'LISTEN 0 128 [::1]:18789 [::]:* users:(("node worker:1",pid=111,fd=12))',
+          "LISTEN 0 128 127.0.0.1:18789 0.0.0.0:*",
+          'LISTEN 0 128 127.0.0.1:187890 0.0.0.0:* users:(("other",pid=222,fd=13))',
+          'ESTAB 0 0 127.0.0.1:18789 127.0.0.1:50123 users:(("LISTEN :1",pid=333,fd=14))',
+        ].join("\n"),
+      ),
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toEqual([
+      { address: "[::1]:18789", pid: 111, command: "node worker:1" },
+      { address: "127.0.0.1:18789" },
+    ]);
+    expect(result.errors).toBeUndefined();
+  });
+
   it("falls back to ss for established gateway client connections", async () => {
     mockUnixCommands({
       lsof: commandOutput("", 1, "lsof: not found\n"),
@@ -881,7 +880,7 @@ describeUnix("inspectPortUsage", () => {
 
 describe("inspectPortUsage on Windows", () => {
   it("classifies SSH through locale-independent tasklist CSV output", async () => {
-    setPlatform("win32");
+    mockProcessPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
       if (command === getWindowsSystem32ExePath("netstat.exe")) {
@@ -1084,4 +1083,20 @@ describeWindows("native tasklist CSV contract", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(new RegExp(`^"[^"]+","${process.pid}",`, "m"));
   });
+});
+
+describe.skipIf(process.platform !== "linux")("native ss process metadata contract", () => {
+  it("preserves a spaced and colon-bearing native TCP client name", async ({ skip }) => {
+    await withNativeSsConnection(skip, async ({ port, clientPort, pid, stdout }) => {
+      mockUnixCommands({ lsof: commandOutput("", 2), ss: commandOutput(stdout) });
+      const result = await inspectPortConnections(port);
+      expect(result.connections).toContainEqual({
+        pid,
+        command: "node worker:1",
+        direction: "client",
+        address: `TCP 127.0.0.1:${clientPort}->127.0.0.1:${port} (ESTABLISHED)`,
+      });
+      expect(result.errors).toBeUndefined();
+    });
+  }, 30_000);
 });

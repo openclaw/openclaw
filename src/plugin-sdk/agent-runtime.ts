@@ -1,7 +1,7 @@
 import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
   getPreparedModelCatalogSnapshot,
-  loadPreparedModelCatalog,
+  readPreparedModelCatalog,
   type LoadPreparedModelCatalogParams,
 } from "../agents/prepared-model-catalog.js";
 /**
@@ -34,7 +34,12 @@ export {
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
-export { getPreparedModelCatalogSnapshot, loadPreparedModelCatalog };
+export { getPreparedModelCatalogSnapshot };
+
+/** Preserves the public SDK's writable default while internal catalog reads stay passive. */
+export async function loadPreparedModelCatalog(params: LoadPreparedModelCatalogParams = {}) {
+  return await readPreparedModelCatalog({ ...params, readOnly: params.readOnly ?? false });
+}
 
 type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
   /** @deprecated Lifecycle publication owns refreshes; retained for source compatibility. */
@@ -52,13 +57,15 @@ type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
 
 /** @deprecated Use loadPreparedModelCatalog or getPreparedModelCatalogSnapshot. */
 export async function loadModelCatalog(params: LoadModelCatalogCompatibilityParams = {}) {
-  const { agentId, agentDir, cacheOnly, config, env, readOnly, workspaceDir } = params;
+  const { agentId, agentDir, cacheOnly, config, env, readOnly, refreshFullCatalog, workspaceDir } =
+    params;
   const preparedParams: LoadPreparedModelCatalogParams = {
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(config ? { config } : {}),
     ...(env ? { env } : {}),
     ...(readOnly !== undefined ? { readOnly } : {}),
+    ...(refreshFullCatalog !== undefined ? { refreshFullCatalog } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };
   if (cacheOnly) {

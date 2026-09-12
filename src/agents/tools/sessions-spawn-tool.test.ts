@@ -571,7 +571,7 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("advertises visible sessions with terse UI guidance", () => {
+  it("reserves visible sessions for independently user-facing work", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
       properties?: Record<
@@ -581,13 +581,19 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
+      "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; no thread/thinking/lightContext or attachment staging.",
     );
     expect(schema.properties?.cwd?.description).toContain(
       "outside configured agent workspaces require operator.admin",
     );
     expect(tool.description).toContain("`visible=true`: durable visible session");
-    expect(tool.description).toContain("Default for coding, multi-step work");
+    expect(tool.description).toContain(
+      "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task",
+    );
+    expect(tool.description).toContain(
+      "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session",
+    );
+    expect(tool.description).not.toContain("Default for coding, multi-step work");
     expect(tool.description).toContain("announcing runs report back");
     expect(tool.description).toContain('`mode="run"` is also accepted');
     expect(tool.description).toContain(
@@ -670,7 +676,8 @@ describe("sessions_spawn tool", () => {
         label: "Issue review",
         category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
-        task: "inspect issue",
+        task: expect.stringContaining("[Subagent Task]\n\ninspect issue"),
+        timeoutMs: 120000,
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
         fork: true,
@@ -995,37 +1002,49 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("applies a per-run timeout to visible dashboard sessions", async () => {
-    const callGateway = vi.fn(async () => ({
-      key: "agent:main:dashboard:timed-child",
-      runStarted: true,
-      runId: "run-visible-timed",
-    }));
-    const registerRun = vi.fn();
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: {
-        agents: {
-          defaults: { subagents: { runTimeoutSeconds: 120 } },
-          list: [{ id: "main" }],
+  it.each([
+    { requested: 1800, configured: 120, seconds: 1800 },
+    { requested: 0, configured: 120, seconds: 0 },
+    { requested: undefined, configured: 120, seconds: 120 },
+    { requested: undefined, configured: undefined, seconds: 0 },
+  ])(
+    "forwards visible run timeout $requested (default $configured)",
+    async ({ requested, configured, seconds }) => {
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:timed-child",
+        runStarted: true,
+        runId: "run-visible-timed",
+      }));
+      const registerRun = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          agents: {
+            defaults: { timeoutSeconds: 180, subagents: { runTimeoutSeconds: configured } },
+            list: [{ id: "main" }],
+          },
         },
-      },
-      callGateway: callGateway as never,
-      registerRun,
-      countActiveRuns: () => 0,
-    });
+        callGateway: callGateway as never,
+        registerRun,
+        countActiveRuns: () => 0,
+      });
 
-    const result = await tool.execute("visible-timeout", {
-      task: "inspect issue",
-      visible: true,
-      runTimeoutSeconds: 7,
-    });
+      const result = await tool.execute("visible-timeout", {
+        task: "inspect issue",
+        visible: true,
+        ...(requested !== undefined ? { runTimeoutSeconds: requested } : {}),
+      });
 
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible-timed" });
-    expect(registerRun).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-visible-timed", runTimeoutSeconds: 7 }),
-    );
-  });
+      expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible-timed" });
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({ timeoutMs: seconds * 1000 }),
+      );
+      expect(registerRun).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-visible-timed", runTimeoutSeconds: seconds }),
+      );
+    },
+  );
 
   it("uses the target agent model for cross-agent visible sessions", async () => {
     const callGateway = vi.fn(async () => ({
@@ -1658,7 +1677,7 @@ describe("sessions_spawn tool", () => {
         expect.objectContaining({
           parentSessionKey: childKey,
           spawnDepth: 2,
-          task: "inspect from the grandchild",
+          task: expect.stringContaining("[Subagent Task]\n\ninspect from the grandchild"),
         }),
       );
     });

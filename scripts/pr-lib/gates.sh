@@ -327,7 +327,13 @@ derive_prepare_gate_change_plan() {
     PREPARE_GATE_DOCS_ONLY=true
   fi
   PREPARE_GATE_CHANGELOG_ONLY=false
-  if [ "$PREPARE_GATE_CHANGED_FILES" = "CHANGELOG.md" ]; then
+  local changelog_mode
+  changelog_mode=$(release_changelog_file_list_mode "$PREPARE_GATE_CHANGED_FILES") || return 1
+  PREPARE_GATE_CHANGELOG_UPDATE=false
+  if [ "$changelog_mode" != "none" ]; then
+    PREPARE_GATE_CHANGELOG_UPDATE=true
+  fi
+  if [ "$changelog_mode" = "only" ]; then
     PREPARE_GATE_CHANGELOG_ONLY=true
   fi
   PREPARE_GATE_CHANGELOG_REQUIRED=false
@@ -361,7 +367,7 @@ prepare_gates() {
   local changelog_only="$PREPARE_GATE_CHANGELOG_ONLY"
   local changelog_required="$PREPARE_GATE_CHANGELOG_REQUIRED"
 
-  local has_changelog_update=false
+  local has_changelog_update="$PREPARE_GATE_CHANGELOG_UPDATE"
   local unsupported_changelog_fragments=""
   local changed_path
   while [ -n "$changed_files" ]; do
@@ -373,9 +379,6 @@ prepare_gates() {
     fi
     [ -n "$changed_path" ] || continue
     case "$changed_path" in
-      CHANGELOG.md)
-        has_changelog_update=true
-        ;;
       changelog/fragments/*)
         unsupported_changelog_fragments="${unsupported_changelog_fragments}${changed_path}"$'\n'
         ;;
@@ -384,7 +387,7 @@ prepare_gates() {
   if [ -n "$unsupported_changelog_fragments" ]; then
     echo "Unsupported changelog fragment files detected:"
     printf '%s\n' "$unsupported_changelog_fragments"
-    echo "Move changelog fragment content into CHANGELOG.md and remove changelog/fragments files."
+    echo "Move release-note context into the PR body or commit message and remove changelog/fragments files."
     exit 1
   fi
 
@@ -392,13 +395,11 @@ prepare_gates() {
   if [ "$has_changelog_update" = "true" ]; then
     remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
     if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
-      echo "CHANGELOG.md is release-owned; normal PRs should put release-note context in the PR body or commit message."
-      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged version section, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
+      echo "CHANGELOG.md is release-owned, along with CHANGELOG/<version>.md and matching records; normal PRs should put release-note context in the PR body or commit message."
+      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged release's artifacts and necessary index update, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
       exit 1
     fi
-    # Published closeout text is immutable; normalizing PR references can move it
-    # into an Unreleased section and invalidate the tagged release copy.
-    if [ "$changelog_mode" = "override" ]; then normalize_pr_changelog_entries "$pr"; fi
+    # Release artifacts retain their approved text, including historical PR references.
     validate_changelog_attribution_policy
   fi
 

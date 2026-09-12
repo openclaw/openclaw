@@ -56,7 +56,7 @@ function createOps(params: {
   Object.assign(chatRunState.getOrCreate(runId), {
     ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
     deltaSentAt: Date.now(),
-    assistantScope: { itemId: "assistant-1", prefix: "" },
+    assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
     agentText: {
       assistant: {
         lastSentAt: Date.now(),

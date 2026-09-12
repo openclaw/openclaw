@@ -1,16 +1,26 @@
 /** Normalizes reply directives and delivers block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { copyReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
+import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
+import { resolveReplyDispatchErrorOutcome } from "./reply-dispatch-outcome.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type ReplyDirectiveParseMode = "always" | "auto" | "never";
+
+export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> & {
+  payload: ReplyPayload;
+};
 
 /** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
@@ -69,16 +79,29 @@ export function normalizeReplyPayloadDirectives(params: {
 async function sendDirectBlockReply(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   directlySentBlockKeys: Set<string>;
-  directlySentBlockPayloads: Array<ReplyPayload | undefined>;
-  trackingPayload: ReplyPayload;
+  directBlockDeliveries: DirectBlockDelivery[];
   payload: ReplyPayload;
 }) {
-  const deliveryIndex = params.directlySentBlockPayloads.length;
-  params.directlySentBlockPayloads.push(undefined);
-  await params.onBlockReply(params.payload);
-  if (isReplyPayloadTerminalContent(params.trackingPayload)) {
-    params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
-    params.directlySentBlockPayloads[deliveryIndex] = params.trackingPayload;
+  const attempt: DirectBlockDelivery = {
+    payload: params.payload,
+    outcome: "failed-deliver",
+    pending: true,
+  };
+  params.directBlockDeliveries.push(attempt);
+  const delivery = await deliverBlockReply(() => params.onBlockReply(params.payload)).catch(
+    (error: unknown) => {
+      attempt.outcome = resolveReplyDispatchErrorOutcome(error);
+      attempt.pending = false;
+      throw error;
+    },
+  );
+  Object.assign(attempt, delivery, { pending: delivery.pending === true });
+  if (
+    delivery.outcome === "delivered" &&
+    !delivery.pending &&
+    isReplyPayloadTerminalContent(params.payload)
+  ) {
+    params.directlySentBlockKeys.add(createBlockReplyContentKey(params.payload));
   }
 }
 
@@ -96,7 +119,7 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
-  directlySentBlockPayloads: Array<ReplyPayload | undefined>;
+  directBlockDeliveries: DirectBlockDelivery[];
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
@@ -156,6 +179,9 @@ export function createBlockReplyDeliveryHandler(params: {
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),
     );
+    if (blockPayload.text?.trim() !== payload.text?.trim()) {
+      setReplyPayloadMetadata(blockPayload, { blockSourceText: undefined });
+    }
     const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
@@ -175,17 +201,8 @@ export function createBlockReplyDeliveryHandler(params: {
     // Use pipeline if available (block streaming enabled), otherwise send directly.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       params.blockReplyPipeline.enqueue(blockPayload);
-    } else if (params.blockStreamingEnabled) {
-      // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-      // Track sent key to avoid duplicate in final payloads.
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directlySentBlockKeys: params.directlySentBlockKeys,
-        directlySentBlockPayloads: params.directlySentBlockPayloads,
-        trackingPayload: blockPayload,
-        payload: blockPayload,
-      });
     } else if (
+      params.blockStreamingEnabled ||
       blockHasNonTextContent ||
       blockPayload.isReasoning === true ||
       blockPayload.isCommentary === true
@@ -195,8 +212,7 @@ export function createBlockReplyDeliveryHandler(params: {
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
-        directlySentBlockPayloads: params.directlySentBlockPayloads,
-        trackingPayload: blockPayload,
+        directBlockDeliveries: params.directBlockDeliveries,
         payload: blockPayload,
       });
     }

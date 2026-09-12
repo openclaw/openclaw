@@ -136,7 +136,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       containerWithoutUserSystemd: false,
     });
     mocks.waitForGatewayReachable.mockResolvedValue({ ok: true });
-    mocks.refreshPluginRegistry.mockResolvedValue(undefined);
     mocks.updateExecApprovals.mockResolvedValue(undefined);
     mocks.verifySetupInferenceConfig.mockResolvedValue({
       ok: true,
@@ -229,25 +228,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       expect(mocks.state.persistedConfig?.agents?.entries).not.toHaveProperty("main");
     },
   );
-
-  it("does not mistake a proposal-created roster for an existing fleet", async () => {
-    const absent = snapshot(null, {}, { agents: { entries: { main: { default: true } } } });
-    setSetupCommitState({ agents: { entries: { main: { default: true } } } }, absent);
-    mocks.state.commitPreviousHash = null;
-
-    await applySystemAgentSetup(
-      baseParams({
-        expectedConfigHash: null,
-        workspace: "/tmp/requested-workspace",
-        configPatch: { agents: { entries: { main: { default: true } } } },
-      }),
-    );
-
-    expect(mocks.state.persistedConfig?.agents).toMatchObject({
-      defaults: { workspace: "/tmp/requested-workspace" },
-      entries: { main: { default: true } },
-    });
-  });
 
   it.each([
     { label: "missing", agents: {} },
@@ -417,9 +397,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await applySystemAgentSetup(
       baseParams({
         workspace: "/tmp/requested-workspace",
-        configPatch: {
-          agents: { defaults: { workspace: "/tmp/patch-workspace" }, entries: null },
-        },
       }),
     );
 
@@ -538,7 +515,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig).toBeUndefined();
   });
 
-  it("folds plugin and auth config into one commit while preserving concurrent edits", async () => {
+  it("preserves concurrent settings in one setup commit", async () => {
     mocks.state.commitConfig = {
       ...mocks.state.commitConfig,
       logging: { level: "debug" },
@@ -550,8 +527,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         expectedConfigHash: "probe",
         expectedAgentId: "main",
         expectedModelRef: "openai/gpt-5.5",
-        enablePluginId: "codex",
-        configPatch: { agents: { defaults: { maxConcurrent: 7 } } },
       }),
     );
 
@@ -559,12 +534,10 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig).toMatchObject({
       agents: {
         defaults: {
-          maxConcurrent: 7,
           model: { primary: "openai/gpt-5.5" },
         },
       },
       logging: { level: "debug" },
-      plugins: { entries: { codex: { enabled: true } } },
     });
     expect(result.configPath).toBe("/tmp/openclaw.json");
   });
@@ -614,7 +587,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await expect(
       applySystemAgentSetup(
         baseParams({
-          model: "anthropic/claude-opus-4-8",
+          finalizeConfig: () => mainAgentModelConfig("anthropic/claude-opus-4-8"),
           expectedInferenceRoute: await projectDefaultInferenceRoute(initial),
         }),
       ),
@@ -921,17 +894,14 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
   });
 
-  it("returns visible post-commit workspace, approval, registry, and service failures", async () => {
+  it("returns visible post-commit workspace, approval, and service failures", async () => {
     mocks.ensureWorkspace.mockRejectedValueOnce(new Error("workspace exploded"));
     mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval exploded"));
-    mocks.refreshPluginRegistry.mockRejectedValueOnce(new Error("registry exploded"));
     mocks.ensureGatewayService.mockRejectedValueOnce(new Error("service exploded"));
 
     const result = await applySystemAgentSetup(
       baseParams({
         expectedConfigHash: "probe",
-        enablePluginId: "codex",
-        refreshPluginRegistry: true,
         surface: "cli",
       }),
     );
@@ -941,7 +911,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       expect.arrayContaining([
         "Workspace files: workspace exploded",
         "OpenClaw exec approval: approval exploded; local model harnesses may ask again.",
-        "Plugin registry refresh failed: registry exploded",
         "Gateway service: service exploded",
       ]),
     );

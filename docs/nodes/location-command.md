@@ -133,3 +133,4 @@ Linux uses the same stable errors: `LOCATION_DISABLED`, `LOCATION_TIMEOUT`, and 
 - [Channel location parsing](/channels/location)
 - [Camera capture](/nodes/camera)
 - [Talk mode](/nodes/talk)
+- [Node troubleshooting](/nodes/troubleshooting)

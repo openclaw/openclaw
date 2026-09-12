@@ -59,7 +59,6 @@ jobs:
         with:
           cache-mode: restore
           install-bun: "false"
-          install-trufflehog: "true"
           # Testbox hydration uses the ordinary pnpm store cache. Canonical CI
           # owns the exact dependency archive and never delegates here.
       - name: Prepare Testbox shell

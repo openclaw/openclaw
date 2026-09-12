@@ -112,8 +112,9 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
-const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
+  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
@@ -286,7 +287,7 @@ export function detectChangedScope(changedPaths) {
 
     if (
       CONTROL_UI_I18N_SCOPE_RE.test(path) ||
-      (CONTROL_UI_RAW_COPY_SOURCE_RE.test(path) && !facts.isTestOnly)
+      (CONTROL_UI_I18N_PRODUCTION_SOURCE_RE.test(path) && !facts.isTestOnly)
     ) {
       runControlUiI18n = true;
     }
@@ -386,6 +387,7 @@ function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
     "scripts/control-ui-i18n.ts",
     "scripts/control-ui-i18n-verify.ts",
     "scripts/lib/control-ui-i18n-catalog.ts",
+    "scripts/lib/control-ui-i18n-catalog-values.ts",
     "scripts/lib/control-ui-i18n-sync-plan.ts",
     "ui/AGENTS.md",
     "ui/config/control-ui-locales.ts",

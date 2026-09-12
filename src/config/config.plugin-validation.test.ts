@@ -477,6 +477,27 @@ describe("config plugin validation", () => {
   });
 
   describe("missing Codex plugin diagnostics", () => {
+    const createPiProviderModels = (baseUrl: string, modelRuntime: "auto" | "codex") => ({
+      providers: {
+        openai: {
+          baseUrl,
+          agentRuntime: { id: "pi" },
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT 5.5",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 8192,
+              agentRuntime: { id: modelRuntime },
+            },
+          ],
+        },
+      },
+    });
+
     const validateWithMissingCodexPlugin = (
       raw: Record<string, unknown>,
       env: NodeJS.ProcessEnv = suiteEnv(),
@@ -592,26 +613,7 @@ describe("config plugin validation", () => {
 
     it("still warns when provider PI policy is overridden by an automatic OpenAI model route", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "auto" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://api.openai.com/v1", "auto"),
         plugins: { entries: { codex: {} } },
       });
 
@@ -1093,26 +1095,7 @@ describe("config plugin validation", () => {
 
     it("does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://proxy.example.invalid/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "auto" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://proxy.example.invalid/v1", "auto"),
         plugins: { entries: { codex: {} } },
       });
 
@@ -1122,26 +1105,7 @@ describe("config plugin validation", () => {
 
     it("does not warn when exact agent policy overrides an automatic OpenAI provider model route", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "auto" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://api.openai.com/v1", "auto"),
         agents: {
           list: [{ id: "openclaw" }],
           defaults: {
@@ -1304,26 +1268,7 @@ describe("config plugin validation", () => {
 
     it("still warns when a provider model route explicitly selects Codex", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "codex" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://api.openai.com/v1", "codex"),
         plugins: { entries: { codex: {} } },
       });
 

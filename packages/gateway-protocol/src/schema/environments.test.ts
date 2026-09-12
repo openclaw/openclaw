@@ -9,6 +9,8 @@ import {
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
   validateEnvironmentsListParams,
+  validateEnvironmentsPrepareParams,
+  validateEnvironmentsPrepareResult,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
@@ -49,6 +51,56 @@ function workerSummary(
 }
 
 describe("worker environment protocol schemas", () => {
+  it("accepts bounded desktop availability in environment lists and status responses", () => {
+    const base = { id: "node:mac-1", type: "node", status: "available" };
+    for (const state of ["locked", "unlocked", "unknown"]) {
+      const summary = { ...base, desktopAvailability: { state } };
+      expect(Value.Check(EnvironmentsListResultSchema, { environments: [summary] })).toBe(true);
+      expect(Value.Check(EnvironmentsStatusResultSchema, summary)).toBe(true);
+    }
+    for (const desktopAvailability of [null, {}, { state: "idle" }, { state: "locked", idle: 1 }]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...base, desktopAvailability })).toBe(false);
+    }
+  });
+  it("accepts only a profile and local project selector for preparation", () => {
+    const request = { profileId: "development", projectPath: "/projects/app" };
+    expect(validateEnvironmentsPrepareParams(request)).toBe(true);
+    for (const invalid of [
+      {},
+      { profileId: "development" },
+      { ...request, profileId: "" },
+      { ...request, projectPath: "" },
+      { ...request, setupAuthorized: false },
+    ]) {
+      expect(validateEnvironmentsPrepareParams(invalid)).toBe(false);
+    }
+    const result = { environmentId: "worker-1", preparationKey: "project-key", reused: false };
+    expect(validateEnvironmentsPrepareResult(result)).toBe(true);
+    expect(validateEnvironmentsPrepareResult({ ...result, reused: true })).toBe(true);
+    expect(validateEnvironmentsPrepareResult({ ...result, reused: "true" })).toBe(false);
+    expect(validateEnvironmentsPrepareResult({ ...result, preparationKey: "" })).toBe(false);
+  });
+
+  it("exposes only preparation purpose and key in list and status summaries", () => {
+    for (const purpose of ["build", "reserve"] as const) {
+      const summary = {
+        ...workerSummary("requested"),
+        preparation: { purpose, key: "project-key" },
+      };
+      expect(Value.Check(EnvironmentsListResultSchema, { environments: [summary] })).toBe(true);
+      expect(Value.Check(EnvironmentsStatusResultSchema, summary)).toBe(true);
+    }
+    for (const preparation of [
+      { purpose: "unknown", key: "project-key" },
+      { purpose: "build", key: "" },
+      { purpose: "build", key: "project-key", projectPath: "/projects/app" },
+    ]) {
+      expect(
+        Value.Check(EnvironmentSummarySchema, { ...workerSummary("requested"), preparation }),
+      ).toBe(false);
+    }
+  });
+
   it("accepts configured-profile create and environment-id destroy requests", () => {
     expect(
       validateEnvironmentsCreateParams({ profileId: "development", idempotencyKey: "request-1" }),
@@ -297,6 +349,10 @@ describe("worker environment protocol schemas", () => {
             trust: "disposable",
             executionMode: "worker-turn",
             executionModes: ["worker-turn", "remote-exec"],
+            operatingSystems: [
+              { id: "linux", label: "Linux", default: true },
+              { id: "windows/wsl2", label: "Windows (WSL2)" },
+            ],
             machines: [
               {
                 id: "standard",
@@ -304,6 +360,7 @@ describe("worker environment protocol schemas", () => {
                 cpu: 32,
                 memoryGb: 64,
                 default: true,
+                os: "linux",
               },
             ],
           },
@@ -362,6 +419,40 @@ describe("worker environment protocol schemas", () => {
         ],
       }),
     ).toBe(false);
+  });
+
+  it("bounds provider-authored OS catalogs and machine choices", () => {
+    const profile = { id: "aws", providerId: "crabbox" };
+    const operatingSystems = Array.from({ length: 8 }, (_, i) => ({
+      id: `os-${i}`,
+      label: `OS ${i}`,
+    }));
+    const machines = Array.from({ length: 64 }, (_, i) => ({
+      id: `class-${i}`,
+      label: `Class ${i}`,
+      os: "os-0",
+    }));
+    const accepts = (choices: object) =>
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ ...profile, ...choices }],
+      });
+    expect(accepts({ operatingSystems, machines })).toBe(true);
+    expect(accepts({ machines: [{ id: "shared", label: "Shared" }] })).toBe(true);
+    for (const choices of [
+      { operatingSystems: [] },
+      { operatingSystems: [...operatingSystems, { id: "overflow", label: "Overflow" }] },
+      { operatingSystems: [{ id: "", label: "Empty ID" }] },
+      { operatingSystems: [{ id: "x".repeat(65), label: "Long ID" }] },
+      { operatingSystems: [{ id: "linux", label: "" }] },
+      { operatingSystems: [{ id: "linux", label: "x".repeat(65) }] },
+      { operatingSystems: [{ id: "linux", label: "Linux", settings: {} }] },
+      { machines: [...machines, { id: "overflow", label: "Overflow" }] },
+      { machines: [{ id: "tiny", label: "Tiny", os: "" }] },
+      { machines: [{ id: "tiny", label: "Tiny", os: "x".repeat(65) }] },
+    ]) {
+      expect(accepts(choices)).toBe(false);
+    }
   });
 
   it("preserves summaries without worker metadata and rejects malformed worker metadata", () => {

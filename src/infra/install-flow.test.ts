@@ -2,28 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import * as archive from "./archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
-import * as installSource from "./install-source-utils.js";
-
-async function runExtractedArchiveFailureCase(configureArchive: () => void) {
-  vi.spyOn(installSource, "withInstallWorkspace").mockImplementation(
-    async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
-  );
-  configureArchive();
-  return await withExtractedArchiveRoot({
-    archivePath: "/tmp/plugin.tgz",
-    tempDirPrefix: "openclaw-plugin-",
-    timeoutMs: 1000,
-    onExtracted: async () => ({ ok: true as const }),
-  });
-}
-
-function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
-  return mock.mock.calls[0];
-}
 
 describe("resolveExistingInstallPath", () => {
   it("returns resolved path and stat for existing files", async () => {
@@ -57,10 +38,6 @@ describe("resolveExistingInstallPath", () => {
 });
 
 describe("withExtractedArchiveRoot", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("applies optional extraction limits before the callback and leaves installer defaults unchanged", async () => {
     await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const archivePath = path.join(fixtureRoot, "plugin.zip");
@@ -92,61 +69,73 @@ describe("withExtractedArchiveRoot", () => {
   });
 
   it("extracts archive and passes root directory to callback", async () => {
-    const tmpRoot = path.join(path.sep, "tmp", "openclaw-install-flow");
-    const archivePath = path.join(path.sep, "tmp", "plugin.tgz");
-    const extractDir = path.join(tmpRoot, "extract");
-    const packageRoot = path.join(extractDir, "package");
-    const withTempDirSpy = vi
-      .spyOn(installSource, "withInstallWorkspace")
-      .mockImplementation(async (_prefix, fn) => await fn(tmpRoot));
-    const extractSpy = vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
-    const resolveRootSpy = vi.spyOn(archive, "resolvePackedRootDir").mockResolvedValue(packageRoot);
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.zip");
+      const zip = new JSZip();
+      zip.file("package.json", '{"name":"example-plugin"}');
+      // Without the requested marker, the resolver would choose this child instead.
+      zip.file("assets/note.txt", "asset");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      let workspace = "";
+      const onExtracted = vi.fn(async (rootDir: string) => {
+        workspace = path.dirname(rootDir);
+        expect(path.basename(workspace)).toMatch(/^openclaw-plugin-/);
+        return {
+          ok: true as const,
+          manifest: await fs.readFile(path.join(rootDir, "package.json"), "utf8"),
+        };
+      });
 
-    const onExtracted = vi.fn(async (rootDir: string) => ({ ok: true as const, rootDir }));
-    const result = await withExtractedArchiveRoot({
-      archivePath,
-      tempDirPrefix: "openclaw-plugin-",
-      timeoutMs: 1000,
-      rootMarkers: ["package.json"],
-      onExtracted,
-    });
-
-    expect(withTempDirSpy).toHaveBeenCalledTimes(1);
-    const withTempDirCall = firstMockCall(withTempDirSpy);
-    expect(withTempDirCall?.[0]).toBe("openclaw-plugin-");
-    expect(typeof withTempDirCall?.[1]).toBe("function");
-    expect(extractSpy).toHaveBeenCalledOnce();
-    expect(firstMockCall(extractSpy)?.[0]?.archivePath).toBe(archivePath);
-    expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
-      rootMarkers: ["package.json"],
-    });
-    expect(onExtracted).toHaveBeenCalledWith(packageRoot);
-    expect(result).toEqual({
-      ok: true,
-      rootDir: packageRoot,
+      await expect(
+        withExtractedArchiveRoot({
+          archivePath,
+          tempDirPrefix: "openclaw-plugin-",
+          timeoutMs: 1000,
+          rootMarkers: ["package.json"],
+          onExtracted,
+        }),
+      ).resolves.toEqual({ ok: true, manifest: '{"name":"example-plugin"}' });
+      expect(onExtracted).toHaveBeenCalledOnce();
+      await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
   it("returns extract failure when extraction throws", async () => {
-    const result = await runExtractedArchiveFailureCase(() => {
-      vi.spyOn(archive, "extractArchive").mockRejectedValue(new Error("boom"));
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: "failed to extract archive: Error: boom",
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.txt");
+      await fs.writeFile(archivePath, "not an archive");
+      const onExtracted = vi.fn(async () => ({ ok: true as const }));
+      await expect(
+        withExtractedArchiveRoot({
+          archivePath,
+          tempDirPrefix: "openclaw-plugin-",
+          timeoutMs: 1000,
+          onExtracted,
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: `failed to extract archive: Error: unsupported archive: ${archivePath}`,
+      });
+      expect(onExtracted).not.toHaveBeenCalled();
     });
   });
 
   it("returns root-resolution failure when archive layout is invalid", async () => {
-    const result = await runExtractedArchiveFailureCase(() => {
-      vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
-      vi.spyOn(archive, "resolvePackedRootDir").mockRejectedValue(new Error("invalid layout"));
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: "Error: invalid layout",
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.zip");
+      const zip = new JSZip();
+      zip.file("note.txt", "no package directory or marker");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const onExtracted = vi.fn(async () => ({ ok: true as const }));
+      await expect(
+        withExtractedArchiveRoot({
+          archivePath,
+          tempDirPrefix: "openclaw-plugin-",
+          timeoutMs: 1000,
+          onExtracted,
+        }),
+      ).resolves.toEqual({ ok: false, error: "Error: unexpected archive layout (dirs: )" });
+      expect(onExtracted).not.toHaveBeenCalled();
     });
   });
 });

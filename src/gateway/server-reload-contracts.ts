@@ -1,5 +1,6 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -47,6 +48,8 @@ export type GatewayGmailRestartAbortController = {
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  checkpoint?: () => Promise<void>;
+  assertInvokerOwned?: () => void;
   sourceConfig: OpenClawConfig;
   prepareRestartRuntimeConfig?: () => Promise<OpenClawConfig>;
   runtimeEnv?: NodeJS.ProcessEnv;
@@ -126,9 +129,15 @@ export function assertReloadPublicationCurrent(
 }
 
 export type GatewayPluginReloadResult = {
+  runtime: import("../plugins/lifecycle.js").PluginRuntimeApplication;
   activeChannels: ReadonlySet<ChannelKind>;
-  /** Set when the reload was cancelled mid-flight (e.g. by an in-process restart). */
-  cancelled?: boolean;
+};
+
+export type GatewayRuntimePublication = {
+  /** Synchronous selection; a throw must leave the previous runtime authoritative. */
+  publish: () => void;
+  /** Runs after config and plugin selection have committed; failures cannot restore old state. */
+  afterCommit?: () => void;
 };
 
 export type GatewayReloadHandlerParams = {
@@ -152,11 +161,18 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
-    commitRuntime: (onCommit?: () => void) => Promise<void>;
-    onReplacementTeardownFailure: (error: unknown) => void;
+    changedPaths: readonly string[];
+    pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
+    /** Validate remaining config effects before the prepared plugin owner starts drainage. */
+    prepareConfigEffects: (replacement: {
+      pluginIds: ReadonlySet<string>;
+      channels: ReadonlySet<ChannelKind>;
+    }) => void;
+    commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
+    checkpoint?: () => Promise<void>;
+    assertInvokerOwned?: () => void;
   }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
     info: (msg: string) => void;
@@ -173,7 +189,7 @@ export type GatewayReloadHandlerParams = {
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;
   /** Revalidate successor-owned startup state before the current listener is closed. */
-  assertRestartReady?: () => Promise<void> | void;
+  assertRestartReady?: (config: OpenClawConfig) => Promise<void> | void;
 };
 
 export type ManagedGatewayConfigReloaderParams = Omit<
@@ -186,6 +202,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
+  initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
   initialCompareConfig?: OpenClawConfig;
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
@@ -206,12 +223,12 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-  }) => {
+  }) => Promise<{
     runtimeConfig: OpenClawConfig;
     compareConfig: OpenClawConfig;
     reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
     reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-  };
+  }>;
   /** Reapplies fixed process-lifetime overlays before secrets preparation. */
   applyRuntimeConfigOverrides?: (config: OpenClawConfig) => OpenClawConfig;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
@@ -227,4 +244,6 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   acceptTerminalConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
-export type ManagedGatewayConfigReloaderHandle = GatewayConfigReloaderHandle;
+export type ManagedGatewayConfigReloaderHandle = GatewayConfigReloaderHandle & {
+  ready: Promise<void>;
+};

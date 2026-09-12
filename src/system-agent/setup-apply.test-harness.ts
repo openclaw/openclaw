@@ -45,7 +45,6 @@ const mocks = vi.hoisted(() => ({
   ensureWorkspace: vi.fn(),
   ensureGatewayService: vi.fn(),
   waitForGatewayReachable: vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(),
-  refreshPluginRegistry: vi.fn(),
   updateExecApprovals: vi.fn(),
   ensureOnboardingAgent: vi.fn(),
   verifySetupInferenceConfig: vi.fn(),
@@ -100,10 +99,6 @@ vi.mock("../wizard/setup.gateway-config.js", () => ({
 
 vi.mock("../wizard/setup.finalize.js", () => ({
   ensureGatewayServiceForOnboarding: mocks.ensureGatewayService,
-}));
-
-vi.mock("../plugins/registry-refresh.js", () => ({
-  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistry,
 }));
 
 vi.mock("../infra/exec-approvals.js", () => ({

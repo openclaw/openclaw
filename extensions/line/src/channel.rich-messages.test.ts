@@ -1,4 +1,6 @@
 // Line tests cover typed rich-message boundaries.
+import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { linePlugin } from "./channel.js";
@@ -11,6 +13,12 @@ import {
   renderLineCard,
 } from "./rich-messages.js";
 import type { LineRichCard } from "./types.js";
+
+const DIRECT_TARGET = "line:U0123456789abcdef0123456789abcdef";
+
+function prepareDirectLineReplyPayload(payload: ReplyPayload) {
+  return prepareLineReplyPayload(payload, DIRECT_TARGET);
+}
 
 function resolveChannelDataSchema() {
   const discovery = lineMessageActions.describeMessageTool({
@@ -80,7 +88,7 @@ describe("LINE rich-message boundaries", () => {
           },
         ],
       },
-      ctx: {} as never,
+      ctx: { to: "line:group:C0123456789abcdef0123456789abcdef" } as never,
     });
 
     const line = result?.channelData?.line as {
@@ -128,6 +136,352 @@ describe("LINE rich-message boundaries", () => {
     expect(createLineQuickReply(line.quickReplyItems as never)).toMatchObject({
       items: [{ action: { type: "postback", data: "deny" } }],
     });
+  });
+
+  it("turns an ask_user question into tappable LINE options", async () => {
+    const prepared = await prepareDirectLineReplyPayload({
+      text: "Agent needs input:\n\nWhich environment?\n1. Staging\n2. Production",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: ["Staging", "Production"],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Staging",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Production",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as {
+      flexMessage?: {
+        contents?: { footer?: { contents?: Array<{ action?: { data?: string } }> } };
+      };
+    };
+    // The Gateway owns option order, so the tap carries an index, never the label.
+    expect(
+      line.flexMessage?.contents?.footer?.contents?.map((button) => button.action?.data),
+    ).toEqual([
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+    ]);
+    // altText is the whole message in the notification and the chat list, so a
+    // question that only ever renders as a card still has to say what it asks.
+    expect((line.flexMessage as { altText?: string } | undefined)?.altText).toBe(
+      "Which environment?",
+    );
+  });
+
+  it.each([
+    { to: DIRECT_TARGET, native: true },
+    { to: "line:group:C0123456789abcdef0123456789abcdef", native: false },
+    { to: "line:room:R0123456789abcdef0123456789abcdef", native: false },
+    { to: "unknown", native: false },
+    { to: undefined, native: false },
+  ])("renders question choices for destination $to", async ({ to, native }) => {
+    const questionId = "ask_3d8dbe55be452a9a39add7c909beb119";
+    const payload: ReplyPayload = {
+      text: "Which environment?\n1. Staging\n2. Production",
+      presentationTextMode: "fallback",
+      channelData: { askUser: { questionId, optionValues: ["Staging", "Production"] } },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: ["Staging", "Production"].map((label) => ({
+              label,
+              action: { type: "question", questionId, optionValue: label },
+            })),
+          },
+        ],
+      },
+    };
+    const outbound = await renderPresentationForDelivery(
+      {
+        presentationCapabilities: lineOutboundAdapter.presentationCapabilities,
+        renderPresentation: (adapted) =>
+          lineOutboundAdapter.renderPresentation!({
+            payload: adapted,
+            presentation: adapted.presentation,
+            ctx: { to } as never,
+          }),
+      },
+      payload,
+    );
+    for (const prepared of [await prepareLineReplyPayload(payload, to), outbound]) {
+      expect(prepared.presentation).toBeUndefined();
+      const line = prepared.channelData?.line as
+        | {
+            flexMessage?: { contents?: { footer?: { contents?: Array<{ action?: unknown }> } } };
+          }
+        | undefined;
+      if (native) {
+        expect(line?.flexMessage?.contents?.footer?.contents).toMatchObject([
+          { action: { type: "postback", data: `line.question=${questionId}&line.option=0` } },
+          { action: { type: "postback", data: `line.question=${questionId}&line.option=1` } },
+        ]);
+      } else {
+        expect(line).toBeUndefined();
+        expect(prepared.text).toBe(payload.text);
+      }
+    }
+  });
+
+  it.each([
+    ["buttons only", "", "text", "", 2, false, false],
+    ["omitted Other control", "", "text", "", 2, true, false],
+    ["overflow Other guidance", "", "text", "", 4, true, false],
+    ["blank authored content", " ", "text", " ", 2, false, false],
+    ["title-only prompt", "Which environment?", "text", "", 2, false, true],
+    ["context prompt", "", "context", "Which environment?", 2, false, true],
+  ] as const)(
+    "preserves the question prompt for %s through both render owners",
+    async (_name, title, promptType, prompt, optionCount, other, native) => {
+      const questionId = "ask_3d8dbe55be452a9a39add7c909beb119";
+      const labels = ["Staging", "Production", "Canary", "Sandbox"].slice(0, optionCount);
+      const payload: ReplyPayload = {
+        text: `Which environment?\n${labels.join(" / ")}${other ? " / Other: reply with your own answer." : ""}`,
+        presentationTextMode: "fallback",
+        channelData: { askUser: { questionId, optionValues: labels } },
+        presentation: {
+          title,
+          blocks: [
+            ...(prompt ? [{ type: promptType, text: prompt }] : []),
+            {
+              type: "buttons",
+              buttons: [
+                ...labels.map((label) => ({
+                  label,
+                  action: { type: "question" as const, questionId, optionValue: label },
+                })),
+                ...(other
+                  ? [
+                      {
+                        label: "Other…",
+                        action: {
+                          type: "question" as const,
+                          questionId,
+                          intent: "custom-input" as const,
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          ],
+        },
+      };
+      const outbound = await renderPresentationForDelivery(
+        {
+          presentationCapabilities: lineOutboundAdapter.presentationCapabilities,
+          renderPresentation: (adapted, sourcePresentation) =>
+            lineOutboundAdapter.renderPresentation!({
+              payload: adapted,
+              presentation: adapted.presentation,
+              sourcePresentation,
+              ctx: { cfg: {}, to: DIRECT_TARGET, text: adapted.text ?? "", payload: adapted },
+            }),
+        },
+        payload,
+      );
+      for (const prepared of [await prepareDirectLineReplyPayload(payload), outbound]) {
+        expect(prepared.presentation).toBeUndefined();
+        const line = prepared.channelData?.line as { flexMessage?: unknown } | undefined;
+        if (native) {
+          expect(line?.flexMessage).toBeDefined();
+          expect(JSON.stringify(line?.flexMessage)).toContain("Which environment?");
+        } else {
+          expect(line).toBeUndefined();
+          expect(prepared.text).toBe(payload.text);
+        }
+      }
+    },
+  );
+
+  // The free-text route is only ever offered as text on LINE. Above the action
+  // budget the shared adapter writes it under `Actions:`; below it the control is
+  // still delivered here, so the renderer has to write the same words itself or a
+  // two- or three-option card offers no way to answer in your own words.
+  it("names the omitted Other… control on a card whatever the option count", async () => {
+    const QUESTION_ID = "ask_3d8dbe55be452a9a39add7c909beb119";
+    const readCardBody = async (optionCount: number): Promise<string | undefined> => {
+      const labels = ["Staging", "Production", "Canary", "Sandbox"].slice(0, optionCount);
+      const prepared = await prepareDirectLineReplyPayload({
+        text: "Which environment?",
+        presentationTextMode: "fallback",
+        channelData: { askUser: { questionId: QUESTION_ID, optionValues: labels } },
+        presentation: {
+          blocks: [
+            { type: "text", text: "Which environment?" },
+            {
+              type: "buttons",
+              buttons: [
+                ...labels.map((label) => ({
+                  label,
+                  action: {
+                    type: "question" as const,
+                    questionId: QUESTION_ID,
+                    optionValue: label,
+                  },
+                })),
+                {
+                  label: "Other…",
+                  action: {
+                    type: "question" as const,
+                    questionId: QUESTION_ID,
+                    intent: "custom-input" as const,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const flex = (prepared.channelData?.line as { flexMessage?: { contents?: unknown } })
+        ?.flexMessage?.contents as { body?: { contents?: Array<{ text?: string }> } } | undefined;
+      return flex?.body?.contents?.map((entry) => entry.text).find((text) => text?.includes("\n"));
+    };
+
+    // Four options push Other… past the action budget, so the shared adapter owns
+    // this wording. Comparing against it keeps the two shapes from drifting apart.
+    const overBudget = await readCardBody(4);
+    expect(overBudget).toBe("Which environment?\nActions:\n- Other…");
+    expect(await readCardBody(2)).toBe(overBudget);
+    expect(await readCardBody(3)).toBe(overBudget);
+  });
+
+  it("falls back to text when two options truncate to the same control label", async () => {
+    const prepared = await prepareDirectLineReplyPayload({
+      text: "Which environment? 1. Deploy the release candidate to the shared staging cluster 2. Deploy the release candidate to the shared production cluster",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: [
+            "Deploy the release candidate to the shared staging cluster",
+            "Deploy the release candidate to the shared production cluster",
+          ],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Deploy the release candidate to the shared staging cluster",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Deploy the release candidate to the shared staging cluster",
+                },
+              },
+              {
+                label: "Deploy the release candidate to the shared production cluster",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Deploy the release candidate to the shared production cluster",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    // Both labels truncate to the same 40 characters, so two taps would read
+    // identically; the prose still names them in full.
+    expect((prepared.channelData?.line as { flexMessage?: unknown } | undefined)?.flexMessage).toBe(
+      undefined,
+    );
+    expect(prepared.text).toContain("Deploy the release candidate to the shared staging cluster");
+  });
+
+  it("draws the declared options and leaves the free-text route to the card text", async () => {
+    const prepared = await prepareDirectLineReplyPayload({
+      text: "Agent needs input: Which environment?",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: ["Staging", "Production"],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Staging",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Production",
+                },
+              },
+              {
+                label: "Other…",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  intent: "custom-input",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as {
+      flexMessage?: {
+        contents?: { footer?: { contents?: Array<{ action?: { data?: string } }> } };
+      };
+    };
+    const footer = line.flexMessage?.contents?.footer?.contents;
+    // A tap on the free-text control would open the composer and nothing else:
+    // the answer typed after it is queued as a new turn rather than claimed by
+    // the question. The card's own words carry that route instead.
+    expect(footer?.map((button) => button.action?.data)).toEqual([
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+    ]);
   });
 
   it.each([
@@ -337,6 +691,7 @@ describe("LINE rich-message boundaries", () => {
           },
         ],
       },
+      ctx: { to: DIRECT_TARGET },
     } as never);
 
     expect(rendered?.text).toBe("Pick a file");
@@ -379,6 +734,7 @@ describe("LINE rich-message boundaries", () => {
           },
         ],
       },
+      ctx: { to: DIRECT_TARGET },
     } as never);
 
     expect(rendered?.text).toBe("Pick a day");

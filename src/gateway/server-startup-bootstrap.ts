@@ -40,7 +40,11 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import {
+  getGatewayPluginMetadataSnapshot,
+  selectCurrentPluginMetadataCache,
+} from "../plugins/current-plugin-metadata-state.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -120,7 +124,7 @@ export async function prepareGatewayServerBootstrap(input: {
           measure: (name, run) => startupTrace.measure(name, run),
         }),
       ));
-    assertConfiguredWorkspaceStateReady({
+    await assertConfiguredWorkspaceStateReady({
       cfg: captureConfigOverrideApplier()(read.snapshot.config),
     });
     return read;
@@ -437,7 +441,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
     return next;
   };
-  const prepareReloadCandidate = (params: {
+  const prepareReloadCandidate = async (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
     previousSourceConfig?: OpenClawConfig;
@@ -452,10 +456,10 @@ export async function prepareGatewayServerBootstrap(input: {
       nextConfig: params.sourceConfig,
     });
     const metadata = startupConfigLoad.pluginMetadataSnapshot;
-    const pluginCandidate = minimalTestGateway
-      ? { runtimeConfig: params.runtimeConfig, compareConfig: params.sourceConfig }
+    const activationConfig = minimalTestGateway
+      ? params.sourceConfig
       : resolveGatewayReloadPluginActivationCandidate({
-          ...params,
+          sourceConfig: params.sourceConfig,
           env: runtimeEnv.env,
           ...(metadata?.manifestRegistry ? { manifestRegistry: metadata.manifestRegistry } : {}),
           discovery: metadata?.discovery,
@@ -466,7 +470,7 @@ export async function prepareGatewayServerBootstrap(input: {
       const applied = applyCandidateOverrides(
         mergeActivationSectionsIntoRuntimeConfig({
           runtimeConfig: config,
-          activationConfig: pluginCandidate.compareConfig,
+          activationConfig,
         }),
       );
       copyConfigResolutionFacts(config, applied);
@@ -477,7 +481,7 @@ export async function prepareGatewayServerBootstrap(input: {
     const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
     // Both managed writes and watcher reloads must reject unmigrated workspaces
     // before persistence or publication, using the candidate's final config and env.
-    assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
+    await assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
     return {
       runtimeConfig,
       compareConfig: reapplyCompareOverlays(params.sourceConfig),
@@ -558,7 +562,11 @@ export async function prepareGatewayServerBootstrap(input: {
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
   const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
-  if (!existingPluginMetadataSnapshot) {
+  if (existingPluginMetadataSnapshot) {
+    selectCurrentPluginMetadataCache(
+      getPluginMetadataSnapshotCache(existingPluginMetadataSnapshot),
+    );
+  } else {
     setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
       config: startupActivationSourceConfig,
       compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],

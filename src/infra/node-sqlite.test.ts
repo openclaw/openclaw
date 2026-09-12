@@ -1,10 +1,13 @@
 // Covers the SQLite WAL-reset corruption safety floor.
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import {
   openNodeSqliteDatabase,
+  resolveExistingSqliteFileUri,
   resolveImmutableSqliteFileUri,
   resolveNodeSqliteLocation,
 } from "./node-sqlite.js";
@@ -66,6 +69,29 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
 }
 
 describe("node SQLite locations", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  it("writes existing URI-escaped paths but never creates a missing database", () => {
+    const pathname = path.join(dirs.make("sqlite-existing-uri-"), "state ?#%.sqlite");
+    const uri = resolveExistingSqliteFileUri(pathname);
+    expect(() => openNodeSqliteDatabase(uri)).toThrow();
+    expect(fs.existsSync(pathname)).toBe(false);
+    const initial = openNodeSqliteDatabase(pathname);
+    initial.exec("CREATE TABLE retained(value TEXT) STRICT");
+    initial.close();
+    const existing = openNodeSqliteDatabase(uri);
+    try {
+      existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
+      expect(existing.prepare("SELECT value FROM retained").all()).toEqual([{ value: "written" }]);
+    } finally {
+      existing.close();
+    }
+  });
+  it("preserves Windows long paths in non-creating writable URIs", () => {
+    const pathname = String.raw`C:\deep state\openclaw.sqlite`;
+    expect(resolveExistingSqliteFileUri(pathname, "win32")).toBe(
+      `file:${encodeURIComponent(path.win32.toNamespacedPath(pathname))}?mode=rw`,
+    );
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -256,15 +282,31 @@ describe("Bun SQLite library selection", () => {
       const libraryPath = "/missing/sqlite.dylib";
       const f = fixture({
         exists: vi.fn(() => false),
+        probe: vi.fn(() => {
+          throw new Error("dlopen failed");
+        }),
         env: source === "env" ? { OPENCLAW_SQLITE_LIBRARY: libraryPath } : {},
       });
       expect(() => f.ensure(source === "explicit" ? { explicitPath: libraryPath } : {})).toThrow(
         `Cannot use SQLite library ${libraryPath}: missing file. Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.`,
       );
-      expect(f.probe).not.toHaveBeenCalled();
+      expect(f.probe).toHaveBeenCalledExactlyOnceWith(libraryPath);
       expect(f.select).not.toHaveBeenCalled();
     },
   );
+
+  it("reports the real defect of a loadable library that has no file on disk", () => {
+    // Apple's SQLite is served from the dyld shared cache: dlopen succeeds, stat does not.
+    const f = fixture({
+      exists: vi.fn(() => false),
+      probe: vi.fn(() => ({ ...safeProbe, extensionLoadingSupported: false })),
+      env: { OPENCLAW_SQLITE_LIBRARY: "/usr/lib/libsqlite3.dylib" },
+    });
+    expect(() => f.ensure()).toThrow(
+      "Cannot use SQLite library /usr/lib/libsqlite3.dylib: built with SQLITE_OMIT_LOAD_EXTENSION",
+    );
+    expect(f.select).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -333,12 +375,18 @@ describe("Bun SQLite library selection", () => {
   });
 
   it("keeps the runtime default when no library exists, including a blank override", () => {
-    const f = fixture({ exists: vi.fn(() => false), env: { OPENCLAW_SQLITE_LIBRARY: "  " } });
+    const f = fixture({
+      exists: vi.fn(() => false),
+      probe: vi.fn(() => {
+        throw new Error("dlopen failed");
+      }),
+      env: { OPENCLAW_SQLITE_LIBRARY: "  " },
+    });
     const selection = f.ensure();
     expect(selection).toEqual({ source: "runtime" });
     expect(f.ensure()).toBe(selection);
     expect(f.exists).toHaveBeenCalledTimes(3);
-    expect(f.probe).not.toHaveBeenCalled();
+    expect(f.probe).toHaveBeenCalledTimes(3);
     expect(f.select).not.toHaveBeenCalled();
   });
 

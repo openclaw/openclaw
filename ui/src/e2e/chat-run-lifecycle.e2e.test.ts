@@ -19,71 +19,45 @@ const rosterMatch = { includeGlobal: true };
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
+
+async function captureMockStopProof(currentPage: Page, name: string) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await currentPage.screenshot({
+      path: path.join(suite.artifactDir, `${name}.png`),
+      fullPage: false,
+    });
+  }
+}
+
+async function openMockAbortableRun(currentPage: Page, runId: string) {
+  const sessionKey = "agent:main:main";
+  const sessionInfo = {
+    key: sessionKey,
+    hasActiveRun: true,
+    activeRunIds: [runId],
+    status: "running",
+  };
+  const gateway = await installMockGateway(currentPage, {
+    sessionKey,
+    sessions: [sessionInfo],
+    sessionInfo,
+    inFlightRun: { runId, text: "The fixture run is still working." },
+    methodResponses: { "chat.abort": { ok: true, aborted: false, runIds: [] } },
+  });
+  await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  const stop = currentPage.getByRole("button", { name: "Stop generating" });
+  const composer = currentPage.locator(".agent-chat__input textarea");
+  await stop.waitFor({ state: "visible" });
+  await currentPage.getByText("The fixture run is still working.", { exact: true }).waitFor();
+  return { gateway, sessionKey, runId, stop, composer };
+}
+
 suite.define(() => {
   afterEach(async () => {
     if (page) {
       await suite.closeBrowserContext(page.context());
     }
     page = undefined;
-  });
-
-  it("retires failed history released after clicking Send", async () => {
-    const context = await suite.newBrowserContext({});
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const sessionKey = "agent:main:main";
-    const diagnostic = "⚠️ ✉️ Message failed: delivery unavailable near 🧭";
-    const renderedDiagnostic = "Message failed: delivery unavailable near 🧭";
-    const gateway = await installMockGateway(currentPage, {
-      sessionKey,
-      // Account recovery can replace startup with a scoped history request.
-      heldMethods: ["chat.startup", "chat.history", "chat.send"],
-      sessions: [
-        {
-          key: sessionKey,
-          status: "failed",
-          hasActiveRun: false,
-          lastRunId: "failed-run",
-          lastRunError: diagnostic,
-        },
-      ],
-    });
-    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-    const startup = await gateway.waitForRequest("chat.startup");
-    expect(startup.params).toMatchObject({ sessionKey });
-    await currentPage.locator(".agent-chat__input textarea").fill("Try again");
-    await currentPage.getByRole("button", { name: "Send message" }).click();
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-    // Fault injection controls only WebSocket delivery, never application state.
-    await gateway.resolveDeferred("chat.startup");
-    await expect
-      .poll(async () =>
-        (await gateway.getRequests()).some(
-          ({ method }) => method === "chat.history" || method === "chat.send",
-        ),
-      )
-      .toBe(true);
-    if ((await gateway.getRequests("chat.history")).length > 0) {
-      await gateway.resolveDeferred("chat.history");
-    }
-    const send = await gateway.waitForRequest("chat.send");
-    const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
-    expect(runId).toEqual(expect.any(String));
-    const alert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
-    await alert.waitFor();
-    await alert.locator(".chat-error__content > strong").getByText(renderedDiagnostic).waitFor();
-    expect(await alert.locator("details").count()).toBe(0);
-    await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    await gateway.emitChatFinal({ sessionKey, runId, text: "Recovery completed." });
-    await currentPage
-      .locator(".chat-group.assistant")
-      .getByText("Recovery completed.", { exact: true })
-      .waitFor();
-    await expect.poll(() => alert.count()).toBe(0);
-    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
   });
 
   it("excludes a reply-less failed turn's idle time from the next successful turn", async () => {
@@ -192,16 +166,19 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
-    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
+    const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
+    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
     await elapsedLabel.waitFor();
-    expect.soft(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await operationLabel.textContent()).toBe("Ran a command");
+    expect.soft(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
     await currentPage.reload();
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
     await elapsedLabel.waitFor();
-    expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
+    expect(await operationLabel.textContent()).toBe("Ran a command");
+    expect(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
   });
 
@@ -373,6 +350,290 @@ suite.define(() => {
     expect(await composer.inputValue()).toBe("keep this draft");
   });
 
+  it("restores stale Stop through a terminal mock-Gateway history response", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
+      currentPage,
+      "finished-run",
+    );
+    // Change only the mock server's next snapshot after the browser observes activity.
+    // No terminal event reaches the page; Stop must request the new history.
+    await gateway.setMethodResponse("chat.history", {
+      messages: [{ role: "assistant", content: "The completed reply." }],
+      sessionId: `session:${sessionKey}`,
+      sessionInfo: {
+        key: sessionKey,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: runId,
+        status: "done",
+      },
+      inFlightRun: null,
+    });
+    const historyCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.abort");
+    await stop.click();
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(abort.params).toEqual({ runId, sessionKey });
+    await composer.fill("keep this draft");
+    await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
+    await gateway.waitForRequest("chat.history", { after: historyCount });
+    await currentPage
+      .locator(".chat-bubble")
+      .getByText("The completed reply.", { exact: true })
+      .waitFor();
+    expect(await composer.inputValue()).toBe("keep this draft");
+    await composer.fill("");
+    await stop.waitFor({ state: "detached" });
+    await composer.fill("next message");
+    await currentPage.getByRole("button", { name: "Send message" }).waitFor({ state: "visible" });
+    expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
+    await captureMockStopProof(currentPage, "mock-stale-stop-recovered");
+  });
+
+  it("keeps a finalizing mock-Gateway run active after a no-op Stop refresh", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
+      currentPage,
+      "finalizing-run",
+    );
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      sessionKey,
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        toolCallId: "finalizing-check",
+        name: "exec",
+        phase: "start",
+        args: { command: "verify-finalization" },
+      },
+    });
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      sessionKey,
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        toolCallId: "finalizing-check",
+        name: "exec",
+        phase: "update",
+        partialResult: "Cleanup is still in progress.",
+      },
+    });
+    const runningTool = currentPage
+      .locator(".chat-tool-row--running")
+      .filter({ hasText: "verify-finalization" });
+    await runningTool.waitFor({ state: "visible" });
+    await gateway.setMethodResponse("chat.history", {
+      messages: [{ role: "assistant", content: "The reply is waiting for cleanup." }],
+      sessionId: `session:${sessionKey}`,
+      sessionInfo: {
+        key: sessionKey,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        status: "running",
+      },
+      inFlightRun: { runId, text: "" },
+    });
+    const historyCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.abort");
+    await stop.click();
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(abort.params).toEqual({ sessionKey, runId });
+    await composer.fill("keep this draft");
+    await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
+    await gateway.waitForRequest("chat.history", { after: historyCount });
+    await currentPage
+      .locator(".chat-bubble")
+      .getByText("The reply is waiting for cleanup.", { exact: true })
+      .waitFor();
+    await runningTool.waitFor({ state: "visible" });
+    expect(await runningTool.count()).toBe(1);
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
+    expect(await composer.inputValue()).toBe("keep this draft");
+    await composer.fill("");
+    await stop.waitFor({ state: "visible" });
+    expect(
+      await currentPage.getByRole("button", { name: "Send message", exact: true }).count(),
+    ).toBe(0);
+    await captureMockStopProof(currentPage, "mock-finalizing-tool-retained");
+  });
+
+  it("keeps an accepted mock-Gateway abort owned until its terminal event", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
+      currentPage,
+      "live-abort-run",
+    );
+    const historyCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.abort");
+    await stop.click();
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(abort.params).toEqual({ sessionKey, runId });
+    await composer.fill("keep this draft");
+    // Deferred responses do not synthesize chat.abort lifecycle events.
+    await gateway.resolveDeferred("chat.abort", { ok: true, aborted: true, runIds: [runId] });
+    await gateway.emitGatewayEvent("chat", {
+      sessionKey,
+      runId,
+      state: "delta",
+      deltaText: "Waiting for the accepted abort to settle.",
+    });
+    await currentPage
+      .getByText("Waiting for the accepted abort to settle.", { exact: false })
+      .waitFor();
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
+    expect(await composer.inputValue()).toBe("keep this draft");
+    expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
+    await captureMockStopProof(currentPage, "mock-accepted-abort-before-terminal");
+    await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "aborted" });
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
+    expect(await composer.inputValue()).toBe("keep this draft");
+    await composer.fill("");
+    await stop.waitFor({ state: "detached" });
+    await composer.fill("next message");
+    await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
+  });
+
+  it("retains stale Stop after a mock-Gateway history error and recovers on the next Stop", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
+      currentPage,
+      "refresh-retry-run",
+    );
+    const historyCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.history");
+    await gateway.deferNext("chat.abort");
+    await stop.click();
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(abort.params).toEqual({ sessionKey, runId });
+    await composer.fill("keep this draft");
+    await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
+    await gateway.waitForRequest("chat.history", { after: historyCount });
+    await gateway.rejectDeferred("chat.history", {
+      code: "UNAVAILABLE",
+      message: "History is temporarily unavailable.",
+    });
+    const error = currentPage
+      .getByRole("status")
+      .filter({ hasText: "History is temporarily unavailable." });
+    await error.waitFor();
+    expect(await composer.inputValue()).toBe("keep this draft");
+    await currentPage.getByText("The fixture run is still working.", { exact: true }).waitFor();
+    await composer.fill("");
+    await stop.waitFor({ state: "visible" });
+    await captureMockStopProof(currentPage, "mock-history-error-retained");
+
+    await gateway.setMethodResponse("chat.history", {
+      messages: [{ role: "assistant", content: "The reply recovered after retry." }],
+      sessionId: `session:${sessionKey}`,
+      sessionInfo: {
+        key: sessionKey,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: runId,
+        status: "done",
+      },
+      inFlightRun: null,
+    });
+    const retryHistoryCount = (await gateway.getRequests("chat.history")).length;
+    const abortCount = (await gateway.getRequests("chat.abort")).length;
+    await gateway.deferNext("chat.abort");
+    await stop.click();
+    const retryAbort = await gateway.waitForRequest("chat.abort", { after: abortCount });
+    expect(retryAbort.params).toEqual({ sessionKey, runId });
+    await composer.fill("keep this draft");
+    await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
+    await gateway.waitForRequest("chat.history", { after: retryHistoryCount });
+    await currentPage
+      .locator(".chat-bubble")
+      .getByText("The reply recovered after retry.", { exact: true })
+      .waitFor();
+    await error.waitFor({ state: "detached" });
+    expect(await composer.inputValue()).toBe("keep this draft");
+    await composer.fill("");
+    await stop.waitFor({ state: "detached" });
+    await composer.fill("next message");
+    await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
+    await captureMockStopProof(currentPage, "mock-history-retry-recovered");
+  });
+
+  it.each(["direct", "descendant"] as const)(
+    "refreshes cached %s activity after a session-only mock-Gateway Stop",
+    async (activity) => {
+      const context = await suite.newBrowserContext({});
+      const currentPage = await context.newPage();
+      page = currentPage;
+      const sessionKey = "agent:main:main";
+      const activeUpdatedAt = Date.now();
+      const sessionInfo = {
+        key: sessionKey,
+        updatedAt: activeUpdatedAt,
+        hasActiveRun: activity === "direct",
+        hasActiveSubagentRun: activity === "descendant",
+        status: activity === "direct" ? "running" : "done",
+      };
+      const gateway = await installMockGateway(currentPage, {
+        sessionKey,
+        sessions: [sessionInfo],
+        sessionInfo,
+        methodResponses: {
+          "sessions.abort": { ok: true, abortedRunId: null, status: "no-active-run" },
+        },
+      });
+      await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const stop = currentPage.getByRole("button", { name: "Stop generating" });
+      const composer = currentPage.locator(".agent-chat__input textarea");
+      await stop.waitFor({ state: "visible" });
+      await gateway.setMethodResponse("chat.history", {
+        messages: [{ role: "assistant", content: "Cached activity has finished." }],
+        sessionId: `session:${sessionKey}`,
+        sessionInfo: {
+          key: sessionKey,
+          updatedAt: activeUpdatedAt + 1,
+          hasActiveRun: false,
+          hasActiveSubagentRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const historyCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.deferNext("sessions.abort");
+      await stop.click();
+      const abort = await gateway.waitForRequest("sessions.abort");
+      expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+      await composer.fill("keep this draft");
+      await gateway.resolveDeferred("sessions.abort", {
+        ok: true,
+        abortedRunId: null,
+        status: "no-active-run",
+      });
+      await gateway.waitForRequest("chat.history", { after: historyCount });
+      await currentPage
+        .locator(".chat-bubble")
+        .getByText("Cached activity has finished.", { exact: true })
+        .waitFor();
+      expect(await composer.inputValue()).toBe("keep this draft");
+      await composer.fill("");
+      await stop.waitFor({ state: "detached" });
+      await composer.fill("next message");
+      await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
+      await captureMockStopProof(currentPage, `mock-session-only-${activity}-recovered`);
+    },
+  );
+
   it("shows compaction savings and live working time", async () => {
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
@@ -474,6 +735,10 @@ suite.define(() => {
       const diagnostic =
         "Provider request failed: session store unavailable. Retry after recovery.";
       if (terminalState === "error") {
+        const readMatch = { key: "agent:main:main", unread: false };
+        const readsBeforeError = (await gateway.getRequests("sessions.patch", readMatch)).length;
+        // Inspect terminal attention before the visible pane acknowledges it as read.
+        await gateway.deferNext("sessions.patch", readMatch);
         await gateway.emitGatewayEvent("chat", {
           runId,
           sessionKey: "agent:main:main",
@@ -481,6 +746,10 @@ suite.define(() => {
           errorMessage: diagnostic,
         });
         try {
+          await gateway.waitForRequest("sessions.patch", {
+            after: readsBeforeError,
+            match: readMatch,
+          });
           await currentPage.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
           await mainSession.locator('[data-session-attention="error"]').waitFor();
           expect(await mainSession.getAttribute("aria-label")).toContain(diagnostic);
@@ -489,7 +758,11 @@ suite.define(() => {
           );
           await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
         } finally {
-          await gateway.resolveDeferred("sessions.list");
+          try {
+            await gateway.resolveDeferred("sessions.patch");
+          } finally {
+            await gateway.resolveDeferred("sessions.list");
+          }
         }
         return;
       }

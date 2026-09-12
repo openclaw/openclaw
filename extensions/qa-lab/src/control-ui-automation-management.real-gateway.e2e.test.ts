@@ -352,7 +352,7 @@ suite.define(() => {
       }
       const stopped = await owner.stop({ preserveToDir: path.join(proofDir, "gateway") });
       errors.push(...stopped.errors);
-      for (const stop of [() => transport.cleanup(), () => provider.stop()]) {
+      for (const stop of [() => transport.cleanupAfterGatewayStop(), () => provider.stop()]) {
         try {
           await stop();
         } catch (error) {

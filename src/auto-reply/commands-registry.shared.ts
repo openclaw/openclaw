@@ -9,6 +9,11 @@ import type {
   CommandCategory,
   CommandTier,
 } from "./commands-registry.types.js";
+import { parseActivationCommand } from "./group-activation.js";
+import {
+  parseSendPolicyCommandBody,
+  parseSlashCommandOrNull,
+} from "./reply/commands-slash-parse.js";
 import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";
 
 type ListThinkingLevels = (
@@ -137,6 +142,7 @@ function defineBuiltinCommand(
     category,
     tier,
     activeRunSafe: options.activeRunSafe,
+    modelIndependent: options.modelIndependent,
   };
 }
 
@@ -151,15 +157,21 @@ export function buildBuiltinChatCommands(
     return ["default", ...levels.filter((level) => level !== "default")];
   };
   const commands: ChatCommandDefinition[] = [
-    defineBuiltinCommand("help", "Show available commands.", "status", "essential"),
-    defineBuiltinCommand("commands", "List all slash commands.", "status", "power"),
+    defineBuiltinCommand("help", "Show available commands.", "status", "essential", {
+      modelIndependent: "always",
+    }),
+    defineBuiltinCommand("commands", "List all slash commands.", "status", "power", {
+      modelIndependent: "no-args",
+    }),
     defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("mode", "compact or verbose", { choices: ["compact", "verbose"] }),
       ],
       argsMenu: "auto",
     }),
     defineBuiltinCommand("skill", "Run a skill by name.", "tools", "standard", {
+      modelIndependent: "no-args",
       args: [
         defineCommandArgument("name", "Skill name", { required: true }),
         defineCommandArgument("input", "Skill input", { captureRemaining: true }),
@@ -197,6 +209,7 @@ export function buildBuiltinChatCommands(
       "tools",
       "standard",
       {
+        modelIndependent: (args) => !args || args.toLowerCase() === "help",
         args: [
           defineCommandArgument("spec", "[interval] prompt, or status/stop", {
             required: false,
@@ -208,8 +221,22 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("status", "Show current status.", "status", "essential", {
       acceptsArgs: true,
       activeRunSafe: true,
+      modelIndependent: "always",
     }),
     defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
+      modelIndependent: (args) => {
+        const parsed = parseSlashCommandOrNull(`/goal ${args}`, "/goal", {
+          defaultAction: "status",
+          invalidMessage: "",
+        });
+        return (
+          parsed?.ok === true &&
+          (["status", "edit", "pause", "complete", "done", "block", "blocked", "clear"].includes(
+            parsed.action,
+          ) ||
+            (["start", "set", "create"].includes(parsed.action) && !parsed.args))
+        );
+      },
       args: [
         defineCommandArgument(
           "action",
@@ -227,6 +254,7 @@ export function buildBuiltinChatCommands(
       "status",
       "standard",
       {
+        modelIndependent: "always",
         args: [
           defineCommandArgument("note", "Optional note for Codex feedback upload", {
             captureRemaining: true,
@@ -234,11 +262,10 @@ export function buildBuiltinChatCommands(
         ],
       },
     ),
-    defineBuiltinCommand("login", "Pair Codex login.", "management", "standard", {
+    defineBuiltinCommand("login", "Connect a model provider.", "management", "standard", {
+      modelIndependent: "always",
       nativeProviders: ["discord", "slack", "telegram"],
-      args: [
-        defineCommandArgument("provider", "Provider to pair", { choices: ["codex", "openai"] }),
-      ],
+      args: [defineCommandArgument("provider", "Provider or connection method")],
     }),
     defineBuiltinCommand(
       "openclaw",
@@ -246,24 +273,29 @@ export function buildBuiltinChatCommands(
       "management",
       "essential",
       {
+        modelIndependent: "always",
         nativeName: false,
         acceptsArgs: true,
       },
     ),
-    defineBuiltinCommand("tasks", "List background tasks for this session.", "status", "standard"),
+    defineBuiltinCommand("tasks", "List background tasks for this session.", "status", "standard", {
+      modelIndependent: "always",
+    }),
     defineBuiltinCommand("allowlist", "List/add/remove allowlist entries.", "management", "power", {
+      modelIndependent: "always",
       nativeName: false,
       acceptsArgs: true,
     }),
     defineBuiltinCommand("approve", "Approve or deny exec requests.", "management", "power", {
       acceptsArgs: true,
+      modelIndependent: "always",
     }),
     defineBuiltinCommand(
       "context",
       "Explain how context is built and used.",
       "status",
       "standard",
-      { acceptsArgs: true },
+      { acceptsArgs: true, modelIndependent: "always" },
     ),
     defineBuiltinCommand(
       "btw",
@@ -271,6 +303,7 @@ export function buildBuiltinChatCommands(
       "tools",
       "standard",
       {
+        modelIndependent: "no-args",
         nativeAliases: ["side"],
         textAliases: ["/btw", "/side"],
         acceptsArgs: true,
@@ -282,6 +315,7 @@ export function buildBuiltinChatCommands(
       "status",
       "essential",
       {
+        modelIndependent: "always",
         textAliases: ["/export-session", "/export"],
         args: [
           defineCommandArgument("path", "Output path inside workspace (default: workspace)", {
@@ -296,6 +330,7 @@ export function buildBuiltinChatCommands(
       "status",
       "essential",
       {
+        modelIndependent: "always",
         textAliases: ["/export-trajectory", "/trajectory"],
         args: [
           defineCommandArgument("path", "Output directory (default: workspace)", {
@@ -305,6 +340,7 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand("tts", "Control text-to-speech (TTS).", "media", "standard", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("action", "TTS action", {
           choices: [
@@ -336,6 +372,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("whoami", "Show your sender id.", "status", "power", {
       textAliases: ["/whoami", "/id"],
+      modelIndependent: "no-args",
     }),
     defineBuiltinCommand(
       "session",
@@ -343,6 +380,7 @@ export function buildBuiltinChatCommands(
       "session",
       "power",
       {
+        modelIndependent: "always",
         args: [
           defineCommandArgument("action", "idle | max-age | unbind", {
             choices: ["idle", "max-age", "unbind"],
@@ -358,6 +396,7 @@ export function buildBuiltinChatCommands(
       "management",
       "standard",
       {
+        modelIndependent: "always",
         args: [
           defineCommandArgument("action", "list | log | info", {
             choices: ["list", "log", "info"],
@@ -371,6 +410,13 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand("acp", "Manage ACP sessions and runtime options.", "management", "power", {
+      modelIndependent: (args) => {
+        const parsed = parseSlashCommandOrNull(`/acp ${args}`, "/acp", {
+          defaultAction: "help",
+          invalidMessage: "",
+        });
+        return parsed?.ok === true && (parsed.action !== "steer" || !parsed.args);
+      },
       args: [
         defineCommandArgument("action", "Action to run", {
           preferAutocomplete: true,
@@ -402,6 +448,7 @@ export function buildBuiltinChatCommands(
       "List thread-bound agents for this session.",
       "management",
       "standard",
+      { modelIndependent: "always" },
     ),
     defineBuiltinCommand(
       "steer",
@@ -409,11 +456,13 @@ export function buildBuiltinChatCommands(
       "management",
       "standard",
       {
+        modelIndependent: "no-args",
         textAliases: ["/steer", "/tell"],
         args: [defineCommandArgument("message", "Steering message", { captureRemaining: true })],
       },
     ),
     defineBuiltinCommand("config", "Show or set config values.", "management", "power", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("action", "show | get | set | unset", {
           choices: ["show", "get", "set", "unset"],
@@ -425,6 +474,7 @@ export function buildBuiltinChatCommands(
       formatArgs: COMMAND_ARG_FORMATTERS.config,
     }),
     defineBuiltinCommand("mcp", "Show or set OpenClaw MCP servers.", "management", "power", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("action", "show | get | set | unset", {
           choices: ["show", "get", "set", "unset"],
@@ -441,6 +491,7 @@ export function buildBuiltinChatCommands(
       "management",
       "power",
       {
+        modelIndependent: "always",
         textAliases: ["/plugins", "/plugin"],
         args: [
           defineCommandArgument("action", "list | show | get | enable | disable", {
@@ -453,6 +504,7 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand("debug", "Set runtime debug overrides.", "management", "power", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("action", "show | reset | set | unset", {
           choices: ["show", "reset", "set", "unset"],
@@ -464,6 +516,7 @@ export function buildBuiltinChatCommands(
       formatArgs: COMMAND_ARG_FORMATTERS.debug,
     }),
     defineBuiltinCommand("usage", "Usage footer or cost summary.", "options", "standard", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("mode", "off, tokens, full, or cost", {
           choices: ["off", "tokens", "full", "cost"],
@@ -473,16 +526,23 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
       activeRunSafe: true,
+      modelIndependent: "no-args",
     }),
-    defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
-    defineBuiltinCommand("update", "Update OpenClaw and restart.", "tools", "power"),
+    defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power", {
+      modelIndependent: "no-args",
+    }),
+    defineBuiltinCommand("update", "Update OpenClaw and restart.", "tools", "power", {
+      modelIndependent: "no-args",
+    }),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
+      modelIndependent: (args) => parseActivationCommand(`/activation ${args}`).hasCommand,
       args: [
         defineCommandArgument("mode", "mention or always", { choices: ["mention", "always"] }),
       ],
       argsMenu: "auto",
     }),
     defineBuiltinCommand("send", "Set send policy.", "management", "power", {
+      modelIndependent: (args) => parseSendPolicyCommandBody(`/send ${args}`).hasCommand,
       args: [
         defineCommandArgument("mode", "on, off, or inherit", {
           choices: ["on", "off", "inherit"],
@@ -494,9 +554,11 @@ export function buildBuiltinChatCommands(
       acceptsArgs: true,
     }),
     defineBuiltinCommand("new", "Start a new session.", "session", "essential", {
+      modelIndependent: "always",
       acceptsArgs: true,
     }),
     defineBuiltinCommand("name", "Name or rename the current session.", "session", "standard", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("title", "New session name (omit to see a suggestion)", {
           captureRemaining: true,
@@ -511,6 +573,7 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineBuiltinCommand("think", "Set thinking level.", "options", "essential", {
+      modelIndependent: "always",
       textAliases: ["/think", "/thinking", "/t"],
       activeRunSafe: true,
       args: [
@@ -522,15 +585,18 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
+      modelIndependent: "always",
       textAliases: ["/verbose", "/v"],
       args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
       argsMenu: "auto",
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
+      modelIndependent: "directive",
       args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],
       argsMenu: "auto",
     }),
     defineBuiltinCommand("fast", "Toggle fast mode.", "options", "standard", {
+      modelIndependent: "always",
       args: [
         defineCommandArgument("mode", "on, off, auto, default, or status", {
           choices: ({ cfg, provider, model }) => [
@@ -550,6 +616,7 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("reasoning", "Toggle reasoning visibility.", "options", "standard", {
+      modelIndependent: "directive",
       textAliases: ["/reasoning", "/reason"],
       args: [
         defineCommandArgument("mode", "on, off, or stream", { choices: ["on", "off", "stream"] }),
@@ -557,6 +624,7 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("elevated", "Toggle elevated mode.", "options", "power", {
+      modelIndependent: "directive",
       textAliases: ["/elevated", "/elev"],
       args: [
         defineCommandArgument("mode", "on, off, ask, or full", {
@@ -566,9 +634,10 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("exec", "Set exec defaults for this session.", "options", "power", {
+      modelIndependent: "directive",
       args: [
-        defineCommandArgument("host", "sandbox, gateway, or node", {
-          choices: ["sandbox", "gateway", "node"],
+        defineCommandArgument("host", "auto, sandbox, gateway, or node", {
+          choices: ["auto", "sandbox", "gateway", "node"],
         }),
         defineCommandArgument("security", "deny, allowlist, or full", {
           choices: ["deny", "allowlist", "full"],
@@ -587,6 +656,7 @@ export function buildBuiltinChatCommands(
       "options",
       "essential",
       {
+        modelIndependent: "directive",
         args: [
           defineCommandArgument(
             "model",
@@ -597,8 +667,10 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {
       acceptsArgs: true,
+      modelIndependent: "always",
     }),
     defineBuiltinCommand("queue", "Adjust queue settings.", "options", "power", {
+      modelIndependent: "directive",
       args: [
         defineCommandArgument("mode", "queue mode", {
           choices: ["steer", "followup", "collect", "interrupt"],
@@ -611,6 +683,7 @@ export function buildBuiltinChatCommands(
       formatArgs: COMMAND_ARG_FORMATTERS.queue,
     }),
     defineBuiltinCommand("bash", "Run host shell commands (host-only).", "tools", "power", {
+      modelIndependent: "always",
       nativeName: false,
       args: [defineCommandArgument("command", "Shell command", { captureRemaining: true })],
     }),

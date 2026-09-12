@@ -372,7 +372,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const sent = firstSendText(sendMessage);
     expect(sent).toContain("Before");
-    expect(sent).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(sent).toContain("<pre><code>| A   | B   |\n| --- | --- |\n| 1   | 2   |\n</code></pre>");
     expect(sent).toContain("After");
     expectRecordFields(firstMockCallArg(sendMessage, 2), { parse_mode: "HTML" });
   });

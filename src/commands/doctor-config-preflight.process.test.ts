@@ -126,7 +126,9 @@ describe("doctor invalid config process exit", () => {
     const first = runBuiltRuntime(runtimeRoot, env, args, 60_000);
     expect(first.error, first.stderr).toBeUndefined();
     expect(first.status, first.stderr).toBe(0);
-    expect(`${first.stdout}\n${first.stderr}`).toContain("v17 -> v19");
+    expect(`${first.stdout}\n${first.stderr}`).toContain(
+      `v17 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}`,
+    );
 
     const repaired = new DatabaseSync(databasePath, { readOnly: true });
     try {

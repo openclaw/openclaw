@@ -191,9 +191,9 @@ describe("memory tools", () => {
     expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
-  it("returns disabled details when memory_get fails", async () => {
+  it("reports a failed memory read without disabling memory", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
-      throw new Error("path required");
+      throw Object.assign(new Error("memory file unreadable"), { code: "EACCES" });
     });
 
     const tool = createMemoryGetToolOrThrow();
@@ -202,8 +202,9 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       path: "memory/NOPE.md",
       text: "",
-      disabled: true,
-      error: "path required",
+      status: "error",
+      code: "EACCES",
+      error: "memory file unreadable",
     });
   });
 

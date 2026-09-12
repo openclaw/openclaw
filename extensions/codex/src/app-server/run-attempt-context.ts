@@ -114,6 +114,7 @@ export async function prepareCodexAttemptContext(
       ? { modelProviderId: params.provider, modelId: params.modelId }
       : {}),
     trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,

@@ -156,7 +156,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
       );
       expect(onError).not.toHaveBeenCalled();
     } finally {
-      bridge.close();
+      await bridge.close();
       vi.useRealTimers();
     }
   });

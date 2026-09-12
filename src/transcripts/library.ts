@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  asSafeIntegerInRange,
-  parseDateStringTimestampMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES,
@@ -21,48 +18,22 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { readTranscriptCaptureSnapshot } from "./capture.js";
 import {
   projectTranscriptMarkdown,
+  projectTranscriptNotes,
   projectTranscriptSession,
   projectTranscriptUtterance,
-  readTranscriptNotes,
 } from "./read.js";
 import {
   assertTranscriptByteLimit,
   assertTranscriptByteCount,
+  cursorScope,
+  decodeCursor,
+  encodeCursor,
   TranscriptLibraryError,
+  type TranscriptExportRead,
   type TranscriptReadOptions,
-  type TranscriptReadPurpose,
 } from "./store-read.js";
 import { safeTranscriptPathSegment, type TranscriptsStore } from "./store.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
-
-function cursorScope(values: unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(values)).digest("hex");
-}
-
-function encodeCursor(scope: string, position: [string, string] | [number]): string {
-  return Buffer.from(JSON.stringify([1, scope, ...position])).toString("base64url");
-}
-
-function decodeCursor(cursor: string | undefined, scope: string): unknown[] | undefined {
-  if (cursor === undefined) {
-    return undefined;
-  }
-  try {
-    if (cursor.length > TRANSCRIPTS_RESULT_MAX_BYTES || !/^[A-Za-z0-9_-]+$/u.test(cursor)) {
-      throw new Error();
-    }
-    const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-    if (Array.isArray(value) && value[0] === 1 && value[1] === scope) {
-      return value.slice(2);
-    }
-  } catch {
-    /* Invalid or cross-query cursors are never used as selectors. */
-  }
-  throw new TranscriptLibraryError(
-    "transcript_invalid_cursor",
-    "Invalid transcript cursor; restart pagination with the current filters.",
-  );
-}
 
 function normalizeDate(value: string | undefined): string | undefined {
   if (value === undefined) {
@@ -78,26 +49,11 @@ function normalizeDate(value: string | undefined): string | undefined {
   return new Date(time).toISOString();
 }
 
-function requireEntry(
-  store: TranscriptsStore,
-  selector: string,
-  purpose: TranscriptReadPurpose = "page",
-) {
-  const entry = store.readEntry(selector, purpose);
-  if (!entry) {
-    throw new TranscriptLibraryError(
-      "transcript_session_not_found",
-      "Transcript not found; refresh the library and use its full selector.",
-    );
-  }
-  return entry;
-}
-
-export function listTranscriptLibrary(
+export async function listTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsListParams,
   providerName?: (providerId: string) => string | undefined,
-): TranscriptsListResult {
+): Promise<TranscriptsListResult> {
   const { cursor, ...filters } = params;
   const startedAfter = normalizeDate(filters.startedAfter);
   const startedBefore = normalizeDate(filters.startedBefore);
@@ -134,7 +90,7 @@ export function listTranscriptLibrary(
   let bytes = 0;
   let hasMore = false;
   try {
-    for (let step = page.next(); ; step = page.next()) {
+    for (let step = await page.next(); ; step = await page.next()) {
       if (step.done) {
         hasMore = step.value;
         break;
@@ -150,7 +106,7 @@ export function listTranscriptLibrary(
       sessions.push(entry);
     }
   } finally {
-    page.return(false);
+    await page.return(false);
   }
   const last = sessions.at(-1);
   const result = {
@@ -166,27 +122,7 @@ export async function getTranscriptLibrary(
   params: TranscriptsGetParams,
   providerName?: (providerId: string) => string | undefined,
 ): Promise<TranscriptsGetResult> {
-  const purpose =
-    params.limit === undefined && params.cursor === undefined && params.query === undefined
-      ? "legacy"
-      : "page";
-  const entry = requireEntry(store, params.selector, purpose);
-  const scope = cursorScope(["get", entry.selector, params.query]);
-  const position = decodeCursor(params.cursor, scope);
-  const after = asSafeIntegerInRange(position?.[0], { min: 0 });
-  if (position && (position.length !== 1 || after === undefined)) {
-    throw new TranscriptLibraryError(
-      "transcript_invalid_cursor",
-      "Invalid transcript reader cursor.",
-    );
-  }
-  const page = params.includeUtterances
-    ? store.readUtterancePage(
-        entry.session,
-        { limit: params.limit, query: params.query, after },
-        purpose,
-      )
-    : undefined;
+  const { entry, page, notes, purpose, scope } = await store.readLibraryEntry(params);
   const utterances = page?.utterances.map((utterance) => {
     const projected = projectTranscriptUtterance(utterance);
     if (purpose === "legacy") {
@@ -203,7 +139,7 @@ export async function getTranscriptLibrary(
     ),
     ...(utterances ? { utterances } : {}),
     nextCursor: page?.hasMore && last ? encodeCursor(scope, [last.sequence]) : null,
-    summary: await readTranscriptNotes(store, entry.session, purpose),
+    summary: projectTranscriptNotes(notes),
   };
   assertTranscriptByteLimit(
     JSON.stringify(result),
@@ -216,22 +152,35 @@ export async function exportTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsExportParams,
 ): Promise<TranscriptsExportResult> {
-  const entry = requireEntry(store, params.selector, "export");
+  const rows = store.iterateExport(params.selector, params.format === "markdown");
   const parts: string[] = [];
   let sizeBytes = 0;
-  for (const utterance of store.iterateUtterances(entry.session)) {
-    const text =
-      params.format === "jsonl"
-        ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
-        : sanitizeTerminalText(utterance.text).trim();
-    const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
-    const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
-    // Include Markdown list/newline overhead while accumulating, before rendering the body.
-    sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
-    assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-    parts.push(line);
+  let completed: TranscriptExportRead | undefined;
+  try {
+    for (let step = await rows.next(); ; step = await rows.next()) {
+      if (step.done) {
+        completed = step.value;
+        break;
+      }
+      const utterance = step.value;
+      const text =
+        params.format === "jsonl"
+          ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
+          : sanitizeTerminalText(utterance.text).trim();
+      const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
+      const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
+      // Include Markdown list/newline overhead while accumulating, before rendering the body.
+      sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
+      assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+      parts.push(line);
+    }
+  } finally {
+    await rows.return(undefined);
   }
-  const notes = params.format === "markdown" ? store.readNotes(entry.session, "export") : undefined;
+  if (!completed) {
+    throw new Error("Transcript export ended before completion.");
+  }
+  const { entry, notes } = completed;
   const summary = notes?.summary;
   const title = sanitizeTerminalText(entry.session.title ?? "").trim() || "Transcript";
   const body =
@@ -247,7 +196,8 @@ export async function exportTranscriptLibrary(
         : summary
           ? `${renderTranscriptsMarkdown({ ...summary, title, transcript: parts, utteranceCount: entry.utteranceCount })}\n\nSummary covers ${summary.utteranceCount} saved utterances.\n`
           : `# ${title}\n\nSession: ${sanitizeTerminalText(entry.session.sessionId)}\nStarted: ${entry.session.startedAt}\n\n## Transcript\n${parts.map((line) => `- ${line}`).join("\n")}\n`;
-  assertTranscriptByteLimit(body, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+  const bodySizeBytes = Buffer.byteLength(body, "utf8");
+  assertTranscriptByteCount(bodySizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
   const digest = createHash("sha256").update(entry.selector).digest("hex").slice(0, 12);
   const filename = `transcript-${safeTranscriptPathSegment(entry.session.startedAt.slice(0, 10))}-${digest}.${params.format === "markdown" ? "md" : "jsonl"}`;
   return {
@@ -259,6 +209,6 @@ export async function exportTranscriptLibrary(
         : "application/x-ndjson;charset=utf-8",
     encoding: "base64",
     data: Buffer.from(body, "utf8").toString("base64"),
-    sizeBytes: Buffer.byteLength(body, "utf8"),
+    sizeBytes: bodySizeBytes,
   };
 }

@@ -3,6 +3,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   stripReplyMediaFailureFallback,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -32,7 +33,7 @@ import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantReplyContent,
   combineNonStreamingReplyParts,
-  extractAssistantDisplayTextFromContent,
+  extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
   sanitizeAssistantDisplayText,
@@ -256,7 +257,7 @@ export function createChatSendReplyDispatch(params: {
     }
     const transcriptReply =
       mediaMessage?.transcriptText ??
-      extractAssistantDisplayTextFromContent(assistantContent) ??
+      extractAssistantDisplayText(assistantContent) ??
       buildTranscriptReplyText([transcriptPayload]);
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const sourceMediaUrls = Array.from(
@@ -373,10 +374,25 @@ export function createChatSendReplyDispatch(params: {
       // would duplicate that row; the live broadcast still carries the visible failure.
       return;
     }
+    const isRuntimeMediaSupplement =
+      assistantMessageIndex !== undefined &&
+      assistantMessageIndex >= 1 &&
+      !mediaNormalizationFailed &&
+      !ttsSupplementMarker &&
+      !payload.isError &&
+      !isReplyPayloadStatusNotice(payload) &&
+      !payloadMetadata?.toolErrorWarning &&
+      !payloadMetadata?.nonTerminalToolErrorWarning &&
+      !payloadMetadata?.terminalProviderError;
+    // The runtime owns text persistence, including hook suppression. Queued tool media
+    // can supplement that turn without recreating text when the exact rewrite cannot match.
+    const appendContent = isRuntimeMediaSupplement
+      ? persistedContentForAppend.filter((block) => block.type !== "text")
+      : persistedContentForAppend;
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,
-      message: transcriptReply,
-      content: persistedContentForAppend,
+      message: isRuntimeMediaSupplement ? "" : transcriptReply,
+      content: appendContent,
       sessionId,
       storePath: latestStorePath,
       agentId,

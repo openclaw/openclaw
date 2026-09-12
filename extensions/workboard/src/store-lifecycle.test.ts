@@ -1,48 +1,26 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkboardLifecycleService } from "./lifecycle-sync.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardStore } from "./store.js";
+import {
+  createWorkboardSqliteTestHarness,
+  createWorkboardSqliteTestStore,
+} from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
-
-function memoryStore(
-  options: {
-    beforeRegister?: () => Promise<void>;
-    beforeLookup?: () => Promise<void>;
-  } = {},
-): WorkboardKeyedStore {
-  const rows = new Map<string, PersistedWorkboardCard>();
-  return {
-    async register(key, value) {
-      await options.beforeRegister?.();
-      rows.set(key, value);
-    },
-    async lookup(key) {
-      await options.beforeLookup?.();
-      return rows.get(key);
-    },
-    async delete(key) {
-      return rows.delete(key);
-    },
-    async entries() {
-      return [...rows].map(([key, value]) => ({ key, value }));
-    },
-  };
-}
 
 describe("Workboard store lifetime", () => {
   it("joins queued mutations before closing and rejects new work", async () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
-    const persistence = memoryStore({
-      beforeRegister: async () => {
+    let closes = 0;
+    const {
+      store,
+      stores: { cards: persistence },
+    } = createWorkboardSqliteTestHarness({
+      beforeCardWrite: async () => {
         entered.resolve();
         await resume.promise;
       },
-    });
-    let closes = 0;
-    const store = new WorkboardStore(persistence, {
-      close: () => {
+      onStoreClose: () => {
         closes += 1;
       },
     });
@@ -50,33 +28,35 @@ describe("Workboard store lifetime", () => {
     await entered.promise;
     const queued = store.create({ title: "Queued" });
     const closing = store.close();
-    expect(store.close()).toBe(closing);
-    await expect(store.create({ title: "Late" })).rejects.toThrow("workboard store is closed.");
-    expect(closes).toBe(0);
-    resume.resolve();
-    await expect(first).resolves.toMatchObject({ title: "First" });
-    await expect(queued).resolves.toMatchObject({ title: "Queued" });
-    await closing;
-    expect(closes).toBe(1);
-    expect(await persistence.entries()).toHaveLength(2);
-    await expect(store.list()).rejects.toThrow("workboard store is closed.");
+    try {
+      expect(store.close()).toBe(closing);
+      await expect(store.create({ title: "Late" })).rejects.toThrow("workboard store is closed.");
+      expect(closes).toBe(0);
+      resume.resolve();
+      await expect(first).resolves.toMatchObject({ title: "First" });
+      await expect(queued).resolves.toMatchObject({ title: "Queued" });
+      await closing;
+      expect(closes).toBe(1);
+      expect(await persistence.entries()).toHaveLength(2);
+      await expect(store.list()).rejects.toThrow("workboard store is closed.");
+    } finally {
+      resume.resolve();
+    }
   });
 
   it("keeps a whole admitted tool call alive across its reads", async () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     let pause = false;
-    const store = new WorkboardStore(
-      memoryStore({
-        beforeLookup: async () => {
-          if (pause) {
-            pause = false;
-            entered.resolve();
-            await resume.promise;
-          }
-        },
-      }),
-    );
+    const store = createWorkboardSqliteTestStore({
+      beforeCardLookup: async () => {
+        if (pause) {
+          pause = false;
+          entered.resolve();
+          await resume.promise;
+        }
+      },
+    });
     const card = await store.create({ title: "Read context", notes: "Keep the full result." });
     const tool = createWorkboardTools({ store }).find((entry) => entry.name === "workboard_read");
     if (!tool) {
@@ -100,8 +80,8 @@ describe("Workboard store lifetime", () => {
   });
 
   it("does not let another store or a detached continuation revive a closed owner", async () => {
-    const first = new WorkboardStore(memoryStore());
-    const second = new WorkboardStore(memoryStore());
+    const first = createWorkboardSqliteTestStore();
+    const second = createWorkboardSqliteTestStore();
     const resume = createDeferred<void>();
     const { detached } = await first.runOperation(() => ({
       detached: resume.promise.then(() => first.create({ title: "Detached" })),
@@ -125,9 +105,11 @@ describe("Workboard store lifetime", () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     let closes = 0;
-    const persistence = memoryStore();
-    const store = new WorkboardStore(persistence, {
-      close: () => {
+    const {
+      store,
+      stores: { cards: persistence },
+    } = createWorkboardSqliteTestHarness({
+      onStoreClose: () => {
         closes += 1;
       },
     });
@@ -177,8 +159,8 @@ describe("Workboard store lifetime", () => {
   it("retains the same cleanup failure without retrying it", async () => {
     const failure = new Error("native close failed");
     let closes = 0;
-    const store = new WorkboardStore(memoryStore(), {
-      close: () => {
+    const store = createWorkboardSqliteTestStore({
+      onStoreClose: () => {
         closes += 1;
         throw failure;
       },

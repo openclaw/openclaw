@@ -43,6 +43,11 @@ export type DiagnosticOwnerRegistration = {
   activity: SessionActivity;
   owner: DiagnosticEmbeddedRunOwner;
   backendActivity?: DiagnosticBackendActivity;
+  retryWait?: {
+    deadlineAtMs: number;
+    assertCurrent: () => void;
+    close: () => void;
+  };
 };
 
 export const activityByRef = new Map<string, SessionActivity>();

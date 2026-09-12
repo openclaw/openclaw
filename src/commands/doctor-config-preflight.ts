@@ -4,7 +4,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
   parseConfigJson5,
-  readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
@@ -27,7 +26,6 @@ import type {
 } from "../infra/state-migrations.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -58,6 +56,7 @@ import {
   commitAutomaticConfigRepair,
   planAutomaticConfigRepair,
 } from "./doctor/shared/automatic-startup-config-repair.js";
+import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
@@ -66,16 +65,6 @@ const loadState = createLazyRuntimeModule(() => import("../infra/state-migration
 const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legacy-repair.js"));
 
 const configLog = createSubsystemLogger("config");
-
-export type DoctorConfigPreflightResult = {
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  baseConfig: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
-  stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
-  postSessionPluginMigration?: PreparedPostSessionPluginMigration;
-  postSessionPluginMigrationPlanBound?: boolean;
-};
 
 /** Returns true during updater-managed config rewrites where plugin validation may be stale. */
 export function shouldSkipPluginValidationForDoctorConfigPreflight(
@@ -127,7 +116,7 @@ export async function runDoctorConfigPreflight(
       recoverOrphanedSidecars: !gatewayStartupCheckpointRequired,
     });
   }
-  noteStaleUpdateRuns(options);
+  await noteStaleUpdateRuns(options);
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   const migrationCheckpointRequired =
@@ -150,6 +139,7 @@ export async function runDoctorConfigPreflight(
   let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
   let startupMigrationHeartbeatError: Error | undefined;
   const startupMigrationWarnings: string[] = [];
+  let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
   let postSessionPluginMigration: PreparedPostSessionPluginMigration | undefined;
@@ -657,6 +647,8 @@ export async function runDoctorConfigPreflight(
       if (!configRepairAllowed) {
         throwStartupMigrationGuardRejected();
       }
+      modelBillingRouteMigrationSource ??=
+        snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
       startupMigrationLease?.heartbeat();
       await measurePreflightStep("automatic-config-repair", () =>
         runWithPluginMetadataSnapshot({ config: automaticConfigRepair.config }, () =>
@@ -745,6 +737,7 @@ export async function runDoctorConfigPreflight(
     return {
       snapshot,
       baseConfig,
+      ...(modelBillingRouteMigrationSource ? { modelBillingRouteMigrationSource } : {}),
       ...(configSnapshotRead.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: configSnapshotRead.pluginMetadataSnapshot }
         : {}),

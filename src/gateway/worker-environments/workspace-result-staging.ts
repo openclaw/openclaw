@@ -265,7 +265,7 @@ async function stageWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
-}): Promise<void> {
+}): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
   const base = parseWorkerWorkspaceManifest(params.baseManifestRaw, params.baseManifestRef);
@@ -329,7 +329,7 @@ async function stageWorkerWorkspaceResult(params: {
   if (imported.termination !== "exit" || imported.code !== 0) {
     throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
   }
-  await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
+  return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
 }
 
 type LoadedStagedWorkerWorkspace = {
@@ -575,7 +575,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       base: staged.base,
       current: staged.current,
       journal: params.journal,
-      publishAcceptedManifest: params.publishAcceptedManifest,
+      acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     });
     return { ...applied, changed: staged.changed };
   });

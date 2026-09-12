@@ -51,7 +51,12 @@ import {
   readInlineProviderApiKeyUsage,
   resolveProfileUnusableUntil,
 } from "./auth-profiles/usage-state.js";
+import {
+  resolveCliRuntimeCanonicalProvider,
+  resolveCliRuntimeModelBackendBinding,
+} from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -66,8 +71,10 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
+import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveCliRuntimeExecutionProvider } from "./model-runtime-aliases.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
   createOpenAIModelRoutesResolver,
   resolveConfiguredOpenAIAuthMode,
@@ -98,6 +105,8 @@ const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
 type ModelAuthAvailability = boolean | undefined;
 type ModelAuthAvailabilityEvidence = Exclude<ProviderModelAuthEvidence, "none">;
 export type ModelAuthAvailabilityRef = {
+  /** Concrete runtime selected by the model decision owner; absent means provider auth only. */
+  runtimeId?: string;
   modelId?: string;
   api?: string | null;
   baseUrl?: unknown;
@@ -111,6 +120,7 @@ export type ModelAuthAvailabilityRef = {
   requiredProfileId?: string;
 };
 export type ModelAuthAvailabilityEvaluation = {
+  requestedRuntimeId?: string;
   availability: ModelAuthAvailability;
   /** A runtime-owned result must not fall back to provider-only registry auth. */
   availabilityAuthoritative?: true;
@@ -122,6 +132,7 @@ export type ModelAuthAvailabilityEvaluation = {
   selectedProfileId?: string;
   selectedAuthMode?: string;
   evidence?: ModelAuthAvailabilityEvidence;
+  runtimeAuth?: { id: string; source: "native" };
 };
 export type ModelAuthAvailabilityResolver = {
   evaluateRuntimeModelAuth(
@@ -148,23 +159,40 @@ function evaluateCliRuntimeModelAuthAvailability(
   evaluation: ModelAuthAvailabilityEvaluation,
   evaluateProviderAuth: ModelAuthAvailabilityResolver["evaluateModelAuth"],
 ): ModelAuthAvailabilityEvaluation | undefined {
+  if (ref.runtimeId === "openclaw") {
+    return undefined;
+  }
   if (evaluation.routeResolution !== null || normalizeProviderId(provider) === "openai") {
     return undefined;
   }
   const selectedProfileId = ref.pinnedProfileId?.trim() || ref.preferredProfileId?.trim();
   // Direct CLI refs have no alias, but still own plugin and selected-account checks.
   const runtimeProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      modelId: ref.modelId,
-      authProfileId: selectedProfileId,
-      metadataSnapshot: params.metadataSnapshot,
-    }) ?? normalizeProviderId(provider);
+    ref.runtimeId && ref.runtimeId !== "auto"
+      ? ref.runtimeId
+      : (resolveCliRuntimeExecutionProvider({
+          provider,
+          cfg: params.cfg,
+          agentId: params.agentId,
+          modelId: ref.modelId,
+          authProfileId: selectedProfileId,
+          metadataSnapshot: params.metadataSnapshot,
+        }) ?? normalizeProviderId(provider));
+  const binding = resolveCliRuntimeModelBackendBinding({ provider, runtime: runtimeProvider });
   const runtimeOwners = params.metadataSnapshot?.owners?.cliBackends.get(
     normalizeProviderId(runtimeProvider),
   );
+  // Agent harnesses can use provider auth without registering a CLI backend.
+  if (
+    !binding &&
+    !runtimeOwners?.length &&
+    !resolveCliRuntimeCanonicalProvider({ runtime: runtimeProvider })
+  ) {
+    return undefined;
+  }
+  if (ref.runtimeId && runtimeProvider !== normalizeProviderId(provider) && !binding) {
+    return { availability: false, routeResolution: null, unavailableReason: "missing-auth" };
+  }
   if (runtimeOwners?.length) {
     const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
     if (
@@ -205,7 +233,7 @@ function evaluateCliRuntimeModelAuthAvailability(
     params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(runtimeProvider)];
   // The prepared native-runtime result is authoritative for this route. Provider
   // credentials cannot prove that the separately authenticated CLI is usable.
-  return runtimeAuthMode
+  return typeof runtimeAuthMode === "string"
     ? {
         availability: true,
         routeResolution: null,
@@ -393,6 +421,14 @@ export function createModelAuthAvailabilityResolver(
   }
   const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)({
     config: params.cfg,
+    agentId: params.agentId,
+    primaryModel: resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    }),
+    resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
     env,
   });
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
@@ -748,7 +784,7 @@ export function createModelAuthAvailabilityResolver(
     const preparedRuntimeAuthMode =
       params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(provider)] ??
       params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
-    if (preparedRuntimeAuthMode) {
+    if (typeof preparedRuntimeAuthMode === "string") {
       return {
         availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
         selectedAuthMode: preparedRuntimeAuthMode,
@@ -1067,7 +1103,24 @@ export function createModelAuthAvailabilityResolver(
     if (invalidProfilePin(provider, ref)) {
       return { availability: false, unavailableReason: "auth-failed", routeResolution: null };
     }
-    const routeResolution = resolveRoutes(ref);
+    const modelLock = ref.requiredProfileId?.trim();
+    const configuredAuthMode = ref.pinnedProfileId
+      ? undefined
+      : resolveConfiguredOpenAIAuthMode(params.cfg);
+    const awsSdkTerminal = !modelLock && configuredAuthMode === "aws-sdk";
+    const baseTarget = prepareAuthTarget(provider, ref);
+    const basePolicy = directPolicy(provider, baseTarget);
+    const bindingProfileId =
+      !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
+        ? basePolicy.binding.profileId
+        : undefined;
+    const routeProfileId = modelLock || ref.pinnedProfileId || bindingProfileId;
+    const routeResolution = resolveRoutes({
+      ...ref,
+      pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
+        routeProfileId ? profileMode(routeProfileId) : configuredAuthMode,
+      ),
+    });
     if (!routeResolution) {
       // Provider policy owns route validation. Null preserves the legacy fallback
       // signal without rebuilding a partial OpenAI policy in core.
@@ -1080,29 +1133,16 @@ export function createModelAuthAvailabilityResolver(
       const rejection = automaticSourceRejection(provider, ref, prepareAuthTarget(provider, ref));
       return { ...(rejection ?? { availability: undefined }), routeResolution };
     }
-    const modelLock = ref.requiredProfileId?.trim();
-    const configuredAuthMode = ref.pinnedProfileId
-      ? undefined
-      : resolveConfiguredOpenAIAuthMode(params.cfg);
-    const awsSdkTerminal = !modelLock && configuredAuthMode === "aws-sdk";
-    const baseTarget = prepareAuthTarget(provider, ref);
-    const basePolicy = directPolicy(provider, baseTarget);
     if (!modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile-incompatible") {
       return { availability: false, unavailableReason: "auth-failed", routeResolution };
     }
-    const bindingProfileId =
-      !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
-        ? basePolicy.binding.profileId
-        : undefined;
     const orderResolution = profileOrder(
       provider,
       ref.modelId,
       ref.preferredProfileId,
       ref.pinnedProfileId,
     );
-    const materializedModelId = ref.modelId
-      ? normalizeModelIdForProvider(provider, ref.modelId)?.toLowerCase()
-      : undefined;
+    const materializedModelId = normalizeModelIdForProvider(provider, ref.modelId ?? "");
     const materialized =
       !modelLock &&
       !ref.pinnedProfileId &&
@@ -1148,39 +1188,13 @@ export function createModelAuthAvailabilityResolver(
               }),
           )
         : undefined;
-    if (materialized) {
-      const selectedRoute = routeResolution.routes.find(
-        (route) =>
-          route.runtimePolicy?.compatibleIds.some(
-            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
-          ) === true &&
-          route.api.toLowerCase() === materialized.modelApi &&
-          route.requestTransportOverrides === materialized.requestTransportOverrides &&
-          modelMatchesProviderModelRoute({
-            provider,
-            api: materialized.modelApi,
-            baseUrl: materialized.modelBaseUrl,
-            route,
-          }),
-      );
-      if (selectedRoute) {
-        return {
-          availability: true,
-          routeResolution,
-          selectedRoute,
-          selectedAuthMode: materialized.authMode,
-          ...(materialized.authProfileId ? { selectedProfileId: materialized.authProfileId } : {}),
-          evidence: "runtime",
-        };
-      }
-    }
     const selectedConfiguredMode = awsSdkTerminal
       ? "aws-sdk"
       : bindingProfileId
         ? undefined
         : (configuredAuthMode ?? (basePolicy.hasDirectMaterial ? "api-key" : undefined));
     const automaticRouteAuthMode =
-      basePolicy.hasDirectFallback && configuredAuthMode && !basePolicy.required
+      basePolicy.hasDirectFallback && !basePolicy.required && !configuredAuthMode
         ? undefined
         : selectedConfiguredMode;
     const targetForMode = (mode: string | undefined): AuthTarget => {
@@ -1238,10 +1252,12 @@ export function createModelAuthAvailabilityResolver(
       ),
       preferredProfileId: ref.pinnedProfileId ?? ref.preferredProfileId,
       explicitOrder: orderResolution.hasExplicitOrder,
+      preserveProfilePriority: Boolean(ref.pinnedProfileId),
       ...(policy.hasDirectFallback ? { fallback: policy.direct } : {}),
     });
     const syntheticCodexOwnsAuth =
       !modelLock &&
+      !ref.preferredProfileId &&
       !ref.pinnedProfileId &&
       !selectedConfiguredMode &&
       (policy.binding.kind === "none" ||
@@ -1265,8 +1281,80 @@ export function createModelAuthAvailabilityResolver(
         ? { allowNativeAuthOnSingleRoute: true }
         : {}),
     });
+    // Past route success proves readiness; the current selector still owns billing preference.
+    const preferredSelection =
+      routeAuthDecision.kind === "selected" &&
+      routeAuthDecision.selection.kind === "selected" &&
+      routeAuthDecision.selection.route.authRequirement ===
+        routeResolution.preferredAuthRequirement &&
+      routeAuthDecision.selection.route.authRequirement !==
+        resolveProviderModelRouteAuthRequirement(materialized?.authMode);
+    if (materialized && !preferredSelection) {
+      const selectedRoute = routeResolution.routes.find(
+        (route) =>
+          route.runtimePolicy?.compatibleIds.some(
+            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
+          ) === true &&
+          route.api.toLowerCase() === materialized.modelApi &&
+          route.requestTransportOverrides === materialized.requestTransportOverrides &&
+          modelMatchesProviderModelRoute({
+            provider,
+            api: materialized.modelApi,
+            baseUrl: materialized.modelBaseUrl,
+            route,
+          }),
+      );
+      if (selectedRoute) {
+        return {
+          availability: true,
+          routeResolution,
+          selectedRoute,
+          selectedAuthMode: materialized.authMode,
+          ...(materialized.authProfileId ? { selectedProfileId: materialized.authProfileId } : {}),
+          evidence: "runtime",
+        };
+      }
+    }
+    if (
+      routeAuthDecision.kind === "deferred" &&
+      syntheticCodexOwnsAuth &&
+      ref.runtimeId === "codex" &&
+      !hasAuthoredProviderRequestParams({
+        config: params.cfg,
+        provider,
+        modelId: ref.modelId ?? "",
+        agentId: params.agentId,
+      })
+    ) {
+      const native = params.preparedRuntimeAuthModes?.codex;
+      const mode =
+        typeof native === "object" && native.source === "native" ? native.mode : undefined;
+      const requirement = resolveProviderModelRouteAuthRequirement(mode);
+      const selectedRoute = requirement
+        ? routeResolution.routes.find((route) => route.authRequirement === requirement)
+        : undefined;
+      return {
+        availability: mode
+          ? Boolean(selectedRoute)
+          : params.preparedSyntheticAuthComplete
+            ? false
+            : undefined,
+        availabilityAuthoritative: true,
+        routeResolution,
+        ...(selectedRoute
+          ? { selectedRoute, selectedAuthMode: mode }
+          : { unavailableReason: "missing-auth" }),
+        evidence: "runtime",
+        runtimeAuth: { id: "codex", source: "native" },
+      };
+    }
     if (routeAuthDecision.kind === "deferred" && syntheticCodexOwnsAuth) {
-      return { availability: undefined, routeResolution, evidence: "synthetic" };
+      return {
+        availability:
+          ref.runtimeId === "openclaw" || params.preparedSyntheticAuthComplete ? false : undefined,
+        routeResolution,
+        evidence: "synthetic",
+      };
     }
     if (routeAuthDecision.kind !== "selected") {
       const rejectedSource =
@@ -1393,14 +1481,25 @@ export function createModelAuthAvailabilityResolver(
     ),
     evaluateModelAuth,
     evaluateRuntimeModelAuth: (provider, ref = {}) => {
-      const evaluation = evaluateModelAuth(provider, ref);
+      const runtimeId =
+        ref.runtimeId ??
+        resolveAgentHarnessPolicy({
+          config: params.cfg,
+          agentId: params.agentId,
+          provider,
+          modelId: ref.modelId,
+          modelApi: ref.api,
+          modelBaseUrl: ref.baseUrl,
+          env: params.env,
+        }).runtime;
+      const evaluation = evaluateModelAuth(provider, { ...ref, runtimeId });
       if (ref.requiredProfileId?.trim()) {
         return evaluation;
       }
       const runtimeEvaluation = evaluateCliRuntimeModelAuthAvailability(
         params,
         provider,
-        ref,
+        { ...ref, runtimeId },
         evaluation,
         evaluateModelAuth,
       );

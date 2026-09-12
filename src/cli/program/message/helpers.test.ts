@@ -226,6 +226,25 @@ describe("runMessageAction", () => {
     },
   );
 
+  it.each(["", "   "])(
+    "rejects an explicitly blank message channel before command startup (%j)",
+    async (channel) => {
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
+      const message = program.command("message");
+      registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+
+      await expect(
+        program.parseAsync(
+          ["message", "send", "--channel", channel, "--target", "channel:123", "--message", "hi"],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("--channel must not be blank");
+
+      expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+      expect(messageCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, 1],
     ["rejected added reaction", "react", { ok: false, warning: "Unavailable", added: "✅" }, 1],

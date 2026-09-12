@@ -4,6 +4,7 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "../models-config.providers.secrets.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../provider-auth-aliases.js", () => ({
@@ -34,16 +35,8 @@ describe("provider catalog auth order", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        [profileA]: {
-          type: "api_key",
-          provider: "openai",
-          key: "key-a",
-        },
-        [profileB]: {
-          type: "api_key",
-          provider: "openai",
-          key: "key-b",
-        },
+        [profileA]: createApiKeyCredential("openai", "key-a"),
+        [profileB]: createApiKeyCredential("openai", "key-b"),
       },
     };
     const config: OpenClawConfig = {

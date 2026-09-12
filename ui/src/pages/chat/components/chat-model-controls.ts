@@ -1,5 +1,10 @@
 import { html, nothing } from "lit";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   normalizeChatModelProviderId,
@@ -15,12 +20,22 @@ import {
   resolveChatThinkingSelectState,
   type ChatThinkingTarget,
 } from "../../../lib/chat/thinking.ts";
+import {
+  canonicalModelAuthProviderId,
+  listEffectiveModelAuthProviders,
+} from "../../../lib/model-auth.ts";
+import { describeModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
+import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import type {
   ChatModelPickerOption,
   ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import { renderChatModelPicker, type ChatModelCatalogState } from "./chat-model-picker.ts";
+import {
+  renderChatModelPicker,
+  type ChatModelCatalogState,
+  type ChatModelProviderAuth,
+} from "./chat-model-picker.ts";
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
@@ -30,7 +45,9 @@ type ChatContextWindowTarget = Pick<
 >;
 
 type ChatModelControlsProps = {
-  renderAccountControl?: (model: string) => unknown;
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+  accountSelection?: ChatAccountSelection | null;
+  renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
   activeRunId: string | null;
   agentDefaultModel?: string;
   connected: boolean;
@@ -81,77 +98,75 @@ function normalizeChatModelProviderGroupId(provider: string): string {
   return CHAT_MODEL_PROVIDER_GROUP_ALIASES[normalized] ?? normalized;
 }
 
-function resolveChatModelProvider(
-  value: string,
-  catalog: ModelCatalogEntry[],
-  fallbackValue = "",
-  providerHint = "",
-): string {
-  const modelRef = (value || fallbackValue).trim();
-  const normalizedModelRef = modelRef.toLowerCase();
-  const qualifiedCatalogEntry = catalog.find((entry) => {
-    const normalizedId = entry.id.trim().toLowerCase();
-    const normalizedProvider = normalizeChatModelProviderId(entry.provider);
-    return `${normalizedProvider}/${normalizedId}` === normalizedModelRef;
-  });
-  if (qualifiedCatalogEntry) {
-    return normalizeChatModelProviderGroupId(qualifiedCatalogEntry.provider);
+function prepareChatModelCatalog(catalog: ModelCatalogEntry[]) {
+  const qualified = new Map<string, ModelCatalogEntry[]>();
+  const ids = new Map<string, ModelCatalogEntry[]>();
+  // Keep source order and duplicate rows: display metadata prefers the first
+  // canonical entry, while a raw id is unambiguous only with exactly one row.
+  for (const entry of catalog) {
+    const id = entry.id.trim().toLowerCase();
+    const key = `${normalizeChatModelProviderId(entry.provider)}/${id}`;
+    const qualifiedRows = qualified.get(key) ?? [];
+    qualifiedRows.push(entry);
+    qualified.set(key, qualifiedRows);
+    const idRows = ids.get(id) ?? [];
+    idRows.push(entry);
+    ids.set(id, idRows);
   }
-  const idMatches = catalog.filter((entry) => entry.id.trim().toLowerCase() === normalizedModelRef);
-  const normalizedHint = normalizeChatModelProviderId(providerHint);
-  const hintOwnsRawId = idMatches.some(
-    (entry) => normalizeChatModelProviderId(entry.provider) === normalizedHint,
-  );
-  if (normalizedHint && (idMatches.length === 0 || hintOwnsRawId)) {
-    return normalizeChatModelProviderGroupId(normalizedHint);
-  }
-  if (idMatches.length === 1) {
-    return normalizeChatModelProviderGroupId(idMatches[0]?.provider ?? "");
-  }
-  const separator = modelRef.indexOf("/");
-  if (separator > 0) {
-    return normalizeChatModelProviderGroupId(modelRef.slice(0, separator));
-  }
-  return "other";
-}
-
-function resolveChatModelCatalogEntry(
-  value: string,
-  catalog: ModelCatalogEntry[],
-): ModelCatalogEntry | undefined {
-  const trimmedValue = value.trim().toLowerCase();
-  const separator = trimmedValue.indexOf("/");
-  const normalizedValue =
-    separator > 0
-      ? `${normalizeChatModelProviderId(trimmedValue.slice(0, separator))}/${trimmedValue.slice(
-          separator + 1,
-        )}`
-      : trimmedValue;
-  if (!normalizedValue) {
-    return undefined;
-  }
-  const matches = catalog.filter((candidate) => {
-    const provider = normalizeChatModelProviderId(candidate.provider);
-    return `${provider}/${candidate.id.trim().toLowerCase()}` === normalizedValue;
-  });
-  if (matches.length > 0) {
-    return (
-      matches.find((candidate) => candidate.provider.trim().toLowerCase() === "openai") ??
-      matches[0]
-    );
-  }
-  const idMatches = catalog.filter(
-    (candidate) => candidate.id.trim().toLowerCase() === normalizedValue,
-  );
-  return idMatches.length === 1 ? idMatches[0] : undefined;
+  return {
+    provider(value: string, providerHint = ""): string {
+      const modelRef = value.trim();
+      const normalizedModelRef = modelRef.toLowerCase();
+      const qualifiedCatalogEntry = qualified.get(normalizedModelRef)?.[0];
+      if (qualifiedCatalogEntry) {
+        return normalizeChatModelProviderGroupId(qualifiedCatalogEntry.provider);
+      }
+      const idMatches = ids.get(normalizedModelRef) ?? [];
+      const normalizedHint = normalizeChatModelProviderId(providerHint);
+      const hintOwnsRawId = idMatches.some(
+        (entry) => normalizeChatModelProviderId(entry.provider) === normalizedHint,
+      );
+      if (normalizedHint && (idMatches.length === 0 || hintOwnsRawId)) {
+        return normalizeChatModelProviderGroupId(normalizedHint);
+      }
+      if (idMatches.length === 1) {
+        return normalizeChatModelProviderGroupId(idMatches[0]?.provider ?? "");
+      }
+      const separator = modelRef.indexOf("/");
+      if (separator > 0) {
+        return normalizeChatModelProviderGroupId(modelRef.slice(0, separator));
+      }
+      return "other";
+    },
+    entry(value: string): ModelCatalogEntry | undefined {
+      const trimmedValue = value.trim().toLowerCase();
+      const separator = trimmedValue.indexOf("/");
+      const normalizedValue =
+        separator > 0
+          ? `${normalizeChatModelProviderId(trimmedValue.slice(0, separator))}/${trimmedValue.slice(
+              separator + 1,
+            )}`
+          : trimmedValue;
+      if (!normalizedValue) {
+        return undefined;
+      }
+      const matches = qualified.get(normalizedValue) ?? [];
+      if (matches.length > 0) {
+        return (
+          matches.find((candidate) => candidate.provider.trim().toLowerCase() === "openai") ??
+          matches[0]
+        );
+      }
+      const idMatches = ids.get(normalizedValue) ?? [];
+      return idMatches.length === 1 ? idMatches[0] : undefined;
+    },
+  };
 }
 
 function resolveChatModelPickerLabel(
-  value: string,
+  entry: ModelCatalogEntry | undefined,
   fallbackLabel: string,
-  catalog: ModelCatalogEntry[],
 ): string {
-  const entry = resolveChatModelCatalogEntry(value, catalog);
   if (entry && normalizeChatModelProviderId(entry.provider) === "openai") {
     return entry.name.trim() || fallbackLabel;
   }
@@ -199,6 +214,28 @@ function resolveCatalogTriggerStatus(
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
+  const catalog = prepareChatModelCatalog(props.modelCatalog);
+  const providerAuth = new Map<string, ChatModelProviderAuth>();
+  const headingKey = (id: string) =>
+    normalizeChatModelProviderGroupId(
+      canonicalModelAuthProviderId(normalizeChatModelProviderId(id)),
+    );
+  // Alias records (e.g. google and google-gemini-cli) share one heading, so merge
+  // them under that key first; iterating raw records let the later one overwrite it.
+  for (const provider of listEffectiveModelAuthProviders(
+    (props.modelAuthStatusResult?.providers ?? []).map((record) =>
+      Object.assign({}, record, { provider: headingKey(record.provider) }),
+    ),
+  )) {
+    const selectedId =
+      props.accountSelection?.kind === "automatic"
+        ? undefined
+        : props.accountSelection?.authProfileId;
+    const auth = describeModelProviderAuth(provider, { authProfileId: selectedId });
+    if (auth) {
+      providerAuth.set(headingKey(provider.provider), auth);
+    }
+  }
   const {
     currentOverride,
     defaultModel,
@@ -249,19 +286,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       );
   const triggerModelValue = activeModelValue || currentOverride;
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
-  const defaultCatalogEntry = resolveChatModelCatalogEntry(defaultModel, props.modelCatalog);
-  const canonicalDefaultLabel = resolveChatModelPickerLabel(
-    defaultModel,
-    defaultLabel,
-    props.modelCatalog,
-  );
+  const defaultCatalogEntry = catalog.entry(defaultModel);
+  const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
   const pickerDefaultLabel =
     defaultModel && canonicalDefaultLabel !== defaultLabel
       ? t("chat.modelControls.defaultWithModel", { model: canonicalDefaultLabel })
       : defaultLabel;
   const normalizedDefaultModel = defaultModel.trim().toLowerCase();
   const modelOptions: ChatModelPickerOption[] = selectOptions.map((option) => {
-    const catalogEntry = resolveChatModelCatalogEntry(option.value, props.modelCatalog);
+    const catalogEntry = catalog.entry(option.value);
     const isDefault =
       option.value.trim().toLowerCase() === normalizedDefaultModel ||
       (catalogEntry !== undefined && catalogEntry === defaultCatalogEntry);
@@ -276,11 +309,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       commitValue: isDefault ? "" : option.value,
       isDefault,
       value: option.value,
-      label: resolveChatModelPickerLabel(option.value, option.label, props.modelCatalog),
-      provider: resolveChatModelProvider(
+      label: resolveChatModelPickerLabel(catalogEntry, option.label),
+      provider: catalog.provider(
         option.value,
-        props.modelCatalog,
-        "",
         isDefault
           ? defaultProviderHint
           : option.value === currentOverride
@@ -303,7 +334,27 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     return pickerOption;
   });
-  const currentCatalogEntry = resolveChatModelCatalogEntry(currentOverride, props.modelCatalog);
+  // Only a pin recorded on the session row makes Default a reset target: New Session
+  // drafts have no row, and a local optimistic override is not yet a recorded pin.
+  const sessionModelPinned = props.selectedSession?.modelOverrideSource === "user";
+  // That pin must stay clearable even when the configured default is absent from
+  // this catalog. Without it the row has no job (an agent-scoped catalog may
+  // legitimately omit the Gateway default), so nothing is synthesized.
+  if (
+    defaultModel &&
+    sessionModelPinned &&
+    modelOptions.length > 0 &&
+    !modelOptions.some((option) => option.isDefault)
+  ) {
+    modelOptions.unshift({
+      commitValue: "",
+      isDefault: true,
+      value: defaultModel,
+      label: formatPickerModelLabel(pickerDefaultLabel),
+      provider: catalog.provider(defaultModel, defaultProviderHint),
+    });
+  }
+  const currentCatalogEntry = catalog.entry(currentOverride);
   if (
     currentOverride &&
     modelOptions.length > 0 &&
@@ -323,12 +374,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       isDefault: false,
       value: currentOverride,
       label: currentCatalogEntry?.name.trim() || currentOverride,
-      provider: resolveChatModelProvider(
-        currentOverride,
-        props.modelCatalog,
-        "",
-        currentProviderHint,
-      ),
+      provider: catalog.provider(currentOverride, currentProviderHint),
     });
   }
   // A persisted pin can match a changed default; equality cannot establish inheritance.
@@ -338,18 +384,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ? modelOptions.find((option) => option.isDefault)
       : modelOptions.find((option) => option.value === pickerValue);
   const activeSessionModel = activeSession?.model
-    ? resolveChatModelCatalogEntry(
+    ? catalog.entry(
         resolvePreferredServerChatModelValue(
           activeSession.model,
           activeSession.modelProvider,
           props.modelCatalog,
         ),
-        props.modelCatalog,
       )
     : undefined;
-  const activeOptionModel = activeModelOption
-    ? resolveChatModelCatalogEntry(activeModelOption.value, props.modelCatalog)
-    : undefined;
+  const activeOptionModel = activeModelOption ? catalog.entry(activeModelOption.value) : undefined;
   const activeSessionRuntime = activeSession?.agentRuntime?.id.trim().toLowerCase();
   const activeOptionRuntime = (
     activeOptionModel?.agentRuntime?.id ??
@@ -378,9 +421,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ? t("chat.selectors.lockedSessionModel")
       : (modelOptions.find((entry) => entry.value === triggerModelValue)?.label ??
         resolveChatModelPickerLabel(
-          triggerModelValue,
+          catalog.entry(triggerModelValue),
           triggerModelValue || pickerDefaultLabel,
-          props.modelCatalog,
         ));
   const managedCatalog = props.modelCatalogState ?? {
     hasSnapshot: !props.modelsLoading,
@@ -396,12 +438,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     modelOptions.length,
     selectionKnown,
   );
-  // A verified-empty catalog means there is nothing to reason about: the effort
-  // picker would only steer a model that cannot be selected, so it hides with it.
   const hasResolvableModel =
     managedCatalog.status === "ready" &&
-    (modelOptions.some((option) => !option.disabled) ||
-      (props.modelSelectionLocked === true && activeModelOption !== undefined));
+    activeModelOption?.disabled !== true &&
+    modelOptions.some((option) => !option.disabled);
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
@@ -437,7 +477,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
-        accountControl: props.renderAccountControl?.(currentOverride || defaultModel),
+        providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
+        accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1
             ? {
@@ -450,7 +491,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
                 },
               }
             : undefined,
-        defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: managedCatalog,
@@ -462,7 +502,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
-        sessionModelPinned: modelOverrideSource === "user",
+        sessionModelPinned,
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerModelValue,

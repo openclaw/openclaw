@@ -1,6 +1,6 @@
 // Memory Core tests cover generic embedding provider.bridge plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
+import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -15,7 +15,7 @@ import {
   restoreRegisteredEmbeddingProviders,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddingProvider, resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
 
 let embeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
@@ -46,7 +46,10 @@ afterEach(() => {
 
 describe("memory-core generic embedding provider contract", () => {
   it("preserves a contract-declared provider and its identity metadata", async () => {
-    let createdProvider: EmbeddingProvider | undefined;
+    const embed = vi.fn(async () => [1, 2, 3]);
+    const embedBatch = vi.fn(async (inputs: EmbeddingInput[]) =>
+      inputs.map((_input, index) => [index, 7]),
+    );
     const { config, registry } = createPluginRegistryFixture({
       plugins: {
         enabled: false,
@@ -88,16 +91,15 @@ describe("memory-core generic embedding provider contract", () => {
             expect(options.model).toBe("virtual-model");
             expect(options.dimensions).toBe(7);
             expect(options.config).toBe(config);
-            createdProvider = {
-              id: "virtual-generic",
-              model: options.model,
-              dimensions: options.dimensions,
-              maxInputTokens: 2048,
-              embed: async () => [1, 2, 3],
-              embedBatch: async (inputs) => inputs.map((_input, index) => [index, 7]),
-            };
             return {
-              provider: createdProvider,
+              provider: {
+                id: "virtual-generic",
+                model: options.model,
+                dimensions: options.dimensions,
+                maxInputTokens: 2048,
+                embed,
+                embedBatch,
+              },
               runtime: {
                 id: "virtual-generic",
                 inlineQueryTimeoutMs: 1234,
@@ -156,6 +158,7 @@ describe("memory-core generic embedding provider contract", () => {
     expect(result.provider).toMatchObject({
       id: "virtual-generic",
       model: "virtual-model",
+      dimensions: 7,
       maxInputTokens: 2048,
     });
     expect(result.runtime).toEqual({
@@ -179,6 +182,18 @@ describe("memory-core generic embedding provider contract", () => {
       ],
     });
 
-    expect(result.provider).toBe(createdProvider);
+    await expect(result.provider?.embed("query", { inputType: "query" })).resolves.toEqual([
+      1, 2, 3,
+    ]);
+    expect(embed).toHaveBeenCalledExactlyOnceWith("query", { inputType: "query" });
+    const inputs: EmbeddingInput[] = [
+      "doc-a",
+      { text: "doc-b", parts: [{ type: "text", text: "doc-b" }] },
+    ];
+    await expect(result.provider?.embedBatch(inputs, { inputType: "document" })).resolves.toEqual([
+      [0, 7],
+      [1, 7],
+    ]);
+    expect(embedBatch).toHaveBeenCalledExactlyOnceWith(inputs, { inputType: "document" });
   });
 });

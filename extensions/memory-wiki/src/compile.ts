@@ -94,6 +94,21 @@ type DashboardPageDefinition = {
   }) => string;
 };
 
+function renderCountedList(
+  label: string,
+  lines: string[],
+  emptyText: string,
+  separator = "\n\n",
+): string {
+  return lines.length === 0
+    ? `- ${emptyText}`
+    : [`- ${label}: ${lines.length}`, lines.join("\n")].join(separator);
+}
+
+function renderReportSection(heading: string, lines: string[]): string[] {
+  return lines.length > 0 ? ["", `### ${heading}`, ...lines] : [];
+}
+
 const DASHBOARD_PAGES: DashboardPageDefinition[] = [
   {
     id: "report.open-questions",
@@ -101,22 +116,14 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     relativePath: "reports/open-questions.md",
     buildBody: ({ config, pages, sourceRelativeTo }) => {
       const matches = pages.filter((page) => page.questions.length > 0);
-      if (matches.length === 0) {
-        return "- No open questions right now.";
-      }
-      return [
-        `- Pages with open questions: ${matches.length}`,
-        "",
-        ...matches.map(
+      return renderCountedList(
+        "Pages with open questions",
+        matches.map(
           (page) =>
-            `- ${formatWikiLink({
-              renderMode: config.vault.renderMode,
-              relativePath: page.relativePath,
-              sourceRelativeTo,
-              title: page.title,
-            })}: ${page.questions.join(" | ")}`,
+            `- ${formatPageLink(config, page, sourceRelativeTo)}: ${page.questions.join(" | ")}`,
         ),
-      ].join("\n");
+        "No open questions right now.",
+      );
     },
   },
   {
@@ -129,23 +136,22 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       if (pageClusters.length === 0 && claimClusters.length === 0) {
         return "- No contradictions flagged right now.";
       }
-      const lines = [
+      return [
         `- Contradiction note clusters: ${pageClusters.length}`,
         `- Competing claim clusters: ${claimClusters.length}`,
-      ];
-      if (pageClusters.length > 0) {
-        lines.push("", "### Page Notes");
-        for (const cluster of pageClusters) {
-          lines.push(formatPageContradictionClusterLine(config, cluster, sourceRelativeTo));
-        }
-      }
-      if (claimClusters.length > 0) {
-        lines.push("", "### Claim Clusters");
-        for (const cluster of claimClusters) {
-          lines.push(formatClaimContradictionClusterLine(config, cluster, sourceRelativeTo));
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection(
+          "Page Notes",
+          pageClusters.map((cluster) =>
+            formatPageContradictionClusterLine(config, cluster, sourceRelativeTo),
+          ),
+        ),
+        ...renderReportSection(
+          "Claim Clusters",
+          claimClusters.map((cluster) =>
+            formatClaimContradictionClusterLine(config, cluster, sourceRelativeTo),
+          ),
+        ),
+      ].join("\n");
     },
   },
   {
@@ -162,25 +168,23 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       if (pageMatches.length === 0 && claimMatches.length === 0) {
         return "- No low-confidence pages or claims right now.";
       }
-      const lines = [
+      return [
         `- Low-confidence pages: ${pageMatches.length}`,
         `- Low-confidence claims: ${claimMatches.length}`,
-      ];
-      if (pageMatches.length > 0) {
-        lines.push("", "### Pages");
-        for (const page of pageMatches) {
-          lines.push(
-            `- ${formatPageLink(config, page, sourceRelativeTo)}: confidence ${(page.confidence ?? 0).toFixed(2)}`,
-          );
-        }
-      }
-      if (claimMatches.length > 0) {
-        lines.push("", "### Claims");
-        for (const claim of claimMatches) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection(
+          "Pages",
+          pageMatches.map(
+            (page) =>
+              `- ${formatPageLink(config, page, sourceRelativeTo)}: confidence ${(page.confidence ?? 0).toFixed(2)}`,
+          ),
+        ),
+        ...renderReportSection(
+          "Claims",
+          claimMatches.map(
+            (claim) => `- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`,
+          ),
+        ),
+      ].join("\n");
     },
   },
   {
@@ -201,30 +205,16 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       ) {
         return "- No claim health issues right now.";
       }
-      const lines = [
+      const claimLines = (claims: WikiClaimHealth[]) =>
+        claims.map((claim) => `- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
+      return [
         `- Claims missing evidence: ${missingEvidence.length}`,
         `- Contested claims: ${contestedClaims.length}`,
         `- Stale or unknown claims: ${staleClaims.length}`,
-      ];
-      if (missingEvidence.length > 0) {
-        lines.push("", "### Missing Evidence");
-        for (const claim of missingEvidence) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      if (contestedClaims.length > 0) {
-        lines.push("", "### Contested Claims");
-        for (const claim of contestedClaims) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      if (staleClaims.length > 0) {
-        lines.push("", "### Stale Claims");
-        for (const claim of staleClaims) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection("Missing Evidence", claimLines(missingEvidence)),
+        ...renderReportSection("Contested Claims", claimLines(contestedClaims)),
+        ...renderReportSection("Stale Claims", claimLines(staleClaims)),
+      ].join("\n");
     },
   },
   {
@@ -252,17 +242,14 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
           return [{ page, freshness }];
         })
         .toSorted((left, right) => left.page.title.localeCompare(right.page.title));
-      if (matches.length === 0) {
-        return `- No aging or stale pages older than ${WIKI_AGING_DAYS} days.`;
-      }
-      return [
-        `- Stale pages: ${matches.length}`,
-        "",
-        ...matches.map(
+      return renderCountedList(
+        "Stale pages",
+        matches.map(
           ({ page, freshness }) =>
             `- ${formatPageLink(config, page, sourceRelativeTo)}: ${formatFreshnessLabel(freshness)}`,
         ),
-      ].join("\n");
+        `No aging or stale pages older than ${WIKI_AGING_DAYS} days.`,
+      );
     },
   },
   {
@@ -273,15 +260,15 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       const matches = pages
         .filter((page) => page.kind !== "report" && isPersonLikePage(page))
         .toSorted((left, right) => left.title.localeCompare(right.title));
-      if (matches.length === 0) {
-        return "- No person-like entity pages with agent cards yet.";
-      }
-      const lines = [`- People with routing metadata: ${matches.length}`];
-      for (const page of matches) {
-        const freshness = assessPageFreshness(page, now);
-        lines.push(`- ${formatPersonDirectoryLine(config, page, freshness, sourceRelativeTo)}`);
-      }
-      return lines.join("\n");
+      return renderCountedList(
+        "People with routing metadata",
+        matches.map(
+          (page) =>
+            `- ${formatPersonDirectoryLine(config, page, assessPageFreshness(page, now), sourceRelativeTo)}`,
+        ),
+        "No person-like entity pages with agent cards yet.",
+        "\n",
+      );
     },
   },
   {
@@ -298,17 +285,14 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
             `${right.page.title} ${rightTitle}`,
           );
         });
-      if (relationships.length === 0) {
-        return "- No structured relationships yet.";
-      }
-      return [
-        `- Structured relationships: ${relationships.length}`,
-        "",
-        ...relationships.map(
+      return renderCountedList(
+        "Structured relationships",
+        relationships.map(
           ({ page, relationship }) =>
             `- ${formatRelationshipLine(config, page, relationship, sourceRelativeTo)}`,
         ),
-      ].join("\n");
+        "No structured relationships yet.",
+      );
     },
   },
   {
@@ -335,25 +319,19 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       const sourceCounts = countBy(
         evidenceEntries.map(({ evidence }) => evidence.sourceId ?? evidence.path ?? "inline"),
       );
-      const lines = [
+      return [
         `- Evidence entries: ${evidenceEntries.length}`,
         `- Claims missing evidence: ${missingEvidence.length}`,
-        "",
-        "### Evidence Classes",
-        ...formatCountLines(kindCounts),
-        "",
-        "### Top Evidence Sources",
-        ...formatCountLines(sourceCounts).slice(0, 20),
-      ];
-      if (missingEvidence.length > 0) {
-        lines.push("", "### Missing Evidence");
-        for (const { page, claim } of missingEvidence) {
-          lines.push(
-            `- ${formatPageLink(config, page, sourceRelativeTo)}: ${formatClaimIdentityForPage(claim)}`,
-          );
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection("Evidence Classes", formatCountLines(kindCounts)),
+        ...renderReportSection("Top Evidence Sources", formatCountLines(sourceCounts).slice(0, 20)),
+        ...renderReportSection(
+          "Missing Evidence",
+          missingEvidence.map(
+            ({ page, claim }) =>
+              `- ${formatPageLink(config, page, sourceRelativeTo)}: ${formatClaimIdentityForPage(claim)}`,
+          ),
+        ),
+      ].join("\n");
     },
   },
   {
@@ -362,10 +340,11 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     relativePath: "reports/privacy-review.md",
     buildBody: ({ config, pages, sourceRelativeTo }) => {
       const entries = collectPrivacyReviewEntries(config, pages, sourceRelativeTo);
-      if (entries.length === 0) {
-        return "- No non-public privacy tiers flagged right now.";
-      }
-      return [`- Privacy review entries: ${entries.length}`, "", ...entries].join("\n");
+      return renderCountedList(
+        "Privacy review entries",
+        entries,
+        "No non-public privacy tiers flagged right now.",
+      );
     },
   },
 ];
@@ -759,15 +738,7 @@ function renderWikiPageLinks(params: {
   sourceRelativeTo?: string;
 }): string {
   return params.pages
-    .map(
-      (page) =>
-        `- ${formatWikiLink({
-          renderMode: params.config.vault.renderMode,
-          relativePath: page.relativePath,
-          sourceRelativeTo: params.sourceRelativeTo,
-          title: page.title,
-        })}`,
-    )
+    .map((page) => `- ${formatPageLink(params.config, page, params.sourceRelativeTo)}`)
     .join("\n");
 }
 
@@ -850,35 +821,22 @@ function buildRelatedBlockBody(params: {
   ).slice(0, MAX_RELATED_PAGES_PER_SECTION);
 
   const sections: string[] = [];
-  if (sourcePages.length > 0) {
-    sections.push(
-      "### Sources",
-      renderWikiPageLinks({
-        config: params.config,
-        pages: sourcePages,
-        sourceRelativeTo: params.page.relativePath,
-      }),
-    );
-  }
-  if (backlinkPages.length > 0) {
-    sections.push(
-      "### Referenced By",
-      renderWikiPageLinks({
-        config: params.config,
-        pages: backlinkPages,
-        sourceRelativeTo: params.page.relativePath,
-      }),
-    );
-  }
-  if (relatedPages.length > 0) {
-    sections.push(
-      "### Related Pages",
-      renderWikiPageLinks({
-        config: params.config,
-        pages: relatedPages,
-        sourceRelativeTo: params.page.relativePath,
-      }),
-    );
+  const groups: Array<[string, WikiPageSummary[]]> = [
+    ["Sources", sourcePages],
+    ["Referenced By", backlinkPages],
+    ["Related Pages", relatedPages],
+  ];
+  for (const [heading, pages] of groups) {
+    if (pages.length > 0) {
+      sections.push(
+        `### ${heading}`,
+        renderWikiPageLinks({
+          config: params.config,
+          pages,
+          sourceRelativeTo: params.page.relativePath,
+        }),
+      );
+    }
   }
   if (sections.length === 0) {
     return "- No related pages yet.";
@@ -938,17 +896,7 @@ function renderSectionList(params: {
   if (params.pages.length === 0) {
     return `- ${params.emptyText}`;
   }
-  return params.pages
-    .map(
-      (page) =>
-        `- ${formatWikiLink({
-          renderMode: params.config.vault.renderMode,
-          relativePath: page.relativePath,
-          sourceRelativeTo: params.sourceRelativeTo,
-          title: page.title,
-        })}`,
-    )
-    .join("\n");
+  return renderWikiPageLinks(params);
 }
 
 async function writeManagedMarkdownFile(params: {
@@ -1023,41 +971,28 @@ async function writeDashboardPage(params: {
     typeof parsed.frontmatter.updatedAt === "string" && parsed.frontmatter.updatedAt.trim()
       ? parsed.frontmatter.updatedAt
       : params.now.toISOString();
-  const stableRendered = withTrailingNewline(
-    renderWikiMarkdown({
-      frontmatter: {
-        ...parsed.frontmatter,
-        pageType: "report",
-        id: params.definition.id,
-        title: params.definition.title,
-        status:
-          typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()
-            ? parsed.frontmatter.status
-            : "active",
-        updatedAt: preservedUpdatedAt,
-      },
-      body: updatedBody,
-    }),
-  );
+  const renderWithUpdatedAt = (updatedAt: string) =>
+    withTrailingNewline(
+      renderWikiMarkdown({
+        frontmatter: {
+          ...parsed.frontmatter,
+          pageType: "report",
+          id: params.definition.id,
+          title: params.definition.title,
+          status:
+            typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()
+              ? parsed.frontmatter.status
+              : "active",
+          updatedAt,
+        },
+        body: updatedBody,
+      }),
+    );
+  const stableRendered = renderWithUpdatedAt(preservedUpdatedAt);
   if (stableRendered === original) {
     return false;
   }
-  const rendered = withTrailingNewline(
-    renderWikiMarkdown({
-      frontmatter: {
-        ...parsed.frontmatter,
-        pageType: "report",
-        id: params.definition.id,
-        title: params.definition.title,
-        status:
-          typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()
-            ? parsed.frontmatter.status
-            : "active",
-        updatedAt: params.now.toISOString(),
-      },
-      body: updatedBody,
-    }),
-  );
+  const rendered = renderWithUpdatedAt(params.now.toISOString());
   await root.write(params.definition.relativePath, rendered);
   return true;
 }

@@ -5,11 +5,15 @@ import Testing
 @testable import OpenClaw
 
 extension QuickChatModelControlSnapshot {
+    static let testThinkingOptions = ["off", "minimal", "low", "medium", "high"].map {
+        OpenClawChatThinkingLevelOption(id: $0, label: $0)
+    }
+
     static let testFixture = QuickChatModelControlSnapshot(
         models: [],
         currentModelSelectionID: nil,
         currentThinkingLevel: nil,
-        thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+        thinkingOptions: Self.testThinkingOptions,
         defaultProvider: nil)
 }
 
@@ -20,7 +24,8 @@ struct QuickChatPowerFeaturesTests {
         name: "Sol",
         provider: "openai",
         contextWindow: 400_000,
-        reasoning: true)
+        reasoning: true,
+        thinkingLevels: ["off", "medium", "high"].map { .init(id: $0, label: $0) })
 
     @Test func `dictation inserts at a UTF16 caret and replaces each partial`() {
         let text = "Hello"
@@ -137,7 +142,7 @@ struct QuickChatPowerFeaturesTests {
         #expect(sections.providers.first?.isDefaultProvider == true)
     }
 
-    @Test func `model controls use target agent defaults when no session row exists`() throws {
+    @Test func `model controls use the target model profile when no session row exists`() throws {
         let sessions = try JSONDecoder().decode(
             OpenClawChatSessionsListResponse.self,
             from: Data(Self.sessionsFixture.utf8))
@@ -146,7 +151,10 @@ struct QuickChatPowerFeaturesTests {
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
             target: QuickChatRoutingTarget(sessionKey: "agent:work:main", agentID: nil),
-            models: [],
+            models: [.init(
+                modelID: "deepseek-v4", name: "Fixture", provider: "deepseek", contextWindow: nil,
+                thinkingLevels: [.init(id: "off", label: "off"), .init(id: "high", label: "high")],
+                thinkingDefault: "high")],
             sessions: sessions,
             agents: agents)
 
@@ -215,10 +223,10 @@ struct QuickChatPowerFeaturesTests {
                     models: [],
                     currentModelSelectionID: nil,
                     currentThinkingLevel: "low",
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let presentationID = model.beginPresentation()
         await model.refreshForPresentation(id: presentationID)
         model.selectThinkingLevel("high")
@@ -253,7 +261,7 @@ struct QuickChatPowerFeaturesTests {
                     models: [choice],
                     currentModelSelectionID: controlsCallCount == 1 ? nil : choice.selectionID,
                     currentThinkingLevel: nil,
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
             patchProvider: { _, _ in
@@ -296,7 +304,8 @@ struct QuickChatPowerFeaturesTests {
         #expect(sendCount == 0)
     }
 
-    @Test func `failed post-patch refresh preserves and blocks explicit reasoning`() async {
+    @Test(arguments: [false, true])
+    func `failed post-patch refresh preserves and blocks explicit reasoning`(publishedFailure: Bool) async {
         let patchStarted = AsyncTestGate()
         let finishPatch = AsyncTestGate()
         let refreshStarted = AsyncTestGate()
@@ -315,13 +324,19 @@ struct QuickChatPowerFeaturesTests {
                 if controlsCallCount > 1 {
                     refreshStarted.open()
                     await finishRefresh.wait()
+                    if publishedFailure {
+                        return QuickChatModelControlSnapshot(
+                            models: [], currentModelSelectionID: choice.selectionID, currentThinkingLevel: nil,
+                            thinkingOptions: [], defaultProvider: choice.provider,
+                            catalogMessage: "Model choices could not refresh.", catalogRefreshFailed: true)
+                    }
                     throw QuickChatModelControlsTestError.refreshFailed
                 }
                 return QuickChatModelControlSnapshot(
                     models: [choice],
                     currentModelSelectionID: nil,
                     currentThinkingLevel: nil,
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
             patchProvider: { _, _ in
@@ -397,10 +412,10 @@ struct QuickChatPowerFeaturesTests {
                     models: [choice],
                     currentModelSelectionID: nil,
                     currentThinkingLevel: nil,
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
-            modelPatchProvider: { target, _ in
+            settingsPatchProvider: { target, _ in
                 #expect(target == QuickChatRoutingTarget(sessionKey: "agent:a:main", agentID: nil))
                 patchStarted.open()
                 await finishPatch.wait()
@@ -453,10 +468,122 @@ struct QuickChatPowerFeaturesTests {
         #expect(patchCompleted)
     }
 
+    @Test func `accepted speed writes settle before sending with a new retry key`() async throws {
+        let patchStarted = AsyncTestGate()
+        let finishPatch = AsyncTestGate()
+        let choice = OpenClawChatModelChoice(
+            modelID: "choice", name: "Fixture", provider: "fixture", contextWindow: nil,
+            supportsFastMode: true)
+        var session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
+            #"{"key":"agent:main:main","modelProvider":"fixture","model":"choice"}"#.utf8))
+        var keys: [String] = []
+        let model = Self.model(
+            sendProvider: { _, _, _, _, key, _ in
+                keys.append(key)
+                if keys.count == 1 { throw URLError(.networkConnectionLost) }
+                return "ok"
+            },
+            controlsProvider: { target in
+                QuickChatModelControlLogic.snapshot(
+                    target: target, models: [choice],
+                    sessions: .init(ts: nil, path: nil, count: nil, defaults: nil, sessions: [session]),
+                    agents: nil)
+            },
+            patchProvider: { target, patch in
+                #expect(target.sessionKey == "agent:main:main")
+                #expect(patch.model == nil)
+                #expect(patch.fastMode == .some(.on))
+                patchStarted.open()
+                await finishPatch.wait()
+                session.fastMode = .on
+                session.effectiveFastMode = .on
+                return nil
+            })
+        defer { model.endPresentation() }
+        await model.refreshForPresentation(id: model.beginPresentation())
+        model.text = "Hello"
+        #expect(await !model.send())
+        model.selectSpeed(.on)
+        let send = Task { await model.send() }
+        await patchStarted.wait()
+        #expect(keys.count == 1)
+        #expect(model.isUpdatingModel)
+        finishPatch.open()
+        #expect(await send.value)
+        try #require(keys.count == 2)
+        #expect(keys[0] != keys[1])
+        #expect(model.speed.isEnabled)
+    }
+
+    @Test func `a rejected speed write preserves published state and the idempotent retry`() async throws {
+        let choice = OpenClawChatModelChoice(
+            modelID: "choice", name: "Fixture", provider: "fixture", contextWindow: nil,
+            supportsFastMode: true)
+        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
+            #"{"key":"agent:main:main","modelProvider":"fixture","model":"choice","fastMode":false}"#.utf8))
+        var keys: [String] = []
+        let model = Self.model(
+            sendProvider: { _, _, _, _, key, _ in
+                keys.append(key)
+                if keys.count == 1 { throw URLError(.networkConnectionLost) }
+                return "ok"
+            },
+            controlsProvider: { target in
+                QuickChatModelControlLogic.snapshot(
+                    target: target, models: [choice],
+                    sessions: .init(ts: nil, path: nil, count: nil, defaults: nil, sessions: [session]), agents: nil)
+            },
+            patchProvider: { _, _ in throw QuickChatModelControlsTestError.refreshFailed })
+        defer { model.endPresentation() }
+        await model.refreshForPresentation(id: model.beginPresentation())
+        model.text = "Hello"
+        #expect(await !model.send())
+        model.selectSpeed(.on)
+        #expect(await !model.send())
+        #expect(keys.count == 1)
+        #expect(model.speed.override == .off)
+        #expect(!model.speed.isEnabled)
+        #expect(model.modelControlStatusMessage != nil)
+        #expect(await model.send())
+        try #require(keys.count == 2)
+        #expect(keys[0] == keys[1])
+    }
+
+    @Test func `settings reload preserves explicit effort and published guidance when support is unknown`() async {
+        let choice = OpenClawChatModelChoice(
+            modelID: "choice", name: "Fixture", provider: "fixture", contextWindow: nil,
+            supportsFastMode: true)
+        var reads = 0
+        var sends = 0
+        let model = Self.model(
+            sendProvider: { _, _, _, _, _, _ in sends += 1
+                return "ok"
+            },
+            controlsProvider: { _ in
+                reads += 1
+                return QuickChatModelControlSnapshot(
+                    models: [choice], currentModelSelectionID: choice.selectionID, currentThinkingLevel: nil,
+                    thinkingOptions: reads == 1 ? [.init(id: "high", label: "Thorough")] : [],
+                    defaultProvider: "fixture",
+                    catalogMessage: reads == 1 ? nil : "Update the Gateway for model choices.",
+                    speed: .resolve(session: nil, model: choice))
+            },
+            patchProvider: { _, _ in nil })
+        defer { model.endPresentation() }
+        await model.refreshForPresentation(id: model.beginPresentation())
+        model.selectThinkingLevel("high")
+        model.text = "Hello"
+        model.selectSpeed(.on)
+        #expect(await !model.send())
+        #expect(model.selectedThinkingLevel == "high")
+        #expect(model.modelControlStatusMessage == "Update the Gateway for model choices.")
+        #expect(sends == 0)
+    }
+
     private static func model(
         sendProvider: @escaping QuickChatModel.SendProvider = { _, _, _, _, _, _ in "ok" },
         controlsProvider: @escaping QuickChatModel.ModelControlsProvider,
-        patchProvider: @escaping QuickChatModel.ModelPatchProvider) -> QuickChatModel
+        patchProvider: @escaping QuickChatModel.SettingsPatchProvider) -> QuickChatModel
     {
         QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },
@@ -477,7 +604,7 @@ struct QuickChatPowerFeaturesTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: controlsProvider,
-            modelPatchProvider: patchProvider)
+            settingsPatchProvider: patchProvider)
     }
 
     private static func message(

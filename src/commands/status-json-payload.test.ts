@@ -58,9 +58,20 @@ describe("status-json-payload", () => {
           cfg: { update: { channel: "stable" }, gateway: {} },
           update: {
             root: "/tmp/openclaw",
-            installKind: "package",
+            installKind: "git",
             packageManager: "npm",
             registry: { latestVersion: "1.2.3" },
+            git: {
+              ahead: 0,
+              behind: 0,
+              countsCached: true,
+              stale: {
+                reason: "fetch-failed",
+                failedAtMs: 1000,
+                detail: "network error",
+                runId: "run-1",
+              },
+            },
           } as never,
           tailscaleMode: "serve",
           gatewayMode: "remote",
@@ -101,9 +112,20 @@ describe("status-json-payload", () => {
       os: { platform: "linux" },
       update: {
         root: "/tmp/openclaw",
-        installKind: "package",
+        installKind: "git",
         packageManager: "npm",
         registry: { latestVersion: "1.2.3" },
+        git: {
+          ahead: 0,
+          behind: 0,
+          countsCached: true,
+          stale: {
+            reason: "fetch-failed",
+            failedAtMs: 1000,
+            detail: "network error",
+            runId: "run-1",
+          },
+        },
       },
       updateChannel: "stable",
       updateChannelSource: "config",

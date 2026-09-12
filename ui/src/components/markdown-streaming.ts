@@ -4,10 +4,13 @@ import {
   findMarkdownCodeRegions,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
 import {
-  markdownDisclosureTagKind,
-  MAX_MARKDOWN_DETAILS_DEPTH,
+  consumeMarkdownRawHtmlLine,
+  findMarkdownRawHtmlRanges,
+  walkMarkdownDisclosureTags,
+  type MarkdownDetailsFrame,
   scanMarkdownDisclosureLine,
 } from "./markdown-details.ts";
+import { createMarkdownParser } from "./markdown-parser.ts";
 
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
@@ -16,7 +19,6 @@ const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
 const DISCLOSURE_LINE_CANDIDATE_RE = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/iu;
 const STREAMING_SPLIT_CACHE_LIMIT = 8;
 
-type DetailsFrame = { hasSummary: boolean };
 type FenceMarker = { length: number; marker: "`" | "~" };
 type StrippedMarkdownLine = { content: string; offset: number };
 
@@ -55,7 +57,7 @@ function isFenceClose(line: string, fence: FenceMarker): boolean {
 
 function updateDetailsStack(
   line: string,
-  stack: DetailsFrame[],
+  stack: MarkdownDetailsFrame[],
   allowPendingSummary: boolean,
   codeSpans: ReadonlyArray<readonly [number, number]>,
   lineOffset: number,
@@ -66,42 +68,7 @@ function updateDetailsStack(
     codeSpans,
     lineOffset + stripped.offset,
   );
-  if (!tags) {
-    return false;
-  }
-  const kinds = tags.map((tag) => markdownDisclosureTagKind(tag.raw));
-  const nextSummaryClose = Array.from({ length: tags.length }, () => -1);
-  let nearestSummaryClose = -1;
-  for (let index = tags.length - 1; index >= 0; index -= 1) {
-    nextSummaryClose[index] = nearestSummaryClose;
-    if (kinds[index] === "summary_close") {
-      nearestSummaryClose = index;
-    }
-  }
-  for (let index = 0; index < tags.length; index += 1) {
-    const kind = kinds[index];
-    if (
-      (kind === "details_open" || kind === "details_open_expanded") &&
-      stack.length < MAX_MARKDOWN_DETAILS_DEPTH
-    ) {
-      stack.push({ hasSummary: false });
-    } else if (kind === "details_close" && stack.length > 0) {
-      stack.pop();
-    } else if (kind === "summary_open") {
-      const frame = stack.at(-1);
-      if (!frame || frame.hasSummary) {
-        continue;
-      }
-      const closeIndex = nextSummaryClose[index] ?? -1;
-      if (closeIndex >= 0) {
-        frame.hasSummary = true;
-        index = closeIndex;
-      } else if (allowPendingSummary) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return tags ? walkMarkdownDisclosureTags(tags, stack, { allowPendingSummary }) : false;
 }
 
 type StreamingMarkdownSplit = {
@@ -116,7 +83,7 @@ type StreamingMarkdownCursor = {
   firstListOffset: number | null;
   hasLinkReferenceDefinition: boolean;
   index: number;
-  lastFenceOffset: number;
+  lastLiteralOffset: number;
   lineMode: "fence" | "plain" | null;
   openFence: FenceMarker | null;
 };
@@ -124,6 +91,8 @@ type StreamingMarkdownCursor = {
 type StreamingMarkdownCacheEntry = {
   cursor: StreamingMarkdownCursor;
   markdown: string;
+  rawTail: boolean;
+  result: StreamingMarkdownSplit;
 };
 
 // A reused row key does not imply append-only text: rollovers, snapshots, and
@@ -137,6 +106,41 @@ function findStreamingCodeSpans(markdown: string, start: number): Array<[number,
   ]);
 }
 
+let rawHtmlParser: ReturnType<typeof createMarkdownParser> | undefined;
+
+function createStreamingRawHtmlScanner(
+  markdown: string,
+  start: number,
+  getCodeSpans: () => ReadonlyArray<readonly [number, number]>,
+) {
+  let ranges: Array<[number, number]> | undefined;
+  let current = 0;
+  return (line: string, index: number) => {
+    const stripped = stripMarkdownContainerPrefixes(line);
+    if (
+      !ranges &&
+      stripped.content.trimStart().startsWith("<") &&
+      consumeMarkdownRawHtmlLine(
+        stripped.content,
+        { context: null },
+        getCodeSpans(),
+        index + stripped.offset,
+      )
+    ) {
+      ranges = findMarkdownRawHtmlRanges(
+        markdown.slice(start),
+        (rawHtmlParser ??= createMarkdownParser()),
+      ).map(([from, to]) => [from + start, to + start]);
+    }
+    let range = ranges?.[current];
+    while (range && range[1] <= index) {
+      current += 1;
+      range = ranges?.[current];
+    }
+    return range && range[0] <= index && index < range[1] ? range : undefined;
+  };
+}
+
 function scanStableStreamingMarkdown(
   markdownLocal: string,
   cursor: StreamingMarkdownCursor = {
@@ -144,20 +148,20 @@ function scanStableStreamingMarkdown(
     firstListOffset: null,
     hasLinkReferenceDefinition: false,
     index: 0,
-    lastFenceOffset: 0,
+    lastLiteralOffset: 0,
     lineMode: null,
     openFence: null,
   },
-): { cursor: StreamingMarkdownCursor; result: StreamingMarkdownSplit } {
-  let { boundary, firstListOffset, hasLinkReferenceDefinition, index, lastFenceOffset } = cursor;
+): { cursor: StreamingMarkdownCursor; rawTail: boolean; result: StreamingMarkdownSplit } {
+  let { boundary, firstListOffset, hasLinkReferenceDefinition, index, lastLiteralOffset } = cursor;
   let lineMode = cursor.lineMode;
   let openFence = cursor.openFence;
-  const detailsStack: DetailsFrame[] = [];
-  // Completed fences cannot gain indentation ownership from later prose. Keep
+  const detailsStack: MarkdownDetailsFrame[] = [];
+  // Completed literal blocks cannot gain indentation ownership from later prose. Keep
   // list containers and unfinished fences intact when parsing the retained suffix.
   const codeStart = cursor.openFence
     ? 0
-    : Math.min(cursor.lastFenceOffset, cursor.firstListOffset ?? cursor.lastFenceOffset);
+    : Math.min(cursor.lastLiteralOffset, cursor.firstListOffset ?? cursor.lastLiteralOffset);
   const codeInput = markdownLocal.slice(codeStart);
   const codeRegions = / {4}|\t/u.test(codeInput)
     ? findMarkdownCodeRegions(codeInput).map((region) => ({
@@ -169,7 +173,13 @@ function scanStableStreamingMarkdown(
   let codeSpans: ReturnType<typeof findMarkdownCodeSpans> | undefined = codeRegions.length
     ? codeRegions.map(({ start, end }) => [start, end])
     : undefined;
+  const findRawHtmlRange = createStreamingRawHtmlScanner(
+    markdownLocal,
+    Math.min(cursor.boundary, cursor.firstListOffset ?? cursor.boundary),
+    () => (codeSpans ??= findStreamingCodeSpans(markdownLocal, firstListOffset ?? boundary)),
+  );
   let resumeCursor = cursor;
+  let rawTail = false;
 
   while (index < markdownLocal.length) {
     const nextLineBreak = markdownLocal.indexOf("\n", index);
@@ -182,7 +192,7 @@ function scanStableStreamingMarkdown(
         firstListOffset,
         hasLinkReferenceDefinition,
         index,
-        lastFenceOffset,
+        lastLiteralOffset,
         lineMode,
         openFence,
       };
@@ -190,48 +200,63 @@ function scanStableStreamingMarkdown(
     }
     const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
     const lineFence = openFence;
+    let rawHtmlLine = false;
 
     if (openFence) {
       if (isFenceClose(line, openFence)) {
         openFence = null;
-        lastFenceOffset = lineEnd;
+        lastLiteralOffset = lineEnd;
         if (detailsStack.length === 0) {
           boundary = lineEnd;
         }
       }
     } else {
-      if (firstListOffset === null && LIST_ITEM_OPEN_RE.test(line)) {
-        firstListOffset = index;
+      const strippedLine = stripMarkdownContainerPrefixes(line);
+      const rawHtmlRange = findRawHtmlRange(line, index);
+      rawHtmlLine = rawHtmlRange !== undefined;
+      if (
+        firstListOffset === null &&
+        LIST_ITEM_OPEN_RE.test(line) &&
+        (!rawHtmlRange || rawHtmlRange[0] === index)
+      ) {
+        // A list also retains the disclosure that contains it.
+        firstListOffset = detailsStack.length > 0 ? boundary : index;
       }
-
-      const openingFence = getFenceMarker(line);
-      if (openingFence) {
-        openFence = openingFence;
-        lastFenceOffset = lineEnd;
+      if (rawHtmlLine) {
+        lastLiteralOffset = lineEnd;
+        const content = strippedLine.content.trimStart();
+        rawTail = nextLineBreak === -1 && content.length > 0 && !content.startsWith("<");
       } else {
-        const strippedLine = stripMarkdownContainerPrefixes(line).content;
-        if (DISCLOSURE_LINE_CANDIDATE_RE.test(strippedLine)) {
-          updateDetailsStack(
-            line,
-            detailsStack,
-            false,
-            (codeSpans ??= findStreamingCodeSpans(markdownLocal, firstListOffset ?? boundary)),
-            index,
-          );
-        }
-        if (detailsStack.length === 0) {
-          if (LINK_REFERENCE_CANDIDATE_RE.test(strippedLine)) {
-            hasLinkReferenceDefinition = true;
+        const openingFence = getFenceMarker(line);
+        if (openingFence) {
+          openFence = openingFence;
+          lastLiteralOffset = lineEnd;
+        } else {
+          if (DISCLOSURE_LINE_CANDIDATE_RE.test(strippedLine.content)) {
+            updateDetailsStack(
+              line,
+              detailsStack,
+              false,
+              (codeSpans ??= findStreamingCodeSpans(markdownLocal, firstListOffset ?? boundary)),
+              index,
+            );
           }
-          if (line.trim() === "") {
-            boundary = lineEnd;
+          if (detailsStack.length === 0) {
+            if (LINK_REFERENCE_CANDIDATE_RE.test(strippedLine.content)) {
+              hasLinkReferenceDefinition = true;
+            }
+            if (line.trim() === "") {
+              boundary = lineEnd;
+            }
           }
         }
       }
     }
     index = lineEnd;
+    // A raw token at EOF can extend on append; resume only after a later nonliteral line.
     if (
       detailsStack.length === 0 &&
+      !rawHtmlLine &&
       (nextLineBreak !== -1 || canResumeStreamingLine(line, lineFence))
     ) {
       lineMode = nextLineBreak === -1 ? (lineFence ? "fence" : "plain") : null;
@@ -240,7 +265,7 @@ function scanStableStreamingMarkdown(
         firstListOffset,
         hasLinkReferenceDefinition,
         index,
-        lastFenceOffset,
+        lastLiteralOffset,
         lineMode,
         openFence,
       };
@@ -259,7 +284,7 @@ function scanStableStreamingMarkdown(
 
   // Blank lines inside indented code do not retire the block, and prose repair
   // must never complete punctuation in any parser-owned code block.
-  let lastCodeEnd = lastFenceOffset;
+  let lastLiteralEnd = lastLiteralOffset;
   for (const region of codeRegions) {
     if (!region.block) {
       continue;
@@ -267,14 +292,15 @@ function scanStableStreamingMarkdown(
     if (region.start < boundary && boundary < region.end) {
       boundary = region.start;
     }
-    lastCodeEnd = Math.max(lastCodeEnd, region.end);
+    lastLiteralEnd = Math.max(lastLiteralEnd, region.end);
   }
 
   return {
     cursor: resumeCursor,
+    rawTail,
     result: {
       boundary,
-      tailRepairStart: openFence ? null : Math.max(boundary, lastCodeEnd),
+      tailRepairStart: openFence ? null : Math.max(boundary, lastLiteralEnd),
     },
   };
 }
@@ -297,12 +323,19 @@ export function splitStableStreamingMarkdown(
   }
   const stableMarkdown = markdownLocal.slice(0, stablePrefixLength);
   const cached = streamingSplitCache.get(streamKey);
-  const scanned = scanStableStreamingMarkdown(
-    stableMarkdown,
-    cached && stableMarkdown.startsWith(cached.markdown) ? cached.cursor : undefined,
-  );
+  const append = cached && stableMarkdown.startsWith(cached.markdown);
+  // Appending within an established literal line cannot change its container.
+  // A new line or an ambiguous opener goes back through the native block parser.
+  const scanned =
+    append && cached.rawTail && !/[\r\n]/u.test(stableMarkdown.slice(cached.markdown.length))
+      ? {
+          cursor: cached.cursor,
+          rawTail: true,
+          result: { boundary: cached.result.boundary, tailRepairStart: stableMarkdown.length },
+        }
+      : scanStableStreamingMarkdown(stableMarkdown, append ? cached.cursor : undefined);
   streamingSplitCache.delete(streamKey);
-  streamingSplitCache.set(streamKey, { cursor: scanned.cursor, markdown: stableMarkdown });
+  streamingSplitCache.set(streamKey, { ...scanned, markdown: stableMarkdown });
   while (streamingSplitCache.size > STREAMING_SPLIT_CACHE_LIMIT) {
     const oldest = streamingSplitCache.keys().next().value;
     if (oldest === undefined) {
@@ -321,15 +354,23 @@ export function splitStableStreamingMarkdown(
 // completing `$$` would inject visible characters into ordinary prose.
 const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies RemendOptions;
 
-// Preserve completed fences verbatim while repairing only the prose after them.
-export function repairStreamingMarkdownTail(tail: string, repairStart = 0): string {
+// repairStart is the splitter-owned literal boundary relative to this tail.
+export function repairStreamingMarkdownTail(tail: string, repairStart: number): string {
+  if (repairStart === tail.length) {
+    return tail;
+  }
   const repaired =
     tail.slice(0, repairStart) + remend(tail.slice(repairStart), streamingRemendOptions);
   if (!repaired.includes("<")) {
     return repaired;
   }
-  const detailsStack: DetailsFrame[] = [];
+  const detailsStack: MarkdownDetailsFrame[] = [];
   const codeSpans = findMarkdownCodeSpans(repaired);
+  const findRawHtmlRange = createStreamingRawHtmlScanner(
+    tail.slice(0, repairStart),
+    0,
+    () => codeSpans,
+  );
   let openFence: FenceMarker | null = null;
   let pendingSummary = false;
   let index = 0;
@@ -341,13 +382,13 @@ export function repairStreamingMarkdownTail(tail: string, repairStart = 0): stri
       if (isFenceClose(line, openFence)) {
         openFence = null;
       }
-    } else {
+    } else if (!findRawHtmlRange(line, index)) {
       openFence = getFenceMarker(line);
       if (!openFence) {
         pendingSummary = updateDetailsStack(
           line,
           detailsStack,
-          lineEnd === repaired.length,
+          nextLineBreak === -1,
           codeSpans,
           index,
         );

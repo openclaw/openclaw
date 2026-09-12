@@ -10,10 +10,10 @@ read_when:
 ---
 
 Mantis publishes visual CI evidence and a PR comment for OpenClaw behavior.
-Live transport scenarios compare a known-bad baseline with a candidate ref;
-focused browser lanes may instead prove one candidate against a deterministic
+Live transport scenarios compare a known-bad baseline with a candidate ref.
+Focused browser lanes may instead prove one candidate against a deterministic
 mocked transport. Discord shipped first with real bot auth, guild channels, reactions, threads,
-and a browser witness. Slack and focused Control UI chat lanes exist too;
+and a browser witness. Slack and focused Control UI chat lanes exist too.
 WhatsApp and Matrix are unimplemented.
 
 ## Ownership
@@ -22,7 +22,7 @@ WhatsApp and Matrix are unimplemented.
 - QA Lab (`extensions/qa-lab/src/live-transports/*`): live transport harness, driver/SUT bots, report/evidence writers.
 - Crabbox (`openclaw/crabbox`): warmed Linux machines, leases, VNC, `crabbox media preview`.
 - GitHub Actions (`.github/workflows/mantis-*.yml`): remote entrypoints, artifact retention.
-- ClawSweeper: independently reviews proof and owns review/readiness policy. Mantis workflow dispatch and evidence publication are separate from ordinary review publication; a Mantis result does not itself grant readiness or merge permission.
+- ClawSweeper: independently reviews proof and owns review/readiness policy. Mantis workflow dispatch and evidence publication are separate from ordinary review publication. A Mantis result does not itself grant readiness or merge permission.
 
 ## CLI commands
 
@@ -39,10 +39,10 @@ at build/run time (bundled workflows set `OPENCLAW_BUILD_PRIVATE_QA=1` and
 | `slack-desktop-smoke`           | Lease/reuse a Crabbox desktop, run Slack QA inside it, open Slack Web, capture evidence.                                                                  |
 | `visual-task` / `visual-driver` | Generic Crabbox desktop capture with optional image-understanding assertions; `visual-driver` is the driver half launched under `crabbox record --while`. |
 
-Every command accepts `--repo-root <path>` and `--output-dir <path>`; Crabbox
+Every command accepts `--repo-root <path>` and `--output-dir <path>`. Crabbox
 commands also accept `--crabbox-bin`, `--provider`, `--machine-class`/`--class`,
 `--lease-id`, `--idle-timeout`, `--ttl`, and `--keep-lease`. Local CLI defaults
-for provider/class are `hetzner`/`beast` unless noted otherwise; CI workflows
+for provider/class are `hetzner`/`beast` unless noted otherwise. CI workflows
 usually override both.
 
 ### `discord-smoke`
@@ -95,7 +95,7 @@ candidate under `<output-dir>/worktrees/`, runs `pnpm install`/`pnpm build` in
 each (unless skipped), then runs
 `pnpm openclaw qa discord --scenario <id> --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --allow-failures`
 against each worktree. Each lane writes `discord-qa-reaction-timelines.json`
-plus a `<scenario-id>-timeline.html`/`.png` pair; the runner copies this
+plus a `<scenario-id>-timeline.html`/`.png` pair. The runner copies this
 evidence back under `baseline/`/`candidate/`, writes `comparison.json`,
 `mantis-report.md`, and `mantis-evidence.json` in the output directory, and
 exits nonzero if the comparison did not pass (baseline `fail` and candidate
@@ -124,19 +124,19 @@ Flags:
 
 - `--lease-id <cbx_...>` reuses a warmed desktop instead of creating one.
 - `--browser-profile-dir <remote-path>` reuses a remote Chrome user-data-dir so a persistent desktop stays logged in between runs (used for a long-lived Discord Web viewer profile).
-- `--browser-profile-archive-env <name>` restores a base64 `.tgz` Chrome profile archive from that env var before launch (default `OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64`); used for logged-in witnesses like Discord Web.
+- `--browser-profile-archive-env <name>` restores a base64 `.tgz` Chrome profile archive from that env var before launch (default `OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64`). Use it for logged-in witnesses like Discord Web.
 - `--video-duration <seconds>` controls MP4 capture length (default 10s).
-- `--keep-lease` (or `OPENCLAW_MANTIS_KEEP_VM=1`) keeps a lease this run created open for VNC inspection; failed runs that created a lease also keep it by default.
+- `--keep-lease` (or `OPENCLAW_MANTIS_KEEP_VM=1`) keeps a lease this run created open for VNC inspection. Failed runs that created a lease also keep it by default.
 
 For Discord Web evidence, Mantis uses a dedicated viewer account, not a bot
-token. The Discord REST oracle (via `qa discord`) remains authoritative; when
+token. The Discord REST oracle (via `qa discord`) remains authoritative. When
 `OPENCLAW_QA_DISCORD_CAPTURE_UI_METADATA=1` is set, the scenario also writes a
 Discord Web URL artifact, and `OPENCLAW_QA_DISCORD_KEEP_THREADS=1` leaves the
 thread open long enough for the browser to open it.
 
 The GitHub workflow prefers a persistent viewer profile via
 `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` (full profile archives can outgrow
-GitHub's secret size limit); for small/bootstrap profiles it can restore a
+GitHub's secret size limit). For small or bootstrap profiles it can restore a
 base64 `.tgz` from `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64` instead. With
 neither source configured, the workflow still publishes the deterministic
 baseline/candidate screenshots and logs that the logged-in witness was
@@ -162,10 +162,10 @@ With `--gateway-setup`, the command creates a persistent disposable OpenClaw
 home at `$HOME/.openclaw-mantis/slack-openclaw` in the VM, patches Slack
 Socket Mode config for the target channel, starts
 `openclaw gateway run --dev --allow-unconfigured --port 38973`, and leaves
-Chrome running in the VNC session; omitting `--gateway-setup` runs the normal
+Chrome running in the VNC session. Omitting `--gateway-setup` runs the normal
 bot-to-bot Slack QA lane instead.
 
-Required env for `--credential-source env` (local default is `env`; role
+Required env for `--credential-source env` (local default is `env`, role
 default is `maintainer`):
 
 - `OPENCLAW_QA_SLACK_CHANNEL_ID`
@@ -182,26 +182,26 @@ bot token into the VM as `OPENCLAW_MANTIS_SLACK_*` env vars, so GitHub
 workflows only need the Convex broker secret, not raw Slack tokens.
 
 Other flags: `--slack-url <url>` opens a specific URL (otherwise Mantis derives
-`https://app.slack.com/client/<team>/<channel>` from `auth.test`);
-`--slack-channel-id <id>` sets the gateway allowlist channel;
+`https://app.slack.com/client/<team>/<channel>` from `auth.test`).
+`--slack-channel-id <id>` sets the gateway allowlist channel.
 `OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR` controls the persistent Chrome
-profile inside the VM (default `$HOME/.config/openclaw-mantis/slack-chrome-profile`);
+profile inside the VM (default `$HOME/.config/openclaw-mantis/slack-chrome-profile`).
 `--approval-checkpoints` runs the native Slack approval scenarios
 (`slack-approval-exec-native`, `slack-approval-plugin-native`) and renders
 pending/resolved checkpoint screenshots instead of gateway setup (mutually
-exclusive with `--gateway-setup`); `--hydrate-mode source|prehydrated`,
+exclusive with `--gateway-setup`). `--hydrate-mode source|prehydrated`,
 `--provider-mode`, `--model`, `--alt-model`, and `--fast` pass through to the
 Slack live lane.
 
 Approval checkpoint screenshots are rendered from the Slack API message the
-scenario observed, not the live Slack UI; `slack-desktop-smoke.png` is only
+scenario observed, not the live Slack UI. `slack-desktop-smoke.png` is only
 proof of Slack Web itself when the lease's browser profile was already logged
 in.
 
 ## Evidence manifest
 
 The publisher requires schema version 2 of `mantis-evidence.json` next to
-the report. Each included lane must declare `expectationMet`; the publisher
+the report. Each included lane must declare `expectationMet`. The publisher
 downgrades a claimed pass when a lane's expectation was not met. For example:
 
 ```json
@@ -251,9 +251,9 @@ not evidence that the baseline reproduced the bug.
 
 The local `qa mantis run` producer still emits schema version 1, which the
 publisher rejects. Do not relabel that output as version 2 without deriving
-its lane expectations from observations; the workflow producers emit version 2.
+its lane expectations from observations. The workflow producers emit version 2.
 
-Artifact `path` is relative to the manifest's directory; `targetPath` is
+Artifact `path` is relative to the manifest's directory. `targetPath` is
 relative to the configured R2/S3 artifact prefix. `scripts/mantis/publish-pr-evidence.mjs`
 rejects path traversal and skips entries with `"required": false` when the
 file is missing.
@@ -276,7 +276,7 @@ A run's on-disk artifact layout:
 
 Screenshots are evidence, not secrets, but still need redaction discipline:
 private channel names, usernames, or message content may appear. Set
-`OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public artifact uploads; it is
+`OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public artifact uploads. It is
 enabled by default in the Discord and Slack GitHub workflows.
 
 ## GitHub automation
@@ -324,7 +324,7 @@ The separate request-bound integration in
 reviewer select relevant proof before completing its original review. It does
 not restore automatic post-review recording or require every check on every PR.
 Hosted execution requires the trusted producer workflows on `main` and the
-matching ClawSweeper Worker/runtime deployment; merging documentation does not
+matching ClawSweeper Worker/runtime deployment. Merging documentation does not
 activate it. The existing Convex credential service is still required, but its
 APIs are reused without a Convex schema change or deployment.
 
@@ -338,20 +338,20 @@ proof available, without supplying a SHA:
 @clawsweeper proof web-ui-chat-proof,telegram-bot-e2e-proof
 ```
 
-The bare command lets the reviewer select useful checks; explicit selections
+The bare command lets the reviewer select useful checks. Explicit selections
 request each named check. The review resolves the current PR head. Control UI
-supports the fixed chat smoke against a mocked Gateway; Telegram supports a
+supports the fixed chat smoke against a mocked Gateway. Telegram supports a
 bounded, data-only Test Server plan. The legacy Crabline recipe is not a third
 inline tool. Missing, late, or incomplete observations remain inconclusive.
-The reviewer assesses results in the same review; successful execution alone
+The reviewer assesses results in the same review. Successful execution alone
 does not clear proof, other readiness blockers, or merge requirements.
 
 Selected checks share a 20-minute proof ceiling, further bounded by the original
 review's remaining time minus its final-decision reserve. With the default
 20-minute review timeout and 90-second reserve, that is at most 18m30s if invoked
 immediately, less after analysis. This is a ceiling, not a fixed wait or a fresh
-budget per check. A consumer timeout does not itself cancel a dispatched producer;
-producer cleanup and credential/lease limits remain separate.
+budget per check. A consumer timeout does not itself cancel a dispatched producer.
+Producer cleanup and credential or lease limits remain separate.
 
 ### Telegram proof is a separate QA entrypoint
 
@@ -371,7 +371,7 @@ activity.
 The recorder can observe messages, edits, deletions, reactions, and typing.
 Judge events after the recorded stimulus from the selected SUT, correlate
 message IDs and expected provider requests, and verify cleanup. The QA adapter's
-current driver exposes a narrower message/edit stream; choose the entrypoint
+current driver exposes a narrower message/edit stream. Choose the entrypoint
 whose observations actually cover the claim. A generic successful reply does
 not prove formatting, reaction, lifecycle, or threading behavior.
 
@@ -385,8 +385,8 @@ authorized, isolated worker, never an ordinary read-only review.
 The request-bound proof integration lets ClawSweeper choose a relevant check
 before finishing its current review. It does not run every check on every PR.
 The exact PR head is resolved by the review, not typed by the maintainer.
-`@clawsweeper proof` requests one review with proof available as a manual override;
-the result is evaluated in that review rather than generating a second review.
+`@clawsweeper proof` requests one review with proof available as a manual override.
+The result is evaluated in that review rather than generating a second review.
 
 The automatic surfaces are:
 
@@ -397,7 +397,7 @@ The automatic surfaces are:
 - Control UI: the existing fixed chat smoke recipe against a mocked Gateway.
   This is not an arbitrary browser-task runner or proof of all UI behavior.
 
-The separate fixed Crabline recipe remains a producer entrypoint; it is not a
+The separate fixed Crabline recipe remains a producer entrypoint. It is not a
 third automatic tool or a mandatory three-check batch.
 
 A trusted external controller owns the Telegram userbot and real bot token.
@@ -405,7 +405,7 @@ The candidate receives a disposable token alias and a restricted DM API proxy,
 not the QA lease, Telegram session, GitHub token, or deployment credentials.
 The candidate runs in a disposable Crabbox local-container on an internal
 network without a Docker socket. Deployment requires a Linux/Podman environment
-where this isolated Crabbox SSH lifecycle has been verified; a generic Docker
+where this isolated Crabbox SSH lifecycle has been verified. A generic Docker
 smoke run does not establish that compatibility.
 
 The controller reuses the existing Convex acquire, heartbeat, payload, and
@@ -422,7 +422,7 @@ Oversized or incomplete observations fail closed. Its assertion outcome stays
 `inconclusive`: the original reviewer must assess the observations against the
 claim. A green process exit, canned reply, or video does not automatically clear
 proof or other readiness blockers. Bot registration/webhook operations are
-simulated; live production Telegram, groups, media, and unrestricted agent
+simulated. Live production Telegram, groups, media, and unrestricted agent
 commands are outside this bounded plan.
 Transport profile display names are synthetic, while routing IDs and the selected
 bot username are retained where required. Message text is not rewritten by this
@@ -431,7 +431,7 @@ outside this proof surface.
 
 ## Machines and secrets
 
-Local CLI Crabbox defaults are `--provider hetzner --class beast`; override
+Local CLI Crabbox defaults are `--provider hetzner --class beast`. Override them
 with `--provider`, `--class`/`--machine-class`, or
 `OPENCLAW_MANTIS_CRABBOX_PROVIDER` / `OPENCLAW_MANTIS_CRABBOX_CLASS`. GitHub
 workflows commonly override both (for example `--class standard`, and the
@@ -478,7 +478,7 @@ environment does not read as a product regression:
   or provider failed before the oracle was meaningful.
 
 Candidate-only browser proof reports whether the candidate passed the mocked
-Gateway and visible UI assertions; it does not claim baseline reproduction.
+Gateway and visible UI assertions. It does not claim baseline reproduction.
 
 ## Adding a scenario
 
@@ -502,7 +502,7 @@ and keep vision checks additive to a platform-API oracle where one exists.
 
 After Discord and Slack, the same runner shape extends to WhatsApp (QR login,
 re-identification, delivery, media, reactions) and Matrix (encrypted rooms,
-thread/reply relations, restart resume); neither is implemented yet.
+thread/reply relations, restart resume). Neither is implemented yet.
 
 ## Open questions
 
@@ -510,3 +510,10 @@ thread/reply relations, restart resume); neither is implemented yet.
   bot is reused?
 - How long should GitHub retain Mantis artifacts for PRs?
 - Should screenshots be redacted or cropped before upload for public PRs?
+
+## Related
+
+- [QA overview](/concepts/qa-e2e-automation) — where Mantis sits among the QA lanes
+- [Mantis Slack desktop runbook](/concepts/mantis-slack-desktop-runbook) — the real-UI Slack lane driven by Mantis
+- [CI pipeline](/ci) — the jobs that run Mantis scenarios
+- [Pull request review flow](/reference/pull-request-review-flow) — how Mantis evidence lands on a PR

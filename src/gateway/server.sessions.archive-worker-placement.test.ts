@@ -1,7 +1,10 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -10,7 +13,13 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
+import {
+  REQUEST,
+  seedProvisioningPlacement,
+} from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
@@ -82,6 +91,81 @@ function placementReader(current: () => WorkerSessionPlacementRecord | undefined
     },
   };
 }
+
+test.each([false, true])(
+  "sessions.patch waits for orphaned provisioning cleanup (failure=%s)",
+  async (destroyFails) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    const harness = createHarness(database, placements, { workspacePath: dir, destroyFails });
+    seedProvisioningPlacement(placements, harness.ready.environmentId);
+    await writeSessionStore({
+      entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
+    });
+    const destroy = vi.mocked(harness.environments.destroy).getMockImplementation()!;
+    const destroying = createDeferredCore();
+    const release = createDeferredCore();
+    vi.mocked(harness.environments.destroy).mockImplementation(async (environmentId) => {
+      destroying.resolve();
+      await release.promise;
+      return await destroy(environmentId);
+    });
+    const archive = directSessionReq(
+      "sessions.patch",
+      {
+        key: REQUEST.sessionKey,
+        archived: true,
+        expectedSessionId: REQUEST.sessionId,
+      },
+      {
+        context: {
+          workerEnvironmentService: createWorkerInferenceDrainService(
+            () => ({
+              drained: Promise.resolve(),
+              hasWork: () => false,
+              release: vi.fn(),
+            }),
+            harness.environments,
+          ),
+          workerSessionPlacementService: placements,
+          workerPlacementDispatchService: harness.service,
+        },
+      },
+    );
+    try {
+      await Promise.race([
+        destroying.promise,
+        archive.then((result) => {
+          expect(result).toMatchObject({ ok: true });
+          throw new Error("archive completed before worker destruction");
+        }),
+      ]);
+      expect(
+        loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt,
+      ).toBeUndefined();
+      release.resolve();
+      if (destroyFails) {
+        await expect(archive).resolves.toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+        expect(placements.get(REQUEST.sessionId)?.state).toBe("failed");
+        expect(harness.environments.get(harness.ready.environmentId)?.state).not.toBe("destroyed");
+        expect(
+          loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt,
+        ).toBeUndefined();
+        return;
+      }
+      await expect(archive).resolves.toMatchObject({ ok: true });
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
+      expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
+      expect(loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt).toEqual(
+        expect.any(Number),
+      );
+    } finally {
+      release.resolve();
+      await archive;
+    }
+  },
+);
 
 test("sessions.patch reclaims the exact active cloud placement before archive metadata commits", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -267,64 +351,53 @@ test("sessions.patch rejects a placement identity changed during the runtime dra
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
-test.each([
-  { name: "requested", state: "requested" as const },
-  { name: "provisioning", state: "provisioning" as const },
-  { name: "syncing", state: "syncing" as const },
-  { name: "starting", state: "starting" as const },
-  { name: "draining", state: "draining" as const },
-  { name: "reconciling", state: "reconciling" as const },
-  {
-    name: "failed with a live environment",
-    state: "failed" as const,
-    environmentState: "attached",
+test.each(["requested", "provisioning", "syncing", "starting", "draining", "failed"] as const)(
+  "sessions.patch stops %s placement before archiving",
+  async (state) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = `agent:main:archive-cloud-${state}`;
+    const sessionId = `session-archive-cloud-${state}`;
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    let placement = workerPlacement({ sessionId, sessionKey, state });
+    const reclaim = vi.fn(async () => {
+      placement = workerPlacement({ sessionId, sessionKey, state: "local" });
+      return placement;
+    });
+    const archived = await directSessionReq(
+      "sessions.patch",
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
+      {
+        context: {
+          workerSessionPlacementService: placementReader(() => placement),
+          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        },
+      },
+    );
+    expect(archived).toMatchObject({ ok: true });
+    expect(reclaim).toHaveBeenCalledOnce();
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
   },
-  {
-    name: "failed with cleanup still pending",
-    state: "failed" as const,
-    environmentState: "destroying",
-  },
-  { name: "failed with an unknown environment", state: "failed" as const },
-])("sessions.patch rejects $name before cancellation or reclaim", async (testCase) => {
+);
+
+test("sessions.patch keeps reconciliation pending before cancellation", async () => {
   const { storePath } = await createSessionStoreDir();
-  const caseId = testCase.name.replaceAll(" ", "-");
-  const sessionKey = `agent:main:archive-cloud-${caseId}`;
-  const sessionId = `session-archive-cloud-${caseId}`;
+  const sessionKey = "agent:main:archive-cloud-reconciling";
+  const sessionId = "session-archive-cloud-reconciling";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placement = workerPlacement({ sessionId, sessionKey, state: testCase.state });
+  const placement = workerPlacement({ sessionId, sessionKey, state: "reconciling" });
   const reclaim = vi.fn();
   embeddedRunMock.activeIds.add(sessionId);
-
   const archived = await directSessionReq(
     "sessions.patch",
     { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
-        ...(testCase.environmentState
-          ? {
-              workerEnvironmentService: {
-                get: () => ({ state: testCase.environmentState, leaseId: "lease" }),
-              },
-            }
-          : {}),
         workerSessionPlacementService: placementReader(() => placement),
         workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
       },
     },
   );
-
-  expect(archived).toMatchObject({
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      retryable: testCase.state !== "failed",
-      message: expect.stringContaining(`cloud worker placement is ${testCase.state}`),
-    },
-  });
-  if (testCase.state === "failed") {
-    expect(archived.error?.message).toContain("Stop cloud worker");
-    expect(archived.error?.message).toContain("provider error");
-  }
+  expect(archived).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: true } });
   expect(reclaim).not.toHaveBeenCalled();
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expectNoSessionQueueCleanup();

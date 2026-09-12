@@ -15,6 +15,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
+import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type {
@@ -49,7 +50,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private loadingCatalog: "pending" | Set<string> | null = null;
   private readonly stops: ControlUiDisposer[] = [];
   private client: GatewayBrowserClient | null = null;
-  private hello: object | null = null;
+  private connectionId: string | null = null;
   private refreshGeneration = 0;
   private disposed = false;
   private diagnostics: PluginControlUiDiagnostic[] = [];
@@ -88,9 +89,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       throw new Error("Reloading plugin UI requires a connected operator with admin access.");
     }
     const client = this.client;
-    const hello = this.hello;
+    const connectionId = this.connectionId;
     await client.request("plugins.controlUi.reload", {});
-    if (this.disposed || this.client !== client || this.hello !== hello) {
+    if (this.disposed || this.client !== client || this.connectionId !== connectionId) {
       throw new Error("The connection changed while reloading plugin UI. Reconnect and retry.");
     }
     await this.refresh();
@@ -113,7 +114,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.stops.push(
       context.gateway.subscribe(() => this.syncConnection()),
       context.gateway.subscribeEvents((event) => {
-        if (event.event === "plugins.controlUi.changed") {
+        if (event.event === "plugins.controlUi.changed" || event.event === "plugins.changed") {
           void this.refresh();
         }
       }),
@@ -124,13 +125,14 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private syncConnection(): void {
     const snapshot = this.getContext().gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
-    const hello = client ? snapshot.hello : null;
-    if (this.client === client && this.hello === hello) {
+    // Plugin generations can change while the server connection and UI owners survive.
+    const connectionId = client ? (snapshot.hello?.server?.connId ?? null) : null;
+    if (this.client === client && this.connectionId === connectionId) {
       return;
     }
     this.retireOwners();
     this.client = client;
-    this.hello = hello;
+    this.connectionId = connectionId;
     this.diagnostics = [];
     this.publish();
     if (client && isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")) {
@@ -172,7 +174,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       if (catalog.plugins.length) {
         const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
         gatewayUrl.protocol = gatewayUrl.protocol.replace(/^ws/u, "http");
-        if (gatewayUrl.origin !== window.location.origin) {
+        if (!hasSameOriginGatewayTransport(client.gatewayUrl)) {
           this.loadingCatalog = null;
           const error = new Error(
             `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`,

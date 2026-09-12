@@ -28,7 +28,7 @@ openclaw doctor
 
 <AccordionGroup>
   <Accordion title="Automations not firing">
-    - Check `cron.enabled` and the `OPENCLAW_SKIP_CRON` env var.
+    - Check the `cron.enabled` config setting and `OPENCLAW_SKIP_CRON` in the Gateway's launch environment. Either can disable automatic runs; clear both disable settings and restart the Gateway to enable scheduling.
     - Confirm the Gateway is running continuously.
     - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
     - `reason: not-due` in run output means the manual run was checked with `openclaw automations run <jobId> --due` and the job was not due yet.

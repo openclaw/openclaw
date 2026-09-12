@@ -1,11 +1,16 @@
 // Gateway concurrency benchmark tests cover CLI controls, probe budgets, and summaries.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
+import {
+  controlGatewayHeapProfile,
+  readGatewayHeapProfile,
+} from "../../scripts/lib/gateway-bench-heap.ts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
 type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
@@ -39,6 +44,65 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it("profiles load allocations after collection without charging startup allocations", async () => {
+    await withTempDir("gateway-heap-profile-", async (dir) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--expose-gc",
+          "--import",
+          new URL("../../scripts/lib/gateway-bench-heap-preload.ts", import.meta.url).href,
+          "--input-type=module",
+          "--eval",
+          `process.stdin.resume();
+        function startupAllocations() {
+          return Array.from({ length: 20000 }, (_, index) => Array(100).fill(index));
+        }
+        globalThis.startup = startupAllocations();
+        globalThis.startup = null;
+        gc();
+        function loadAllocations() {
+          return Array.from({ length: 20000 }, (_, index) => Array(100).fill(index));
+        }
+        process.on("message", (message) => {
+          if (message !== "allocate") return;
+          globalThis.load = loadAllocations();
+          globalThis.load = null;
+          gc();
+          gc();
+          process.send("allocated");
+        });
+        process.send("ready");`,
+        ],
+        { stdio: ["pipe", "pipe", "pipe", "ipc"] },
+      );
+      const exited = once(child, "exit");
+      try {
+        const ready = await Promise.race([
+          once(child, "message"),
+          exited.then(() => {
+            throw new Error("Heap profile fixture exited before ready");
+          }),
+        ]);
+        expect(ready[0]).toBe("ready");
+        const profilePath = `${dir}/load.heapprofile`;
+        await controlGatewayHeapProfile(child, "start", profilePath);
+        const allocated = once(child, "message");
+        child.send("allocate");
+        expect((await allocated)[0]).toBe("allocated");
+        await controlGatewayHeapProfile(child, "stop", profilePath);
+        const profile = readGatewayHeapProfile(profilePath);
+        expect(profile.sampledAllocatedBytes).toBeGreaterThan(1_000_000);
+        const stacks = profile.topAllocationSites.flatMap((site) => site.stack).join("\n");
+        expect(stacks).toContain("loadAllocations");
+        expect(stacks).not.toContain("startupAllocations");
+      } finally {
+        child.kill();
+        await exited;
+      }
+    });
+  });
+
   it("parses benchmark controls without booting a gateway", () => {
     expect(
       testing.parseOptions([
@@ -54,6 +118,8 @@ describe("gateway concurrency benchmark script", () => {
         "90000",
         "--cpu-prof-dir",
         "/tmp/gateway-cpu-profiles",
+        "--heap-prof-dir",
+        "/tmp/gateway-heap-profiles",
         "--plugin-count",
         "50",
         "--session-count",
@@ -91,6 +157,7 @@ describe("gateway concurrency benchmark script", () => {
       cadenceMs: 50,
       concurrency: 12,
       cpuProfDir: "/tmp/gateway-cpu-profiles",
+      heapProfDir: "/tmp/gateway-heap-profiles",
       diagnosticsTimeline: false,
       json: true,
       historyBurst: 5,

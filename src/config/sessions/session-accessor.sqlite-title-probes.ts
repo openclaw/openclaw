@@ -14,6 +14,7 @@ type TitleProbeDatabase = Pick<
   | "session_transcript_active_events"
   | "session_transcript_index_state"
   | "session_windows"
+  | "session_transcript_cold_archives"
   | "transcript_events"
   | "transcript_rewrite_watermarks"
 > & {
@@ -104,7 +105,17 @@ function readTitleProbeChunk(
               .limit(1)
               .as("latest_boundary_type"),
           ])
-          .where("window.session_id", "in", sessionIds),
+          .where("window.session_id", "in", sessionIds)
+          .where((eb) =>
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom("session_transcript_cold_archives as cold")
+                  .select("cold.session_id")
+                  .whereRef("cold.session_id", "=", "window.session_id"),
+              ),
+            ),
+          ),
       ).rows;
       const probes = new Map<string, SessionTranscriptTitleProbe>();
       for (const row of windows) {

@@ -219,7 +219,13 @@ describe("Workshop current collection", () => {
           "skills.proposals.inspect",
           fixture.responses["skills.proposals.inspect"],
         );
-        await gateway.resolveDeferred(method, {});
+        const record = inspect.response.record;
+        await gateway.resolveDeferred(
+          method,
+          action === "Apply"
+            ? { record, targetSkillFile: `skills/${record.target.skillKey}/SKILL.md` }
+            : record,
+        );
         await expect.poll(() => page.locator(".sw-row").count()).toBe(remaining);
         const notice = page.locator(".sw-action-toast");
         await expect
@@ -334,11 +340,10 @@ describe("Workshop current collection", () => {
           ...fixture.manifest,
           installedSkills: [],
         });
-        const listsBeforeScan = (await gateway.getRequests("skills.proposals.list")).length;
-        await page.locator(".sw-history").getByRole("button").click();
-        await gateway.waitForRequest("skills.proposals.list", { after: listsBeforeScan });
-        await expect.poll(() => skills.textContent()).toContain("0");
+        const listsBeforeRefresh = (await gateway.getRequests("skills.proposals.list")).length;
         await page.locator("#skill-workshop-mode-tab-skills").click();
+        await gateway.waitForRequest("skills.proposals.list", { after: listsBeforeRefresh });
+        await expect.poll(() => skills.textContent()).toContain("0");
         await page.getByText("No skills installed yet", { exact: true }).waitFor();
         expect(await page.locator(".sw-installed-skill").count()).toBe(0);
         expect(

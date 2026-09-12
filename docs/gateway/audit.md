@@ -352,8 +352,9 @@ See [Audit records](/cli/audit) for the full field reference and query filters.
 
 ## Message lifecycle events
 
-Set [`logging.audit.messages`](/gateway/config-observability#audit) to choose what
-is recorded, then restart the Gateway:
+Choose message audit metadata in **Settings → Advanced → Logging**, or set
+[`logging.audit.messages`](/gateway/config-observability#audit), then restart
+the Gateway:
 
 - `off` (default): no message records.
 - `direct`: only messages in direct conversations.

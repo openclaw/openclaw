@@ -8,7 +8,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -254,6 +254,7 @@ suite.define(() => {
       });
     }
 
+    await page.setViewportSize({ width: 1440, height: 900 });
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const previewBubble = page.locator(".chat-bubble", { has: preview });
     const widgetActions = preview.locator("[data-widget-actions]");
@@ -265,16 +266,82 @@ suite.define(() => {
           .evaluate((element) => getComputedStyle(element).padding),
       )
       .toBe("0px");
+    await page.mouse.move(0, 0);
     await expect
-      .poll(() =>
-        preview.evaluate((element) => {
-          const actions = element.querySelector(".chat-tool-card__preview-actions");
-          return actions
-            ? actions.getBoundingClientRect().bottom <= element.getBoundingClientRect().top
-            : false;
-        }),
-      )
+      .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("0");
+    const restingBox = (await preview.boundingBox())!;
+    const pin = preview.getByRole("button", { name: "Pin to dashboard" });
+    const more = preview.getByRole("button", { name: "Widget actions", exact: true });
+    await pin.focus();
+    await pin.hover();
+    // Hover keeps the toolbar visible after keyboard focus leaves it.
+    await page.locator(".agent-chat__composer-combobox textarea").focus();
+    await expect
+      .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
+    const geometry = await preview.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const pinBox = element.querySelector("[data-pin-widget]")!.getBoundingClientRect();
+      const moreBox = element
+        .querySelector(".chat-tool-card__widget-actions-trigger")!
+        .getBoundingClientRect();
+      const panelBox = element
+        .querySelector(".chat-tool-card__preview-panel")!
+        .getBoundingClientRect();
+      return {
+        gap: pinBox.left - box.right,
+        actionLeftOffset: moreBox.left - pinBox.left,
+        actionVerticalGap: moreBox.top - pinBox.bottom,
+        top: pinBox.top - box.top,
+        box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        panelWidth: panelBox.width,
+      };
+    });
+    expect(geometry.gap).toBeGreaterThan(0);
+    expect(geometry.top).toBe(0);
+    expect(geometry.actionLeftOffset).toBe(0);
+    expect(geometry.actionVerticalGap).toBeGreaterThan(0);
+    expect(geometry.box).toEqual(restingBox);
+    expect(geometry.panelWidth).toBe(restingBox.width);
+    const pinBox = (await pin.boundingBox())!;
+    await page.mouse.move(pinBox.x - geometry.gap / 2, pinBox.y + pinBox.height / 2);
+    await page.mouse.move(pinBox.x + pinBox.width / 2, pinBox.y + pinBox.height / 2);
+    await expect
+      .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
+    await page.mouse.move(0, 0);
+    await pin.focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() => more.evaluate((element) => element.matches(":focus-visible")))
       .toBe(true);
+    await expect
+      .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => preview.locator("wa-dropdown[open]").count()).toBe(1);
+    await page.keyboard.press("Escape");
+    for (const width of [796, 794, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect
+        .poll(() =>
+          preview.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const actions = element.querySelector("[data-widget-actions]")!.getBoundingClientRect();
+            const thread = element.closest(".chat-thread")!;
+            const edge =
+              thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
+            return edge - box.right >= 40
+              ? actions.left >= box.right && actions.right <= edge && actions.top === box.top
+              : actions.right <= box.right && actions.bottom === box.top;
+          }),
+        )
+        .toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await pin.focus();
+    await pin.hover();
     await expect
       .poll(() =>
         preview
@@ -289,7 +356,7 @@ suite.define(() => {
         .toBe("1");
       await writeFile(
         path.join(suite.artifactDir, "workboard-pin", "01-pin-hover.png"),
-        await takeControlUiElementScreenshot(page, previewBubble, [preview]),
+        await takeControlUiViewportScreenshot(page, previewBubble, [preview]),
       );
     }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
@@ -307,7 +374,7 @@ suite.define(() => {
     if (recordProof) {
       await writeFile(
         path.join(suite.artifactDir, "workboard-pin", "02-pinned.png"),
-        await takeControlUiElementScreenshot(page, previewBubble, [preview]),
+        await takeControlUiViewportScreenshot(page, previewBubble, [preview]),
       );
     }
     await gateway.setMethodResponse("board.get", pinnedBoardSnapshot);
@@ -408,7 +475,23 @@ suite.define(() => {
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const pin = preview.getByRole("button", { name: "Pin to dashboard" });
-    await preview.hover();
+    await expect
+      .poll(() =>
+        preview
+          .locator("[data-widget-actions]")
+          .evaluate((element) => getComputedStyle(element).opacity),
+      )
+      .toBe("0.6");
+    await expect
+      .poll(() =>
+        pin.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const thread = element.closest(".chat-thread")!.getBoundingClientRect();
+          return box.top >= thread.top;
+        }),
+      )
+      .toBe(true);
+    await pin.focus();
     await pin.click();
 
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
@@ -417,6 +500,7 @@ suite.define(() => {
     expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await pin.isEnabled()).toBe(true);
     await page.mouse.move(0, 0);
+    await pin.focus();
     await pin.hover();
     const hint = page.locator("wa-tooltip[open]");
     await hint.locator('[part="body"]').waitFor({ state: "visible" });

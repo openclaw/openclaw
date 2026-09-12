@@ -12,27 +12,23 @@ import type {
   ModelChoice as ProtocolModelChoice,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
-import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   SessionCompactionCheckpoint as ProtocolSessionCompactionCheckpoint,
-  SessionObserverDigest,
   SessionsCompactionBranchResult as ProtocolSessionsCompactionBranchResult,
   SessionsCompactionListResult as ProtocolSessionsCompactionListResult,
   SessionsCompactionRestoreResult as ProtocolSessionsCompactionRestoreResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
-  SessionContextBudgetStatus,
-  SessionGoal,
-} from "../../../src/config/sessions/types.js";
-import type { FastModeSource } from "../../../src/shared/fast-mode.js";
+  GatewaySessionRow as GatewayWireSessionRow,
+  GatewaySessionsDefaults as GatewayWireSessionsDefaults,
+  SessionsPatchResult as GatewayWireSessionsPatchResult,
+} from "../../../src/gateway/session-utils.types.js";
 import type {
-  GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   GatewayContextWindowOption,
   GatewayThinkingLevelOption,
@@ -213,19 +209,7 @@ export type ConfigSnapshot = {
 
 export type PresenceEntry = ProtocolPresenceEntry;
 
-export type GatewaySessionsDefaults = {
-  modelProvider: string | null;
-  model: string | null;
-  contextTokens: number | null;
-  contextWindow?: string;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  agentRuntime?: GatewayAgentRuntime;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  modelSelectionTarget?: "session" | "agent" | "global";
-};
+export type GatewaySessionsDefaults = GatewayWireSessionsDefaults;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
@@ -239,75 +223,24 @@ export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
 };
 
-type SubagentRunState = "active" | "interrupted" | "historical";
-
 export type SessionCompactionCheckpoint = Omit<
   ProtocolSessionCompactionCheckpoint,
   "tokensVersion"
 >;
 
-type SessionCompactionCheckpointPreview = Pick<
-  SessionCompactionCheckpoint,
-  "checkpointId" | "createdAt" | "reason"
->;
-
-export type GatewaySessionRow = SessionRow & {
-  contextBudgetStatus?: SessionContextBudgetStatus;
-  /** Transient UI-owned Swarm note overlays, not persisted session fields. */
-  swarmPhase?: string;
-  swarmPhaseRank?: number;
-  swarmLog?: string;
-  placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
-  icon?: string;
-  channelAvatarUrl?: string;
-  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
-  category?: string;
-  surface?: string;
-  subject?: string;
-  room?: string;
-  space?: string;
-  agentStatus?: SessionAgentStatus;
-  observerDigest?: Pick<
-    SessionObserverDigest,
-    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
-  >;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  contextWindow?: string;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  fastMode?: FastMode;
-  effectiveFastMode?: FastMode;
-  effectiveFastModeSource?: FastModeSource;
-  fastAutoOnSeconds?: number;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  hasActiveRun?: boolean;
-  activeRunIds?: string[];
-  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
-  hasAutomation?: boolean;
-  subagentRunState?: SubagentRunState;
-  hasActiveSubagentRun?: boolean;
-  startedAt?: number;
-  endedAt?: number;
-  runtimeMs?: number;
-  /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
-  runtimeSampledAt?: number;
-  modelSelectionLocked?: boolean;
-  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
-  queueMode?: QueueMode;
-  effectiveQueueMode?: QueueMode;
-  agentRuntime?: GatewayAgentRuntime;
-  compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
-  goal?: SessionGoal;
-};
+export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
+  Pick<SessionRow, "archivedBy" | "updatedAt"> & {
+    /** Transient UI-owned Swarm note overlays, not persisted session fields. */
+    swarmPhase?: string;
+    swarmPhaseRank?: number;
+    swarmLog?: string;
+    icon?: string;
+    channelAvatarUrl?: string;
+    surface?: string;
+    room?: string;
+    /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
+    runtimeSampledAt?: number;
+  };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
@@ -345,6 +278,11 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  createdAt?: number;
+  pinnedAt?: number;
+  lastReadAt?: number;
+  lastActivityAt?: number;
+  lastInteractionAt?: number;
   permissionMode?: GatewaySessionRow["permissionMode"];
   archivedAt?: number;
   archiveReason?: SessionEntryArchiveReason;
@@ -356,17 +294,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-}> & {
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: GatewayAgentRuntime;
-    contextWindow?: string;
-    contextWindows?: GatewayContextWindowOption[];
-    thinkingLevel?: string;
-    thinkingLevels?: GatewayThinkingLevelOption[];
-  };
-};
+}> &
+  Pick<GatewayWireSessionsPatchResult, "resolved">;
 
 export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 
@@ -460,6 +389,9 @@ export type ModelAuthStatusProfile =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProfile;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
+export type ProviderLoginOption = NonNullable<
+  NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
+>[number];
 export type ModelsProbeResult =
   import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
 export type SystemAgentSetupActivateParams =

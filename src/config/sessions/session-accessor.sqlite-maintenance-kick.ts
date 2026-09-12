@@ -71,23 +71,27 @@ async function runPendingMaintenance(
     const activeSessionKeys = [...owner.activeSessionKeys];
     owner.activeSessionKeys.clear();
     try {
-      const plan = await runExclusiveSqliteSessionWrite(owner.scope, async () => {
-        // The writer queue can outlive the handle that admitted this owner.
-        // Check inside the acquired lane so an evicted owner cannot reopen the path.
-        if (!isCurrent()) {
-          return undefined;
-        }
-        return runOpenClawAgentWriteTransaction(
-          (database) =>
-            applySessionEntryMaintenance(database, {
-              activeSessionKeys,
-              archiveDirectory: owner.archiveDirectory,
-              maintenanceConfig: owner.maintenanceConfig,
-              storePath: owner.storePath,
-            }),
-          toDatabaseOptions(owner.scope),
-        );
-      });
+      const plan = await runExclusiveSqliteSessionWrite(
+        owner.scope,
+        async () => {
+          // The writer queue can outlive the handle that admitted this owner.
+          // Check inside the acquired lane so an evicted owner cannot reopen the path.
+          if (!isCurrent()) {
+            return undefined;
+          }
+          return runOpenClawAgentWriteTransaction(
+            (database) =>
+              applySessionEntryMaintenance(database, {
+                activeSessionKeys,
+                archiveDirectory: owner.archiveDirectory,
+                maintenanceConfig: owner.maintenanceConfig,
+                storePath: owner.storePath,
+              }),
+            toDatabaseOptions(owner.scope),
+          );
+        },
+        "session.maintenance.plan",
+      );
       if (!plan) {
         if (maintenanceByStore.get(databasePath) === owner) {
           maintenanceByStore.delete(databasePath);

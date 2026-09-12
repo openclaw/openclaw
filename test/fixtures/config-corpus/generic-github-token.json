@@ -1,0 +1,9 @@
+{
+  "gateway": {
+    "mode": "local",
+    "auth": { "mode": "token", "token": "FAKE_CONFIG_CORPUS_CREDENTIAL" }
+  },
+  "agents": { "entries": { "main": {} } },
+  "env": { "vars": { "GITHUB_TOKEN": "FAKE_GENERIC_GITHUB_TOKEN" } },
+  "plugins": { "allow": ["github-copilot"] }
+}

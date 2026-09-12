@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { pages } from "./route.ts";
 
@@ -22,13 +23,12 @@ function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
 
 function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey = "main") {
   const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
-    if (method === "sessions.resolve" || method === "chat.startup") {
-      return method === "chat.startup" ? { resolution, messages: [] } : resolution;
+    if (method === "sessions.resolve") {
+      return resolution;
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
   const client = { request };
-  const list = vi.fn();
   const context = {
     basePath: "",
     router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
@@ -38,9 +38,10 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
       subscribeEvents: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey } } },
-    sessions: { list, state: { result: null }, whenCachedRosterSettled: async () => undefined },
   } as unknown as ApplicationContext;
-  return { context, list, request };
+  const sessions = createChatPageSessions(context.gateway);
+  const list = vi.spyOn(sessions, "list");
+  return { context: { ...context, sessions }, list, request };
 }
 
 describe("loadChatRoute", () => {
@@ -68,6 +69,7 @@ describe("loadChatRoute", () => {
     );
     expect(redirected).toEqual({
       kind: "session",
+      routeLoadingSkeleton: true,
       sessionKey,
       agentId: "main",
       draft: "ship",
@@ -139,18 +141,18 @@ describe("loadChatRoute", () => {
     ).resolves.toEqual({
       kind: "session",
       sessionKey: target.key,
+      routeLoadingSkeleton: true,
       agentId: "main",
       draft: undefined,
       face: "chat",
       shortId: "123456780a",
     });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
       shortId: "123456780a",
       slugHint: "deploy-monitor",
       agentId: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
+      allowMissing: true,
     });
   });
 
@@ -208,6 +210,7 @@ describe("loadChatRoute", () => {
       ).resolves.toEqual({
         kind: "session",
         sessionKey: expectedRow?.key,
+        routeLoadingSkeleton: true,
         agentId: candidate.agentId,
         draft: "ship",
         focusComposer: true,

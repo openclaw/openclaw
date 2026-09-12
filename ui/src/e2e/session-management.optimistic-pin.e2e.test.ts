@@ -74,7 +74,7 @@ suite.define(() => {
       await captureUiProof(suite, page, "optimistic-pin-02-pinned-while-in-flight.png");
 
       await gateway.setMethodResponse("sessions.list", pinnedList());
-      await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
+      await gateway.resolveDeferred("sessions.patch");
 
       await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => zoneEntry.count()).toBe(1);
@@ -160,13 +160,13 @@ suite.define(() => {
       // The pin commits first; its list refresh still carries the pinned row the
       // unpin already replaced locally.
       await gateway.setMethodResponse("sessions.list", pinnedList());
-      await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
+      await gateway.resolveDeferred("sessions.patch");
       await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.list", unpinnedList());
-      await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
+      await gateway.resolveDeferred("sessions.patch");
       await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(3);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);

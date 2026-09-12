@@ -1,264 +1,50 @@
 // Covers provider usage auth profile key normalization.
-import nodeFs from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type {
+  ProviderResolveUsageAuthContext,
+  ProviderResolvedUsageAuth,
+} from "../plugins/types.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
-vi.mock("../agents/auth-profiles.js", () => {
-  const normalizeProvider = (provider?: string | null): string =>
-    (provider ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/^z-ai$/, "zai");
-  const dedupeProfileIds = (profileIds: string[]): string[] => [...new Set(profileIds)];
-  const listProfilesForProvider = (
-    store: { profiles?: Record<string, { provider?: string } | undefined> },
-    provider: string,
-  ): string[] =>
-    Object.entries(store.profiles ?? {})
-      .filter(([, profile]) => normalizeProvider(profile?.provider) === normalizeProvider(provider))
-      .map(([profileId]) => profileId);
-  const readStore = (agentDir?: string) => {
-    if (!agentDir) {
-      return { version: 1, profiles: {} };
-    }
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    try {
-      const parsed = JSON.parse(nodeFs.readFileSync(authPath, "utf8")) as {
-        version?: number;
-        profiles?: Record<string, unknown>;
-        order?: Record<string, string[]>;
-        lastGood?: Record<string, string>;
-        usageStats?: Record<string, unknown>;
-      };
-      return {
-        version: parsed.version ?? 1,
-        profiles: parsed.profiles ?? {},
-        ...(parsed.order ? { order: parsed.order } : {}),
-        ...(parsed.lastGood ? { lastGood: parsed.lastGood } : {}),
-        ...(parsed.usageStats ? { usageStats: parsed.usageStats } : {}),
-      };
-    } catch {
-      return { version: 1, profiles: {} };
-    }
-  };
-
-  const resolveAuthProfileOrder = (params: {
-    cfg?: { auth?: { profiles?: Record<string, { provider?: string } | undefined> } };
-    store: {
-      profiles: Record<string, { provider?: string } | undefined>;
-      order?: Record<string, string[]>;
-    };
-    provider: string;
-  }): string[] => {
-    const provider = normalizeProvider(params.provider);
-    const configured = Object.entries(params.cfg?.auth?.profiles ?? {})
-      .filter(([, profile]) => normalizeProvider(profile?.provider) === provider)
-      .map(([profileId]) => profileId);
-    if (configured.length > 0) {
-      return dedupeProfileIds(configured);
-    }
-    const ordered = params.store.order?.[params.provider] ?? params.store.order?.[provider];
-    if (ordered?.length) {
-      return dedupeProfileIds(ordered);
-    }
-    return dedupeProfileIds(listProfilesForProvider(params.store, provider));
-  };
-
-  const resolveApiKeyForProfile = async (params: {
-    store: {
-      profiles: Record<
-        string,
-        | {
-            type?: string;
-            provider?: string;
-            key?: string;
-            token?: string;
-            accessToken?: string;
-            email?: string;
-            expires?: number;
-          }
-        | undefined
-      >;
-    };
-    profileId: string;
-  }): Promise<{ apiKey: string; provider: string; email?: string } | null> => {
-    const cred = params.store.profiles[params.profileId];
-    if (!cred) {
-      return null;
-    }
-    const profileProvider = normalizeProvider(params.profileId.split(":")[0] ?? "");
-    const credentialProvider = normalizeProvider(cred.provider);
-    if (profileProvider && credentialProvider && profileProvider !== credentialProvider) {
-      return null;
-    }
-    if (cred.type === "api_key") {
-      return cred.key ? { apiKey: cred.key, provider: cred.provider ?? profileProvider } : null;
-    }
-    if (cred.type === "token") {
-      if (typeof cred.expires === "number" && cred.expires <= Date.now()) {
-        return null;
-      }
-      return cred.token
-        ? { apiKey: cred.token, provider: cred.provider ?? profileProvider, email: cred.email }
-        : null;
-    }
-    if (cred.type === "oauth") {
-      if (typeof cred.expires === "number" && cred.expires <= Date.now()) {
-        return null;
-      }
-      const token = cred.accessToken ?? cred.token;
-      return token
-        ? { apiKey: token, provider: cred.provider ?? profileProvider, email: cred.email }
-        : null;
-    }
-    return null;
-  };
-
+const authProfileMocks = vi.hoisted(() => {
+  const store: AuthProfileStore = { version: 1, profiles: {} };
+  const orders: Record<string, string[]> = {};
   return {
-    clearRuntimeAuthProfileStoreSnapshots: () => {},
-    ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
-    ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) => readStore(agentDir),
-    hasAnyAuthProfileStoreSource: (agentDir?: string) =>
-      Boolean(agentDir && nodeFs.existsSync(path.join(agentDir, "auth-profiles.json"))),
-    dedupeProfileIds,
-    listProfilesForProvider,
-    resolveApiKeyForProfile,
-    resolveAuthProfileOrder,
+    store,
+    orders,
+    resolvedProfiles: new Map<string, { apiKey: string; provider: string } | null>(),
+    unexpectedStoreRead: () => {
+      throw new Error("Usage auth tests must use their prepared store");
+    },
   };
 });
 
+vi.mock("../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: authProfileMocks.unexpectedStoreRead,
+  ensureAuthProfileStoreWithoutExternalProfiles: authProfileMocks.unexpectedStoreRead,
+  hasAnyAuthProfileStoreSource: authProfileMocks.unexpectedStoreRead,
+  dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
+  listProfilesForProvider: (_store: unknown, provider: string) =>
+    authProfileMocks.orders[provider] ?? [],
+  resolveAuthProfileOrder: ({ provider }: { provider: string }) =>
+    authProfileMocks.orders[provider] ?? [],
+  resolveApiKeyForProfile: async ({ profileId }: { profileId: string }) =>
+    authProfileMocks.resolvedProfiles.get(profileId) ?? null,
+}));
+
 const providerRuntimeMocks = vi.hoisted(() => ({
   providerRuntimeMock: {
-    augmentModelCatalogWithProviderPlugins: vi.fn((catalog: unknown) => catalog),
-    buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
-    buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
-    buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
-    formatProviderAuthProfileApiKeyWithPlugin: vi.fn(() => undefined),
-    normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
-    prepareProviderDynamicModel: vi.fn(async () => {}),
-    prepareProviderExtraParams: vi.fn(() => undefined),
-    prepareProviderRuntimeAuth: vi.fn(async () => undefined),
-    refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => undefined),
-    resolveProviderBinaryThinking: vi.fn(() => undefined),
-    resolveProviderCacheTtlEligibility: vi.fn(() => undefined),
-    resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
-    resolveProviderDefaultThinkingLevel: vi.fn(() => undefined),
-    resolveProviderModernModelRef: vi.fn(() => undefined),
-    resolveProviderRuntimePlugin: vi.fn(() => undefined),
-    resolveProviderStreamFn: vi.fn(() => undefined),
-    resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
-    resolveProviderUsageAuthWithPlugin: vi.fn(async (params) => {
-      const resolveToken = (options?: {
-        providerIds?: string[];
-        envDirect?: Array<string | undefined>;
-      }) => params.context.resolveApiKeyFromConfigAndStore(options);
-      if (params.provider === "zai") {
-        const token = resolveToken({
-          providerIds: ["zai", "z-ai"],
-          envDirect: [params.context.env?.ZAI_API_KEY, params.context.env?.Z_AI_API_KEY],
-        });
-        return token ? { token } : null;
-      }
-
-      if (params.provider === "anthropic") {
-        const adminKey =
-          params.context.env?.ANTHROPIC_ADMIN_KEY ?? params.context.env?.ANTHROPIC_ADMIN_API_KEY;
-        if (adminKey) {
-          return {
-            token: `openclaw:anthropic-admin:v1:${JSON.stringify({ token: adminKey })}`,
-          };
-        }
-        const candidates =
-          (await params.context.resolveApiKeyCandidatesFromConfigAndStore?.({
-            providerIds: ["anthropic"],
-          })) ?? [];
-        const storedAdminKey = candidates.find((candidate: string) =>
-          candidate.startsWith("sk-ant-admin"),
-        );
-        if (storedAdminKey) {
-          return {
-            token: `openclaw:anthropic-admin:v1:${JSON.stringify({ token: storedAdminKey })}`,
-          };
-        }
-        const oauth = await params.context.resolveOAuthToken();
-        if (oauth) {
-          return oauth;
-        }
-        const token = resolveToken({
-          providerIds: ["anthropic"],
-          envDirect: [params.context.env?.ANTHROPIC_API_KEY],
-        });
-        return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
-      }
-
-      if (params.provider === "openai") {
-        const adminKey = params.context.env?.OPENAI_ADMIN_KEY;
-        if (adminKey) {
-          return { token: `openclaw:openai-admin:v1:${JSON.stringify({ token: adminKey })}` };
-        }
-        const oauth = await params.context.resolveOAuthToken();
-        if (oauth) {
-          return oauth;
-        }
-        return { handled: true };
-      }
-
-      if (params.provider === "minimax") {
-        const token = resolveToken({
-          providerIds: ["minimax"],
-          envDirect: [
-            params.context.env?.MINIMAX_CODE_PLAN_KEY,
-            params.context.env?.MINIMAX_CODING_API_KEY,
-            params.context.env?.MINIMAX_API_KEY,
-          ],
-        });
-        return token ? { token } : null;
-      }
-
-      if (params.provider === "xiaomi") {
-        const token = resolveToken({
-          providerIds: ["xiaomi"],
-          envDirect: [params.context.env?.XIAOMI_API_KEY],
-        });
-        return token ? { token } : null;
-      }
-
-      if (params.provider === "xiaomi-token-plan") {
-        const token = resolveToken({
-          providerIds: ["xiaomi-token-plan"],
-          envDirect: [params.context.env?.XIAOMI_TOKEN_PLAN_API_KEY],
-        });
-        return token ? { token } : null;
-      }
-
-      if (params.provider === "google-gemini-cli") {
-        const resolved = await params.context.resolveOAuthToken({
-          provider: "google-gemini-cli",
-        });
-        if (!resolved?.token) {
-          return null;
-        }
-        try {
-          const parsed = JSON.parse(resolved.token) as { token?: string };
-          const token = parsed.token ?? resolved.token;
-          return resolved.accountId ? { token, accountId: resolved.accountId } : { token };
-        } catch {
-          return resolved.accountId
-            ? { token: resolved.token, accountId: resolved.accountId }
-            : { token: resolved.token };
-        }
-      }
-
-      return null;
-    }),
-    resolveProviderXHighThinking: vi.fn(() => undefined),
-    runProviderDynamicModel: vi.fn(() => undefined),
-    wrapProviderStreamFn: vi.fn(() => undefined),
+    resolveProviderUsageAuthWithPlugin:
+      vi.fn<
+        (params: {
+          context: ProviderResolveUsageAuthContext;
+        }) => Promise<ProviderResolvedUsageAuth | null>
+      >(),
   },
 }));
 
@@ -293,7 +79,6 @@ vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
-let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-provider-auth-suite-" });
@@ -315,7 +100,6 @@ describe("resolveProviderAuths key normalization", () => {
   beforeAll(async () => {
     await suiteRootTracker.setup();
     ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
-    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
@@ -324,30 +108,27 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   beforeEach(() => {
+    authProfileMocks.store.profiles = {};
+    authProfileMocks.orders = {};
+    authProfileMocks.resolvedProfiles.clear();
+    providerRuntimeMocks.providerRuntimeMock.resolveProviderUsageAuthWithPlugin
+      .mockReset()
+      .mockImplementation(async ({ context }) => {
+        const token = context.resolveApiKeyFromConfigAndStore();
+        return token ? { token } : null;
+      });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    clearRuntimeAuthProfileStoreSnapshots();
   });
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    clearRuntimeAuthProfileStoreSnapshots();
     vi.restoreAllMocks();
   });
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const base = await suiteRootTracker.make("case");
-    const stateDir = path.join(base, ".openclaw");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
-    nodeFs.mkdirSync(agentDir, { recursive: true });
-    nodeFs.writeFileSync(
-      path.join(agentDir, "auth-profiles.json"),
-      `${JSON.stringify({ version: 1, profiles: {} }, null, 2)}\n`,
-      "utf8",
-    );
-    return await fn(base);
+    return await fn(await suiteRootTracker.make("case"));
   }
 
   function agentDirForHome(home: string): string {
@@ -373,41 +154,9 @@ describe("resolveProviderAuths key normalization", () => {
     return suiteEnv;
   }
 
-  async function writeAuthProfiles(home: string, profiles: Record<string, unknown>) {
-    const agentDir = agentDirForHome(home);
-    await fs.mkdir(agentDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      `${JSON.stringify({ version: 1, profiles }, null, 2)}\n`,
-      "utf8",
-    );
-  }
-
-  async function writeConfig(home: string, config: Record<string, unknown>) {
-    const stateDir = path.join(home, ".openclaw");
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, "openclaw.json"),
-      `${JSON.stringify(config, null, 2)}\n`,
-      "utf8",
-    );
-  }
-
-  async function writeProfileOrder(home: string, provider: string, profileIds: string[]) {
-    const agentDir = agentDirForHome(home);
-    const parsed = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as Record<string, unknown>;
-    const order = (parsed.order && typeof parsed.order === "object" ? parsed.order : {}) as Record<
-      string,
-      unknown
-    >;
-    order[provider] = profileIds;
-    parsed.order = order;
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      `${JSON.stringify(parsed, null, 2)}\n`,
-    );
+  function seedProfiles(profiles: AuthProfileStore["profiles"], orders: Record<string, string[]>) {
+    authProfileMocks.store.profiles = profiles;
+    authProfileMocks.orders = orders;
   }
 
   function createTestModelDefinition(): ModelDefinitionConfig {
@@ -435,10 +184,10 @@ describe("resolveProviderAuths key normalization", () => {
           },
         },
       } satisfies OpenClawConfig;
-      await writeConfig(home, config);
 
       return await resolveProviderAuths({
         providers: ["minimax"],
+        store: authProfileMocks.store,
         agentDir: agentDirForHome(home),
         config,
         env: buildSuiteEnv(home),
@@ -460,6 +209,7 @@ describe("resolveProviderAuths key normalization", () => {
       const config = params.config ?? {};
       const auths = await resolveProviderAuths({
         providers: params.providers,
+        store: authProfileMocks.store,
         agentDir: agentDirForHome(home),
         config,
         env: buildSuiteEnv(home, params.env),
@@ -528,19 +278,26 @@ describe("resolveProviderAuths key normalization", () => {
     });
   });
 
-  it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
+  it("strips embedded CR/LF from prepared profile values (token + api_key)", async () => {
     await expectResolvedAuthsFromSuiteHome({
       providers: ["minimax", "xiaomi", "xiaomi-token-plan"],
-      setup: async (home) => {
-        await writeAuthProfiles(home, {
-          "minimax:default": { type: "token", provider: "minimax", token: "mini-\r\nmax" },
-          "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "xiao-\r\nmi" },
-          "xiaomi-token-plan:default": {
-            type: "api_key",
-            provider: "xiaomi-token-plan",
-            key: "token-\r\nplan",
+      setup: async () => {
+        seedProfiles(
+          {
+            "minimax:default": { type: "token", provider: "minimax", token: "mini-\r\nmax" },
+            "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "xiao-\r\nmi" },
+            "xiaomi-token-plan:default": {
+              type: "api_key",
+              provider: "xiaomi-token-plan",
+              key: "token-\r\nplan",
+            },
           },
-        });
+          {
+            minimax: ["minimax:default"],
+            xiaomi: ["xiaomi:default"],
+            "xiaomi-token-plan": ["xiaomi-token-plan:default"],
+          },
+        );
       },
       expected: [
         { provider: "minimax", token: "mini-max" },
@@ -556,36 +313,6 @@ describe("resolveProviderAuths key normalization", () => {
       auth: [{ provider: "anthropic", token: "token-1", accountId: "acc-1" }],
     });
     expect(auths).toEqual([{ provider: "anthropic", token: "token-1", accountId: "acc-1" }]);
-  });
-
-  it.each([
-    {
-      name: "extracts google oauth token from JSON payload in token profiles",
-      token: '{"token":"google-oauth-token"}',
-      expectedToken: "google-oauth-token",
-    },
-    {
-      name: "keeps raw google token when token payload is not JSON",
-      token: "plain-google-token",
-      expectedToken: "plain-google-token",
-    },
-  ])("$name", async ({ token, expectedToken }) => {
-    const googleGeminiCliUsageProvider = "google-gemini-cli" as unknown as Parameters<
-      typeof resolveProviderAuths
-    >[0]["providers"][number];
-    await expectResolvedAuthsFromSuiteHome({
-      providers: [googleGeminiCliUsageProvider],
-      setup: async (home) => {
-        await writeAuthProfiles(home, {
-          "google-gemini-cli:default": {
-            type: "token",
-            provider: "google-gemini-cli",
-            token,
-          },
-        });
-      },
-      expected: [{ provider: googleGeminiCliUsageProvider, token: expectedToken }],
-    });
   });
 
   it("uses config api keys when env and profiles are missing", async () => {
@@ -617,9 +344,6 @@ describe("resolveProviderAuths key normalization", () => {
     } satisfies OpenClawConfig;
     await expectResolvedAuthsFromSuiteHome({
       providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
-      setup: async (home) => {
-        await writeConfig(home, config);
-      },
       config,
       expected: [
         { provider: "zai", token: "cfg-zai-key" },
@@ -640,79 +364,49 @@ describe("resolveProviderAuths key normalization", () => {
   it("uses zai api_key auth profiles when env and config are missing", async () => {
     await expectResolvedAuthsFromSuiteHome({
       providers: ["zai"],
-      setup: async (home) => {
-        await writeAuthProfiles(home, {
-          "zai:default": { type: "api_key", provider: "zai", key: "profile-zai-key" },
-        });
+      setup: async () => {
+        seedProfiles(
+          {
+            "zai:default": { type: "api_key", provider: "zai", key: "profile-zai-key" },
+          },
+          { zai: ["zai:default"] },
+        );
       },
       expected: [{ provider: "zai", token: "profile-zai-key" }],
     });
   });
 
-  it("routes the dedicated OpenAI admin key to the provider-owned usage path", async () => {
-    const config = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [createTestModelDefinition()],
-            apiKey: "cfg-openai-key", // pragma: allowlist secret
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["openai"],
-      env: {
-        OPENAI_ADMIN_KEY: "env-openai-admin-key",
-        OPENAI_API_KEY: "env-openai-key",
-      },
-      setup: async (home) => {
-        await writeConfig(home, config);
-        await writeAuthProfiles(home, {
-          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
-        });
-      },
-      config,
-      expected: [
-        {
-          provider: "openai",
-          token: 'openclaw:openai-admin:v1:{"token":"env-openai-admin-key"}',
-        },
-      ],
+  it("forwards a resolved OAuth-compatible profile through the plugin callback", async () => {
+    authProfileMocks.resolvedProfiles.set("openai:default", {
+      apiKey: "chatgpt-token",
+      provider: "openai",
     });
-  });
-
-  it("does not route OpenAI inference keys to organization usage", async () => {
+    providerRuntimeMocks.providerRuntimeMock.resolveProviderUsageAuthWithPlugin.mockImplementationOnce(
+      async ({ context }) => (await context.resolveOAuthToken()) ?? { handled: true },
+    );
     await expectResolvedAuthsFromSuiteHome({
       providers: ["openai"],
-      env: { OPENAI_API_KEY: "env-openai-key" },
-      setup: async (home) => {
-        await writeAuthProfiles(home, {
-          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
-        });
-      },
-      expected: [],
-    });
-  });
-
-  it("uses OpenAI oauth-compatible profiles for ChatGPT usage auth", async () => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["openai"],
-      setup: async (home) => {
-        await writeAuthProfiles(home, {
-          "openai:default": {
-            type: "token",
-            provider: "openai",
-            token: "chatgpt-token",
+      setup: async () => {
+        seedProfiles(
+          {
+            "openai:default": {
+              type: "token",
+              provider: "openai",
+              token: "chatgpt-token",
+            },
           },
-        });
+          { openai: ["openai:default"] },
+        );
       },
       expected: [{ provider: "openai", token: "chatgpt-token" }],
     });
   });
 
-  it("discovers oauth provider from config but skips mismatched profile providers", async () => {
+  it("skips configured profiles when credential resolution returns null", async () => {
+    authProfileMocks.resolvedProfiles.set("anthropic:default", null);
+    providerRuntimeMocks.providerRuntimeMock.resolveProviderUsageAuthWithPlugin.mockImplementationOnce(
+      async ({ context }) => (await context.resolveOAuthToken()) ?? { handled: true },
+    );
     await withSuiteHome(async (home) => {
       const config = {
         auth: {
@@ -721,17 +415,20 @@ describe("resolveProviderAuths key normalization", () => {
           },
         },
       } satisfies OpenClawConfig;
-      await writeConfig(home, config);
-      await writeAuthProfiles(home, {
-        "anthropic:default": {
-          type: "token",
-          provider: "zai",
-          token: "mismatched-provider-token",
+      seedProfiles(
+        {
+          "anthropic:default": {
+            type: "token",
+            provider: "zai",
+            token: "mismatched-provider-token",
+          },
         },
-      });
+        { anthropic: ["anthropic:default"] },
+      );
 
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        store: authProfileMocks.store,
         agentDir: agentDirForHome(home),
         config,
         env: buildSuiteEnv(home),
@@ -744,6 +441,7 @@ describe("resolveProviderAuths key normalization", () => {
     await withSuiteHome(async (home) => {
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        store: authProfileMocks.store,
         agentDir: agentDirForHome(home),
         config: {},
         env: buildSuiteEnv(home),
@@ -753,20 +451,30 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   it("skips oauth profiles that resolve without an api key and uses later profiles", async () => {
+    authProfileMocks.resolvedProfiles.set("anthropic:empty", null);
+    authProfileMocks.resolvedProfiles.set("anthropic:valid", {
+      apiKey: "anthropic-token",
+      provider: "anthropic",
+    });
+    providerRuntimeMocks.providerRuntimeMock.resolveProviderUsageAuthWithPlugin.mockImplementationOnce(
+      async ({ context }) => (await context.resolveOAuthToken()) ?? { handled: true },
+    );
     await withSuiteHome(async (home) => {
-      await writeAuthProfiles(home, {
-        "anthropic:empty": {
-          type: "token",
-          provider: "anthropic",
-          token: "expired-token",
-          expires: Date.now() - 60_000,
+      seedProfiles(
+        {
+          "anthropic:empty": {
+            type: "token",
+            provider: "anthropic",
+            token: "unresolved-token",
+          },
+          "anthropic:valid": { type: "token", provider: "anthropic", token: "anthropic-token" },
         },
-        "anthropic:valid": { type: "token", provider: "anthropic", token: "anthropic-token" },
-      });
-      await writeProfileOrder(home, "anthropic", ["anthropic:empty", "anthropic:valid"]);
+        { anthropic: ["anthropic:empty", "anthropic:valid"] },
+      );
 
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        store: authProfileMocks.store,
         agentDir: agentDirForHome(home),
         config: {},
         env: buildSuiteEnv(home),
@@ -776,84 +484,34 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   it("skips api_key entries in oauth token resolution order", async () => {
+    authProfileMocks.resolvedProfiles.set("anthropic:api", {
+      apiKey: "api-key-1",
+      provider: "anthropic",
+    });
+    authProfileMocks.resolvedProfiles.set("anthropic:token", {
+      apiKey: "token-1",
+      provider: "anthropic",
+    });
+    providerRuntimeMocks.providerRuntimeMock.resolveProviderUsageAuthWithPlugin.mockImplementationOnce(
+      async ({ context }) => (await context.resolveOAuthToken()) ?? { handled: true },
+    );
     await withSuiteHome(async (home) => {
-      await writeAuthProfiles(home, {
-        "anthropic:api": { type: "api_key", provider: "anthropic", key: "api-key-1" },
-        "anthropic:token": { type: "token", provider: "anthropic", token: "token-1" },
-      });
-      await writeProfileOrder(home, "anthropic", ["anthropic:api", "anthropic:token"]);
+      seedProfiles(
+        {
+          "anthropic:api": { type: "api_key", provider: "anthropic", key: "api-key-1" },
+          "anthropic:token": { type: "token", provider: "anthropic", token: "token-1" },
+        },
+        { anthropic: ["anthropic:api", "anthropic:token"] },
+      );
 
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        store: authProfileMocks.store,
         agentDir: agentDirForHome(home),
         config: {},
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
-    });
-  });
-
-  it("does not use standard Anthropic API keys for provider usage auth", async () => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["anthropic"],
-      env: {
-        ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret
-      },
-      expected: [],
-    });
-  });
-
-  it("allows Anthropic setup tokens from API-key sources for provider usage auth", async () => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["anthropic"],
-      env: {
-        ANTHROPIC_API_KEY: `sk-ant-oat01-${"a".repeat(80)}`,
-      },
-      expected: [{ provider: "anthropic", token: `sk-ant-oat01-${"a".repeat(80)}` }],
-    });
-  });
-
-  it("routes Anthropic Admin API keys to provider cost usage", async () => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["anthropic"],
-      env: {
-        ANTHROPIC_ADMIN_KEY: "sk-ant-admin-status-key",
-      },
-      expected: [
-        {
-          provider: "anthropic",
-          token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-status-key"}',
-        },
-      ],
-    });
-  });
-
-  it("selects a stored Anthropic Admin key before coexisting OAuth and API auth", async () => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["anthropic"],
-      env: {
-        ANTHROPIC_API_KEY: "sk-ant-api03-inference",
-      },
-      setup: async (home) => {
-        await writeAuthProfiles(home, {
-          "anthropic:oauth": {
-            type: "oauth",
-            provider: "anthropic",
-            accessToken: "oauth-token",
-          },
-          "anthropic:billing": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-ant-admin-billing",
-          },
-        });
-      },
-      expected: [
-        {
-          provider: "anthropic",
-          token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-billing"}',
-        },
-      ],
     });
   });
 

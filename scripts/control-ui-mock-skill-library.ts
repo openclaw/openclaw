@@ -30,6 +30,7 @@ function installSkillLibraryMock(
     ]),
   );
   const sessions = new Map<string, SkillsLibraryReadResult[]>();
+  const uploads = new Map<string, { slug: string; offset: number }>();
   const pins = (sessionKey: string) => {
     let selected = sessions.get(sessionKey);
     if (!selected) {
@@ -100,6 +101,11 @@ function installSkillLibraryMock(
       action?: string;
       revision?: string;
       source?: { slug: string };
+      uploadId?: string;
+      offset?: number;
+      data?: string;
+      sizeBytes?: number;
+      sha256?: string;
     };
     if (method === "commands.list" || method === "chat.metadata") {
       const selected = params.sessionKey ? pins(params.sessionKey) : [];
@@ -206,6 +212,31 @@ function installSkillLibraryMock(
       });
       return;
     }
+    if (method === "skills.library.upload") {
+      if (params.action === "begin" && params.slug && params.sizeBytes && params.sha256) {
+        const uploadId = `mock-upload-${params.slug}`;
+        uploads.set(uploadId, { slug: params.slug, offset: 0 });
+        respond({ uploadId, offset: 0, maxChunkBytes: 256 * 1024 });
+        return;
+      }
+      const upload = params.uploadId ? uploads.get(params.uploadId) : undefined;
+      if (!upload) {
+        return reject("The mock upload is no longer available.", "SKILL_LIBRARY_UPLOAD_MISSING");
+      }
+      if (params.action === "chunk" && typeof params.data === "string") {
+        const received = atob(params.data).length;
+        upload.offset = (params.offset ?? upload.offset) + received;
+        respond({ uploadId: params.uploadId, offset: upload.offset, maxChunkBytes: 256 * 1024 });
+        return;
+      }
+      if (params.action === "commit") {
+        uploads.delete(params.uploadId ?? "");
+        params.slug = upload.slug;
+        params.content = `---\nname: ${upload.slug}\ndescription: Imported archive fixture\n---\n\nReview the source material before drafting.\n`;
+        params.files = [];
+      }
+    }
+
     const current = params.skillId ? entries.get(params.skillId) : undefined;
     if (
       params.skillId &&
@@ -252,7 +283,10 @@ function installSkillLibraryMock(
       revisions: [],
     };
     read.entry = { ...read.entry, slug, revision, updatedAt: Date.now() };
-    if (method === "skills.library.save") {
+    if (
+      method === "skills.library.save" ||
+      (method === "skills.library.upload" && params.action === "commit")
+    ) {
       read.content = params.content ?? "";
       read.files = params.files ?? [];
     }
@@ -305,6 +339,7 @@ function installSkillLibraryMock(
     "skills.library.save",
     "skills.library.mutate",
     "skills.library.import",
+    "skills.library.upload",
   ]) {
     gateway.setRequestHandler(method, (request) => handleRequest(method, request));
   }

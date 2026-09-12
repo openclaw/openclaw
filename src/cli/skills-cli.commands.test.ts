@@ -8,6 +8,11 @@ import {
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import {
+  expectObjectFields,
+  mockCall,
+  mockFirstObjectArg,
+} from "../test-utils/mock-call-assertions.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -188,33 +193,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function mockCall(mock: unknown, index = 0): Array<unknown> {
-  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  const call = calls.at(index);
-  if (!call) {
-    throw new Error(`Expected mock call ${index + 1}`);
-  }
-  return call;
-}
-
-function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
-  const [arg] = mockCall(mock);
-  if (!arg || typeof arg !== "object") {
-    throw new Error("expected first mock argument object");
-  }
-  return arg as Record<string, unknown>;
-}
-
-function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected object fields");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
-
 function expectLogger(value: unknown): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected logger object");
@@ -261,6 +239,11 @@ function primeCalendarUpdate(workspaceDir = "/tmp/workspace"): void {
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
+}));
+
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -1848,17 +1831,21 @@ describe("skills cli commands", () => {
     expectStatusWorkspaceCall("/tmp/workspace-main");
   });
 
-  it("renders the supported skills escape without advertising --all-agents", async () => {
+  it("hands the supported skills escape to the CLI failure owner without --all-agents", async () => {
     resolveDefaultAgentIdMock.mockImplementationOnce((_config, context) => {
       throw new AgentSelectionRequiredError(["main", "helper", "third"], context);
     });
 
-    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors).toStrictEqual([
-      "Multiple agents are configured, but the skills command has no explicit owner. Pass --agent <id>.",
-    ]);
-    expect(runtimeErrors[0]).not.toContain("--all-agents");
+    // Agent selection is an expected CLI condition; the root failure owner renders it
+    // without crash framing, so the command must not print a second copy.
+    await expect(runCommand(["skills", "list"])).rejects.toThrow(
+      expect.objectContaining({
+        name: "AgentSelectionRequiredError",
+        message:
+          "Multiple agents are configured, but the skills command has no explicit owner. Pass --agent <id>.",
+      }),
+    );
+    expect(runtimeErrors).toStrictEqual([]);
   });
 
   it("redacts secrets from rendered skills CLI errors", async () => {

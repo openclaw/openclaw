@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withEnvOverride } from "../../../config/test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { VERSION } from "../../../version.js";
 import {
   isStartupConfigRepairResult,
@@ -150,7 +150,7 @@ describe("automatic startup config repair", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-repair-preview-"));
     try {
       await fs.mkdir(path.join(root, "state", "openclaw.sqlite"), { recursive: true });
-      await withEnvOverride({ OPENCLAW_STATE_DIR: root }, async () => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
         const snapshot = invalidSnapshot({
           config: { session: { idleMinutes: 45 } } as OpenClawConfig,
           issuePaths: ["session.idleMinutes"],

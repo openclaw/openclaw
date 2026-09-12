@@ -77,6 +77,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   offline?: boolean;
   queuedOutboxCount?: number;
   canSend: boolean;
+  modelRequiredReason?: string | null;
+  submitDisabledReason?: string | null;
+  submitPending?: boolean;
   disabledReason: string | null;
   disabledReasonTone?: "info" | "danger";
   disabledReasonBusy?: boolean;
@@ -185,6 +188,7 @@ type ComposingDraft = {
 export type ChatComposerState = SkillMenuState &
   SlashMenuState & {
     composerComposing: boolean;
+    editRevision: number;
     mentionMenu: HumanMentionMenu;
     mentionInput?: HumanMentionInput;
     composingDraft: ComposingDraft | null;

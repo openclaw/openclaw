@@ -1,6 +1,11 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import {
+  getDiscordEndpointRuntime,
+  resolveDiscordEndpointMediaGuard,
+  type DiscordEndpointRuntime,
+} from "../endpoint-runtime.js";
 import type { Client, User } from "../internal/discord.js";
 import { resolveDiscordCdnPolicy } from "./media-ssrf-policy.js";
 
@@ -36,7 +41,11 @@ export function createDiscordAvatarResolver() {
   const guildIcons = new Map<string, GuildIconEntry>();
   const pendingGuilds = new Set<string>();
 
-  const resolveSavedAvatar = (key: string, url: string): string | undefined => {
+  const resolveSavedAvatar = (
+    key: string,
+    url: string,
+    endpointRuntime: DiscordEndpointRuntime | null,
+  ): string | undefined => {
     const cached = saved.get(key);
     if (cached) {
       saved.delete(key);
@@ -46,12 +55,20 @@ export function createDiscordAvatarResolver() {
     if (pending.has(key) || pending.size >= DISCORD_AVATAR_CACHE_MAX_ENTRIES) {
       return undefined;
     }
+    let endpointGuard: ReturnType<typeof resolveDiscordEndpointMediaGuard>;
+    try {
+      endpointGuard = resolveDiscordEndpointMediaGuard(url, endpointRuntime);
+    } catch (error) {
+      logDebug(`discord conversation avatar download blocked: ${formatErrorMessage(error)}`);
+      return undefined;
+    }
     pending.add(key);
     void saveRemoteMedia({
       url,
       filePathHint: "conversation-avatar.png",
       maxBytes: DISCORD_AVATAR_MAX_BYTES,
-      ssrfPolicy: resolveDiscordCdnPolicy(),
+      ssrfPolicy: endpointGuard?.ssrfPolicy ?? resolveDiscordCdnPolicy(),
+      ...(endpointGuard ? { maxRedirects: endpointGuard.maxRedirects } : {}),
     })
       .then((media) => {
         setBoundedEntry(saved, key, media.path);
@@ -65,7 +82,12 @@ export function createDiscordAvatarResolver() {
     return undefined;
   };
 
-  const refreshGuildIcon = (client: Client, guildId: string, conversationId: string): void => {
+  const refreshGuildIcon = (
+    client: Client,
+    guildId: string,
+    conversationId: string,
+    endpointRuntime: DiscordEndpointRuntime | null,
+  ): void => {
     if (pendingGuilds.has(guildId) || pendingGuilds.size >= DISCORD_AVATAR_CACHE_MAX_ENTRIES) {
       return;
     }
@@ -82,6 +104,7 @@ export function createDiscordAvatarResolver() {
           resolveSavedAvatar(
             `${conversationId}\0${hash}`,
             discordAvatarUrl("icons", guildId, hash),
+            endpointRuntime,
           );
         }
       })
@@ -100,23 +123,26 @@ export function createDiscordAvatarResolver() {
       author: User;
       guildId?: string;
     }): string | undefined {
+      const endpointRuntime = getDiscordEndpointRuntime() ?? null;
       if (!params.guildId) {
         const hash = params.author.avatar;
         return hash
           ? resolveSavedAvatar(
               `${params.conversationId}\0${hash}`,
               discordAvatarUrl("avatars", params.author.id, hash),
+              endpointRuntime,
             )
           : undefined;
       }
       const guildIcon = guildIcons.get(params.guildId);
       if (!guildIcon || guildIcon.expiresAt <= Date.now()) {
-        refreshGuildIcon(params.client, params.guildId, params.conversationId);
+        refreshGuildIcon(params.client, params.guildId, params.conversationId, endpointRuntime);
       }
       return guildIcon?.hash
         ? resolveSavedAvatar(
             `${params.conversationId}\0${guildIcon.hash}`,
             discordAvatarUrl("icons", params.guildId, guildIcon.hash),
+            endpointRuntime,
           )
         : undefined;
     },

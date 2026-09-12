@@ -20,6 +20,8 @@ export type RuntimeConfigSnapshotRefreshOptions = {
 export type RuntimeConfigSnapshotRefreshParams = RuntimeConfigSnapshotRefreshOptions & {
   sourceConfig: OpenClawConfig;
   preflightResult?: unknown;
+  /** Original write authority; refresh owners recheck immediately before activation. */
+  assertCurrent?: () => void;
 };
 type MaybePromise<T> = T | Promise<T>;
 
@@ -327,10 +329,9 @@ export function selectApplicableRuntimeConfig(params: {
     return inputConfig;
   }
   const runtimeSourceConfig = params.runtimeSourceConfig ?? null;
-  if (!runtimeSourceConfig) {
-    return runtimeConfig;
-  }
-  if (configSnapshotsMatch(inputConfig, runtimeSourceConfig)) {
+  // A pinned file config is not an activated secrets snapshot. Without its source
+  // contract, replacing an explicit config can discard command-resolved credentials.
+  if (runtimeSourceConfig && configSnapshotsMatch(inputConfig, runtimeSourceConfig)) {
     return runtimeConfig;
   }
   return inputConfig;
@@ -461,24 +462,30 @@ export async function finalizeRuntimeSnapshotWrite(params: {
   formatRefreshError: (error: unknown) => string;
   preflightResult?: unknown;
   deferRuntimeActivation?: boolean;
+  assertCurrent?: () => void;
 }): Promise<void> {
-  if (params.deferRuntimeActivation) {
+  const notifyCommittedWrite = () => {
+    params.assertCurrent?.();
     params.notifyCommittedWrite();
+  };
+  params.assertCurrent?.();
+  if (params.deferRuntimeActivation) {
+    notifyCommittedWrite();
     return;
   }
   const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
+    let refreshed: boolean;
     try {
-      const refreshed = await refreshHandler.refresh({
+      refreshed = await refreshHandler.refresh({
         sourceConfig: params.nextSourceConfig,
         ...params.refreshOptions,
         preflightResult: params.preflightResult,
+        ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
       });
-      if (refreshed) {
-        params.notifyCommittedWrite();
-        return;
-      }
     } catch (error) {
+      // An expired writer must not clear the last-known-good runtime either.
+      params.assertCurrent?.();
       try {
         refreshHandler.clearOnRefreshFailure?.();
       } catch {
@@ -486,22 +493,32 @@ export async function finalizeRuntimeSnapshotWrite(params: {
       }
       throw params.createRefreshError(params.formatRefreshError(error), error);
     }
+    // Refresh can yield before returning even when it declines activation.
+    params.assertCurrent?.();
+    if (refreshed) {
+      notifyCommittedWrite();
+      return;
+    }
   }
 
   if (params.hadBothSnapshots) {
     const fresh = params.loadFreshConfig();
+    params.assertCurrent?.();
     setRuntimeConfigSnapshot(fresh, params.nextSourceConfig);
-    params.notifyCommittedWrite();
+    notifyCommittedWrite();
     return;
   }
 
   if (params.hadRuntimeSnapshot) {
     const fresh = params.loadFreshConfig();
+    params.assertCurrent?.();
     setRuntimeConfigSnapshot(fresh);
-    params.notifyCommittedWrite();
+    notifyCommittedWrite();
     return;
   }
 
-  setRuntimeConfigSnapshot(params.loadFreshConfig());
-  params.notifyCommittedWrite();
+  const fresh = params.loadFreshConfig();
+  params.assertCurrent?.();
+  setRuntimeConfigSnapshot(fresh);
+  notifyCommittedWrite();
 }

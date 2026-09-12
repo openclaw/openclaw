@@ -16,6 +16,7 @@ import { t } from "../../../i18n/index.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
+import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import {
@@ -120,39 +121,25 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   @state() private pendingEnabled: boolean | null = null;
 
   private readonly viewState: DreamingViewState = createDreamingViewState();
-  private gatewaySource: ApplicationGateway | null = null;
-  private gatewayBindingEpoch = 0;
-  private gatewayEpoch = 0;
-  private hasBoundGatewaySource = false;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onSnapshot: ({ snapshot, initial, sourceChanged }) =>
+      this.applyGatewaySnapshot(
+        snapshot,
+        initial ? "initial" : sourceChanged ? "replacement" : undefined,
+      ),
+  });
   private selectedAgentId: string | null = null;
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const sourceReplaced = this.hasBoundGatewaySource;
-        this.hasBoundGatewaySource = true;
-        this.gatewaySource = gateway;
-        const bindingEpoch = ++this.gatewayBindingEpoch;
-        this.gatewayEpoch += 1;
-        const cleanup = gateway.subscribe((snapshot) => {
-          if (this.isGatewayBindingCurrent(gateway, bindingEpoch)) {
-            this.applyGatewaySnapshot(snapshot);
-          }
-        });
-        this.applyGatewaySnapshot(gateway.snapshot, sourceReplaced ? "replacement" : "initial");
-        return cleanup;
-      },
-    )
-    .effect(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig) => {
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.runtimeConfig,
+    (runtimeConfig) => {
+      this.syncConfigSnapshot();
+      return runtimeConfig.subscribe(() => {
         this.syncConfigSnapshot();
-        return runtimeConfig.subscribe(() => {
-          this.syncConfigSnapshot();
-          this.requestUpdate();
-        });
-      },
-    );
+        this.requestUpdate();
+      });
+    },
+  );
 
   override updated(changed: PropertyValues<this>) {
     if (changed.has("agentId")) {
@@ -162,36 +149,24 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.gatewayBindingEpoch += 1;
-    this.gatewayEpoch += 1;
-    this.gatewaySource = null;
     this.resetTransientState();
     this.dreaming = createDreamingState();
     super.disconnectedCallback();
   }
 
-  private isGatewayBindingCurrent(gateway: ApplicationGateway, bindingEpoch: number): boolean {
-    return (
-      this.isConnected &&
-      this.gatewaySource === gateway &&
-      this.gatewayBindingEpoch === bindingEpoch &&
-      this.context.gateway === gateway
-    );
-  }
-
   private captureTaskScope(): DreamingTaskScope | null {
-    const gateway = this.gatewaySource;
+    const gateway = this.gateway.gateway;
     if (!gateway) {
       return null;
     }
-    return { gateway, epoch: this.gatewayEpoch, state: this.dreaming };
+    return { gateway, epoch: this.gateway.epoch, state: this.dreaming };
   }
 
   private isTaskScopeCurrent(scope: DreamingTaskScope): boolean {
     return (
       this.isConnected &&
-      this.gatewaySource === scope.gateway &&
-      this.gatewayEpoch === scope.epoch &&
+      this.gateway.gateway === scope.gateway &&
+      this.gateway.epoch === scope.epoch &&
       this.context.gateway === scope.gateway &&
       this.dreaming === scope.state
     );
@@ -223,9 +198,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const connectionChanged = this.dreaming.connected !== (snapshot.phase === "connected");
     const becameConnected = snapshot.phase === "connected" && !this.dreaming.connected;
     const replaceState = sourceBind === "replacement" || clientChanged || connectionChanged;
-    if (connectionChanged) {
-      this.gatewayEpoch += 1;
-    }
     if (replaceState) {
       this.dreaming = this.createGatewayState(snapshot);
       if (sourceBind !== "initial") {
@@ -252,7 +224,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       return;
     }
     this.selectedAgentId = agentId;
-    this.gatewayEpoch += 1;
+    this.gateway.invalidate();
     this.resetTransientState();
     this.dreaming = this.createGatewayState();
     if (agentId && this.dreaming.connected) {

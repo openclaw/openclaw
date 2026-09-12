@@ -116,7 +116,9 @@ async function stageNodeTerminalUpload(
   if (!validateTerminalUploadResult(payload)) {
     throw new Error("terminal node returned an invalid upload result");
   }
-  return payload as TerminalUploadResult;
+  // Insertion policy belongs to the admitted catalog plan, not the node reply.
+  const uploaded = payload as TerminalUploadResult;
+  return { path: uploaded.path, size: uploaded.size };
 }
 
 function respondLaunchBlocked(
@@ -253,6 +255,15 @@ export async function openTerminalSession(
       }
     } else {
       const nodeCatalogPlan = catalogPlan;
+      if (
+        nodeCatalogPlan.uploadPathStyle !== undefined &&
+        nodeCatalogPlan.uploadPathStyle !== "native"
+      ) {
+        invalid(respond, "catalog terminal plan has an unsupported upload path style");
+        return;
+      }
+      const uploadNodeId = nodeCatalogPlan.nodeId;
+      const uploadPathStyle = nodeCatalogPlan.uploadPathStyle;
       const access = authorizeCatalogTerminalNode(context, nodeCatalogPlan);
       if (!access.ok) {
         respondTerminalUnavailable(respond, access.message, request.failureHint);
@@ -307,8 +318,10 @@ export async function openTerminalSession(
         respondTerminalUnavailable(respond, policyResult.message, request.failureHint);
         return;
       }
-      stageUpload = async (file) =>
-        await stageNodeTerminalUpload(context, nodeCatalogPlan.nodeId, file);
+      stageUpload = async (file) => ({
+        ...(await stageNodeTerminalUpload(context, uploadNodeId, file)),
+        ...(uploadPathStyle ? { uploadPathStyle } : {}),
+      });
     }
   }
 

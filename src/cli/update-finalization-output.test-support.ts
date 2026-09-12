@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
@@ -46,6 +47,18 @@ export async function doctorCommand() {
   if (!process.argv.includes('--no-workspace-suggestions')) note('Doctor workspace diagnostic', 'Workspace');
   console.log('Doctor console diagnostic');
   process.stderr.write('Doctor stderr diagnostic\\n');
+  ${
+    scenario === "doctor-hang" || scenario === "doctor-progress"
+      ? `
+  console.log('STEP completed fixture-schema');
+  console.error('STEP active fixture-validation');
+  process.on('SIGTERM', () => {});
+  ${scenario === "doctor-progress" ? "setInterval(() => console.error('PROGRESS fixture-validation'), 40);" : ""}
+  setTimeout(() => process.exit(0), 8_000);
+  await new Promise(() => {});
+  `
+      : ""
+  }
   outro('Doctor complete.');
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
 }
@@ -99,7 +112,8 @@ const stubs = new Map<string, string>([
   // place that URL in a shared chunk. Workers still execute their real compiled code.
   [
     sourceUrl("../infra/runtime-process-entrypoints.ts"),
-    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};`,
+    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};
+export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)};`,
   ],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
@@ -152,11 +166,13 @@ export const preparePostCorePluginConfig = async () => ({
   ],
 ]);
 const blockedPhase =
-  scenario === "phase-hang"
-    ? "configSnapshot"
-    : scenario === "completion-hang"
-      ? "completionCache"
-      : undefined;
+  scenario === "doctor-hang" || scenario === "doctor-progress"
+    ? "doctor"
+    : scenario === "phase-hang"
+      ? "configSnapshot"
+      : scenario === "completion-hang"
+        ? "completionCache"
+        : undefined;
 if (blockedPhase) {
   const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
   // Keep real phase ownership; only the deliberately blocked phase gets a short budget.

@@ -6,7 +6,11 @@ import {
   ConverseStreamCommand,
   StopReason as BedrockStopReason,
 } from "@aws-sdk/client-bedrock-runtime";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "@openclaw/ai/internal/shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
@@ -469,7 +473,7 @@ describe("Bedrock prompt cache ownership", () => {
               name: "Claude Haiku 4.5",
             }),
             {
-              systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+              systemPrompt: `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.trim()}Stable workspace${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END.trim()}${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
               messages: [{ role: "user", content: "Hello", timestamp: 0 }],
             },
             { cacheRetention },
@@ -501,6 +505,26 @@ describe("Bedrock prompt cache ownership", () => {
 
   const model = () =>
     bedrockModel({ id: "anthropic.claude-haiku-4-5-20251001-v1:0", name: "Claude Haiku 4.5" });
+
+  it("strips relocation markers from a prompt without a cache boundary", async () => {
+    const payload = await capturePayload(
+      model(),
+      {
+        systemPrompt: `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.trim()}Complete policy${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END.trim()}`,
+        messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+      },
+      { cacheRetention: "short" },
+    );
+
+    expect(payload.system).toEqual([
+      { text: "Complete policy" },
+      { cachePoint: { type: "default" } },
+    ]);
+    expect(payload.messages?.[0]?.content).toEqual([
+      { text: "Hello" },
+      { cachePoint: { type: "default" } },
+    ]);
+  });
 
   it("anchors prompt caching on the last stable user turn instead of transient runtime context", async () => {
     const messages = await captureMessages(

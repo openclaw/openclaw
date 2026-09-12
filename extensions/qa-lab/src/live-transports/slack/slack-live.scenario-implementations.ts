@@ -299,7 +299,9 @@ export const slackQaProgressCommentaryFalseScenario: SlackQaScenarioImplementati
 
 export const slackQaProgressCommentaryOmittedScenario: SlackQaScenarioImplementation = {
   configOverrides: {
-    progress: { toolProgress: true },
+    // This proof inspects chat.update history for one editable text draft.
+    // Native and Block Kit cards have separate transport proofs.
+    progress: { style: "compact", toolProgress: true },
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {

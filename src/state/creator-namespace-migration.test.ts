@@ -8,6 +8,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
@@ -69,7 +70,7 @@ describe("creator namespace upgrades", () => {
         expect(migrate).toThrow(/maintenance/);
         const execute = db.exec.bind(db);
         const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
-          if (sql === "PRAGMA user_version = 19;") {
+          if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
             throw new Error("injected commit failure");
           }
           return execute(sql);
@@ -91,11 +92,13 @@ describe("creator namespace upgrades", () => {
             .every((row) => row.source === null),
         ).toBe(true);
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => migrate());
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         expect(
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
             ?.schema_version,
-        ).toBe(19);
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
         expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
         expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       } finally {

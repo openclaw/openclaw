@@ -1,14 +1,13 @@
 // Bash completion owns shell-word normalization and Readline insertion spans.
-import type { Command } from "commander";
-import {
-  collectShellCompletionCommandTree,
-  type ShellCompletionContext,
+import type {
+  ShellCompletionCommandTree,
+  ShellCompletionContext,
 } from "./completion-command-tree.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
-export function generateBashCompletion(program: Command): string {
-  const rootCmd = program.name();
-  const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
+export function generateBashCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants: contexts } = tree;
+  const rootCmd = root.command.name();
   const commandPathUpdate = generateBashCommandPathUpdate(contexts);
   const choiceCompletion = generateBashOptionChoiceCompletion([root, ...contexts]);
   return `

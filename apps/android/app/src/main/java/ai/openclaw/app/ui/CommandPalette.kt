@@ -99,7 +99,7 @@ internal fun CommandPalette(
   Surface(modifier = Modifier.fillMaxSize(), color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
     ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
       LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item {
+        item(key = "header") {
           Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -120,7 +120,7 @@ internal fun CommandPalette(
           }
         }
 
-        item {
+        item(key = "query") {
           ClawTextField(
             value = query,
             onValueChange = { query = it },
@@ -129,26 +129,25 @@ internal fun CommandPalette(
           )
         }
 
-        item {
-          CommandSectionLabel(title = nativeString("Quick actions"))
+        if (actionRows.isNotEmpty() || sessionRows.isEmpty()) {
+          item(key = "actions-heading") {
+            CommandSectionLabel(title = nativeString("Quick actions"))
+          }
+          item(key = "actions") {
+            if (actionRows.isEmpty()) {
+              ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Threads, Providers, or Settings."))
+            } else {
+              CommandActionList(rows = actionRows, onOpen = onOpen)
+            }
+          }
         }
 
-        if (actionRows.isEmpty()) {
-          item {
-            ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Threads, Providers, or Settings."))
-          }
-        } else {
-          item {
-            CommandActionList(rows = actionRows, onOpen = onOpen)
-          }
-        }
-
-        item {
+        item(key = "threads-heading") {
           CommandSectionLabel(title = nativeString("Threads"))
         }
 
-        if (sessionRows.isEmpty()) {
-          item {
+        item(key = "threads") {
+          if (sessionRows.isEmpty()) {
             ClawPanel {
               Text(
                 text = if (isConnected) nativeString("No matching threads yet.") else nativeString("Connect the Gateway to search threads."),
@@ -156,9 +155,7 @@ internal fun CommandPalette(
                 color = ClawTheme.colors.textMuted,
               )
             }
-          }
-        } else {
-          item {
+          } else {
             CommandSessionList(
               rows =
                 sessionRows.map { session ->

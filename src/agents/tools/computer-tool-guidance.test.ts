@@ -28,8 +28,12 @@ describe("computer tool guidance", () => {
     );
 
     expect(description).toContain("Observe first with `get_window_state`");
+    expect(description).toContain("capture the desktop and return frameId");
+    expect(description).toContain("do not accept window or browser targets");
+    expect(description).toContain("observationId for window input");
     expect(description).toContain('`effect:"confirmed"` > `unverifiable` > `suspected_noop`');
     expect(description).toContain("never blind-retry a mutation");
+    expect(description).toContain("For window input");
     expect(description).toContain("untrusted input");
     expect(description).not.toMatch(
       /cua|peekaboo|\b(?:cli|mcp|daemon|socket|install(?:ation|ing)?)\b|verify_state|start_session|end_session|element_token|snapshot_id|window_id|delivery_mode/iu,
@@ -64,5 +68,14 @@ describe("computer tool guidance", () => {
     expect(windowBackground).toContain('deliveryMode:"background"');
     expect(windowBackground).toContain("background_occluded");
     expect(windowBackground).not.toMatch(/desktop coordinates|foreground|frameId/);
+  });
+
+  it("distinguishes key taps from advertised held-key support", () => {
+    const taps = buildComputerToolDescription(descriptor(["screenshot", "key"]));
+    expect(taps).toContain("key taps only");
+    expect(taps).not.toContain("`hold_key`");
+    const holds = buildComputerToolDescription(descriptor(["screenshot", "key", "hold_key"]));
+    expect(holds).toContain("`hold_key`");
+    expect(holds).not.toContain("key taps only");
   });
 });

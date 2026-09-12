@@ -148,7 +148,7 @@ describe("structured input execution", () => {
   });
 
   it.each([
-    ["Continue", "answered"],
+    ["I've completed this step", "answered"],
     ["Decline", "declined"],
   ] as const)("maps the URL choice %s to %s", async (choice, status) => {
     const gateway = createGateway((questions) => ({ [questions[0]!.questionId]: [choice] }));

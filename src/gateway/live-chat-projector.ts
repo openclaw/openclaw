@@ -27,7 +27,16 @@ export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
       ? sliceUtf16Safe(text, -MAX_LIVE_CHAT_BUFFER_CHARS)
       : text;
   if (scope) {
-    scope.prefix = sliceUtf16Safe(scope.prefix, text.length - capped.length);
+    const retired = text.length - capped.length;
+    const retiredAfterPrefix = Math.max(0, retired - scope.prefix.length);
+    // Retire padding with its prefix, including a cap that cuts through the
+    // separator. Later deltas must not recreate or consume those newlines.
+    scope.boundaryNewlines =
+      retiredAfterPrefix > scope.separatorLength
+        ? 0
+        : Math.max(0, scope.boundaryNewlines - retiredAfterPrefix);
+    scope.separatorLength = Math.max(0, scope.separatorLength - retiredAfterPrefix);
+    scope.prefix = sliceUtf16Safe(scope.prefix, retired);
   }
   return capped;
 }

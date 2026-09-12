@@ -31,16 +31,20 @@ export type PluginRuntimeLoadContext = {
   metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
+  expectedSourceDigests?: PluginLoadOptions["expectedSourceDigests"];
 };
 
 export function setPluginRuntimeLoadContext(
   registry: PluginRegistry,
   context: PluginRuntimeLoadContext,
   registrationConfigKey?: string,
+  loaderCacheIdentity?: PluginRuntimeLoadContextState["loaderCacheIdentity"],
 ): void {
   const previous = getPluginRuntimeLoadContextState(registry);
+  const capturedIdentity = previous?.loaderCacheIdentity ?? loaderCacheIdentity;
   const bound = {
     ...context,
+    ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
     // Host preparation may rebind metadata, but it cannot change already-registered closures.
     registrationConfigKey:
       previous?.registrationConfigKey ??
@@ -82,6 +86,7 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "manifestRegistry"
   | "installRecords"
   | "preferBuiltPluginArtifacts"
+  | "expectedSourceDigests"
 >;
 
 /** Creates the default plugin runtime loader logger. */
@@ -109,6 +114,7 @@ export function buildPluginRuntimeLoadOptions(
     manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
     preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
+    expectedSourceDigests: values.expectedSourceDigests,
     ...overrides,
   };
 }

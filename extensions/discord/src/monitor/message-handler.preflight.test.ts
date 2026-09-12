@@ -382,6 +382,33 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
 
+  it("carries the host channel context builder into the preflight context", async () => {
+    const buildContext = vi.fn();
+    const channelId = "dm-channel-host-builder";
+    const message = createDiscordMessage({
+      id: "m-host-builder",
+      channelId,
+      content: "hello",
+      author: { id: "user-1", bot: false, username: "alice" },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: { dmPolicy: "open" } as DiscordConfig,
+        data: {
+          channel_id: channelId,
+          author: message.author,
+          message,
+        } as DiscordMessageEvent,
+        client: createDmClient(channelId),
+      }),
+      buildContext,
+    });
+
+    expect(expectPreflightResult(result).buildContext).toBe(buildContext);
+  });
+
   it("admits embed-only messages when their text appears after a textless first embed", async () => {
     const channelId = "dm-channel-multiple-embeds";
     const message = Object.assign(
@@ -2200,6 +2227,63 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.channelConfig?.allowed).toBe(true);
     expect(preflight.shouldRequireMention).toBe(false);
   });
+
+  it.each([
+    { threadAgents: undefined, peerId: "parent-1", mentionedAgentIds: ["analyst"] },
+    { threadAgents: ["writer"], peerId: "thread-1", mentionedAgentIds: ["writer"] },
+    { threadAgents: [], peerId: undefined, mentionedAgentIds: [] },
+  ])(
+    "resolves group thread admission with exact entry $threadAgents",
+    async ({ threadAgents, peerId, mentionedAgentIds }) => {
+      const threadId = "thread-1";
+      const parentId = "parent-1";
+      const message = createDiscordMessage({
+        id: "group-thread-admission",
+        channelId: threadId,
+        content: "@Analyst @Writer please review",
+        author: { id: "user-1", bot: false, username: "Pat" },
+      });
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: {
+            ...DEFAULT_PREFLIGHT_CFG,
+            agents: {
+              entries: {
+                primary: { identity: { name: "Primary" } },
+                analyst: { identity: { name: "Analyst" } },
+                writer: { identity: { name: "Writer" } },
+              },
+            },
+            bindings: [{ agentId: "primary", match: { channel: "discord" } }],
+            broadcast: {
+              [`discord:${parentId}`]: ["analyst"],
+              ...(threadAgents ? { [`discord:${threadId}`]: threadAgents } : {}),
+            },
+          },
+          discordConfig: {},
+          data: createGuildEvent({
+            channelId: threadId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client: createThreadClient({ threadId, parentId }),
+        }),
+        guildEntries: {
+          "guild-1": { channels: { [parentId]: { enabled: true, requireMention: true } } },
+        },
+      });
+      if (!peerId) {
+        expect(result).toBeNull();
+        return;
+      }
+      const preflight = expectPreflightResult(result);
+      expect(preflight.groupThread?.peerId).toBe(peerId);
+      expect(preflight.groupThread?.mentionedAgentIds).toEqual(mentionedAgentIds);
+      expect(preflight.messageChannelId).toBe(threadId);
+      expect(preflight.wasMentioned).toBe(true);
+    },
+  );
 
   it("inherits parent thread allowlist when guild object is missing", async () => {
     const threadId = "thread-1";

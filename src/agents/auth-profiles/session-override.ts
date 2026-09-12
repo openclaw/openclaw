@@ -8,6 +8,7 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
+import { resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -19,7 +20,11 @@ import {
   isModelScopedCooldownReason,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import { resolveModelRouteIntent } from "../model-runtime-policy.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
+import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
@@ -276,6 +281,7 @@ async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  agentId?: string;
   agentDir: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -480,7 +486,24 @@ async function resolveSessionAuthProfileOverride(params: {
   // Provider artifacts own persisted route stickiness; runtime planning owns cross-route failover.
   const routeResolution =
     shouldRotateCurrent && !retryableHigherPriorityProfile
-      ? resolveProviderModelRoutes({ provider, modelId: params.modelId, config: cfg })
+      ? resolveProviderModelRoutes({
+          provider,
+          modelId: params.modelId,
+          config: cfg,
+          routeIntent: resolveModelRouteIntent({
+            config: cfg,
+            provider,
+            modelId: params.modelId,
+            agentId: params.agentId,
+            primaryModel: resolveDefaultModelForAgent({
+              cfg,
+              agentId: params.agentId,
+              allowManifestNormalization: false,
+              allowPluginNormalization: false,
+            }),
+            resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
+          }),
+        })
       : null;
   const currentAuthRequirement =
     current && routeResolution?.kind === "routes" && routeResolution.routes.length > 1
@@ -546,6 +569,7 @@ export async function resolveSessionAuthSelection(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  agentId?: string;
   configuredProfileId?: string;
   harnessRuntime?: string;
   agentDir: string;
@@ -556,6 +580,12 @@ export async function resolveSessionAuthSelection(params: {
   isNewSession: boolean;
   requesterProfileId?: string;
 }): Promise<SessionAuthSelection | undefined> {
+  const modelId = splitTrailingAuthProfile(params.modelId).model;
+  const cfg = resolveModelProviderAuthConfig({
+    config: params.cfg,
+    provider: params.provider,
+    modelId,
+  });
   const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
     provider: params.provider,
     harnessRuntime: params.harnessRuntime,
@@ -563,7 +593,8 @@ export async function resolveSessionAuthSelection(params: {
   });
   const { profileId: rotatedProfileId, store } = await resolveSessionAuthProfileOverride({
     ...params,
-    modelId: splitTrailingAuthProfile(params.modelId).model,
+    cfg,
+    modelId,
     acceptedProviderIds,
   });
   const rotatedSource = rotatedProfileId
@@ -574,7 +605,20 @@ export async function resolveSessionAuthSelection(params: {
   // Person-linked pins carry user strength and outrank the agent's static @profile.
   const rotatedPinnedProfileId =
     rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
-  const configuredProfileId = params.configuredProfileId?.trim() || undefined;
+  const configuredProfile = params.agentId
+    ? splitTrailingAuthProfile(resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ?? "")
+        .profile
+    : undefined;
+  const defaultModel = configuredProfile
+    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
+    : undefined;
+  const configuredProfileId =
+    params.configuredProfileId?.trim() ||
+    (defaultModel &&
+    resolveModelCatalogIdentityKey({ provider: params.provider, id: modelId }) ===
+      resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
+      ? configuredProfile
+      : undefined);
   const profileId = rotatedPinnedProfileId ?? configuredProfileId ?? rotatedProfileId;
   if (!profileId) {
     return undefined;
@@ -592,7 +636,7 @@ export async function resolveSessionAuthSelection(params: {
     !rotatedPinnedProfileId &&
     profileId === configuredProfileId &&
     !isProfileForProvider({
-      cfg: params.cfg,
+      cfg,
       providers: uniqueProviders(params.provider, acceptedProviderIds),
       profileId,
       store: authStore,
@@ -605,6 +649,6 @@ export async function resolveSessionAuthSelection(params: {
   return {
     profileId,
     source: rotatedPinnedProfileId || configuredProfileId ? "user" : "auto",
-    routeRequirement: profileAuthRequirement({ cfg: params.cfg, store: authStore, profileId }),
+    routeRequirement: profileAuthRequirement({ cfg, store: authStore, profileId }),
   };
 }

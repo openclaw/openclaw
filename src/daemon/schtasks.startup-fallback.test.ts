@@ -13,6 +13,7 @@ import {
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 
 vi.mock("../infra/windows-encoding.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/windows-encoding.js")>(
@@ -659,6 +660,20 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await expect(readWindowsStartupFallbackRuntimeForUpdate(env)).resolves.toBeNull();
       expect(spawnSync).not.toHaveBeenCalled();
+    });
+  });
+
+  it("refuses update-owned Startup fallback before publishing a login item or detached launcher", async () => {
+    await withWindowsEnv("openclaw-win-update-startup-", async ({ env }) => {
+      addMissingTaskInstallResponses([{ code: 5, stdout: "", stderr: "ERROR: Access is denied." }]);
+      await expect(
+        withGatewayServiceUpdateAuthority(
+          () => {},
+          () => installGatewayScheduledTask(env),
+        ),
+      ).rejects.toThrow("startup fallback is unsupported");
+      await expect(fs.stat(resolveStartupEntryPath(env))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 

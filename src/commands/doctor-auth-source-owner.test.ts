@@ -100,7 +100,8 @@ describe("Doctor auth migration source ownership", () => {
     expect.soft(result).toEqual({
       detected: selectedSources.map(({ sourcePath }) => sourcePath),
       changes: [],
-      configOwnerMigrationApplied: false,
+      migratedProfileIds: new Set<string>(),
+      blockedProfileIds: new Set<string>(),
       warnings: [],
     });
     for (const source of [...selectedSources, ...ambientSources]) {

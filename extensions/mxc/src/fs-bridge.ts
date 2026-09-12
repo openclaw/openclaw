@@ -81,11 +81,9 @@ class MxcFsBridge implements SandboxFsBridge {
     })) as Buffer;
   }
 
-  async readDirectory(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<DirectoryEntry[]> {
+  async readDirectory(
+    params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
+  ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
     const root = await fsRoot(target.mount.hostRoot);
     const entries = await root.list(target.mountRelativePath, { withFileTypes: true });

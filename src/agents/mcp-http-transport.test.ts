@@ -1,5 +1,8 @@
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, it, vi } from "vitest";
+import { settlesWithin } from "../shared/settle-within.js";
 import { disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 import {
@@ -18,13 +21,12 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
 
 function initializedFetch(params: {
   onGet: () => Promise<Response> | Response;
-  onDelete?: (init: RequestInit) => void;
+  onDelete?: (init: RequestInit) => Response | void;
   onPost?: (message: { id?: string | number; method?: string }) => Promise<Response> | Response;
 }) {
   return vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "DELETE") {
-      params.onDelete?.(init);
-      return new Response(null, { status: 204 });
+      return params.onDelete?.(init) ?? new Response(null, { status: 204 });
     }
     if (init?.method === "GET") {
       return await params.onGet();
@@ -427,6 +429,138 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       "allocated-before-failure",
     );
     expect(deleteRequests[0]?.signal?.aborted).toBe(false);
+  });
+
+  it.each(["pending", "rejecting"])(
+    "finishes termination with %s DELETE body cancellation",
+    async (cancellation) => {
+      let deleteCount = 0;
+      const sockets = new Set<Socket>();
+      const server = createServer((request, response) => {
+        response.on("error", () => {});
+        if (request.method === "DELETE") {
+          deleteCount += 1;
+          response.writeHead(200).end("terminated");
+          return;
+        }
+        if (request.method === "GET") {
+          response.writeHead(405).end();
+          return;
+        }
+        response.writeHead(500, { "mcp-session-id": "hang-cancel-session" });
+        response.end("initialize failed");
+      });
+      try {
+        server.on("connection", (socket) => {
+          sockets.add(socket);
+          socket.once("close", () => sockets.delete(socket));
+        });
+        server.on("clientError", (_err, socket) => socket.destroy());
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected loopback TCP address");
+        }
+        const baseUrl = new URL(`http://127.0.0.1:${address.port}/mcp`);
+
+        // Replace only cancellation after the real DELETE has completed.
+        const cleanupFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+          const response = await fetch(input, init);
+          if (init?.method !== "DELETE") {
+            return response;
+          }
+          expect(response.status).toBe(200);
+          await response.arrayBuffer();
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("bye"));
+              },
+              cancel() {
+                return cancellation === "rejecting"
+                  ? Promise.reject(new Error("synthetic cancellation rejection"))
+                  : new Promise(() => {});
+              },
+            }),
+            {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            },
+          );
+        };
+
+        const transport = new OpenClawStreamableHTTPClientTransport(baseUrl, {
+          fetch: cleanupFetch,
+        });
+        const client = new Client({ name: "test", version: "1" });
+
+        await expect(client.connect(transport)).rejects.toThrow("initialize failed");
+        expect(transport.sessionId).toBe("hang-cancel-session");
+
+        await expect(settlesWithin(transport.terminateSession(), 1_000)).resolves.toBe(true);
+        expect(deleteCount).toBe(1);
+
+        // Marked terminated — a second call must not issue another DELETE.
+        await transport.terminateSession();
+        expect(deleteCount).toBe(1);
+
+        await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+        expect(deleteCount).toBe(1);
+      } finally {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        });
+      }
+    },
+  );
+
+  it("accepts unsupported session DELETE without sending it again", async () => {
+    const onDelete = vi.fn(() => new Response(null, { status: 405 }));
+    const fetchMock = initializedFetch({
+      onGet: () => new Response(null, { status: 405 }),
+      onDelete,
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    await client.connect(transport);
+    await transport.terminateSession();
+    await transport.terminateSession();
+    await expect(
+      disposeMcpClient({ client, transport, transportType: "streamable-http" }),
+    ).resolves.toBe("closed");
+    expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("does not record a rejected DELETE as successful termination", async () => {
+    const onDelete = vi.fn(() => new Response("refused", { status: 500, statusText: "Rejected" }));
+    const fetchMock = initializedFetch({
+      onGet: () => new Response(null, { status: 405 }),
+      onDelete,
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    await client.connect(transport);
+    await expect(transport.terminateSession()).rejects.toThrow(
+      "Failed to terminate session: Rejected",
+    );
+    await expect(transport.terminateSession()).rejects.toThrow(
+      "Failed to terminate session: Rejected",
+    );
+    await expect(
+      disposeMcpClient({ client, transport, transportType: "streamable-http" }),
+    ).resolves.toBe("uncertain");
+    expect(onDelete).toHaveBeenCalledTimes(3);
   });
 
   it("does not fetch another notification stream after close returns", async () => {

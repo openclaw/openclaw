@@ -44,7 +44,7 @@ describe("createVideoGenerateTool status actions", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns active task status instead of starting a duplicate generation", () => {
+  it("returns active task status instead of starting a duplicate generation", async () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",
@@ -64,7 +64,7 @@ describe("createVideoGenerateTool status actions", () => {
       },
     ]);
 
-    const result = createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
+    const result = await createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
       prompt: "friendly lobster surfing",
     });
 
@@ -103,7 +103,7 @@ describe("createVideoGenerateTool status actions", () => {
     expect(details?.progressSummary).toBe("Generating video");
   });
 
-  it("reports active task status when action=status is requested", () => {
+  it("reports active task status when action=status is requested", async () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",
@@ -123,7 +123,7 @@ describe("createVideoGenerateTool status actions", () => {
       },
     ]);
 
-    const result = createVideoGenerateStatusActionResult("agent:main:discord:direct:123");
+    const result = await createVideoGenerateStatusActionResult("agent:main:discord:direct:123");
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Video generation task task-active is already queued with google.");
@@ -147,7 +147,7 @@ describe("createVideoGenerateTool status actions", () => {
     expect(details.progressSummary).toBe("Queued video generation");
   });
 
-  it("returns recent succeeded video status instead of starting a duplicate generation", () => {
+  it("returns recent succeeded video status instead of starting a duplicate generation", async () => {
     // A recently completed request is still a duplicate from the user's
     // perspective; report status instead of spending another provider call.
     const now = Date.now();
@@ -183,7 +183,7 @@ describe("createVideoGenerateTool status actions", () => {
       },
     ]);
 
-    const result = createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
+    const result = await createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
       requestKey: "video-request:friendly-lobster",
     });
     const text = (result?.content?.[0] as { text: string } | undefined)?.text ?? "";

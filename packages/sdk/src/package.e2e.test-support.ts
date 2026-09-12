@@ -11,11 +11,6 @@ import { type FileLockOptions, withFileLock } from "../../../src/infra/file-lock
 import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
-type CommandResult = {
-  stdout: string;
-  stderr: string;
-};
-
 type PackageManifest = {
   name: string;
   version: string;
@@ -106,7 +101,7 @@ function runCommand(
     SpawnOptionsWithoutStdio,
     "env" | "shell" | "windowsVerbatimArguments"
   >,
-): Promise<CommandResult> {
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -138,15 +133,14 @@ function runCommand(
     });
     child.once("exit", (code, signal) => {
       clearTimeout(timer);
-      const result = { stdout: stdout.join(""), stderr: stderr.join("") };
       if (code === 0) {
-        resolve(result);
+        resolve();
         return;
       }
       reject(
         new Error(
           `command failed (${String(code ?? signal)}): ${[command, ...args].join(" ")}\n` +
-            `--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
+            `--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
         ),
       );
     });
@@ -156,7 +150,7 @@ function runCommand(
 function runPnpmCommand(
   args: string[],
   options: { cwd: string; timeoutMs?: number },
-): Promise<CommandResult> {
+): Promise<void> {
   const spec = createPnpmRunnerSpawnSpec({
     cwd: options.cwd,
     env: createCommandEnv(),
@@ -175,7 +169,7 @@ function runPnpmCommand(
 function runNpmCommand(
   args: string[],
   options: { cwd: string; timeoutMs?: number },
-): Promise<CommandResult> {
+): Promise<void> {
   const env = createCommandEnv();
   const runner = resolveNpmRunner({ env, npmArgs: args });
   return runCommand(runner.command, runner.args, {

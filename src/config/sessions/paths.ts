@@ -34,6 +34,14 @@ export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
+/** Store selectors and explicit databases share the owning agent's session artifact directory. */
+export function resolveSessionArtifactDirectory(storePath: string): string {
+  const storeDir = path.dirname(storePath);
+  return path.basename(storeDir) === "agent"
+    ? path.join(path.dirname(storeDir), "sessions")
+    : storeDir;
+}
+
 type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;

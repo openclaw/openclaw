@@ -9,7 +9,11 @@ import type {
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import {
+  isHostedOllamaCloud,
+  OLLAMA_DEFAULT_API_KEY,
+  OLLAMA_DEFAULT_BASE_URL,
+} from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
 
@@ -158,22 +162,6 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
     isIpv6LocalRange(host) ||
     (!host.includes(".") && !host.includes(":"))
   );
-}
-
-const HOSTED_OLLAMA_CLOUD_HOSTNAMES = new Set(["ollama.com", "api.ollama.com"]);
-
-function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
-  if (!baseUrl) {
-    return false;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    return false;
-  }
-  const host = parsed.hostname.toLowerCase();
-  return HOSTED_OLLAMA_CLOUD_HOSTNAMES.has(host) || host.endsWith(".ollama.com");
 }
 
 function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {

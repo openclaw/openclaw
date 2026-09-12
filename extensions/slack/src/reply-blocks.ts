@@ -10,12 +10,19 @@ import {
   type AskUserQuestionOptionIndices,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveSlackAuthoredTextPlacement,
   type SlackAuthoredTextPlacement,
 } from "./authored-text.js";
-import { buildSlackBlocksFallbackText, renderSlackBlockFallbackText } from "./blocks-fallback.js";
+import {
+  buildSlackBlocksFallbackText,
+  buildSlackCompleteBlocksFallbackText,
+  renderSlackBlockFallbackText,
+} from "./blocks-fallback.js";
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
@@ -31,7 +38,6 @@ import {
   buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
 } from "./native-data-blocks.js";
-import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
 import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
 import {
   SLACK_APPROVAL_BUTTON_ACTION_ID,
@@ -52,6 +58,28 @@ export type SlackReplyBlockResolution = {
   authoredTextPlacement: SlackAuthoredTextPlacement;
   segments: SlackReplyBlockSegment[];
 };
+
+export function normalizeSlackReplyPayload(payload: ReplyPayload): ReplyPayload {
+  const previousSlackData = asOptionalRecord(payload.channelData?.slack) ?? {};
+  const { authoredPresentationText: _authoredPresentationText, ...slackData } = previousSlackData;
+  if (
+    payload.presentationTextMode !== "fallback" ||
+    !normalizeMessagePresentation(payload.presentation)
+  ) {
+    return Object.hasOwn(previousSlackData, "authoredPresentationText")
+      ? { ...payload, channelData: { ...payload.channelData, slack: slackData } }
+      : payload;
+  }
+  // Core withholds alternative text during native rendering. Capture it after
+  // policy rewrites so the same Slack compiler can preserve authored literals.
+  return {
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      slack: { ...slackData, authoredPresentationText: payload.text },
+    },
+  };
+}
 
 export function parseSlackReplyBlockSegments(value: unknown): SlackReplyBlockSegment[] | undefined {
   if (value === undefined) {
@@ -131,19 +159,13 @@ export function resolveSlackReplyDeliveryMessages(
   return Array.from(iterateSlackReplyDeliveryMessages(params));
 }
 
-function resolveSlackReplyText(payload: ReplyPayload, text = payload.text): string {
-  const presentation = normalizeMessagePresentation(payload.presentation);
-  return presentation
-    ? renderSlackMessagePresentationFallbackText({ text, presentation })
-    : (text ?? "");
-}
-
 type SlackReplyRenderPlan =
   | {
       mode: "single";
       text: string;
       blocks?: SlackBlock[];
       textIsSlackMrkdwn?: boolean;
+      textIsSlackPlainText?: true;
     }
   | {
       mode: "split";
@@ -192,7 +214,6 @@ export function prepareSlackReply(payload: ReplyPayload): PreparedSlackReply {
         return prepareSlackReply({ ...source, text: override }).resolvePreview();
       }
       return (preview ??= projectSlackReplyRenderPlan(
-        source,
         text,
         resolve(hasStructuredContent()),
         resolveAuthoredTextChunks,
@@ -202,7 +223,6 @@ export function prepareSlackReply(payload: ReplyPayload): PreparedSlackReply {
 }
 
 function projectSlackReplyRenderPlan(
-  payload: ReplyPayload,
   text: string | undefined,
   resolution: SlackReplyBlockResolution,
   resolveAuthoredTextChunks: () => readonly string[],
@@ -214,7 +234,7 @@ function projectSlackReplyRenderPlan(
   });
   if (messages.length <= 1) {
     const [message] = messages;
-    const sourceText = text?.trim() ?? "";
+    const sourceText = resolution.authoredTextPlacement === "none" ? "" : (text?.trim() ?? "");
     const blocks =
       message?.authoredTextPlacement === "blocks"
         ? addPreviewVerbatimToAuthoredTextBlocks(
@@ -222,7 +242,10 @@ function projectSlackReplyRenderPlan(
             sourceText ? resolveAuthoredTextChunks() : [],
           )
         : message?.blocks;
-    let renderedText = message?.text ?? resolveSlackReplyText(payload, text);
+    // Previews use mrkdwn; escape literal block labels at that boundary.
+    let renderedText = message?.blocks
+      ? buildSlackCompleteBlocksFallbackText(message.blocks, { includeSelectOptions: true })
+      : (message?.text ?? text ?? "");
     let textIsSlackMrkdwn = Boolean(
       message &&
       !message.textIsSlackPlainText &&
@@ -242,6 +265,7 @@ function projectSlackReplyRenderPlan(
       text: renderedText,
       ...(blocks ? { blocks } : {}),
       ...(textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
+      ...(message?.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
     };
   }
   const blockPart = messages.find((message) => message.blocks?.length);
@@ -356,7 +380,7 @@ function resolvePresentationRenderOptions(
   segments: SlackReplyBlockSegment[],
   mode: "current" | "new-message",
 ): SlackBlockRenderOptions {
-  const allOffsets = resolveSlackBlockOffsets(readAllNativeBlocks(segments));
+  const allOffsets = resolveSlackBlockOffsets(readAllNativeBlocks(segments), "controls");
   const messageOffsets =
     mode === "current" ? resolveSlackBlockOffsets(readLastBlockSegment(segments)) : {};
   // Control ids span the logical reply, while chart/table limits reset for
@@ -491,18 +515,21 @@ export function resolveSlackReplyBlockResolution(
   } = {},
 ): SlackReplyBlockResolution {
   const segments: SlackReplyBlockSegment[] = [];
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  const textIsFallback = presentation && payload.presentationTextMode === "fallback";
+  const authoredText = textIsFallback ? undefined : payload.text;
   const channelBlocks = readSlackChannelBlocks(payload);
   let compiledChannelBlocks = channelBlocks;
   let authoredTextKnownInBlocks = false;
   if (options.materializeAuthoredText) {
     const rawTextFragments = renderSlackAuthoredTextFragments(channelBlocks);
     const initialPlacement = resolveSlackAuthoredTextPlacement({
-      text: payload.text,
+      text: authoredText,
       interactive: payload.interactive,
       renderedTextFragments: rawTextFragments,
     });
     authoredTextKnownInBlocks = initialPlacement === "blocks";
-    const text = normalizeOptionalString(payload.text);
+    const text = normalizeOptionalString(authoredText);
     if (text && initialPlacement === "outside-blocks") {
       const textBlocks = buildSlackAuthoredTextBlocks(
         options.resolveAuthoredTextChunks?.() ??
@@ -523,7 +550,6 @@ export function resolveSlackReplyBlockResolution(
     appendBlockSegment(segments, compiledChannelBlocks);
   }
 
-  const presentation = normalizeMessagePresentation(payload.presentation);
   const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
   const presentationBlockOffset = readAllNativeBlocks(segments).length;
   if (presentation?.title) {
@@ -538,10 +564,27 @@ export function resolveSlackReplyBlockResolution(
   }
   const renderedPresentationBlocks = readAllNativeBlocks(segments).slice(presentationBlockOffset);
 
-  const interactiveBlocks = buildSlackInteractiveBlocks(payload.interactive, {
-    ...resolveSlackBlockOffsets(readAllNativeBlocks(segments)),
-    questionOptionIndices,
-  });
+  const interactiveBlocks = payload.interactive
+    ? buildSlackInteractiveBlocks(payload.interactive, {
+        ...resolveSlackBlockOffsets(readAllNativeBlocks(segments)),
+        questionOptionIndices,
+      })
+    : [];
+  // Companions are independent of the presentation's alternative text.
+  // Preserve the authored continuation when no native presentation survives.
+  if (
+    textIsFallback &&
+    payload.text?.trim() &&
+    renderedPresentationBlocks.every(
+      (block) =>
+        ["header", "section", "context", "divider", "rich_text"].includes(block.type) &&
+        !("accessory" in block && block.accessory),
+    )
+  ) {
+    segments.length = 0;
+    appendBlockSegment(segments, compiledChannelBlocks);
+    appendTextSegment(segments, payload.text);
+  }
   // Compare final Slack rows, not source payloads: fallbacks and transport
   // limits can prevent an apparent source mirror from rendering at all.
   appendBlockSegment(
@@ -558,7 +601,7 @@ export function resolveSlackReplyBlockResolution(
     return renderSlackAuthoredTextFragments(segment.blocks);
   });
   const authoredTextPlacement = resolveSlackAuthoredTextPlacement({
-    text: payload.text,
+    text: authoredText,
     interactive: payload.interactive,
     renderedTextFragments,
   });
