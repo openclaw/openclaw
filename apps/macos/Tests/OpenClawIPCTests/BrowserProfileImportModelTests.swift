@@ -355,6 +355,32 @@ struct BrowserProfileImportModelTests {
         }
     }
 
+    @Test(arguments: [BrowserProfileImportDisposition.dismissed, .imported])
+    func `automatic offers cannot supersede a pending forced reoffer`(
+        disposition: BrowserProfileImportDisposition) async throws
+    {
+        let stub = BrowserImportTransportStub()
+        let status = Self.status(
+            profiles: [Self.chromeProfile],
+            state: BrowserProfileImportOutcome(status: disposition))
+        stub.statusJSON = try String(decoding: JSONEncoder().encode(status), as: UTF8.self)
+        let model = stub.makeModel()
+        let gate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        let forced = Task { await model.refresh(force: true) }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        #expect(stub.requests(for: "/system-profile-import/status").count == 1)
+        gate.continuation?.resume()
+        #expect(await forced.value == .offering)
+        #expect(model.phase == .offering(status))
+    }
+
     @Test func `newer forced refresh owns the banner before either response arrives`() async {
         let stub = BrowserImportTransportStub()
         let model = stub.makeModel()
@@ -380,6 +406,8 @@ struct BrowserProfileImportModelTests {
         #expect(await older.value == .superseded)
         #expect(model.phase == .hidden)
         #expect(!model.importAvailable)
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        #expect(stub.requests(for: "/system-profile-import/status").count == 2)
 
         newerGate.continuation?.resume()
         #expect(await newer.value == .offering)

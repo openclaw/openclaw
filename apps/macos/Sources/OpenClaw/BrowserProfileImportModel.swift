@@ -92,6 +92,7 @@ final class BrowserProfileImportModel {
     private(set) var phase: Phase = .hidden
     private(set) var importAvailable = false
     @ObservationIgnored private var phaseGeneration = 0
+    @ObservationIgnored private var pendingForcedRefreshGeneration: Int?
     @ObservationIgnored private var statusRequest: StatusRequest?
     /// A dismissal must stick for this app session even while its
     /// fire-and-forget persistence write is pending or lost — otherwise the
@@ -145,6 +146,7 @@ final class BrowserProfileImportModel {
     private func setPhase(_ phase: Phase) {
         self.phase = phase
         self.phaseGeneration += 1
+        self.pendingForcedRefreshGeneration = nil
     }
 
     /// First inline-browser open trigger. Only fills an empty banner slot so a
@@ -194,8 +196,16 @@ final class BrowserProfileImportModel {
         }
         if case .importing = self.phase { return (.offering, false) }
         guard shouldApply() else { return (.superseded, false) }
+        // Automatic offers must not consume a pending explicit re-offer.
+        guard force || self.pendingForcedRefreshGeneration == nil else { return (.superseded, false) }
         self.phaseGeneration += 1
         let generation = self.phaseGeneration
+        if force { self.pendingForcedRefreshGeneration = generation }
+        defer {
+            if self.pendingForcedRefreshGeneration == generation {
+                self.pendingForcedRefreshGeneration = nil
+            }
+        }
         var request = self.startStatusRequest()
         while true {
             let result = await request.task.result
