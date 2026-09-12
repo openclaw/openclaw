@@ -100,6 +100,9 @@ suite.define(() => {
       expect((await gateway.getRequests("sessions.list")).length - before).toBe(0);
       expect(await selectedRow.textContent()).toContain("Weekly report");
 
+      const primaryQuery = { agentId: "main", limit: 200 };
+      const primaryBefore = (await gateway.getRequests("sessions.list", primaryQuery)).length;
+
       await gateway.setSessionsListResponse(
         sessionsListResponse([{ ...row, label: "Weekly report ready", updatedAt: 5 }]),
       );
@@ -109,7 +112,12 @@ suite.define(() => {
         updatedAt: 5,
       });
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report ready");
-      expect((await gateway.getRequests("sessions.list")).length - before).toBe(1);
+      await expect
+        .poll(
+          async () =>
+            (await gateway.getRequests("sessions.list", primaryQuery)).length - primaryBefore,
+        )
+        .toBe(1);
       await captureUiProof(suite, page, "roster-own-agent-updated.png");
     } finally {
       await suite.closeBrowserContext(context);

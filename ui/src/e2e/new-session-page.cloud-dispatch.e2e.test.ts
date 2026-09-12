@@ -541,8 +541,8 @@ suite.define(() => {
         await page.clock.runFor(250);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
-      // This single-page fixture pairs each Swarm child read with its parent read.
-      // Placement updates must not add an unpaired describe for the same session.
+      // Healthy parent and child reads are independent; placement updates must
+      // not add extra parent lookups regardless of which request starts first.
       const parentReads = (await gateway.getRequests()).filter((request) => {
         const params = asNullableRecord(request.params);
         return (
@@ -550,12 +550,11 @@ suite.define(() => {
           (request.method === "sessions.list" && params?.spawnedBy === sessionKey)
         );
       });
-      for (let index = 0; index < parentReads.length; index += 2) {
-        expect(parentReads.slice(index, index + 2)).toMatchObject([
-          { method: "sessions.list", params: { spawnedBy: sessionKey } },
-          { method: "sessions.describe", params: { key: sessionKey } },
-        ]);
-      }
+      const childReads = parentReads.filter((request) => request.method === "sessions.list");
+      expect(childReads.length).toBeGreaterThan(0);
+      expect(parentReads.filter((request) => request.method === "sessions.describe")).toHaveLength(
+        childReads.length,
+      );
       const neutralRow = page.locator('[data-session-key="agent:cloud:neutral-e2e"] a');
       await neutralRow.waitFor();
       await neutralRow.click();

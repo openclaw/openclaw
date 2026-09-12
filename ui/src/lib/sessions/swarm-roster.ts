@@ -118,6 +118,7 @@ export class SwarmRosterHydrator {
   private childRows: GatewaySessionRow[] = [];
   private parentRequest: Promise<void> | null = null;
   private parentRefreshQueued = false;
+  private publishingParentRead = false;
 
   update(params: SwarmHydrationParams): void {
     const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
@@ -218,7 +219,7 @@ export class SwarmRosterHydrator {
     this.parentSummary = summary;
     this.rows = this.parentRow ? mergeSwarmSessionRows(this.childRows, [this.parentRow]) : [];
     this.params?.onRows(this.rows);
-    if (parent && changed && this.parent && !this.parentRequest) {
+    if (parent && changed && this.parent && !this.publishingParentRead) {
       void this.readParent();
     }
   }
@@ -266,13 +267,23 @@ export class SwarmRosterHydrator {
     const generation = this.generation;
     const isCurrent = () => generation === this.generation && parent === this.parent;
     const reconcile = parent.captureReconcile();
+    const publish = (row: GatewaySessionRow | undefined) => {
+      // The describe publishes synchronously through its observation. Only external
+      // summaries should queue replacement work behind this same read.
+      this.publishingParentRead = true;
+      try {
+        return reconcile(row);
+      } finally {
+        this.publishingParentRead = false;
+      }
+    };
     const request = Promise.resolve()
       .then(() => params.readParent())
       .then((row) => {
         if (!isCurrent()) {
           return;
         }
-        const outcome = reconcile(row ?? undefined);
+        const outcome = publish(row ?? undefined);
         if (outcome.status === "invalidated") {
           this.parentRefreshQueued = true;
         } else if (outcome.status === "current") {
@@ -284,7 +295,7 @@ export class SwarmRosterHydrator {
           return;
         }
         if (error instanceof GatewayRequestError && error.code === "INVALID_REQUEST") {
-          const outcome = reconcile(undefined);
+          const outcome = publish(undefined);
           if (outcome.status === "invalidated") {
             this.parentRefreshQueued = true;
           } else if (outcome.status === "current") {
@@ -318,7 +329,6 @@ export class SwarmRosterHydrator {
     if (!params || snapshot.loading || !result || result === this.childResult) {
       return;
     }
-    const previousResult = this.childResult;
     this.childResult = result;
     const previousChildren = new Map(this.childRows.map((row) => [row.key, row]));
     const described = new Map(
@@ -345,7 +355,7 @@ export class SwarmRosterHydrator {
         (member?.groupId !== row.swarmGroupId || (row.status && member?.status !== row.status))
       );
     });
-    if (previousResult && this.parentRow && (removedMember || missingDetail)) {
+    if (this.parentRow && (removedMember || missingDetail)) {
       void this.readParent();
     }
     const generation = this.generation;

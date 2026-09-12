@@ -24,6 +24,7 @@ suite.define(() => {
       async ({ page }) => {
         const children = Array.from({ length: viewport.count }, (_, index) => ({
           key: `agent:main:subagent:completed-${index}`,
+          sessionId: `session:agent:main:subagent:completed-${index}`,
           kind: "direct",
           label: "Research worker visibility after reconnect",
           parentSessionKey: sessionKey,
@@ -42,6 +43,7 @@ suite.define(() => {
         };
         const parent = {
           key: sessionKey,
+          sessionId: `session:${sessionKey}`,
           kind: "direct",
           label: "Research comparison",
           updatedAt: 1,
@@ -147,6 +149,7 @@ suite.define(() => {
       const now = Date.now();
       const parent = {
         key: sessionKey,
+        sessionId: `session:${sessionKey}`,
         kind: "direct",
         label: "Research comparison",
         status: "running",
@@ -172,6 +175,7 @@ suite.define(() => {
       };
       const children = Array.from({ length: 30 }, (_, index) => ({
         key: `agent:${viewport.childAgent}:subagent:research-${index}`,
+        sessionId: `session:agent:${viewport.childAgent}:subagent:research-${index}`,
         kind: "direct",
         label: `Research lane ${index + 1}`,
         parentSessionKey: sessionKey,

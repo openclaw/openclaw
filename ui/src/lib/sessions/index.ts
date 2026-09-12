@@ -544,6 +544,7 @@ export function createSessionCapability(
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
       primarySnapshotApplied,
+      event: event.payload,
     });
   });
 

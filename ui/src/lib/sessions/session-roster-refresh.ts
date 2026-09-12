@@ -25,6 +25,7 @@ import {
   prepareSessionRefreshOptions,
   retainSessionPaginationWindow,
   sessionListAgentMatcher,
+  sessionListEventMatcher,
   sessionListQueryAgentId,
   type ManagedSessionList,
   type QueuedSessionRefresh,
@@ -66,7 +67,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let requestRevision = 0;
   const eventRevisions = new WeakMap<
     object,
-    { revision: number; scope: SessionConnectionScope | null }
+    {
+      revision: number;
+      scope: SessionConnectionScope | null;
+      lists: ReadonlySet<ManagedSessionList>;
+    }
   >();
   const captureEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
@@ -76,7 +81,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (previous !== undefined) {
       return previous;
     }
-    const observation = { revision: ++requestRevision, scope: host.connection.capture() };
+    const observation = {
+      revision: ++requestRevision,
+      scope: host.connection.capture(),
+      lists: new Set([...managedLists.values()].filter(sessionListEventMatcher(payload))),
+    };
     eventRevisions.set(payload, observation);
     return observation;
   };
@@ -644,12 +653,25 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     // Gateway-owned membership filters require an authoritative list refresh.
     canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),
     invalidateManagedLists,
-    scheduleEvent(options: { agentId?: string | null; primarySnapshotApplied?: boolean } = {}) {
+    scheduleEvent(
+      options: { agentId?: string | null; primarySnapshotApplied?: boolean; event?: unknown } = {},
+    ) {
       const matchesAgent = sessionListAgentMatcher(options.agentId);
       if (!options.primarySnapshotApplied && matchesAgent(lastListOptions.agentId)) {
         eventRefreshCoordinator.schedule();
       }
-      invalidateManagedLists(options.agentId);
+      const event = options.event;
+      const affected =
+        event && typeof event === "object" ? eventRevisions.get(event)?.lists : undefined;
+      if (affected) {
+        for (const entry of managedLists.values()) {
+          if (affected.has(entry)) {
+            entry.coordinator.schedule();
+          }
+        }
+      } else {
+        invalidateManagedLists(options.agentId);
+      }
     },
     reset() {
       observations.reset();
