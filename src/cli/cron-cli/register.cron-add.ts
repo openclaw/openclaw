@@ -1,9 +1,5 @@
 // Cron status/list/add command registration and create-payload normalization.
 import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
-import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readNonBlankString,
@@ -28,6 +24,8 @@ import {
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronFallbacks,
+  parseCronIntegerOption,
+  parseCronNoOutputTimeoutOption,
   parseCronToolsAllow,
   printCronJson,
   printCronList,
@@ -184,18 +182,14 @@ export function registerCronAddCommand(cron: Command) {
                     "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
                   );
                 }
-                const scriptTimeoutSeconds = parseStrictPositiveInteger(opts.scriptTimeoutSeconds);
-                if (opts.scriptTimeoutSeconds !== undefined && scriptTimeoutSeconds === undefined) {
-                  throw new CronCliError(
-                    "Invalid --script-timeout-seconds (must be a positive integer).",
-                  );
-                }
-                const scriptToolBudget = parseStrictPositiveInteger(opts.scriptToolBudget);
-                if (opts.scriptToolBudget !== undefined && scriptToolBudget === undefined) {
-                  throw new CronCliError(
-                    "Invalid --script-tool-budget (must be a positive integer).",
-                  );
-                }
+                const scriptTimeoutSeconds = parseCronIntegerOption(
+                  opts.scriptTimeoutSeconds,
+                  "--script-timeout-seconds",
+                );
+                const scriptToolBudget = parseCronIntegerOption(
+                  opts.scriptToolBudget,
+                  "--script-tool-budget",
+                );
                 return {
                   kind: "script" as const,
                   timeoutSeconds: scriptTimeoutSeconds,
@@ -204,35 +198,17 @@ export function registerCronAddCommand(cron: Command) {
                   script: await readCronPayloadScript(scriptPath),
                 };
               }
-              const timeoutSeconds = parseStrictNonNegativeInteger(opts.timeoutSeconds);
-              if (opts.timeoutSeconds !== undefined && timeoutSeconds === undefined) {
-                throw new CronCliError(
-                  "Invalid --timeout-seconds (must be a non-negative integer).",
-                );
-              }
+              const timeoutSeconds = parseCronIntegerOption(
+                opts.timeoutSeconds,
+                "--timeout-seconds",
+                "non-negative",
+              );
               if (commandShell || commandArgv) {
-                const rawNoOutputTimeoutSeconds =
-                  opts.noOutputTimeoutSeconds ??
-                  (typeof opts.outputTimeoutSeconds === "string" ||
-                  typeof opts.outputTimeoutSeconds === "number"
-                    ? opts.outputTimeoutSeconds
-                    : undefined);
-                const noOutputTimeoutSeconds =
-                  parseStrictPositiveInteger(rawNoOutputTimeoutSeconds);
-                if (
-                  rawNoOutputTimeoutSeconds !== undefined &&
-                  noOutputTimeoutSeconds === undefined
-                ) {
-                  throw new CronCliError(
-                    "Invalid --no-output-timeout-seconds (must be a positive integer).",
-                  );
-                }
-                const outputMaxBytes = parseStrictPositiveInteger(opts.outputMaxBytes);
-                if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
-                  throw new CronCliError(
-                    "Invalid --output-max-bytes (must be a positive integer).",
-                  );
-                }
+                const noOutputTimeoutSeconds = parseCronNoOutputTimeoutOption(opts);
+                const outputMaxBytes = parseCronIntegerOption(
+                  opts.outputMaxBytes,
+                  "--output-max-bytes",
+                );
                 return {
                   kind: "command" as const,
                   argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],

@@ -1,8 +1,4 @@
 import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
-import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -14,6 +10,8 @@ import {
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronFallbacks,
+  parseCronIntegerOption,
+  parseCronNoOutputTimeoutOption,
   parseCronToolsAllow,
 } from "./shared.js";
 import { parseCronThreadIdOption } from "./thread-id-shared.js";
@@ -62,32 +60,19 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new CronCliError("Use --fallbacks or --clear-fallbacks, not both");
   }
   const toolsAllow = parseCronToolsAllow(opts.tools);
-  const timeoutSeconds = parseStrictNonNegativeInteger(opts.timeoutSeconds);
+  const timeoutSeconds = parseCronIntegerOption(
+    opts.timeoutSeconds,
+    "--timeout-seconds",
+    "non-negative",
+  );
   const hasTimeoutSeconds = timeoutSeconds !== undefined;
-  if (opts.timeoutSeconds !== undefined && !hasTimeoutSeconds) {
-    throw new CronCliError("Invalid --timeout-seconds (must be a non-negative integer).");
-  }
-  const rawNoOutputTimeoutSeconds =
-    opts.noOutputTimeoutSeconds ??
-    (typeof opts.outputTimeoutSeconds === "string" || typeof opts.outputTimeoutSeconds === "number"
-      ? opts.outputTimeoutSeconds
-      : undefined);
-  const noOutputTimeoutSeconds = parseStrictPositiveInteger(rawNoOutputTimeoutSeconds);
-  if (rawNoOutputTimeoutSeconds !== undefined && noOutputTimeoutSeconds === undefined) {
-    throw new CronCliError("Invalid --no-output-timeout-seconds (must be a positive integer).");
-  }
-  const outputMaxBytes = parseStrictPositiveInteger(opts.outputMaxBytes);
-  if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
-    throw new CronCliError("Invalid --output-max-bytes (must be a positive integer).");
-  }
-  const scriptTimeoutSeconds = parseStrictPositiveInteger(opts.scriptTimeoutSeconds);
-  if (opts.scriptTimeoutSeconds !== undefined && scriptTimeoutSeconds === undefined) {
-    throw new CronCliError("Invalid --script-timeout-seconds (must be a positive integer).");
-  }
-  const scriptToolBudget = parseStrictPositiveInteger(opts.scriptToolBudget);
-  if (opts.scriptToolBudget !== undefined && scriptToolBudget === undefined) {
-    throw new CronCliError("Invalid --script-tool-budget (must be a positive integer).");
-  }
+  const noOutputTimeoutSeconds = parseCronNoOutputTimeoutOption(opts);
+  const outputMaxBytes = parseCronIntegerOption(opts.outputMaxBytes, "--output-max-bytes");
+  const scriptTimeoutSeconds = parseCronIntegerOption(
+    opts.scriptTimeoutSeconds,
+    "--script-timeout-seconds",
+  );
+  const scriptToolBudget = parseCronIntegerOption(opts.scriptToolBudget, "--script-tool-budget");
 
   const hasWebhookDelivery = Boolean(webhookUrl);
   const hasDeliveryModeFlag =
