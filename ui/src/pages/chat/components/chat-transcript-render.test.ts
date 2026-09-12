@@ -46,6 +46,7 @@ describe("chat transcript rendering", () => {
   it.each([
     ["blob:configured-agent", "gutter", "props"],
     ["blob:configured-agent", "gutter", "roster"],
+    ["blob:configured-agent", "gutter", null],
     ["🦉", "gutter", "fallback-agent"],
     ["🤖", "gutter", null],
     [null, "gutter", null],
@@ -88,7 +89,7 @@ describe("chat transcript rendering", () => {
         const replies = container.querySelectorAll(".chat-group.assistant");
         expect(replies).toHaveLength(3);
         for (const reply of replies) {
-          const slot = reply.querySelector(".chat-avatar.assistant");
+          const slot = reply.querySelector(".chat-avatar-slot, .chat-avatar.assistant");
           if (avatarPlacement !== "gutter") {
             expect(slot).toBeNull();
           } else if (avatar === null) {
@@ -96,13 +97,20 @@ describe("chat transcript rendering", () => {
               expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
             );
           } else if (avatar.startsWith("blob:")) {
-            const image = slot?.querySelector("img");
+            const image = slot?.querySelector("img.chat-avatar.assistant");
             expect(image?.getAttribute("src")).toBe(avatar);
+            expect(image?.getAttribute("alt")).toBe(props.assistantName);
             image?.dispatchEvent(new Event("load"));
             expect(slot?.classList.contains("is-fallback")).toBe(false);
             image?.dispatchEvent(new Event("error"));
             expect(slot?.classList.contains("is-fallback")).toBe(true);
-            expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
+            if (emojiSource) {
+              expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
+            } else {
+              await vi.waitFor(() =>
+                expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+              );
+            }
           } else {
             expect(slot?.querySelector("img")).toBeNull();
             expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe(avatar);

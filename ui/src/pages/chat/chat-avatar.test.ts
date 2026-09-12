@@ -88,16 +88,27 @@ describe("renderChatAvatar", () => {
       defaultAvatar?.querySelector("svg")?.outerHTML,
     );
 
-    const blobAvatar = renderAvatar(["assistant", { avatar: "blob:managed-image", name: "Val" }]);
-    expect(blobAvatar?.querySelector("img")?.getAttribute("src")).toBe("blob:managed-image");
+    for (const avatar of ["blob:managed-image", "/avatar/main", "data:image/png;base64,YQ=="]) {
+      const image = renderAvatar(["assistant", { avatar, name: "Val", textAvatar: "🦉" }]);
+      expect(image?.matches("img.chat-avatar.assistant")).toBe(true);
+      expect(image?.getAttribute("src")).toBe(avatar);
+      expect(image?.getAttribute("alt")).toBe("Val");
+    }
 
     const textAvatar = renderAvatar(["assistant", { avatar: "🦉", name: "Val" }]);
     expect(textAvatar?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
     expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
     expect(textAvatar?.getAttribute("role")).toBe("img");
+  });
 
-    const localAvatar = renderAvatar(["assistant", { avatar: "/avatar/main", name: "OpenClaw" }]);
-    expect(localAvatar?.querySelector("img")?.getAttribute("src")).toBe("/avatar/main");
+  it.each(["openclaw", "crestodian"])("keeps the product mark for system agent %s", (agentId) => {
+    const image = renderAvatar([
+      "assistant",
+      { agentId, name: "System", avatar: "blob:configured-image", textAvatar: "🦉" },
+    ]);
+    expect(image?.matches("img.chat-avatar.assistant")).toBe(true);
+    expect(image?.getAttribute("src")).toBe("/favicon.svg");
+    expect(image?.getAttribute("alt")).toBe("System");
   });
 
   it("shares authenticated welcome and transcript avatars without an explicit token", async () => {

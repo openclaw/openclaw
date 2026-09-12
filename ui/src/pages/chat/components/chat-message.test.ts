@@ -2571,16 +2571,14 @@ describe("grouped chat rendering", () => {
       };
       render(renderTestMessageGroup(group, options), container);
 
-      const image = container.querySelector(".chat-avatar img");
+      const image = container.querySelector("img.chat-avatar.assistant");
       expect(image !== null).toBe(expected === "image");
       expect(container.querySelector(".chat-avatar--forwarded") !== null).toBe(
         expected === "glyph",
       );
       if (expected === "image") {
         expect(image?.getAttribute("src")).toBe(avatar);
-        expect(container.querySelector(".chat-avatar")?.getAttribute("aria-label")).toBe(
-          "Research Agent",
-        );
+        expect(image?.getAttribute("alt")).toBe("Research Agent");
       }
       if (expected === "face") {
         await vi.waitFor(() =>

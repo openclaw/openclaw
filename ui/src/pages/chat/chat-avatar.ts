@@ -1,6 +1,7 @@
 // Control UI chat module implements chat avatar behavior.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
+import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
@@ -11,7 +12,9 @@ import {
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  identityAvatarClass,
   renderAgentIdentityAvatar,
+  renderIdentityAvatarImage,
   resolveIdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
@@ -129,10 +132,23 @@ function renderAgentAvatar(
   textAvatar = resolveAssistantTextAvatar(avatar),
 ) {
   const value = avatar?.trim() || "";
-  return renderAgentIdentityAvatar(
-    { id, name, avatar: isAvatarUrl(value) ? value : null, textAvatar },
-    "chat-avatar assistant",
-  );
+  const fallback = renderAgentIdentityAvatar({ id, name, textAvatar }, "chat-avatar assistant");
+  if (
+    isReservedSystemAgentId(id) ||
+    !(value.startsWith("blob:") || isRenderableControlUiAvatarUrl(value))
+  ) {
+    return fallback;
+  }
+  const imageUrl = resolveAvatarImageUrl(value) ?? value;
+  const view = { imageUrl, sourceUrl: value, pending: typeof imageUrl !== "string" };
+  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+    ${renderIdentityAvatarImage({
+      view,
+      fallbackSelector: ".chat-avatar-slot",
+      className: "chat-avatar assistant",
+      alt: name,
+    })}${fallback}
+  </span>`;
 }
 
 type ForwardedAvatarOptions = {
@@ -171,11 +187,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
     avatar,
     resolveAssistantTextAvatar(avatar) ?? resolveAgentTextAvatar(agent),
   );
-}
-
-function isAvatarUrl(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
 }
 
 type ChatAvatarHost = {
