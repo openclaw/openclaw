@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { describe, expect, it } from "vitest";
+import { describe, expect, inject, it } from "vitest";
 import type { AuthHealthSummary } from "../../../src/agents/auth-health.js";
 import type { ProfileUsageStats } from "../../../src/agents/auth-profiles/types.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
@@ -108,7 +108,10 @@ async function captureFinalStatus(
   const { browserUrl }: { browserUrl: string } = JSON.parse(dashboard.stdout);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: inject("controlUiE2eChromium").executablePath,
+  });
   try {
     const context = await browser.newContext({
       locale: "en-US",
