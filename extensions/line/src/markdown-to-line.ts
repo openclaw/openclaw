@@ -335,7 +335,8 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
     rowCells.push(cells);
   }
 
-  if (table.headers.length === 2 && !hasInlineMarkup) {
+  // Receipt cards clip after 12 rows; larger tables need the complete generic layout.
+  if (table.headers.length === 2 && !hasInlineMarkup && rowCells.length <= 12) {
     return createReceiptCard({
       title: headerCells.map((cell) => cell.text).join(" / "),
       items: rowCells.map((row) => ({
