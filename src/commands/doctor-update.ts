@@ -283,6 +283,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
                       root: candidateRoot,
                       env: resolveUpdatedInstallCommandEnv({ processEnv: run.env, invocationCwd }),
                       executor,
+                      timeoutMs: UPDATE_RUNNER_TIMEOUT_MS,
                     });
                     assertCurrent();
                     if (!supported) {

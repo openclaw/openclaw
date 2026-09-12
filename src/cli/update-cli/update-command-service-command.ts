@@ -45,6 +45,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   root: string;
   env: NodeJS.ProcessEnv;
   executor: UpdateRecoveryFence;
+  timeoutMs: number;
   nodeRunner?: string;
   signal?: AbortSignal;
 }): Promise<boolean> {
@@ -75,7 +76,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
           baseEnv: {},
           cwd: params.root,
           env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
-          timeoutMs: 30_000,
+          timeoutMs: params.timeoutMs,
           killProcessTree: true,
           requireProcessTreeExtinction: true,
           ...(params.signal ? { signal: params.signal } : {}),
@@ -192,6 +193,7 @@ export async function runUpdatedInstallGatewayCommand(
         root: params.result.root,
         env: commandEnv,
         executor,
+        timeoutMs: installTimeoutMs,
         nodeRunner,
         signal: params.signal,
       }))

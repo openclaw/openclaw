@@ -467,6 +467,7 @@ describe("mutable update execution", () => {
         const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
         const params = executionParams(route === "git" ? "git" : "package");
         params.root = dir;
+        params.updateStepTimeoutMs = 600_000;
         params.opts.run = { runId, env };
         if (route === "staged") {
           params.packageInstallSpec = path.join(dir, "candidate.tgz");
@@ -510,6 +511,9 @@ describe("mutable update execution", () => {
           reason: "target-native-unsupported",
         });
         expect(events).toEqual(["native-admission"]);
+        expect(mocks.nativeSupport.mock.calls[0]?.[0]).toMatchObject({
+          timeoutMs: params.updateStepTimeoutMs,
+        });
         expect(mocks.serviceStopped).toBe(false);
         expect(mocks.validateCanary).not.toHaveBeenCalled();
       }),
