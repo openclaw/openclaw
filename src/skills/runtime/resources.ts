@@ -19,12 +19,13 @@ import {
   SkillTreeDirectoryError,
 } from "../library/bundle.js";
 import { SkillLibraryError } from "../library/errors.js";
-import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
+import { readSelectedSkillLibraryFiles } from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
 import { createSyntheticSourceInfo } from "../loading/skill-contract.js";
 import { shouldSyncSkillPath } from "../loading/skill-paths.js";
 import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
 import type { ExplicitSkillSelection, SkillSnapshot } from "../types.js";
+import { resolveSkillResourceCandidates } from "./resource-candidates.js";
 
 const log = createSubsystemLogger("skills/resources");
 
@@ -66,15 +67,7 @@ export async function prepareSkillResourceDelivery(
   }
   const skills: SkillResourceDelivery["skills"] = [];
   let total = 0;
-  const candidates = [...(snapshot.resolvedSkills ?? [])];
-  for (const entry of loadSkillLibrarySelection(snapshot.librarySelections ?? [])) {
-    if (
-      snapshot.skills.some((skill) => skill.name === entry.skill.name) &&
-      !candidates.some((skill) => skill.name === entry.skill.name)
-    ) {
-      candidates.push(entry.skill);
-    }
-  }
+  const candidates = resolveSkillResourceCandidates(snapshot)!;
   for (const selected of explicitSelections) {
     if (
       selected.path.startsWith("node://") ||

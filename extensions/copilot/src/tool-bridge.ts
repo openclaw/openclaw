@@ -189,10 +189,6 @@ export async function createCopilotToolBridge(
     return { codeModeEngaged: false, promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY, sourceTools: [] };
   }
 
-  const createOpenClawCodingTools =
-    input.createOpenClawCodingTools ??
-    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
-
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: input.abortSignal,
     agentId: attemptParams.sandboxAgentId ?? input.agentId,
@@ -237,11 +233,21 @@ export async function createCopilotToolBridge(
   const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
   const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
   try {
-    const constructedTools = await createOpenClawCodingTools(toolOptions);
-    if (!Array.isArray(constructedTools)) {
-      throw new Error("createOpenClawCodingTools must return an array of tools");
+    let boundTools: AnyAgentTool[];
+    if (input.createOpenClawCodingTools) {
+      const constructedTools = await input.createOpenClawCodingTools(toolOptions);
+      if (!Array.isArray(constructedTools)) {
+        throw new Error("createOpenClawCodingTools must return an array of tools");
+      }
+      boundTools = hostCapabilities.bindToolSurface(constructedTools, bindingOptions);
+    } else {
+      const createToolSurface = hostCapabilities.createToolSurface;
+      if (!createToolSurface) {
+        throw new Error("Copilot tool construction requires a current host capability");
+      }
+      // The host supplies run-owned resources and binds its tools exactly once.
+      boundTools = createToolSurface(toolOptions, bindingOptions);
     }
-    const boundTools = hostCapabilities.bindToolSurface(constructedTools, bindingOptions);
     sourceTools = boundTools;
     for (const tool of boundTools) {
       boundSourceTools.add(tool);
@@ -417,6 +423,7 @@ function buildOpenClawCodingToolsOptions(
     sandbox,
     spawnWorkspaceDir: input.spawnWorkspaceDir,
     config: toolSurfaceRuntime?.config ?? a.config,
+    skillsSnapshot: a.skillsSnapshot,
     abortSignal: input.abortSignal,
     modelProvider: input.modelProvider,
     modelId: input.modelId,

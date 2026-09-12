@@ -4,6 +4,7 @@ import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
+import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
 import { resolveCodeModeSkills, type CodeModeSkillReader } from "../code-mode-skills.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
@@ -45,6 +46,7 @@ export function prepareEmbeddedSkills(params: {
       skillUsagePaths: undefined,
       skillsPrompt: "",
       skillsSnapshotForRun: undefined,
+      skillReadResources: undefined,
       codeModeSkills: [],
     };
   }
@@ -134,8 +136,14 @@ export function prepareEmbeddedSkills(params: {
           reader: sandboxSkillReader,
         })
       : [];
+    // Host read exceptions use exact eligible resources without changing model visibility.
+    // Sandboxes keep their existing materialized paths; never resolve host library pins there.
+    const skillReadResources = params.sandbox?.enabled
+      ? undefined
+      : resolveSkillResourceCandidates(skillsSnapshot);
     return {
       restoreSkillEnv,
+      skillReadResources,
       skillUsagePaths,
       skillsPrompt,
       skillsSnapshotForRun: skillsSnapshot,

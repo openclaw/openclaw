@@ -143,7 +143,13 @@ export async function runEmbeddedAttempt(
       }),
     );
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
-    const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
+    const {
+      codeModeSkills,
+      skillReadResources,
+      skillUsagePaths,
+      skillsPrompt,
+      skillsSnapshotForRun,
+    } = preparedSkills;
     if (params.skillsSnapshot?.librarySelections?.length && sandbox?.enabled) {
       const remapped = remapSkillReferencePaths(params.prompt, skillUsagePaths);
       if (remapped !== params.prompt) {
@@ -194,6 +200,7 @@ export async function runEmbeddedAttempt(
         runAbortController,
         runTrace,
         skillUsagePaths,
+        skillReadResources,
         skillsSnapshot: skillsSnapshotForRun,
         codeModeSkills,
         reviewTranscript: () => {

@@ -422,7 +422,11 @@ type OpenClawCodingToolsOptions = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
-function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+/** Internal preparation data stays outside the public harness factory options. */
+export function createOpenClawCodingToolsInternal(
+  options?: OpenClawCodingToolsOptions,
+  skillReadResources?: SkillSnapshot["resolvedSkills"],
+): AnyAgentTool[] {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
@@ -664,6 +668,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     readOnly,
     sandbox,
     skillsSnapshot: options?.skillsSnapshot,
+    skillReadResources,
     skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
     skillInstructionDeliveryCache: options?.skillInstructionDeliveryCache,
     modelContextWindowTokens: options?.modelContextWindowTokens,
