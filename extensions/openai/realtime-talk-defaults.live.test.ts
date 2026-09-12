@@ -53,7 +53,9 @@ describe.skipIf(!live)("OpenAI Talk account defaults live", () => {
       },
       onClearAudio: () => undefined,
       onTranscript: (role, text) => {
-        if (role === "assistant") assistantText += text;
+        if (role === "assistant") {
+          assistantText += text;
+        }
       },
       onError: (error) => errors.push(error),
       onClose: (reason) => {
@@ -74,8 +76,12 @@ describe.skipIf(!live)("OpenAI Talk account defaults live", () => {
         );
         offset = Math.min(offset + frame.length, speech.audioBuffer.length);
         bridge.sendAudio(frame);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        if (errors.length) break;
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        if (errors.length) {
+          break;
+        }
       }
       expect(errors).toEqual([]);
       expect(questions.some((question) => /launch code/i.test(question))).toBe(true);
