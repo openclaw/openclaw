@@ -9,13 +9,31 @@ import {
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 
-it("preserves NUL-bearing TEXT, storage classes, and source key order", async () => {
+it("preserves separator-bearing TEXT, storage classes, and source key order", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));
   const sourcePath = path.join(root, "source.sqlite");
   const outputPath = path.join(root, "dump");
   const targetPath = path.join(root, "restored.sqlite");
-  const keys = ["\0leading", "\nline", " space", "shared\0left", "shared\0right", "雪🦀\0尾"];
-  const values = ["text\0suffix", "", null, 9_007_199_254_740_993n, Buffer.from([0, 255]), 1.25];
+  const keys = [
+    "\0leading",
+    "\nline",
+    " space",
+    "shared\0left",
+    "shared\0right",
+    "\u2028separator",
+    "\u2029separator",
+    "雪🦀\0尾",
+  ];
+  const values = [
+    "text\0suffix",
+    "",
+    null,
+    9_007_199_254_740_993n,
+    Buffer.from([0, 255]),
+    "lead\u2028tail",
+    "a\u2029b",
+    1.25,
+  ];
   const byteQuery =
     'SELECT hex("key") AS key, typeof(value) AS type, hex(value) AS bytes FROM text_values ORDER BY "key"';
   try {
@@ -45,7 +63,9 @@ it("preserves NUL-bearing TEXT, storage classes, and source key order", async ()
       { key: keys[2], value: null },
       { key: keys[3], value: { $int: "9007199254740993" } },
       { key: keys[4], value: { $hex: "00ff" } },
-      { key: keys[5], value: 1.25 },
+      { key: keys[5], value: values[5] },
+      { key: keys[6], value: values[6] },
+      { key: keys[7], value: 1.25 },
     ]);
     const restored = await restoreGitBackupDirectory({
       sourcePath: outputPath,
