@@ -27,7 +27,7 @@ import {
  * must use their snapshot owner: a child cannot borrow that source authority. */
 export async function inspectSqliteSchemaHeader(
   pathname: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; agentSchemaVersionForOwnership?: number } = {},
 ) {
   options.signal?.throwIfAborted();
   if (
@@ -35,7 +35,11 @@ export async function inspectSqliteSchemaHeader(
     hasStateDatabaseSourceExclusion(pathname)
   ) {
     const prepared = await prepareSqliteReadOnlyLocation(pathname, options);
-    return readSqliteSchemaHeaderFromSnapshot(prepared, options.signal);
+    return readSqliteSchemaHeaderFromSnapshot(
+      prepared,
+      options.signal,
+      options.agentSchemaVersionForOwnership,
+    );
   }
   // Reserve cleanup ownership before launch even if only journal recovery will
   // need a copy. Cancellation joins the child before deleting unpublished bytes.
@@ -47,6 +51,7 @@ export async function inspectSqliteSchemaHeader(
       mode: "schema-header",
       stagingRoot,
       signal: options.signal,
+      agentSchemaVersionForOwnership: options.agentSchemaVersionForOwnership,
     });
     options.signal?.throwIfAborted();
   } catch (error) {

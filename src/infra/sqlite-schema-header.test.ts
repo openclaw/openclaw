@@ -164,8 +164,8 @@ describe("schema-header native reader lifetime", () => {
       const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
       writer.exec(`
         PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
-        CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT);
-        INSERT INTO schema_meta VALUES('primary','writer-7');
+        CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT, role TEXT, agent_id TEXT, schema_version INTEGER);
+        INSERT INTO schema_meta VALUES('primary','writer-7','agent','owner-7',7);
         PRAGMA user_version=7;
       `);
       // Faults and native pauses are installed in the actual child, not a
@@ -228,7 +228,10 @@ describe("schema-header native reader lifetime", () => {
       const controller = new AbortController();
       const cancellation = new Error("header inspection cancelled");
       let settled = false;
-      const operation = inspectSqliteSchemaHeader(pathname, { signal: controller.signal });
+      const operation = inspectSqliteSchemaHeader(pathname, {
+        signal: controller.signal,
+        agentSchemaVersionForOwnership: 8,
+      });
       void operation.then(
         () => {
           settled = true;
@@ -242,9 +245,9 @@ describe("schema-header native reader lifetime", () => {
           timeout: 10_000,
         });
         expectSourceExcluded(pathname);
-        // This newer pair commits between the child's two metadata queries.
+        // New version and ownership facts commit between the child's metadata queries.
         writer.exec(
-          "BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='writer-8'; COMMIT;",
+          "BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='writer-8', agent_id='owner-8', schema_version=8; COMMIT;",
         );
         fs.writeFileSync(marker("read-release"), "resume");
         await vi.waitFor(() => expect(fs.existsSync(marker("close"))).toBe(true), {
@@ -269,6 +272,7 @@ describe("schema-header native reader lifetime", () => {
             await expect(operation).resolves.toEqual({
               userVersion: 7,
               writerAppVersion: "writer-7",
+              agentSchemaMeta: { role: "agent", agentId: "owner-7", schemaVersion: 7 },
             });
           }
         }

@@ -156,11 +156,16 @@ describe("schema preflight source artifacts", () => {
     }
   }, 20_000);
 
-  it.each([0, 8 * 1024 * 1024])(
-    "reads fresh WAL metadata without copying %i bytes of unrelated payload",
-    async (payloadBytes) => {
+  it.each([
+    { payloadBytes: 0, admission: false },
+    { payloadBytes: 8 * 1024 * 1024, admission: false },
+    { payloadBytes: 8 * 1024 * 1024, admission: true },
+  ])(
+    "reads fresh WAL metadata without copying $payloadBytes bytes of unrelated payload (admission=$admission)",
+    async ({ payloadBytes, admission }) => {
       const root = tempDirs.make("openclaw-header-preflight-");
-      const pathname = path.join(root, "agent.sqlite");
+      const pathname = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(pathname), { recursive: true });
       const preload = path.join(root, "no-backup.cjs");
       fs.writeFileSync(
         preload,
@@ -170,8 +175,8 @@ describe("schema preflight source artifacts", () => {
       writer.exec(`
         PRAGMA journal_mode = WAL;
         PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
-        INSERT INTO schema_meta VALUES ('primary', 'original');
+        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT, role TEXT, agent_id TEXT, schema_version INTEGER);
+        INSERT INTO schema_meta VALUES ('primary', 'original', 'agent', 'main', ${supportedVersions.agent});
         CREATE TABLE payload (data BLOB);
         INSERT INTO payload VALUES (zeroblob(${payloadBytes}));
         PRAGMA user_version = ${supportedVersions.agent};
@@ -182,27 +187,44 @@ describe("schema preflight source artifacts", () => {
       }
       try {
         for (const increment of [1, 2]) {
-          const foundVersion = supportedVersions.agent + increment;
+          const foundVersion = supportedVersions.agent + (admission ? 0 : increment);
           writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${foundVersion};`);
-          writer.prepare("UPDATE schema_meta SET app_version = ?").run(`writer-${increment}`);
+          writer
+            .prepare("UPDATE schema_meta SET app_version = ?, agent_id = ?")
+            .run(`writer-${increment}`, increment === 1 ? "other" : "main");
           writer.exec("COMMIT;");
           const before = sourceArtifacts([pathname], [pathname]);
           const result = await preflightOpenClawDatabaseSchemas({
             env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
             supportedVersions,
             configuredAgentDatabaseCandidatePaths: [pathname],
+            ...(admission ? { agentAdmissionConfig: { agents: { entries: { main: {} } } } } : {}),
           });
           expect(result).toEqual({
-            incompatible: [
-              {
-                kind: "agent",
-                path: pathname,
-                foundVersion,
-                supportedVersion: supportedVersions.agent,
-                writerAppVersion: `writer-${increment}`,
-              },
-            ],
+            incompatible: admission
+              ? []
+              : [
+                  {
+                    kind: "agent",
+                    path: pathname,
+                    foundVersion,
+                    supportedVersion: supportedVersions.agent,
+                    writerAppVersion: `writer-${increment}`,
+                  },
+                ],
             indeterminate: [],
+            ...(admission && increment === 1
+              ? {
+                  agentRefusals: [
+                    expect.objectContaining({
+                      agentId: "main",
+                      paths: [pathname],
+                      embeddedOwnerId: "other",
+                      code: "agent-database-ownership-mismatch",
+                    }),
+                  ],
+                }
+              : {}),
           });
           expect(sourceArtifacts([pathname], [pathname])).toEqual(before);
         }
