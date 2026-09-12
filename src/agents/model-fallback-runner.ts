@@ -317,25 +317,27 @@ async function runWithModelFallbackInternal<T>(
           profileId: userLockedAuthProfileId,
           includePendingOAuthRefresh: true,
         }).eligible;
+      let profileIds = authRuntime.resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store: authStore,
+        provider: candidate.provider,
+        forModel: candidate.model,
+        includePendingOAuthRefresh: true,
+      });
+      if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
+        profileIds = [...new Set([userLockedAuthProfileId, ...profileIds])];
+      }
+      // A harness owns admission, but shared WHAM blocks still need their
+      // existing bounded recovery when upstream capacity returns early.
+      authRuntime.maybeReprobeWhamBlockedProfiles({
+        store: authStore,
+        profileIds,
+        agentDir: params.agentDir,
+        forModel: candidate.model,
+      });
       if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
-        candidateAuthProfileIds = authRuntime.resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store: authStore,
-          provider: candidate.provider,
-          forModel: candidate.model,
-          includePendingOAuthRefresh: true,
-        });
-        if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
-          candidateAuthProfileIds.unshift(userLockedAuthProfileId);
-          candidateAuthProfileIds = [...new Set(candidateAuthProfileIds)];
-        }
-        profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
-        authRuntime.maybeReprobeWhamBlockedProfiles({
-          store: authStore,
-          profileIds: candidateAuthProfileIds,
-          agentDir: params.agentDir,
-          forModel: candidate.model,
-        });
+        candidateAuthProfileIds = profileIds;
+        profileIdsByCandidate.set(candidate, profileIds);
       }
     }
     const candidateAuthScope = resolveFallbackAuthScope({
