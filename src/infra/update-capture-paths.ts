@@ -70,17 +70,17 @@ type CapturePath = { path: string; directory: boolean };
 
 function resolveCapturePath(
   sourcePath: string,
-  directories = new Set<string>(),
+  entries = new Map<string, boolean>(),
 ): CapturePath | undefined {
   const activeLinks = new Set<string>();
   function resolve(
     candidate: string,
-    ancestors: Set<string>,
+    inspected: Map<string, boolean>,
     depth: number,
   ): CapturePath | undefined {
     const root = path.parse(candidate).root;
     let current: CapturePath = { path: root, directory: true };
-    ancestors.add(root);
+    inspected.set(root, true);
     const separators = path.sep === "\\" ? /[\\/]/ : /\//;
     for (const component of candidate.slice(root.length).split(separators)) {
       if (!current.directory) {
@@ -103,38 +103,37 @@ function resolveCapturePath(
         });
       }
       if (stat.isSymbolicLink()) {
+        inspected.set(entry, false);
         if (activeLinks.has(entry) || depth === 40) {
           return undefined;
         }
         activeLinks.add(entry);
         const link = fs.readlinkSync(entry);
-        const targetAncestors = new Set<string>();
+        const targetEntries = new Map<string, boolean>();
         // Keep target components in filesystem order: an earlier link changes what '..' means.
         const target = resolve(
           path.isAbsolute(link) ? link : current.path + path.sep + link,
-          targetAncestors,
+          targetEntries,
           depth + 1,
         );
         activeLinks.delete(entry);
         if (!target) {
           return undefined;
         }
-        for (const ancestor of targetAncestors) {
-          ancestors.add(ancestor);
+        for (const [targetPath, realDirectory] of targetEntries) {
+          inspected.set(targetPath, realDirectory);
         }
         current = target;
       } else {
         current = { path: entry, directory: stat.isDirectory() };
-        if (current.directory) {
-          ancestors.add(entry);
-        }
+        inspected.set(entry, current.directory);
       }
     }
     return current;
   }
   return resolve(
     path.isAbsolute(sourcePath) ? sourcePath : process.cwd() + path.sep + sourcePath,
-    directories,
+    entries,
     0,
   );
 }
@@ -150,18 +149,20 @@ function isPairedCapturePath(directory: string): boolean {
 
 /** One admission decision over real ancestors and safely resolved link targets. */
 export function isUpdateCapturePath(sourcePath: string, stateDir: string): boolean {
-  const ancestors = new Set<string>();
-  resolveCapturePath(sourcePath, ancestors);
+  const entries = new Map<string, boolean>();
+  resolveCapturePath(sourcePath, entries);
   const captureRoot = resolveUpdateCaptureRoot(stateDir);
   const resolvedRoot = resolveCapturePath(captureRoot)?.path;
   let captured = false;
-  for (const ancestor of ancestors) {
-    // A prior exclusion must not hide an invalid marker on another real ancestor.
-    captured = hasPrivacyMarker(ancestor) || captured;
+  for (const [entryPath, realDirectory] of entries) {
+    // Logical names establish legacy ownership; only real directories can carry markers.
+    if (realDirectory) {
+      captured = hasPrivacyMarker(entryPath) || captured;
+    }
     captured =
-      ancestor === captureRoot ||
-      ancestor === resolvedRoot ||
-      isPairedCapturePath(ancestor) ||
+      entryPath === captureRoot ||
+      entryPath === resolvedRoot ||
+      isPairedCapturePath(entryPath) ||
       captured;
   }
   return captured;

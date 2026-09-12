@@ -150,6 +150,27 @@ describe("private update capture exclusion", () => {
     }
   });
 
+  it.each([false, true])(
+    "backupCreateCommand: linked capture root, onlyConfig=%s",
+    async (onlyConfig) => {
+      const owner = path.join(home.home, "other-state");
+      const target = path.join(home.home, "legacy-data");
+      await fs.mkdir(owner);
+      await fs.mkdir(target);
+      const configPath = path.join(target, "config.json");
+      await fs.writeFile(configPath, "{}");
+      const captureAlias = owner + ".update-captures";
+      await fs.symlink(target, captureAlias, process.platform === "win32" ? "junction" : "dir");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(captureAlias, "config.json"));
+      const output = path.join(home.home, "capture-alias.tar.gz");
+      await expect(
+        backupCreateCommand(createTestRuntime(), { output, onlyConfig, verify: true }),
+      ).rejects.toThrow("Private update captures are excluded from backups and support exports.");
+      await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(configPath, "utf8")).toBe("{}");
+    },
+  );
+
   it.each(["parent", "nested alias"])(
     "excludes marked orphaned and relocated artifacts from a %s workspace",
     async (selection) => {
