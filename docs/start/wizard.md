@@ -220,7 +220,11 @@ Local mode (default) walks through these steps:
    token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 4. **Channels** - built-in and official plugin chat channels, including
    Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
-   QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
+   QQ Bot, Signal, Slack, Telegram, WhatsApp, and more. When no command owner
+   exists, completed channel setup offers a separate operator-account step for
+   `/update` and other administration. Enter your own user ID and confirm it, or
+   skip. This works in servers and groups without DM pairing and does not promote
+   chat allowlists. See [command owner setup](/channels/pairing#set-up-an-owner-without-dm-pairing).
 5. **Web search** - configures an optional search provider.
 6. **Skills** - installs recommended skills and their optional dependencies.
 7. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit

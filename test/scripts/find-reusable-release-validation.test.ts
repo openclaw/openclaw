@@ -1391,6 +1391,43 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 
+  it.each([false, true])(
+    "checks selected split release files in the shell resolver (unrelated=%s)",
+    (unrelated) => {
+      const { origin, priorSha } = createRepo();
+      mkdirSync(join(origin, "CHANGELOG"));
+      const targetSha = commitFile(
+        origin,
+        "CHANGELOG/2026.7.1.md",
+        "## 2026.7.1\n\nReleased.\n",
+        "docs: release entry",
+      );
+      const inputs = { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" };
+      const record = normalizedEvidence({ targetSha: priorSha, validationInputs: inputs });
+      const fixtures = setUpFixtures([{ record, runId: "111" }]);
+      const changedPaths = [
+        "CHANGELOG/2026.7.1.md",
+        ...(unrelated ? ["CHANGELOG/2026.6.8.md"] : []),
+      ];
+      const result = runResolver({
+        ...fixtures,
+        compareBaseSha: priorSha,
+        compareFiles: changedPaths,
+        inputs,
+        repoDir: cloneHead(origin),
+        targetSha,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(parseOutput(result.stdout).reuse).toBe(unrelated ? "false" : "true");
+      if (!unrelated) {
+        expect(parseOutput(result.stdout)).toMatchObject({
+          changed_paths: JSON.stringify(changedPaths),
+          evidence_policy: "split-changelog-release-v1",
+        });
+      }
+    },
+  );
+
   it("rejects a source-file rename to CHANGELOG.md", () => {
     const { origin, priorSha } = createRepo();
     const targetSha = commitFile(origin, "CHANGELOG.md", "renamed source\n", "docs: rename");

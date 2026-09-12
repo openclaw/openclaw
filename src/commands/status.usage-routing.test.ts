@@ -85,9 +85,9 @@ vi.mock("./status-all/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./status-all/gateway.js")>()),
   readFileTailLines: async () => [],
 }));
-vi.mock("./backup-health.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./backup-health.js")>()),
-  readBackupFreshness: () => ({}),
+vi.mock("../state/backup-run-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/backup-run-records.js")>()),
+  readBackupRunFreshness: async () => ({}),
 }));
 vi.mock("../security/audit.runtime.js", () => ({
   runSecurityAudit: async () => ({

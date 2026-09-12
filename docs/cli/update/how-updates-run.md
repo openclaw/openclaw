@@ -69,11 +69,19 @@ host links target the staged candidate. Path aliases that resolve to a running
 package's bundled plugin use the staged bundled plugin with the same ID when
 available, preserving bundled trust. External path installs keep their existing
 classification. The live plugin files and host links stay unchanged. Channels,
-cron, automatic updates, and other side services are suppressed in this canary.
+cron, automatic updates, background task maintenance, and other side services are
+suppressed in this canary. Copied task records remain available for startup
+validation without recovery or pruning.
 
 Candidate build and rehearsal processes resolve source-linked plugin SDKs from
 the candidate root, even when the serving source launcher passed its own checkout
 root. This keeps candidate assets and validation independent of the old checkout.
+
+The candidate answers the updater's native service capability probe before
+loading configuration or initializing debug capture. Probing capability does not
+open or migrate shared state, so the old Gateway can keep serving while its
+database schema is older than the candidate's. The installed updater runs first;
+this repair takes effect when the candidate it probes contains the fix.
 
 Snapshot preparation budgets time for the SQLite database and journal bytes,
 including copying and verification passes, with a five-minute startup floor.

@@ -2,30 +2,15 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveGatewayStartupRetryAfterMs,
 } from "@openclaw/gateway-client/browser";
-import type {
-  ChatMetadataParams,
-  CommandsListResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { ChatMetadataParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-
-export type ChatMetadataResult = CommandsListResult;
-
-type ChatMetadataUpdate =
-  | { type: "invalidated" }
-  | { type: "loading" }
-  | { type: "result"; result: ChatMetadataResult }
-  | { type: "error"; error: unknown };
-type ChatMetadataEntry = {
-  scope: ChatMetadataParams;
-  result?: ChatMetadataResult;
-  loadPending?: Promise<ChatMetadataResult>;
-  revalidationPending?: Promise<ChatMetadataResult>;
-  writer?: object;
-  listeners: Set<(update: ChatMetadataUpdate) => void>;
-  release: () => void;
-};
-
-const chatMetadataCache = new WeakMap<GatewayBrowserClient, Map<string, ChatMetadataEntry>>();
+import {
+  chatMetadataCache,
+  notifyChatMetadataListeners,
+  type ChatMetadataEntry,
+  type ChatMetadataResult,
+  type ChatMetadataUpdate,
+} from "./chat-metadata-cache.ts";
 
 function metadataScopeKey(scope: ChatMetadataParams): string {
   return JSON.stringify([
@@ -71,16 +56,6 @@ function waitForMetadataRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, delayMs);
   });
-}
-
-function notifyChatMetadataListeners(entry: ChatMetadataEntry, update: ChatMetadataUpdate): void {
-  for (const listener of Array.from(entry.listeners)) {
-    try {
-      listener(update);
-    } catch (error) {
-      console.error("[chat-metadata] listener error:", error);
-    }
-  }
 }
 
 async function requestChatMetadata(
@@ -237,31 +212,4 @@ export function beginChatMetadataPublication(
 ) {
   const { isCurrent, publish } = beginPublication(metadataEntryFor(client, scope));
   return { isCurrent, publish };
-}
-
-export function invalidateChatMetadataStore(
-  client: GatewayBrowserClient,
-  scope?: ChatMetadataParams,
-): void {
-  const entries = chatMetadataCache.get(client)?.values();
-  if (!entries) {
-    return;
-  }
-  const invalidated = Array.from(entries).filter(
-    (entry) =>
-      (!scope?.agentId || entry.scope.agentId === scope.agentId) &&
-      (!scope?.sessionKey || entry.scope.sessionKey === scope.sessionKey) &&
-      (!scope?.authProfileId || entry.scope.authProfileId === scope.authProfileId),
-  );
-  // Retire every affected writer before subscribers can synchronously start replacements.
-  for (const entry of invalidated) {
-    entry.result = undefined;
-    entry.loadPending = undefined;
-    entry.revalidationPending = undefined;
-    entry.writer = undefined;
-  }
-  for (const entry of invalidated) {
-    notifyChatMetadataListeners(entry, { type: "invalidated" });
-    entry.release();
-  }
 }

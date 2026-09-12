@@ -6,10 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readConfigFileSnapshotForWrite } from "openclaw/plugin-sdk/config-mutation";
-import type {
-  ModelsAuthLoginFlowOptions,
-  ModelsAuthLoginFlowResult,
-} from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
+import type { ModelsAuthLoginFlowResult } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -23,6 +20,7 @@ import {
   deliverReplies,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
 export type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
 
@@ -114,29 +112,87 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
   try {
     await withTempHome(
       async (home) => {
-        const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
+        const pluginDir = path.join(home, "ux-catalog-fixture");
+        await fs.mkdir(pluginDir);
+        await Promise.all([
+          fs.writeFile(path.join(pluginDir, "index.js"), "export default { register() {} };\n"),
+          fs.writeFile(
+            path.join(pluginDir, "package.json"),
+            JSON.stringify({ type: "module", openclaw: { extensions: ["./index.js"] } }),
+          ),
+          fs.writeFile(
+            path.join(pluginDir, "openclaw.plugin.json"),
+            JSON.stringify({
+              id: "ux-catalog-fixture",
+              configSchema: { type: "object", additionalProperties: false, properties: {} },
+              providerAuthChoices: [
+                {
+                  provider: "ux-catalog-fixture",
+                  method: "device-code",
+                  choiceId: "device",
+                  choiceLabel: "Fixture device login",
+                  groupLabel: "Fixture",
+                  appGuidedAuth: "device-code",
+                  credentialOnly: true,
+                  channelLogin: {},
+                },
+                {
+                  provider: "ux-catalog-fixture",
+                  method: "device-code-alternate",
+                  choiceId: "device-alternate",
+                  choiceLabel: "Fixture alternate device login",
+                  groupLabel: "Fixture",
+                  appGuidedAuth: "device-code",
+                  credentialOnly: true,
+                  channelLogin: {},
+                },
+              ],
+            }),
+          ),
+        ]);
+        const delivery = await vi.importActual<typeof import("./bot/delivery.replies.js")>(
+          "./bot/delivery.replies.js",
+        );
+        deliverReplies.mockImplementation(delivery.deliverReplies);
+        const loginFlow = vi.fn<TelegramLoginFlow>(async (params) => {
           await params.prompter.deviceCode?.({ title: "Sign in", code: "MODEL-ACCESS" });
           if (!params.onModelAccessRequested) {
             throw new Error("expected deferred model access");
           }
           params.onModelAccessRequested({
-            provider: "openai",
-            providerLabel: "OpenAI",
+            provider: "ux-catalog-fixture",
+            providerLabel: "Fixture",
             agentId: "main",
             policy: { path: "agents.defaults.modelPolicy.allow", refs: ["openai/gpt-5.4"] },
             prompt: {
-              message: "Credentials saved. Your current model restrictions may hide OpenAI models.",
+              message:
+                "Credentials saved. Your current model restrictions may hide Fixture models.",
               initialValue: "keep",
               options: [
-                { value: "all", label: "Show all OpenAI models" },
+                { value: "all", label: "Show all Fixture models" },
                 { value: "keep", label: "Keep current restrictions" },
               ],
             },
           });
-          return createLoginResult("openai:consent");
+          return {
+            providerId: "ux-catalog-fixture",
+            methodId: "device-code",
+            authRefresh: "refreshed",
+            profiles: [
+              {
+                profileId: "ux-catalog-fixture:consent",
+                provider: "ux-catalog-fixture",
+                mode: "oauth",
+              },
+            ],
+          };
         });
         const cfg: OpenClawConfig = {
           commands: { native: true, ownerAllowFrom: ["200"] },
+          plugins: {
+            load: { paths: [pluginDir] },
+            entries: { "ux-catalog-fixture": { enabled: true } },
+          },
           agents: {
             defaults: { model: "openai/gpt-5.4", modelPolicy: { allow: ["openai/gpt-5.4"] } },
             entries: { main: { name: "Main" } },
@@ -150,29 +206,53 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
         };
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         const first = registerLoginCommand({ cfg, loginFlow, runtime });
-        await first.handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-        await vi.waitFor(() => expect(deliverReplies).toHaveBeenCalled());
-        const delivery = vi.mocked((await import("./bot/delivery.replies.js")).deliverReplies);
-        const buttons = delivery.mock.calls
-          .at(-1)?.[0]
-          .replies[0]?.presentation?.blocks.find((block) => block.type === "buttons");
-        expect(buttons).toMatchObject({
-          buttons: [
-            {
-              label: "Show all OpenAI models",
-              action: { type: "command", command: expect.stringMatching(/^\/login choice /) },
-            },
-            {
-              label: "Keep current restrictions",
-              action: { type: "command", command: expect.stringMatching(/^\/login choice /) },
-            },
-          ],
+        const deliveredButtons = (calls: Parameters<typeof first.bot.api.sendMessage>[]) =>
+          calls.flatMap((call) => {
+            const markup = call[2]?.reply_markup;
+            return markup && "inline_keyboard" in markup ? markup.inline_keyboard.flat() : [];
+          });
+        await first.handler(
+          createPrivateCommandContext({ match: "ux-catalog-fixture", userId: 200 }),
+        );
+        const methods = deliveredButtons(vi.mocked(first.bot.api).sendMessage.mock.calls);
+        expect(methods).toHaveLength(2);
+        expect(methods).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              text: "Fixture device login",
+              callback_data: "tgcmd:/login ux-catalog-fixture/device",
+            }),
+            expect.objectContaining({
+              text: "Fixture alternate device login",
+              callback_data: "tgcmd:/login ux-catalog-fixture/device-alternate",
+            }),
+          ]),
+        );
+        expect(loginFlow).not.toHaveBeenCalled();
+        first.sendMessage.mockClear();
+        deliverReplies.mockClear();
+        await first.handler(
+          createPrivateCommandContext({ match: "ux-catalog-fixture/device", userId: 200 }),
+        );
+        await vi.waitFor(() => expect(deliverReplies).toHaveBeenCalledOnce());
+        await expect(deliverReplies.mock.results[0]?.value).resolves.toEqual({ delivered: true });
+        const buttons = deliveredButtons(vi.mocked(first.bot.api).sendMessage.mock.calls);
+        expect(buttons.map((button) => button.text)).toEqual([
+          "Show all Fixture models",
+          "Keep current restrictions",
+        ]);
+        const commands = buttons.map((button) => {
+          if (!("callback_data" in button)) {
+            throw new Error("expected an encoded native command callback");
+          }
+          expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+          expect(button.callback_data).toContain(" ux-catalog-fixture");
+          return parseTelegramNativeCommandCallbackData(button.callback_data);
         });
-        const button = buttons?.buttons[choice === "keep" ? 1 : 0];
-        if (button?.action?.type !== "command") {
-          throw new Error("expected typed command button");
+        const commandText = commands[choice === "keep" ? 1 : 0];
+        if (!commandText) {
+          throw new Error("expected a delivered model-access command");
         }
-        const commandText = button.action.command;
         expect(await readPolicy()).toEqual(["openai/gpt-5.4"]);
         const fresh = registerLoginCommand({ cfg, loginFlow, runtime, accountId: first.accountId });
         const dispatch = fresh.nativeCommandCallbackDispatcher;
@@ -201,40 +281,51 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
           await fresh.handler(createPrivateCommandContext({ match: "cancel", userId: 200 }));
           expect(fresh.sendMessage).toHaveBeenLastCalledWith(
             100,
-            "Provider login cancelled for this chat.",
+            "Model-access choice cancelled. Your saved connection is unchanged. Send /models to choose a model.",
             {},
           );
+        } else {
           await click(100);
+          expect(await readPolicy()).toEqual(
+            choice === "all" ? ["openai/gpt-5.4", "ux-catalog-fixture/*"] : ["openai/gpt-5.4"],
+          );
           expect(fresh.sendMessage).toHaveBeenLastCalledWith(
             100,
-            expect.stringContaining("This model access choice is no longer available."),
+            expect.stringContaining(
+              choice === "all"
+                ? "Application by the running Gateway is not confirmed."
+                : "Current model restrictions kept.",
+            ),
             {},
           );
-          expect(await readPolicy()).toEqual(["openai/gpt-5.4"]);
-          expect(loginFlow).toHaveBeenCalledOnce();
-          return;
         }
+        const deliveriesBeforeRecovery = deliverReplies.mock.calls.length;
+        const sendsBeforeRecovery = fresh.sendMessage.mock.calls.length;
         await click(100);
         expect(await readPolicy()).toEqual(
-          choice === "all" ? ["openai/gpt-5.4", "openai/*"] : ["openai/gpt-5.4"],
+          choice === "all" ? ["openai/gpt-5.4", "ux-catalog-fixture/*"] : ["openai/gpt-5.4"],
         );
-        expect(fresh.sendMessage).toHaveBeenLastCalledWith(
-          100,
-          expect.stringContaining(
-            choice === "all"
-              ? "Application by the running Gateway is not confirmed."
-              : "Current model restrictions kept.",
-          ),
-          {},
+        expect(deliverReplies.mock.calls).toHaveLength(deliveriesBeforeRecovery + 1);
+        const recoveryMessages = vi
+          .mocked(fresh.bot.api)
+          .sendMessage.mock.calls.slice(sendsBeforeRecovery);
+        expect(recoveryMessages.map(([, text]) => text).join("\n")).toContain(
+          "Choose model access using your current restrictions. You do not need to sign in again.",
         );
-        const logsAfterChoice = runtime.log.mock.calls.length;
-        await click(100);
-        expect(fresh.sendMessage).toHaveBeenLastCalledWith(
-          100,
-          expect.stringContaining("This model access choice is no longer available."),
-          {},
-        );
-        expect(runtime.log).toHaveBeenCalledTimes(logsAfterChoice);
+        const renewedButtons = deliveredButtons(recoveryMessages);
+        expect(renewedButtons.map((button) => button.text)).toEqual([
+          "Show all Fixture models",
+          "Keep current restrictions",
+        ]);
+        for (const button of renewedButtons) {
+          if (!("callback_data" in button)) {
+            throw new Error("expected a renewed native command callback");
+          }
+          expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+          const renewedCommand = parseTelegramNativeCommandCallbackData(button.callback_data);
+          expect(renewedCommand).toMatch(/^\/login choice [a-f0-9]+ [01] ux-catalog-fixture$/u);
+          expect(commands).not.toContain(renewedCommand);
+        }
         expect(loginFlow).toHaveBeenCalledOnce();
       },
       {

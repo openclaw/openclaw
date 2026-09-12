@@ -65,7 +65,7 @@ describe("CommandPalette lifecycle", () => {
       ),
     );
     const changes = vi.fn();
-    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
     try {
       palette.openPalette();
       await palette.updateComplete;
@@ -555,6 +555,7 @@ describe("CommandPalette lifecycle", () => {
         harness.setConnected(false);
       } else if (replacement === "detach") {
         palette.remove();
+        harness.emit("chat.metadata.changed");
       } else if (replacement === "closed") {
         palette.togglePalette();
         harness.emit("chat.metadata.changed");

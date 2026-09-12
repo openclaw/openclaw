@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
+import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -18,10 +20,11 @@ import {
 import type { SessionEntryPair } from "./session-list-order.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
-import type {
-  GatewaySessionModelSource,
-  SessionActorProfileIdentity,
-  SessionListRowContext,
+import {
+  createSessionRowModelCacheKey,
+  type GatewaySessionModelSource,
+  type SessionActorProfileIdentity,
+  type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import { resolveEstimatedSessionCostUsd, resolvePositiveNumber } from "./session-utils-core.js";
 
@@ -29,10 +32,26 @@ export function buildSessionListRowMetadataContext(params: {
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
+  const catalogEntries = new WeakMap<
+    ModelCatalogEntry[],
+    Map<string, ModelCatalogEntry | undefined>
+  >();
   return {
     subagentRuns: buildSubagentSessionListReadIndex(params.now),
     selectedModelByOverrideRef: new Map(),
     thinkingMetadataByModelRef: new Map(),
+    findModelCatalogEntry: (catalog, query) => {
+      let entries = catalogEntries.get(catalog);
+      if (!entries) {
+        entries = new Map();
+        catalogEntries.set(catalog, entries);
+      }
+      const key = createSessionRowModelCacheKey(query.provider, query.modelId);
+      if (!entries.has(key)) {
+        entries.set(key, findModelCatalogEntry(catalog, query));
+      }
+      return entries.get(key);
+    },
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
     userProfileIdentityById: params.userProfileIdentityById ?? new Map(),

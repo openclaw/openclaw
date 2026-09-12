@@ -31,7 +31,7 @@ export function createConnectionHandle(overrides: Partial<DesktopConnectionHandl
     sendBackspace: vi.fn(),
     sendKeyboardEvent: vi.fn(),
     sendText: vi.fn(),
-    setScaleViewport: vi.fn(),
+    setSizingMode: vi.fn(),
     ...overrides,
   } satisfies DesktopConnectionHandle;
 }
@@ -45,6 +45,20 @@ export function clickPanelButton(
     throw new Error(`expected Desktop button: ${selector}`);
   }
   button.click();
+}
+
+export function sizingMenu(panel: DesktopPanelElement): HTMLSelectElement {
+  const menu = panel.renderRoot.querySelector<HTMLSelectElement>(".desktop-sizing");
+  if (!menu) {
+    throw new Error("expected the desktop sizing menu");
+  }
+  return menu;
+}
+
+export function selectSizing(panel: DesktopPanelElement, mode: string): void {
+  const menu = sizingMenu(panel);
+  menu.value = mode;
+  menu.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 export async function settleTasks(): Promise<void> {

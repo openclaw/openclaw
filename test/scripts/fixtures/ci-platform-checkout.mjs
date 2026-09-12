@@ -915,7 +915,7 @@ async function command() {
     operation === "diff" &&
     ((options.docsPublish &&
       args.join(" ") === "--quiet -- docs .openclaw-sync package.json package-lock.json") ||
-      (options.docsAgent && args.join(" ") === "--quiet") ||
+      (options.docsAgent && args.join(" ") === "HEAD --quiet") ||
       options.maturity)
   ) {
     await boundary("diff");

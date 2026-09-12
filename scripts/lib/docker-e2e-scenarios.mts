@@ -683,6 +683,7 @@ export const mainLanes: DockerE2eLane[] = [
   lane(
     "session-runtime-context",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
+    { resources: ["service"] },
   ),
   lane(
     "plugin-binding-command-escape",

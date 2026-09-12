@@ -953,49 +953,53 @@ describe("renderModelProviders", () => {
     expect(option?.getAttribute("aria-selected") === "true").toBe(true);
   });
 
-  it("renders alias defaults and distinct automatic or disabled utility states", async () => {
-    const aliasEntry = {
-      id: "claude-opus",
-      provider: "anthropic",
-      name: "Claude Opus",
-      available: true,
-      selectionRef: "opus",
-    };
-    const automatic = mount(
-      props({
-        configuredModels: [aliasEntry],
-        defaultModels: { primary: "opus", fallbacks: [], utilityModel: null },
-      }),
-    );
-    await updatePickers(automatic);
-    expect(
-      automatic
-        .querySelector('[role="option"][data-value="opus"]')
-        ?.getAttribute("aria-selected") === "true",
-    ).toBe(true);
-    expect(
-      text(
+  it.each([undefined, null])(
+    "renders alias defaults and distinct automatic or disabled utility states (%s)",
+    async (automaticUtilityModel) => {
+      const aliasEntry = {
+        id: "claude-opus",
+        provider: "anthropic",
+        name: "Claude Opus",
+        available: true,
+        selectionRef: "opus",
+      };
+      const automatic = mount(
+        props({
+          configuredModels: [aliasEntry],
+          defaultModels: { primary: "opus", fallbacks: [], utilityModel: null },
+          automaticUtilityModel,
+        }),
+      );
+      await updatePickers(automatic);
+      expect(
         automatic
-          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
-          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
-      ),
-    ).toBe("Auto");
+          .querySelector('[role="option"][data-value="opus"]')
+          ?.getAttribute("aria-selected") === "true",
+      ).toBe(true);
+      expect(
+        text(
+          automatic
+            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+            ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
+        ),
+      ).toBe(automaticUtilityModel === null ? "Auto No recommended small model" : "Auto");
 
-    const disabled = mount(
-      props({
-        configuredModels: [aliasEntry],
-        defaultModels: { primary: "opus", fallbacks: [], utilityModel: "" },
-      }),
-    );
-    await updatePickers(disabled);
-    expect(
-      text(
-        disabled
-          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
-          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
-      ),
-    ).toBe("Disabled");
-  });
+      const disabled = mount(
+        props({
+          configuredModels: [aliasEntry],
+          defaultModels: { primary: "opus", fallbacks: [], utilityModel: "" },
+        }),
+      );
+      await updatePickers(disabled);
+      expect(
+        text(
+          disabled
+            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+            ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
+        ),
+      ).toBe("Disabled");
+    },
+  );
 
   it("disables probing when the gateway does not advertise the method", () => {
     const onProbe = vi.fn();

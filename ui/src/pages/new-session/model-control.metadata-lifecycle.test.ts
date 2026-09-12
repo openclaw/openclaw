@@ -81,6 +81,43 @@ function retainedAccountDraft() {
 }
 
 describe("new-session model metadata lifecycle", () => {
+  it("enables a cooled-down model on reopen without a catalog event", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const model: ModelCatalogEntry = {
+      id: "model",
+      name: "Model",
+      provider: "example",
+      available: false,
+      unavailableReason: "cooldown",
+      unavailableUntil: 12_000,
+    };
+    const agent = { id: "main", model: { primary: "example/model" } };
+    const { context, request } = contextWith([model]);
+    const control = new NewSessionModelControl(() => undefined);
+    const option = () =>
+      renderControl(control, context, "main", agent).querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="example/model"]',
+      );
+    try {
+      control.load(context, "main", true, { agent });
+      await vi.waitFor(() => expect(option()?.disabled).toBe(true));
+      request.mockResolvedValueOnce({
+        models: [
+          { ...model, available: true, unavailableReason: undefined, unavailableUntil: undefined },
+        ],
+      });
+      clock.mockReturnValue(12_000);
+      renderControl(control, context, "main", agent)
+        .querySelector<HTMLElement>('[data-chat-model-select="true"]')!
+        .click();
+      await vi.waitFor(() => expect(option()?.disabled).toBe(false));
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      control.reset();
+      clock.mockRestore();
+    }
+  });
+
   it.each([false, true])(
     "selects a usable retained account with refresh failure %s without changing saved preferences",
     async (refreshFailed) => {
@@ -100,7 +137,7 @@ describe("new-session model metadata lifecycle", () => {
       expect(request).toHaveBeenLastCalledWith(
         "models.list",
         { view: "configured", agentId: "main", authProfileId: account.authProfileId },
-        { signal: expect.any(AbortSignal) },
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
       );
       expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
       preview.resolve({ ...connected, refreshFailed });
@@ -303,10 +340,10 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("reads published models when the picker opens without acquiring providers", async () => {
+  it("reuses published models on picker open and refreshes after publication", async () => {
     const prepared = [{ id: "prepared", name: "Prepared", provider: "example" }];
     const published = [...prepared, { id: "published", name: "Published", provider: "example" }];
-    const { context, request } = contextWith(prepared);
+    const { context, request, emitCatalogChanged } = contextWith(prepared);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
     await vi.waitFor(() =>
@@ -321,6 +358,8 @@ describe("new-session model metadata lifecycle", () => {
       ".chat-controls__model-picker",
     )!;
     picker.querySelector("summary")!.click();
+    expect(request).toHaveBeenCalledTimes(1);
+    emitCatalogChanged();
     await vi.waitFor(() =>
       expect(
         renderControl(control, context).querySelector(
@@ -335,7 +374,7 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("reads current catalog state on remount after control teardown", async () => {
+  it("restores cached controls synchronously after teardown", async () => {
     const models: ModelCatalogEntry[] = [
       {
         id: "gpt-5.6-luna",
@@ -354,9 +393,8 @@ describe("new-session model metadata lifecycle", () => {
 
     const remountedControl = new NewSessionModelControl(() => undefined);
     remountedControl.load(context, "main", true, { agent });
-    await vi.waitFor(() =>
-      expect(remountedControl.modelUnavailableReason(agent)).toBe("missing-auth"),
-    );
+    expect(remountedControl.modelUnavailableReason(agent)).toBe("missing-auth");
+    expect(remountedControl.isRestoringPreference()).toBe(false);
 
     const container = renderControl(remountedControl, context, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="ready"]')).not.toBeNull();
@@ -365,7 +403,7 @@ describe("new-session model metadata lifecycle", () => {
       container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
     ).not.toBeNull();
     expect(container.textContent).toContain("No models available");
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(1);
     remountedControl.reset();
   });
 

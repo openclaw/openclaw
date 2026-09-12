@@ -383,7 +383,7 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(
@@ -461,8 +461,8 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
-      bridge.close();
+      await bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(

@@ -134,7 +134,9 @@ never needs the agent.
 - **Dashboard view.** The board can occupy the main area or a resizable side
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
-  the side panel back.
+  the side panel back. A tab with one full-width widget fills the focused
+  dashboard edge to edge, without a card border or surrounding padding.
+  Restoring the split or adding another widget brings back the normal spacing.
 - **Agent parity.** The agent's `dashboard` tool creates or updates trusted
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with

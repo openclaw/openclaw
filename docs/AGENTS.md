@@ -8,6 +8,8 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 - This repo therefore holds no `/clawhub/**` page sources, even though `docs/docs.json` lists them in the navigation. Both link-audit modes accept those declared routes without a ClawHub checkout; undeclared routes still fail.
 - Keep OpenClaw-specific skill and plugin guidance in the owning OpenClaw docs, such as `docs/cli/skills.md` and `docs/cli/plugins.md`. That guidance covers installation, update, verification, removal, and release trust. Standalone ClawHub CLI and publishing reference belongs upstream.
 - For links into `/clawhub/**`, plain `pnpm docs:check-links` does not check fragments. To verify anchors, run `pnpm docs:check-links:anchors` with `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` pointing to the actual ClawHub source checkout. Without that source, fragments into declared mirrored routes are reported as unverified.
+- Approved release docs can own a marked `CHANGELOG/<version>.md` mirror. When changing those sources, regenerate that complete flat Markdown file in the same PR with `pnpm changelog:from-docs`, preserving the marker's ordered source list and the frozen `CHANGELOG/records/<version>.md`. `pnpm changelog:check` verifies marked mirrors; it does not convert untouched historical releases. The `openclaw-changelog-update` skill owns the commands and separate post-release publication sequence.
+- Generated `CHANGELOG/**` artifacts retain the exact migrated or mirrored bytes. Like the root changelog, they are excluded from generic formatting; use the owning generator and `pnpm changelog:check` instead.
 
 ## Published Link Rules
 

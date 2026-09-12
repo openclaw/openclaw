@@ -257,6 +257,7 @@ export function createStatusCommandOverviewRowsParams(
   overrides: Partial<StatusCommandOverviewRowsParams> = {},
 ): StatusCommandOverviewRowsParams {
   return {
+    backupFreshness: {},
     env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
     opts: { deep: true },
     surface: baseStatusOverviewSurface,

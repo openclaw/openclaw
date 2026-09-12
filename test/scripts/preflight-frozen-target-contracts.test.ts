@@ -711,6 +711,71 @@ describe("frozen admission bootstrap repairs", () => {
 });
 
 describe("frozen admission entry", () => {
+  it.each<{
+    name: string;
+    files: Record<string, string>;
+    allow: boolean;
+    mode: "required" | "unsupported" | null;
+  }>([
+    { name: "legacy authorized", files: {}, allow: true, mode: "unsupported" },
+    { name: "legacy strict", files: {}, allow: false, mode: "required" },
+    {
+      name: "current authorized",
+      files: { "src/config/zod-schema.session-config.ts": "coldStorage: z.object({})" },
+      allow: true,
+      mode: "required",
+    },
+    {
+      name: "current declaration regression",
+      files: {
+        "src/config/zod-schema.session-config.ts": "export const SessionSchema = z.object({});",
+      },
+      allow: true,
+      mode: "required",
+    },
+    {
+      name: "legacy backport",
+      files: { "src/config/zod-schema.session.ts": "coldStorage: z.object({})" },
+      allow: true,
+      mode: "required",
+    },
+    {
+      name: "unknown schema",
+      files: { "src/config/zod-schema.session.ts": "unknown schema" },
+      allow: true,
+      mode: null,
+    },
+  ])("binds both cold subcases for $name", ({ files, allow, mode }) => {
+    const f = fixture({
+      "src/config/zod-schema.session.ts":
+        "export const SessionSchema = z.object({ maintenance: z.object({ pruneAfter: PositiveDurationSchema.optional() }) });",
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts":
+        "fragments?: RuntimeContextFragment[];\nconst fragments = params.fragments?.filter",
+      ...files,
+    });
+    const result = f.run(
+      { docker: { lanes: ["session-runtime-context", "openai-chat-tools"] } },
+      { allowFrozenTargetScenarioOmissions: allow },
+    );
+    if (mode === null) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("unable to resolve frozen session cold-storage contract");
+      return;
+    }
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker.lanes).toEqual(["openai-chat-tools", "session-runtime-context"]);
+    expect(
+      record.contracts.map((contract: { consumer: string; modes: Record<string, string> }) => [
+        contract.consumer,
+        contract.modes.OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE,
+      ]),
+    ).toEqual([
+      ["openai-chat-tools", mode],
+      ["session-runtime-context", mode],
+    ]);
+  });
+
   it.each(["nested-tooling", "nested-selected"] as const)(
     "binds selected and fallback files to their actual checkout in %s layout",
     (layout) => {

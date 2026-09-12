@@ -560,10 +560,10 @@ function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
   if (!schema || typeof schema !== "object") {
     return schema as TSchema;
   }
-  const defs = extendSchemaDefs(undefined, schema as Record<string, unknown>);
+  const schemaRecord = schema as Record<string, unknown>;
   return inlineLocalSchemaRefsWithDefs(
     schema,
-    defs,
+    Array.isArray(schema) ? extendSchemaDefs(undefined, schemaRecord) : undefined,
     undefined,
     {
       unresolvedLocalRefs: false,

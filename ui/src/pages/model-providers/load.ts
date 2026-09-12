@@ -33,6 +33,7 @@ export const MODEL_PROVIDERS_COST_DAYS = 30;
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
+  automaticUtilityModel: string | null | undefined;
   providerOutcomes: ModelCatalogProviderOutcome[];
   catalogError: string | null;
   config: Record<string, unknown> | null;
@@ -47,6 +48,7 @@ type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
+  automaticUtilityModel: undefined,
   providerOutcomes: [],
   catalogError: null,
   config: null,
@@ -84,6 +86,7 @@ export async function loadModelProvidersData(
     settleRequest(
       loadModelCatalog(client, {
         agentId: opts.agentId,
+        includeDefaultModels: true,
         ...(refresh ? { refresh: true } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
@@ -111,6 +114,9 @@ export async function loadModelProvidersData(
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models: catalog.ok ? catalog.result.models : null,
+    automaticUtilityModel: catalog.ok
+      ? catalog.result.defaultModels?.automaticUtilityModel
+      : undefined,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
     catalogError:
       refreshResult && !refreshResult.ok

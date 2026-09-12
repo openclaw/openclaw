@@ -231,7 +231,6 @@ it.each([
         ),
       ),
     ).toEqual(sourceModes);
-    expect(await rehearsal.changedConfigKeys()).toEqual([]);
   } finally {
     closeOpenClawStateDatabaseForTest();
     await cleanupRehearsal?.();

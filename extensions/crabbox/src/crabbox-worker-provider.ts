@@ -583,6 +583,9 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
+    // Desktop provisioning requires a dedicated Linux XFCE display. Older fixed-size
+    // images are still safe to request: noVNC negotiates actual resize support.
+    allowsDesktopResize: true,
     async dispose() {
       maintenanceAbort.abort();
       await Promise.all([

@@ -3,6 +3,7 @@ import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-ru
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../shared/update-outcome.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
+import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -134,6 +135,23 @@ export function renderUpdateRunReport(
   }
   headline = bounded(headline, 500);
   const lines: string[] = [];
+  for (const step of run.steps) {
+    if (step.configWriteRefusal) {
+      lines.push(formatUpdateDoctorConfigWriteRefusal(step.configWriteRefusal));
+    }
+  }
+  const configChanges = run.steps.flatMap((step) => (step.configChange ? [step.configChange] : []));
+  const configKeys = [
+    ...new Set(configChanges.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
+  ];
+  if (configKeys.length) {
+    lines.push(`Doctor changed config keys: ${configKeys.join(", ")}.`);
+  }
+  for (const message of new Set(
+    configChanges.flatMap((change) => (change.kind === "migration" ? [change.message] : [])),
+  )) {
+    lines.push(`Warning: Doctor migration: ${message}`);
+  }
   const phases = run.steps
     .filter((step) => PHASES.has(step.step))
     .map((step) => {
@@ -194,7 +212,11 @@ export function renderUpdateRunReport(
     Object.hasOwn(UPDATE_INSTALL_SKIP_GUIDANCE, run.reason)
       ? UPDATE_INSTALL_SKIP_GUIDANCE[run.reason]
       : undefined);
-  const repairStopReason = run.repair.at(-1)?.reason ?? run.reason;
+  const lastRepairReason = run.repair.at(-1)?.reason;
+  const repairStopReason =
+    lastRepairReason === "requester-revoked" || lastRepairReason === "repair-requires-config-change"
+      ? lastRepairReason
+      : run.reason;
   const repairHint =
     run.status === "failed" && repairStopReason === "requester-revoked"
       ? nextAction
@@ -202,8 +224,8 @@ export function renderUpdateRunReport(
         : "Repair stopped because the chat requester is no longer a command owner. A current command owner must start a new update, or the operator can run openclaw triage locally."
       : run.status === "failed" && repairStopReason === "repair-requires-config-change"
         ? nextAction
-          ? "Rehearsal config changes were not promoted. Review the named top-level keys before continuing recovery."
-          : "Rehearsal config changes were not promoted. Review the named top-level keys, then run openclaw doctor --fix under your own authority, or openclaw triage."
+          ? "Doctor could not promote config changes. Review the named keys and writer refusal before continuing recovery."
+          : "Doctor could not promote config changes. Review the named keys and writer refusal, then run openclaw doctor --fix under your own authority, or openclaw triage."
         : undefined;
   const hints =
     run.status === "running"

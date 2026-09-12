@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { LaunchctlResult } from "../daemon/launchd-exec.js";
+import type { ServiceConfigAudit } from "../daemon/service-audit.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
@@ -303,6 +304,20 @@ const gatewayProgramArguments = [
   "18789",
 ];
 
+function createRecommendedServiceAudit(code: string, message: string): ServiceConfigAudit {
+  return { ok: false, issues: [{ code, message, level: "recommended" }] };
+}
+
+function createGatewayInstallPlanFixture(): Awaited<
+  ReturnType<typeof import("./daemon-install-helpers.js").buildGatewayInstallPlan>
+> {
+  return {
+    programArguments: gatewayProgramArguments,
+    workingDirectory: "/tmp",
+    environment: {},
+  };
+}
+
 function createGatewayCommand(entrypoint: string) {
   return {
     programArguments: ["/usr/bin/node", entrypoint, "gateway", "--port", "18789"],
@@ -410,21 +425,13 @@ function setupGatewayTokenRepairScenario() {
       OPENCLAW_GATEWAY_TOKEN: "stale-token",
     },
   });
-  mocks.auditGatewayServiceConfig.mockResolvedValue({
-    ok: false,
-    issues: [
-      {
-        code: "gateway-token-mismatch",
-        message: "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token",
-        level: "recommended",
-      },
-    ],
-  });
-  mocks.buildGatewayInstallPlan.mockResolvedValue({
-    programArguments: gatewayProgramArguments,
-    workingDirectory: "/tmp",
-    environment: {},
-  });
+  mocks.auditGatewayServiceConfig.mockResolvedValue(
+    createRecommendedServiceAudit(
+      "gateway-token-mismatch",
+      "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token",
+    ),
+  );
+  mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
   mocks.install.mockResolvedValue(undefined);
 }
 
@@ -711,16 +718,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
     };
     mocks.readCommand.mockResolvedValue(bunCommand);
     mocks.buildGatewayInstallPlan.mockResolvedValue(bunCommand);
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-path-nonminimal",
-          message: "Gateway PATH should be regenerated",
-          level: "recommended",
-        },
-      ],
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-path-nonminimal",
+        "Gateway PATH should be regenerated",
+      ),
+    );
 
     await runRepair({ gateway: {} });
 
@@ -743,16 +746,9 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: [runtimePath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
       environment: {},
     }));
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-runtime-bun",
-          message: "Bun runtime is unsupported",
-          level: "recommended",
-        },
-      ],
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit("gateway-runtime-bun", "Bun runtime is unsupported"),
+    );
     mocks.needsNodeRuntimeMigration.mockReturnValue(true);
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: systemNodePath,
@@ -886,11 +882,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         HTTPS_PROXY: "https://proxy.local:7890",
       },
     });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: gatewayProgramArguments,
-      workingDirectory: "/tmp",
-      environment: {},
-    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
@@ -1330,11 +1322,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           },
         ],
       });
-      mocks.buildGatewayInstallPlan.mockResolvedValue({
-        programArguments: gatewayProgramArguments,
-        workingDirectory: "/tmp",
-        environment: {},
-      });
+      mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
       mocks.isSystemdUnitActive.mockResolvedValue(active);
 
       await runRepair({ gateway: { port: 18888 } });
@@ -1443,11 +1431,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ok: false,
       issues: [],
     });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: gatewayProgramArguments,
-      workingDirectory: "/tmp",
-      environment: {},
-    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
     mocks.install.mockResolvedValue(undefined);
 
     const cfg: OpenClawConfig = {
@@ -1564,21 +1548,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
         OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work",
       },
     });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-entrypoint-mismatch",
-          message: "Gateway service entrypoint differs from the current install.",
-          level: "recommended",
-        },
-      ],
-    });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: gatewayProgramArguments,
-      workingDirectory: "/tmp",
-      environment: {},
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-entrypoint-mismatch",
+        "Gateway service entrypoint differs from the current install.",
+      ),
+    );
+    mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
     await runNonInteractiveRepair({ updateInProgress: true });
@@ -1607,21 +1583,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: gatewayProgramArguments,
       environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-entrypoint-mismatch",
-          message: "Gateway service entrypoint differs from the current install.",
-          level: "recommended",
-        },
-      ],
-    });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: gatewayProgramArguments,
-      workingDirectory: "/tmp",
-      environment: {},
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-entrypoint-mismatch",
+        "Gateway service entrypoint differs from the current install.",
+      ),
+    );
+    mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
     await runNonInteractiveRepair({ updateInProgress: true });
@@ -1642,16 +1610,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
         OPENCLAW_GATEWAY_TOKEN: "stale-token",
       },
     });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-entrypoint-mismatch",
-          message: "Gateway service entrypoint differs from the current install.",
-          level: "recommended",
-        },
-      ],
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-entrypoint-mismatch",
+        "Gateway service entrypoint differs from the current install.",
+      ),
+    );
 
     await runNonInteractiveRepair({ updateInProgress: true });
 
@@ -1699,21 +1663,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: gatewayProgramArguments,
       environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-entrypoint-mismatch",
-          message: "Gateway service entrypoint differs from the current install.",
-          level: "recommended",
-        },
-      ],
-    });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: gatewayProgramArguments,
-      workingDirectory: "/tmp",
-      environment: {},
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-entrypoint-mismatch",
+        "Gateway service entrypoint differs from the current install.",
+      ),
+    );
+    mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
     await runNonInteractiveRepair({ updateInProgress: true });
@@ -1748,21 +1704,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
           },
         });
-        mocks.auditGatewayServiceConfig.mockResolvedValue({
-          ok: false,
-          issues: [
-            {
-              code: "gateway-token-embedded",
-              message: "Gateway service contains an embedded token.",
-              level: "recommended",
-            },
-          ],
-        });
-        mocks.buildGatewayInstallPlan.mockResolvedValue({
-          programArguments: gatewayProgramArguments,
-          workingDirectory: "/tmp",
-          environment: {},
-        });
+        mocks.auditGatewayServiceConfig.mockResolvedValue(
+          createRecommendedServiceAudit(
+            "gateway-token-embedded",
+            "Gateway service contains an embedded token.",
+          ),
+        );
+        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
         mocks.readRuntime.mockResolvedValue({ status: "running" });
         mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue({
           status: "running",
@@ -1844,21 +1792,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
           },
         });
-        mocks.auditGatewayServiceConfig.mockResolvedValue({
-          ok: false,
-          issues: [
-            {
-              code: "gateway-token-embedded",
-              message: "Gateway service contains an embedded token.",
-              level: "recommended",
-            },
-          ],
-        });
-        mocks.buildGatewayInstallPlan.mockResolvedValue({
-          programArguments: gatewayProgramArguments,
-          workingDirectory: "/tmp",
-          environment: {},
-        });
+        mocks.auditGatewayServiceConfig.mockResolvedValue(
+          createRecommendedServiceAudit(
+            "gateway-token-embedded",
+            "Gateway service contains an embedded token.",
+          ),
+        );
+        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
         mocks.readRuntime.mockResolvedValue({ status: "running" });
 
         await runNonInteractiveRepair({ updateInProgress: true });
@@ -1887,21 +1827,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: gatewayProgramArguments,
       environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "gateway-entrypoint-mismatch",
-          message: "Gateway service entrypoint differs from the current install.",
-          level: "recommended",
-        },
-      ],
-    });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: gatewayProgramArguments,
-      workingDirectory: "/tmp",
-      environment: {},
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-entrypoint-mismatch",
+        "Gateway service entrypoint differs from the current install.",
+      ),
+    );
+    mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
     mocks.readRuntime.mockResolvedValue({ status: "stopped" });
 
     await runNonInteractiveRepair({ updateInProgress: true });
@@ -1929,11 +1861,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           ok: false,
           issues: [],
         });
-        mocks.buildGatewayInstallPlan.mockResolvedValue({
-          programArguments: gatewayProgramArguments,
-          workingDirectory: "/tmp",
-          environment: {},
-        });
+        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
         mocks.install.mockResolvedValue(undefined);
 
         const cfg: OpenClawConfig = {

@@ -3294,10 +3294,10 @@ export const en: TranslationMap & {
       description:
         "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
+
     swarm: {
       title: "Swarm",
       groupTitle: "Parallel tasks",
-      description: "Coordinate parallel subagents and collect their results.",
       defaultPhase: "Unphased",
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed",
@@ -3313,21 +3313,7 @@ export const en: TranslationMap & {
       description:
         "Local models use Tool Search automatically. Enable this override to defer tool schemas for all models; turning it off restores each model's default.",
     },
-    loopDetection: {
-      title: "Tool-loop detection",
-      description:
-        "Enable rolling-history guards that warn or block repeated tool calls when an agent stops making progress.",
-    },
-    localModelLean: {
-      title: "Lean tools for local models",
-      description:
-        "Remove optional tools such as browser and automations. Leave this off to keep those capabilities available through Tool Search.",
-    },
-    cliAgents: {
-      title: "CLI agents",
-      description:
-        "Show external CLI session engines in the new-session model picker when their plugins support creating sessions.",
-    },
+
     customPluginUi: {
       title: "Custom plugin UI",
       description:
@@ -3335,11 +3321,7 @@ export const en: TranslationMap & {
       restartRequired:
         "Restart the Gateway and reload this browser tab after changing this setting.",
     },
-    auditMessages: {
-      title: "Message audit metadata",
-      description:
-        "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
-    },
+
     hostDesktop: {
       title: "Host Desktop",
       description:
@@ -3468,8 +3450,9 @@ export const en: TranslationMap & {
       sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
-      controlUi: "Control UI",
+      web: "Web",
       cli: "Command line",
+      terminal: "Terminal",
       app: "App",
     },
   },
@@ -4711,6 +4694,7 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
       retryStatus: "Status unavailable · Retry",
       viewDetails: "View details",
@@ -5160,15 +5144,16 @@ export const en: TranslationMap & {
       description: "The earlier conversation was cleared.",
     },
     outboxRecoveryTitle: "Saved messages need a destination",
+    outboxRecoveryFailedTitle: "Saved messages could not be loaded",
     outboxRecoveryDescription:
-      "An older browser version did not preserve every destination. These drafts and queued messages have not been sent by recovery. Open an empty non-Incognito conversation, then restore an entry here for review. Attachment drafts may appear separately.",
+      "These saved drafts and queued messages need a conversation. Open an empty non-Incognito conversation, then restore an entry for review. Nothing is sent automatically. Attachment drafts may appear separately.",
     outboxRecoveryConfirm:
       "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
     outboxRecoveryRestore: "Restore here for review",
     outboxRecoveryConflict:
       "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
     outboxRecoveryStorageFailed:
-      "Browser storage could not complete recovery. The original saved data has been retained. Free browser storage and reload to try again.",
+      "Your saved data has been kept. Reload to try again. If the problem continues, check that browser storage is available. Do not clear site data while you have messages to recover.",
     outboxRecoveryFull:
       "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
     outboxRecoveryMessages: "Queued messages: {count}",
@@ -5276,6 +5261,9 @@ export const en: TranslationMap & {
       sortBy: "Sort by",
       sortCreated: "Created",
       sortSessions: "Filter & sort",
+      showOnlyPerson: "Show only {name}",
+      showEveryone: "Show everyone",
+      showAllSessions: "Show all sessions",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",

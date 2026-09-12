@@ -1,5 +1,6 @@
 import { WebAPIRateLimitedError } from "@slack/web-api";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 import {
@@ -10,27 +11,31 @@ import {
 
 const AUTO_MAX_PARTICIPANTS = 8;
 
-function createCooldownStore(): PluginStateSyncKeyedStore<number> {
+function createCooldownStore() {
   const values = new Map<string, number>();
   return {
-    register: (key, value) => void values.set(key, value),
-    registerIfAbsent: (key, value) => {
+    register: async (key, value) => void values.set(key, value),
+    registerIfAbsent: async (key, value) => {
       if (values.has(key)) {
         return false;
       }
       values.set(key, value);
       return true;
     },
-    lookup: (key) => values.get(key),
-    consume: (key) => {
+    lookup: async (key) => values.get(key),
+    consume: async (key) => {
       const value = values.get(key);
       values.delete(key);
       return value;
     },
-    delete: (key) => values.delete(key),
-    entries: () => [],
-    clear: () => values.clear(),
-  };
+    delete: async (key) => values.delete(key),
+    deleteIf: async (key, predicate) => {
+      const value = values.get(key);
+      return value !== undefined && predicate(value) ? values.delete(key) : false;
+    },
+    entries: async () => [],
+    clear: async () => values.clear(),
+  } satisfies PluginStateKeyedStore<number>;
 }
 
 function createPrepared(params: {
@@ -566,6 +571,160 @@ describe("Slack presence monitor", () => {
       await polling;
       vi.useRealTimers();
     }
+  });
+
+  it.each(["publish", "stop", "ineligible", "expired", "queue-refused", "replaced"] as const)(
+    "waits for cooldown persistence and drains cleanup when %s",
+    async (outcome) => {
+      const reservation = createDeferred<boolean>();
+      const reservationStarted = createDeferred<void>();
+      const cleanup = createDeferred<boolean>();
+      const cleanupStarted = createDeferred<void>();
+      const cooldownStore = createCooldownStore();
+      cooldownStore.registerIfAbsent = async (key, value) => {
+        await cooldownStore.register(key, value);
+        reservationStarted.resolve();
+        return reservation.promise;
+      };
+      const deleteEntry = cooldownStore.delete.bind(cooldownStore);
+      cooldownStore.delete = async (key) => {
+        cleanupStarted.resolve();
+        await cleanup.promise;
+        return await deleteEntry(key);
+      };
+      const deleteIf = cooldownStore.deleteIf.bind(cooldownStore);
+      cooldownStore.deleteIf = async (key, predicate) => {
+        cleanupStarted.resolve();
+        await cleanup.promise;
+        return await deleteIf(key, predicate);
+      };
+      const getPresence = vi
+        .fn()
+        .mockResolvedValueOnce({ presence: "away" })
+        .mockResolvedValueOnce({ presence: "active" });
+      const enqueue = vi.fn(() => outcome !== "queue-refused" && outcome !== "replaced");
+      const wake = vi.fn();
+      let now = 1_000;
+      const monitor = createSlackPresenceMonitor({
+        accountId: "default",
+        accountConfig: { mode: "auto" },
+        client: { getPresence } as never,
+        cooldownStore,
+        enqueue,
+        wake,
+        nowMs: () => now,
+      });
+      monitor.observe(createPrepared({ userId: "U123" }));
+      await monitor.pollOnce();
+      const polling = monitor.pollOnce();
+      await reservationStarted.promise;
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(wake).not.toHaveBeenCalled();
+      expect(monitor.pollOnce() === polling).toBe(true);
+      let stopping: Promise<void> | undefined;
+      let stopSettled = false;
+      if (outcome === "stop") {
+        stopping = monitor.stop().then(() => {
+          stopSettled = true;
+        });
+      } else if (outcome === "ineligible") {
+        for (let index = 0; index < AUTO_MAX_PARTICIPANTS; index += 1) {
+          monitor.observe(createPrepared({ userId: `UOTHER${index}` }));
+        }
+      } else if (outcome === "expired") {
+        now += 24 * 60 * 60 * 1_000;
+      } else if (outcome === "publish") {
+        now += 1;
+        monitor.observe(
+          createPrepared({ userId: "U123", channelId: "DNEW", sessionKey: "session:new" }),
+        );
+      }
+      reservation.resolve(true);
+      if (outcome !== "publish") {
+        await cleanupStarted.promise;
+        stopping ??= monitor.stop().then(() => {
+          stopSettled = true;
+        });
+        await Promise.resolve();
+        expect(stopSettled).toBe(false);
+        expect(wake).not.toHaveBeenCalled();
+        if (outcome === "replaced") {
+          await cooldownStore.register("default:workspace:U123", now + 1);
+        }
+        cleanup.resolve(true);
+      }
+      await polling;
+      await stopping;
+      if (outcome === "publish") {
+        expect(enqueue).toHaveBeenCalledWith(
+          expect.stringContaining('channel_id="DNEW"'),
+          expect.objectContaining({ sessionKey: "session:new" }),
+          expect.anything(),
+        );
+        expect(wake).toHaveBeenCalledOnce();
+      } else {
+        expect(stopSettled).toBe(true);
+        expect(enqueue).toHaveBeenCalledTimes(
+          outcome === "queue-refused" || outcome === "replaced" ? 1 : 0,
+        );
+        expect(await cooldownStore.lookup("default:workspace:U123")).toBe(
+          outcome === "replaced" ? now + 1 : undefined,
+        );
+        expect(wake).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps the cooldown until expiry when an older store lacks conditional deletion", async () => {
+    const cooldownStore: PluginStateKeyedStore<number> = createCooldownStore();
+    delete cooldownStore.deleteIf;
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto" },
+      client: {
+        getPresence: vi
+          .fn()
+          .mockResolvedValueOnce({ presence: "away" })
+          .mockResolvedValueOnce({ presence: "active" }),
+      } as never,
+      cooldownStore,
+      enqueue: () => false,
+      wake: vi.fn(),
+      nowMs: () => 1_000,
+    });
+    monitor.observe(createPrepared({ userId: "U123" }));
+    await monitor.pollOnce();
+    await monitor.pollOnce();
+    await monitor.stop();
+    expect(await cooldownStore.lookup("default:workspace:U123")).toBe(1_000);
+  });
+
+  it("does not publish when cooldown persistence rejects", async () => {
+    const cooldownStore = createCooldownStore();
+    cooldownStore.registerIfAbsent = vi.fn().mockRejectedValue(new Error("storage unavailable"));
+    const enqueue = vi.fn(() => true);
+    const wake = vi.fn();
+    const error = vi.fn();
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto" },
+      client: {
+        getPresence: vi
+          .fn()
+          .mockResolvedValueOnce({ presence: "away" })
+          .mockResolvedValueOnce({ presence: "active" }),
+      } as never,
+      cooldownStore,
+      enqueue,
+      wake,
+      error,
+    });
+    monitor.observe(createPrepared({ userId: "U123" }));
+    await monitor.pollOnce();
+    await monitor.pollOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(wake).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("cooldown persistence failed"));
   });
 
   it("quiesces an in-flight poll before stop returns", async () => {

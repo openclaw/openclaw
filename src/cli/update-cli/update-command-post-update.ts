@@ -128,16 +128,16 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   const publishFinalResult = async (failure?: unknown): Promise<UpdateRunResult> => {
     const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure);
     const result = completedResult(settled.result);
+    result.recovery = settled.settlementFailed ? undefined : result.recovery;
+    const reportDowntime = !settled.settlementFailed && pendingRestartAtMs === undefined;
     if (pendingNotify) {
-      await writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        result,
-        jsonMode: Boolean(params.opts.json),
-      });
+      const meta = params.controlPlaneUpdateSentinelMeta;
+      const jsonMode = Boolean(params.opts.json);
+      await writeControlPlaneUpdateRestartSentinelBestEffort({ meta, result, jsonMode });
     }
     return publishUpdateCommandTerminalResult(params, result, {
       rolledBack: rolledBack && !settled.settlementFailed,
-      downtimeMs: pendingRestartAtMs === undefined ? completedDowntimeMs : undefined,
+      downtimeMs: reportDowntime ? completedDowntimeMs : undefined,
     });
   };
   const deferredTerminal = deferUpdateCommandTerminalResult(params.opts.run, publishFinalResult);

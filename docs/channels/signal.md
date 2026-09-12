@@ -83,6 +83,8 @@ Minimal config:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
 
+If an account key such as `Work Phone` is listed as `work-phone` but reported unconfigured, run `openclaw doctor --fix` and restart the Gateway. Doctor preserves the account settings when moving an unambiguous key. If multiple keys normalize to the same account ID, or moving a key could change an account already using channel defaults, Doctor leaves it unchanged and asks you to review and rename it.
+
 Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
 ## What it is
