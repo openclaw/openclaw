@@ -52,6 +52,9 @@ results. See
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
+It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
+for policy checks, while using a temporary token and disabling Tailscale identity
+authentication.
 The activated Gateway retains your normal listener settings.
 
 Package updates also check npm availability for enabled configured plugins before
