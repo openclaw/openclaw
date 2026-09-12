@@ -142,7 +142,7 @@
   height: var(--shell-chrome-control-size);
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   color: var(--muted);
   box-shadow: var(--shadow-sm);
@@ -921,7 +921,7 @@ openclaw-settings-save-indicator:empty {
   padding: 0;
   flex-shrink: 0;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   transition:
@@ -2128,7 +2128,7 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 var(--sidebar-child-session-toggle-width, 31px);
   padding: 0 3px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
 }
@@ -3532,7 +3532,7 @@ a:is(
   height: 22px;
   flex: none;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
