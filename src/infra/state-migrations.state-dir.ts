@@ -4,6 +4,9 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveUserPath } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import { logStateMigrationResult } from "./state-migrations.messages.js";
 import {
@@ -69,11 +72,40 @@ export function resolvePendingLegacyProfileWorkspaceMigrationPaths(params: {
   return paths && lstatIfPresent(paths.source) ? paths : undefined;
 }
 
-export function migrateLegacyProfileWorkspace(params: {
+export function isLegacyProfileWorkspaceExplicitlyConfigured(params: {
+  config: OpenClawConfig;
+  source: string;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-}): { changes: string[]; warnings: string[] } {
-  const paths = resolveLegacyProfileWorkspaceMigrationPaths(params);
+}): boolean {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  const sourceIdentity = resolveIdentityPathViaExistingAncestorSync(params.source);
+  const agentWorkspaces = [
+    ...Object.values(params.config.agents?.entries ?? {}),
+    ...(params.config.agents?.list ?? []),
+  ].map((entry) => entry.workspace);
+  const configuredWorkspaces = [params.config.agents?.defaults?.workspace, ...agentWorkspaces];
+  return configuredWorkspaces.some((workspace) => {
+    const value = workspace?.trim();
+    if (!value) {
+      return false;
+    }
+    return (
+      resolveIdentityPathViaExistingAncestorSync(resolveUserPath(value, env, homedir)) ===
+      sourceIdentity
+    );
+  });
+}
+
+export function migrateLegacyProfileWorkspace(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { changes: string[]; warnings: string[]; notices?: string[] } {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  const paths = resolveLegacyProfileWorkspaceMigrationPaths({ env, homedir });
   if (!paths) {
     return { changes: [], warnings: [] };
   }
@@ -92,6 +124,25 @@ export function migrateLegacyProfileWorkspace(params: {
           `Profile workspace migration skipped: legacy path is not a directory (${legacyDir}).`,
         ],
       };
+    }
+    if (
+      params.config &&
+      isLegacyProfileWorkspaceExplicitlyConfigured({
+        config: params.config,
+        source: legacyDir,
+        env,
+        homedir,
+      })
+    ) {
+      return lstatIfPresent(targetDir)
+        ? {
+            changes: [],
+            warnings: [],
+            notices: [
+              `Profile workspace: keeping configured workspace at ${legacyDir}; existing workspace at ${targetDir} was left unchanged.`,
+            ],
+          }
+        : { changes: [], warnings: [] };
     }
     if (lstatIfPresent(targetDir)) {
       return {

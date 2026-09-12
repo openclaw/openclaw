@@ -164,6 +164,7 @@ import {
 } from "./state-migrations.shared-auth-store.js";
 import {
   autoMigrateLegacyStateDir,
+  isLegacyProfileWorkspaceExplicitlyConfigured,
   migrateLegacyProfileWorkspace,
   resolveLegacyProfileWorkspaceMigrationPaths,
   resolvePendingLegacyStateDirMigrationPaths,
@@ -1495,8 +1496,16 @@ function buildLegacyStateMigrationPreludeSteps(params: {
       ? resolveLegacyProfileWorkspaceMigrationPaths
       : resolvePendingLegacyProfileWorkspaceMigrationPaths
   )({ env: params.env, homedir: params.homedir });
+  const profileWorkspaceIsConfigured =
+    profileWorkspace !== undefined &&
+    isLegacyProfileWorkspaceExplicitlyConfigured({
+      config: params.config,
+      source: profileWorkspace.source,
+      env: params.env,
+      homedir: params.homedir,
+    });
   const profileRefusal =
-    profileWorkspace && params.readOnlyPlanning
+    profileWorkspace && params.readOnlyPlanning && !profileWorkspaceIsConfigured
       ? {
           code: "profile-workspace-snapshot-deferred",
           message:
@@ -1506,11 +1515,20 @@ function buildLegacyStateMigrationPreludeSteps(params: {
   steps.push(
     sharedStep(
       "profile-workspace",
-      profileWorkspace ? [{ kind: "path", path: profileWorkspace.source }] : [],
-      profileWorkspace ? [{ kind: "path", path: profileWorkspace.target }] : [],
-      () => migrateLegacyProfileWorkspace({ env: params.env, homedir: params.homedir }),
+      profileWorkspace && !profileWorkspaceIsConfigured
+        ? [{ kind: "path", path: profileWorkspace.source }]
+        : [],
+      profileWorkspace && !profileWorkspaceIsConfigured
+        ? [{ kind: "path", path: profileWorkspace.target }]
+        : [],
+      () =>
+        migrateLegacyProfileWorkspace({
+          config: params.config,
+          env: params.env,
+          homedir: params.homedir,
+        }),
       profileRefusal,
-      profileWorkspace ? "conditional" : "not-required",
+      profileWorkspace && !profileWorkspaceIsConfigured ? "conditional" : "not-required",
     ),
   );
   if (params.pluginPreparation) {
