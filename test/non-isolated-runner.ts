@@ -447,9 +447,12 @@ export async function drainMockerResolveMocks(
   mocker: SerializableMocker | undefined,
 ): Promise<void> {
   const state = (mocker as SerializedMocker | undefined)?.[SERIALIZED_RESOLVE_MOCKS];
-  if (!state) {
+  if (!state || !mocker?.resolveMocks) {
     return;
   }
+  // An unused vi.mock leaves BareModuleMocker's static queue idle; schedule one
+  // pass so file cleanup cannot lend that registration to the next file.
+  void mocker.resolveMocks();
   while (true) {
     const tail = state.tail;
     await tail;
