@@ -286,14 +286,6 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   return value;
 }
 
-/**
- * Serialize the form state for submission to `config.set` / `config.apply`.
- *
- * HTML `<input>` elements produce string `.value` properties, so numeric and
- * boolean config fields can leak into `configForm` as strings.  We coerce
- * them back to their schema-defined types before JSON serialization so the
- * gateway's Zod validation always sees correctly typed values.
- */
 export function serializeFormForSubmit(state: RuntimeConfigState): string {
   // A clean snapshot submits its raw bytes verbatim: reserializing the parsed
   // form would destroy JSON5 comments/formatting the file already has (the
@@ -301,30 +293,34 @@ export function serializeFormForSubmit(state: RuntimeConfigState): string {
   if (!state.configFormDirty && typeof state.configSnapshot?.raw === "string") {
     return state.configSnapshot.raw;
   }
+  const form = configFormForSubmit(state);
+  return form ? serializeConfigForm(form) : state.configRaw;
+}
+
+export function configFormForSubmit(state: RuntimeConfigState): Record<string, unknown> | null {
   if (state.configFormMode !== "form" || !state.configForm) {
-    return state.configRaw;
+    return null;
   }
   const schema = isRecord(state.configSchema) ? (state.configSchema as JsonSchema) : null;
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  const sanitized = sanitizeRedactedFormForSubmit(
+  return sanitizeRedactedFormForSubmit(
     form,
     state.configFormOriginal,
     state.configRawOriginalParsed,
   );
-  return serializeConfigForm(sanitized);
 }
+
+export type ConfigSubmittedDraft = { raw: string; form: Record<string, unknown> | null };
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
 
 export function replayConfigDraftEdits(
-  submittedRaw: string,
-  currentRaw: string,
+  submitted: Record<string, unknown> | null,
+  current: Record<string, unknown> | null,
   acknowledgedConfig: Record<string, unknown>,
 ): Record<string, unknown> | null {
-  const submitted = parseConfigRawDraft(submittedRaw);
-  const current = parseConfigRawDraft(currentRaw);
   if (!submitted || !current) {
     return null;
   }
@@ -354,16 +350,13 @@ export function replayConfigDraftEdits(
 // after dispatch are replayed; a reload is not needed to repair the receipt.
 export function adoptConfigSetAck(
   state: RuntimeConfigState,
-  submittedRaw: string,
+  submitted: ConfigSubmittedDraft,
   ack: ConfigWriteAck,
 ) {
   const currentRaw = serializeFormForSubmit(state);
   let draft: Record<string, unknown> | null = cloneConfigObject(ack.config);
-  if (currentRaw !== submittedRaw) {
-    draft =
-      state.configFormMode === "raw"
-        ? null
-        : replayConfigDraftEdits(submittedRaw, currentRaw, ack.config);
+  if (currentRaw !== submitted.raw) {
+    draft = replayConfigDraftEdits(submitted.form, configFormForSubmit(state), ack.config);
   }
   const acknowledgedRaw = serializeConfigForm(ack.config);
   state.configSnapshot = {

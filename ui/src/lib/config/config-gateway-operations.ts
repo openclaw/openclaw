@@ -9,6 +9,8 @@ import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import {
   adoptConfigSetAck,
+  configFormForSubmit,
+  type ConfigSubmittedDraft,
   applyConfigSnapshot,
   replayConfigDraftEdits,
   formatConfigMutationError,
@@ -362,7 +364,7 @@ function applyConfigSchema(state: RuntimeConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
-export type ConfigSubmission = { raw: string; ack: ConfigWriteAck | null };
+export type ConfigSubmission = ConfigSubmittedDraft & { ack: ConfigWriteAck | null };
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
 export async function submitConfigDraft(
@@ -396,6 +398,7 @@ export async function submitConfigDraft(
       return false;
     }
     const raw = serializeFormForSubmit(state);
+    const submitted = { raw, form: configFormForSubmit(state) };
     submittedFormRaw = state.configFormMode === "form" ? raw : null;
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
@@ -414,17 +417,17 @@ export async function submitConfigDraft(
       state.chatError = null;
     }
     // Dispatch bytes let reconnect recognize a committed write whose ack was lost.
-    onSubmitted?.({ raw, ack: null });
+    onSubmitted?.({ ...submitted, ack: null });
     const ack = await client.request<ConfigWriteAck>(
       mode === "apply" ? "config.apply" : "config.set",
       { raw, baseHash, ...(mode === "apply" ? { sessionKey: state.applySessionKey } : {}) },
     );
     // Report before the epoch fence: teardown can flush against this flight's ack.
-    onSubmitted?.({ raw, ack });
+    onSubmitted?.({ ...submitted, ack });
     if (!isCurrent()) {
       return false;
     }
-    adoptConfigSetAck(state, raw, ack);
+    adoptConfigSetAck(state, submitted, ack);
     state.configNeedsApply = mode !== "apply";
     if (mode === "apply") {
       state.configAutoSaveStatus = "idle";
@@ -466,7 +469,7 @@ export async function submitConfigDraft(
 export function teardownFlushConfigDraft(
   state: RuntimeConfigState,
   client: GatewayBrowserClient,
-  submittedRaw: string,
+  submitted: ConfigSubmittedDraft,
   ack: ConfigWriteAck,
   canDispatch: () => boolean,
 ): void {
@@ -478,7 +481,7 @@ export function teardownFlushConfigDraft(
   if (!canDispatch()) {
     return;
   }
-  const draft = replayConfigDraftEdits(submittedRaw, serializeFormForSubmit(state), ack.config);
+  const draft = replayConfigDraftEdits(submitted.form, configFormForSubmit(state), ack.config);
   if (draft) {
     void client
       .request("config.set", { raw: serializeConfigForm(draft), baseHash: ack.hash })

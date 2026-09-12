@@ -792,13 +792,13 @@ export function createConfigWriteCoordinator({
           // the document and revision for replaying that newer edit.
           const submitted = pendingFlight.submission;
           const ack = submitted?.ack ?? null;
-          const submittedRaw = submitted?.raw ?? null;
+
           // Bytes-vs-submission is the only trustworthy signal here: the
           // epoch guard blocked the ack's rebase, so a revert back to the
           // pre-save value reads configFormDirty=false while the persisted
           // bytes are still the unreverted submission.
-          if (ack && submittedRaw !== null && serializeFormForSubmit(state) !== submittedRaw) {
-            teardownFlushConfigDraft(state, client, submittedRaw, ack, () =>
+          if (ack && submitted && serializeFormForSubmit(state) !== submitted.raw) {
+            teardownFlushConfigDraft(state, client, submitted, ack, () =>
               canCallConfigMethod("config.set"),
             );
           }
