@@ -6,6 +6,7 @@ import {
   type SpanKind,
   type Tracer,
 } from "@opentelemetry/api";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -20,7 +21,8 @@ import {
 } from "./service-trace-context.js";
 import type { TrustedSpanAliasOwner } from "./service-types.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(tracer: Tracer, retainedAttributes: string[] = []) {
+  const retainedTraceAttributes = new Set(retainedAttributes);
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
@@ -68,7 +70,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     const span = tracer.startSpan(
       name,
       {
-        attributes: redactOtelAttributes(attributes),
+        attributes: redactOtelAttributes(attributes, retainedTraceAttributes),
         ...(options.kind !== undefined ? { kind: options.kind } : {}),
         ...(startTime !== undefined ? { startTime } : {}),
       },
@@ -288,7 +290,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     span: ReturnType<typeof tracer.startSpan>,
     attributes: Record<string, string | number | boolean>,
   ) => {
-    span.setAttributes?.(redactOtelAttributes(attributes));
+    span.setAttributes?.(redactOtelAttributes(attributes, retainedTraceAttributes));
   };
   const retainTrustedSpanContext = (
     traceId: string,
@@ -356,6 +358,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       runId?: string;
       sessionKey?: string;
       sessionId?: string;
+      agentId?: string;
       provider?: string;
       model?: string;
       channel?: string;
@@ -373,6 +376,15 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     if (evt.trigger) {
       spanAttrs["openclaw.trigger"] = evt.trigger;
+    }
+    if (evt.agentId) {
+      spanAttrs["openclaw.agent.id"] = normalizeDiagnosticValue(evt.agentId);
+    }
+    if (evt.sessionId) {
+      spanAttrs["openclaw.sessionId"] = evt.sessionId;
+    }
+    if (evt.sessionKey) {
+      spanAttrs["openclaw.sessionKey"] = evt.sessionKey;
     }
   };
 

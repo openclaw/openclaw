@@ -57,6 +57,8 @@ export type SkillUsagePath = {
   readPath: string;
   /** Canonical source SKILL.md path used as the lifecycle identity. */
   skillFile: string;
+  /** Immutable identity prepared when the source instructions were loaded. */
+  contentHash?: string;
   skillName: string;
   skillSource: SkillTelemetrySource;
 };

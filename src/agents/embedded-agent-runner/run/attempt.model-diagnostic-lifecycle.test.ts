@@ -31,12 +31,18 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagn
 
 const tempDirs = createTempDirTracker();
 
-async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
+type ModelCallEvent = Extract<DiagnosticEventPayload, { type: `model.call.${string}` }>;
+
+async function collectModelCallEvents(run: () => Promise<void>): Promise<ModelCallEvent[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
   // events and flush one tick after the stream completes.
-  const events: DiagnosticEventPayload[] = [];
+  const events: ModelCallEvent[] = [];
   const stop = onInternalDiagnosticEvent((event) => {
-    if (event.type.startsWith("model.call.")) {
+    if (
+      event.type === "model.call.started" ||
+      event.type === "model.call.completed" ||
+      event.type === "model.call.error"
+    ) {
       events.push(event);
     }
   });
@@ -141,6 +147,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       });
       const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => originalStream, {
         runId: "run-explicit-result",
+        agentId: "agent-explicit-result",
         provider: "openai",
         model: "gpt-5.4",
         trace: createDiagnosticTraceContext(),
@@ -160,6 +167,11 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       expect(onTerminal).toHaveBeenCalledOnce();
       expect(onSucceeded).toHaveBeenCalledTimes(stopReason === "stop" ? 1 : 0);
       expect(events.filter((event) => event.type === "model.call.completed")).toHaveLength(1);
+      expect(
+        events
+          .filter((event) => event.type.startsWith("model.call."))
+          .map((event) => event.agentId),
+      ).toEqual(["agent-explicit-result", "agent-explicit-result"]);
     },
   );
 

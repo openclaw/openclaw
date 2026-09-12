@@ -40,6 +40,7 @@ export type {
 } from "../infra/diagnostic-events.js";
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
+  MAX_DIAGNOSTIC_CONTENT_CHARS,
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,

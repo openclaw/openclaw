@@ -556,9 +556,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracer = active.traceProvider
         ? active.traceProvider.getTracer("openclaw")
         : trace.getTracer("openclaw");
-      const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer);
+      const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer, otel.traceAttributes);
       active.stopActiveTrustedSpans = diagnosticsTrace.stopActiveTrustedSpans;
-      const diagnosticMetrics = createDiagnosticsMetrics(meter, otel.metricNamePrefix);
+      const diagnosticMetrics = createDiagnosticsMetrics(
+        meter,
+        otel.metricNamePrefix,
+        otel.metricAttributes,
+      );
 
       const diagnosticsLogs = createDiagnosticsLogExporter({
         contentCapturePolicy,
@@ -573,6 +577,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         logUrl,
         resource,
         serviceName,
+        retainedAttributes: otel.logAttributes,
       });
       active.logProvider = diagnosticsLogs.logProvider;
       const { recordLogRecord, recordSecurityEvent } = diagnosticsLogs;
@@ -582,6 +587,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metrics: diagnosticMetrics,
         traces: diagnosticsTrace,
         tracesEnabled: tracesActive,
+        skillContentHash: otel.skillContentHash === true,
       });
       const recorders = {
         ...createUsageRecorders(recorderRuntime),

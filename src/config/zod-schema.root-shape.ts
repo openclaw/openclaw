@@ -103,6 +103,10 @@ export const OpenClawSchemaShape = {
           sampleRate: z.number().min(0).max(1).optional(),
           flushIntervalMs: z.number().int().nonnegative().optional(),
           captureContent: z.boolean().optional(),
+          skillContentHash: z.boolean().optional(),
+          traceAttributes: z.array(z.string()).optional(),
+          logAttributes: z.array(z.string()).optional(),
+          metricAttributes: z.array(z.string()).optional(),
         })
         .optional(),
       cacheTrace: z.strictObject({ enabled: z.boolean().optional() }).optional(),

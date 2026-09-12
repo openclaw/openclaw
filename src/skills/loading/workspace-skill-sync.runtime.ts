@@ -316,6 +316,7 @@ export async function syncWorkspaceSkills(params: {
           path.relative(entry.skill.baseDir, entry.skill.filePath),
         ),
         skillFile: canonicalizePath(entry.skill.filePath),
+        ...(entry.skill.contentHash ? { contentHash: entry.skill.contentHash } : {}),
         skillName: entry.skill.name,
         skillSource: resolveSkillTelemetrySource(entry.skill),
       });

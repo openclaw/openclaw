@@ -396,6 +396,14 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
   "diagnostics.otel.captureContent":
     "Opt-in OTEL span content capture. Defaults to off; true captures non-system message and tool content.",
+  "diagnostics.otel.skillContentHash":
+    "Opt in to content-derived skill version attributes on skill-used trace spans. Defaults to off to avoid filesystem hashing during skill use.",
+  "diagnostics.otel.traceAttributes":
+    "Diagnostic attribute names to retain on trace spans when the privacy filter omits them by default.",
+  "diagnostics.otel.logAttributes":
+    "Diagnostic attribute names to retain on exported logs when the privacy filter omits them by default.",
+  "diagnostics.otel.metricAttributes":
+    "Diagnostic attribute names to retain on metrics when the cardinality filter omits them by default.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "tools.exec.applyPatch.enabled":

@@ -15,6 +15,7 @@ import {
 } from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { joinDiagnosticContent } from "../../infra/diagnostic-content.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -57,6 +58,15 @@ import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
+
+function captureDiagnosticResponse(payloads: readonly ReplyPayload[]): string | undefined {
+  const responseParts = payloads
+    .filter((payload) => payload.isReasoning !== true && payload.isCommentary !== true)
+    .flatMap((payload) =>
+      typeof payload.text === "string" && payload.text.trim() ? [payload.text] : [],
+    );
+  return joinDiagnosticContent(responseParts, "…[truncated]");
+}
 
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
@@ -428,6 +438,10 @@ export async function prepareReplyAgentPayloads(state: {
       (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
       (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true),
   );
+  const diagnosticResponse = captureDiagnosticResponse(payloadCandidates);
+  if (diagnosticResponse !== undefined) {
+    opts?.onDiagnosticResponse?.(diagnosticResponse);
+  }
   const payloadResult = await buildFinalPayloads(payloadCandidates);
   let { replyPayloads } = payloadResult;
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;

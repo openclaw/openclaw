@@ -4,13 +4,16 @@ import { resolveCompactionTimeoutMs } from "../agents/embedded-agent-runner/comp
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { truncateDiagnosticContent } from "../infra/diagnostic-content.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  emitInternalDiagnosticEventWithPrivateData,
   isDiagnosticsEnabled,
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
@@ -754,6 +757,8 @@ export function logMessageProcessed(params: {
   outcome: "completed" | "skipped" | "error";
   reason?: string;
   error?: string;
+  userPrompt?: string;
+  finalResponse?: string;
 }) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
@@ -775,8 +780,8 @@ export function logMessageProcessed(params: {
       diag.debug(payload);
     }
   }
-  emitDiagnosticEvent({
-    type: "message.processed",
+  const messageProcessedEvent = {
+    type: "message.processed" as const,
     channel: params.channel,
     chatId: params.chatId,
     messageId: params.messageId,
@@ -786,7 +791,26 @@ export function logMessageProcessed(params: {
     outcome: params.outcome,
     reason: params.reason,
     error: params.error,
-  });
+  };
+  // Gate each message content field on its own captureContent policy field so that
+  // enabling input capture does not leak output text and vice versa.
+  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+  const messageContent: { userPrompt?: string; finalResponse?: string } | undefined =
+    contentPolicy.inputMessages || contentPolicy.outputMessages
+      ? {
+          ...(contentPolicy.inputMessages && params.userPrompt !== undefined
+            ? { userPrompt: truncateDiagnosticContent(params.userPrompt) }
+            : {}),
+          ...(contentPolicy.outputMessages && params.finalResponse !== undefined
+            ? { finalResponse: truncateDiagnosticContent(params.finalResponse) }
+            : {}),
+        }
+      : undefined;
+  const hasContent = messageContent !== undefined && Object.keys(messageContent).length > 0;
+  emitInternalDiagnosticEventWithPrivateData(
+    messageProcessedEvent,
+    hasContent ? { messageContent } : undefined,
+  );
   markActivity();
 }
 

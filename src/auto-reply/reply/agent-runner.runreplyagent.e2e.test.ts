@@ -4985,6 +4985,36 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
   });
 
+  it.each([false, true])(
+    "captures the bounded final response before delivery deduplication when streamed=%s",
+    async (streamed) => {
+      const response = "diagnostic response";
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        if (streamed) {
+          await params.onBlockReply?.({ text: response });
+        }
+        return { payloads: [{ text: response }], meta: {} };
+      });
+      const onDiagnosticResponse = vi.fn();
+      const { run } = createMinimalRun({
+        opts: { onDiagnosticResponse },
+        blockStreamingEnabled: streamed,
+        runOverrides: {
+          config: {
+            diagnostics: {
+              enabled: true,
+              otel: { enabled: true, traces: true, captureContent: true },
+            },
+          },
+        },
+      });
+
+      await run();
+
+      expect(onDiagnosticResponse).toHaveBeenCalledExactlyOnceWith(response);
+    },
+  );
+
   it("delivers one bounded status for an accepted child continuation", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "I’m continuing this work and will send the result when it is ready." }],

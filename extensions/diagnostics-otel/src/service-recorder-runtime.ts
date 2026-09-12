@@ -7,11 +7,13 @@ export function createDiagnosticsRecorderRuntime(params: {
   metrics: DiagnosticsMetrics;
   traces: DiagnosticsTraceRuntime;
   tracesEnabled: boolean;
+  skillContentHash: boolean;
 }) {
   return {
     ...params.metrics,
     ...params.traces,
     contentCapturePolicy: params.contentCapturePolicy,
+    skillContentHash: params.skillContentHash,
     tracesEnabled: params.tracesEnabled,
   };
 }

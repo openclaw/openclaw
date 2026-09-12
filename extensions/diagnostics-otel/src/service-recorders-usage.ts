@@ -1,7 +1,15 @@
 import { SpanStatusCode } from "@opentelemetry/api";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
+} from "../api.js";
+import {
+  MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
+  normalizeOtelLogString,
+} from "./service-content-normalization.js";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
@@ -45,6 +53,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     setSpanAttrs,
     completeTrackedLifecycleSpan,
     addRunAttrs,
+    contentCapturePolicy,
     tracesEnabled,
   } = runtime;
 
@@ -81,13 +90,22 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
     }
     if (usage.cacheRead) {
-      tokensCounter.add(usage.cacheRead, { ...attrs, "openclaw.token": "cache_read" });
+      tokensCounter.add(usage.cacheRead, {
+        ...attrs,
+        "openclaw.token": "cache_read",
+      });
     }
     if (usage.cacheWrite) {
-      tokensCounter.add(usage.cacheWrite, { ...attrs, "openclaw.token": "cache_write" });
+      tokensCounter.add(usage.cacheWrite, {
+        ...attrs,
+        "openclaw.token": "cache_write",
+      });
     }
     if (usage.promptTokens) {
-      tokensCounter.add(usage.promptTokens, { ...attrs, "openclaw.token": "prompt" });
+      tokensCounter.add(usage.promptTokens, {
+        ...attrs,
+        "openclaw.token": "prompt",
+      });
     }
     if (usage.total) {
       tokensCounter.add(usage.total, { ...attrs, "openclaw.token": "total" });
@@ -129,6 +147,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       spanAttrs["openclaw.plugin"] = normalizeDiagnosticValue(hostPluginId);
     }
     assignGenAiSpanIdentityAttrs(spanAttrs, evt);
+    addRunAttrs(spanAttrs, evt);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.cache_read.input_tokens", usage.cacheRead);
@@ -232,10 +251,12 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     if (!traceContext?.spanId || activeTrustedSpans.has(traceContext.spanId)) {
       return;
     }
+    const dispatchSpanAttrs: Record<string, string | number> = { ...attrs };
+    addRunAttrs(dispatchSpanAttrs, evt);
     trackInternalOrTrustedSpan(
       evt,
       metadata,
-      spanWithDuration("openclaw.message.processed", attrs, undefined, {
+      spanWithDuration("openclaw.message.processed", dispatchSpanAttrs, undefined, {
         parentContext: internalOrTrustedExplicitParentContext(evt, metadata),
         startTimeMs: evt.ts,
       }),
@@ -258,6 +279,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
   const recordMessageProcessed = (
     evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
     metadata: DiagnosticEventMetadata,
+    privateData: DiagnosticEventPrivateData,
   ) => {
     const attrs = {
       "openclaw.channel": normalizeDiagnosticValue(evt.channel),
@@ -271,8 +293,21 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       return;
     }
     const spanAttrs: Record<string, string | number> = { ...attrs };
+    addRunAttrs(spanAttrs, evt);
     if (evt.reason) {
       spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
+    }
+    if (contentCapturePolicy.inputMessages && privateData.messageContent?.userPrompt) {
+      spanAttrs["input.value"] = normalizeOtelLogString(
+        privateData.messageContent.userPrompt,
+        MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
+      );
+    }
+    if (contentCapturePolicy.outputMessages && privateData.messageContent?.finalResponse) {
+      spanAttrs["output.value"] = normalizeOtelLogString(
+        privateData.messageContent.finalResponse,
+        MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
+      );
     }
     const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
     const span =
@@ -283,7 +318,10 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
     setSpanAttrs(span, spanAttrs);
     if (evt.outcome === "error" && evt.error) {
-      span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: redactSensitiveText(evt.error),
+      });
     }
     const traceContext = internalOrTrustedTraceContext(evt, metadata);
     if (trackedSpan && traceContext?.spanId) {
@@ -323,7 +361,10 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.delivery.result_count": evt.resultCount,
       },
       evt.durationMs,
-      { parentContext: activeInternalOrTrustedContext(evt, metadata), endTimeMs: evt.ts },
+      {
+        parentContext: activeInternalOrTrustedContext(evt, metadata),
+        endTimeMs: evt.ts,
+      },
     );
     span.end(evt.ts);
   };

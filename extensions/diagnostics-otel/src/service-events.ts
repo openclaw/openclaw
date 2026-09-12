@@ -119,7 +119,7 @@ export function createDiagnosticsEventHandler(params: {
           recordMessageDispatchCompleted(evt);
           return;
         case "message.processed":
-          recordMessageProcessed(evt, metadata);
+          recordMessageProcessed(evt, metadata, privateData);
           return;
         case "message.delivery.started":
           recordMessageDeliveryStarted(evt);
@@ -180,7 +180,7 @@ export function createDiagnosticsEventHandler(params: {
           recordRunCompleted(evt, metadata, privateData);
           return;
         case "harness.run.started":
-          recordHarnessRunStarted(evt, metadata);
+          recordHarnessRunStarted(evt, metadata, privateData);
           return;
         case "harness.run.completed":
           recordHarnessRunCompleted(evt, metadata, privateData);
@@ -209,7 +209,7 @@ export function createDiagnosticsEventHandler(params: {
           recordToolExecutionBlocked(evt, metadata);
           return;
         case "skill.used":
-          recordSkillUsed(evt, metadata);
+          recordSkillUsed(evt, metadata, privateData.skillUsage);
           return;
         case "exec.process.completed":
           recordExecProcessCompleted(evt, metadata);

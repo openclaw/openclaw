@@ -198,6 +198,14 @@ export type DiagnosticsOtelConfig = {
   flushIntervalMs?: number;
   /** Opt in to raw non-system message/tool content in OTEL span attributes. */
   captureContent?: boolean;
+  /** Compute content-derived skill versions for skill-used trace spans. Default: false. */
+  skillContentHash?: boolean;
+  /** Diagnostic attribute names to retain on traces even when omitted by default. */
+  traceAttributes?: string[];
+  /** Diagnostic attribute names to retain on logs even when omitted by default. */
+  logAttributes?: string[];
+  /** Diagnostic attribute names to retain on metrics even when omitted by default. */
+  metricAttributes?: string[];
 };
 
 export type DiagnosticsCacheTraceConfig = {

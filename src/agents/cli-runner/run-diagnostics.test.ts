@@ -56,6 +56,7 @@ describe("Claude CLI run diagnostics", () => {
         runClaudeCliAgentTurnWithDiagnostics(
           {
             runId,
+            agentId: "test-claude-agent",
             sessionId: "session-1",
             sessionKey: "agent:test-claude-agent:main",
             modelProvider: "anthropic",
@@ -130,10 +131,12 @@ describe("Claude CLI run diagnostics", () => {
     const modelStarted = diagnostics.events.find(({ event }) => event.type === "model.call.started")
       ?.event as Extract<DiagnosticEventPayload, { type: "model.call.started" }>;
     expect(harnessStarted.harnessId).toBe("claude-cli");
+    expect(harnessStarted.agentId).toBe("test-claude-agent");
     expect(harnessStarted.provider).toBe("anthropic");
     expect(harnessStarted.trace?.traceId).toBe(parentTrace.traceId);
     expect(harnessStarted.trace?.parentSpanId).toBe(parentTrace.spanId);
     expect(runStarted.trace?.parentSpanId).toBe(harnessStarted.trace?.spanId);
+    expect(runStarted.agentId).toBe("test-claude-agent");
     expect(modelStarted.trace?.parentSpanId).toBe(runStarted.trace?.spanId);
     expect(modelStarted.observationUnit).toBe("turn");
     expect(callbackTrace).toEqual(runStarted.trace);

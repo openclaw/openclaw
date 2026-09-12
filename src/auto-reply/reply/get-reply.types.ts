@@ -49,6 +49,8 @@ type InternalReplySessionOptions = {
   onDeliberateSilentTerminalReply?: () => void;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  /** Receives bounded response text before delivery-only payload deduplication. */
+  onDiagnosticResponse?: (response: string) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Publishes each executing turn's preferences without persisting them to its session. */
   onRunVerbosityResolved?: (settings: ReplyRunVerbosity) => void;

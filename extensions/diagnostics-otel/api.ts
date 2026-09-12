@@ -7,6 +7,7 @@ export {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
+  MAX_DIAGNOSTIC_CONTENT_CHARS,
   onDiagnosticEvent,
   parseDiagnosticTraceparent,
   type DiagnosticEventMetadata,

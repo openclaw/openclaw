@@ -9,6 +9,7 @@ import type {
 export type InternalReplyResolverOptions = {
   onDeliberateSilentTerminalReply?: () => void;
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  onDiagnosticResponse?: (response: string) => void;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   onRunVerbosityResolved?: InternalGetReplyOptions["onRunVerbosityResolved"];

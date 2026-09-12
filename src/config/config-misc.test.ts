@@ -448,7 +448,7 @@ describe("models.catalogRefresh", () => {
   });
 });
 
-describe("diagnostics.otel.captureContent", () => {
+describe("diagnostics.otel privacy controls", () => {
   it("accepts supported OTEL log exporters and rejects unknown values", () => {
     for (const logsExporter of ["otlp", "stdout", "both"]) {
       const result = OpenClawSchema.safeParse({
@@ -484,6 +484,20 @@ describe("diagnostics.otel.captureContent", () => {
       });
       expect(result.success).toBe(true);
     }
+  });
+
+  it("accepts default-off skill hashing and per-signal attribute lists", () => {
+    const result = OpenClawSchema.safeParse({
+      diagnostics: {
+        otel: {
+          skillContentHash: true,
+          traceAttributes: ["openclaw.sessionId"],
+          logAttributes: ["openclaw.runId"],
+          metricAttributes: ["openclaw.agent.id"],
+        },
+      },
+    });
+    expect(result.success).toBe(true);
   });
 });
 

@@ -15,10 +15,13 @@ import { normalizeOtelLogString } from "./service-content-normalization.js";
 import type { OtelContentCapturePolicy } from "./service-content-normalization.js";
 import type { SecuritySeverityText } from "./service-types.js";
 
-export function redactOtelAttributes(attributes: Record<string, string | number | boolean>) {
+export function redactOtelAttributes(
+  attributes: Record<string, string | number | boolean>,
+  retainedAttributes: ReadonlySet<string> = new Set(),
+) {
   const redactedAttributes: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(attributes)) {
-    if (DROPPED_OTEL_ATTRIBUTE_KEYS.has(key)) {
+    if (DROPPED_OTEL_ATTRIBUTE_KEYS.has(key) && !retainedAttributes.has(key)) {
       continue;
     }
     redactedAttributes[key] = typeof value === "string" ? redactSensitiveText(value) : value;

@@ -42,6 +42,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     addRunAttrs,
     paramsSummaryAttrs,
     contentCapturePolicy,
+    skillContentHash,
     tracesEnabled,
   } = runtime;
 
@@ -81,6 +82,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
   const recordSkillUsed = (
     evt: Extract<DiagnosticEventPayload, { type: "skill.used" }>,
     metadata: DiagnosticEventMetadata,
+    privateData?: { skillFile: string; contentHash?: string },
   ) => {
     if (!metadata.trusted) {
       return;
@@ -91,6 +93,9 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       return;
     }
     const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+    if (skillContentHash && privateData?.contentHash) {
+      spanAttrs["openclaw.skill.version"] = `sha256:${privateData.contentHash.slice(0, 16)}`;
+    }
     addRunAttrs(spanAttrs, evt);
     const span = spanWithDuration("openclaw.skill.used", spanAttrs, 0, {
       parentContext: activeTrustedParentContext(evt, metadata),

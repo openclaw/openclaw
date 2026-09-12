@@ -187,6 +187,7 @@ export async function runCronIsolatedAgentTurn(
 
           let outcome: "completed" | "error" = "completed";
           let outcomeError: string | undefined;
+          let finalizedOutputText: string | undefined;
           let cronRunSessionCleanupHandled = false;
           // The execution owner spans fallback and interim-ack retries. Individual
           // attempts must not retire the shared run before that execution settles.
@@ -294,6 +295,8 @@ export async function runCronIsolatedAgentTurn(
               outcome = "error";
               outcomeError = finalized.error;
             }
+            finalizedOutputText =
+              typeof finalized.outputText === "string" ? finalized.outputText : undefined;
             const delayMs = consumeCronNextCheckProposal(initialSessionId, params.job.id);
             return finalized.status !== "ok" || delayMs === undefined
               ? finalized
@@ -357,6 +360,8 @@ export async function runCronIsolatedAgentTurn(
               messageLifecycle.markProcessed(outcome, {
                 ...finalSessionRef,
                 error: outcomeError,
+                userPrompt: prepared.context.commandBody || undefined,
+                finalResponse: finalizedOutputText,
               });
             } finally {
               try {

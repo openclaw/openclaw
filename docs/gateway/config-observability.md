@@ -118,6 +118,10 @@ writer is best-effort, not a lossless compliance archive.
       sampleRate: 1.0,
       flushIntervalMs: 5000,
       captureContent: false,
+      skillContentHash: false,
+      traceAttributes: [],
+      logAttributes: [],
+      metricAttributes: [],
     },
 
     cacheTrace: {
@@ -140,6 +144,8 @@ writer is best-effort, not a lossless compliance archive.
 - `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in content capture for OTEL span attributes. Defaults to off. `true` captures non-system visible message, tool, and tool-definition content plus OTLP log bodies; provider-internal thinking payloads remain excluded.
+- `otel.skillContentHash`: opt-in content-derived versions on skill-used trace spans. Defaults to off; diagnostics alone never enables hashing.
+- `otel.traceAttributes` / `otel.logAttributes` / `otel.metricAttributes`: signal-specific lists of attribute names to retain despite the default privacy/cardinality filter. Keep identifier attributes out of metrics unless their cardinality is bounded.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of legacy `gen_ai.system`. By default spans keep `openclaw.model.call` and `gen_ai.system` for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.

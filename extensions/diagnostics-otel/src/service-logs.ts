@@ -56,6 +56,7 @@ export function createDiagnosticsLogExporter(params: {
   logUrl?: string;
   resource: Resource;
   serviceName: string;
+  retainedAttributes?: string[];
 }) {
   const {
     contentCapturePolicy,
@@ -70,7 +71,9 @@ export function createDiagnosticsLogExporter(params: {
     logUrl,
     resource,
     serviceName,
+    retainedAttributes = [],
   } = params;
+  const retainedLogAttributes = new Set(retainedAttributes);
   let logProvider: LoggerProvider | null = null;
   const logSeverityMap = LOG_SEVERITY_MAP;
   let recordLogRecord:
@@ -208,7 +211,7 @@ export function createDiagnosticsLogExporter(params: {
         body,
         severityText: logLevelName,
         severityNumber,
-        attributes: redactOtelAttributes(attributes),
+        attributes: redactOtelAttributes(attributes, retainedLogAttributes),
         timestamp: evt.ts,
       };
       const logContext = contextForTrustedTraceContext(evt, metadata);
@@ -231,7 +234,7 @@ export function createDiagnosticsLogExporter(params: {
         body: "openclaw.security.event",
         severityText,
         severityNumber: logSeverityMap[severityText] ?? (9 as SeverityNumber),
-        attributes: redactOtelAttributes(attributes),
+        attributes: redactOtelAttributes(attributes, retainedLogAttributes),
         timestamp: evt.ts,
       };
       const logContext = contextForTrustedTraceContext(evt, metadata);

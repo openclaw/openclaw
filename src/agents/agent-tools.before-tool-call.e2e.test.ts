@@ -1550,13 +1550,16 @@ describe("before_tool_call loop detection behavior", () => {
         prompt: "",
         skills: [{ name: "demo-skill" }],
         resolvedSkills: [
-          createCanonicalFixtureSkill({
-            name: "demo-skill",
-            description: "Demo",
-            filePath: skillFilePath,
-            baseDir: skillBaseDir,
-            source: "workspace",
-          }),
+          {
+            ...createCanonicalFixtureSkill({
+              name: "demo-skill",
+              description: "Demo",
+              filePath: skillFilePath,
+              baseDir: skillBaseDir,
+              source: "workspace",
+            }),
+            contentHash: "a".repeat(64),
+          },
         ],
       },
       loopDetection: { enabled: false },
@@ -1592,6 +1595,7 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain("SKILL.md");
       expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
+      expect(privateData[0]?.skillUsage?.contentHash).toBe("a".repeat(64));
       expect(consumeRunSkillUsage("run-1")).toEqual([
         {
           name: "demo-skill",

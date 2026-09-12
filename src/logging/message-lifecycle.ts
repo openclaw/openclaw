@@ -12,6 +12,8 @@ type MessageLifecycleProcessedOptions = MessageLifecycleRef & {
   durationMs?: number;
   reason?: string;
   error?: string;
+  userPrompt?: string;
+  finalResponse?: string;
 };
 
 export function createDiagnosticMessageLifecycle(
@@ -24,6 +26,7 @@ export function createDiagnosticMessageLifecycle(
     processingReason?: string;
     startedAtMs?: number;
     trackSessionState: boolean;
+    userPrompt?: string;
   },
 ) {
   const startedAtMs = params.startedAtMs ?? Date.now();
@@ -89,6 +92,8 @@ export function createDiagnosticMessageLifecycle(
         outcome,
         reason: options?.reason,
         error: options?.error,
+        userPrompt: options?.userPrompt ?? params.userPrompt,
+        finalResponse: options?.finalResponse,
       });
     },
   };

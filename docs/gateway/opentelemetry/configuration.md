@@ -58,6 +58,10 @@ paths.
       sampleRate: 0.2, // root-span sampler, 0.0..1.0
       flushIntervalMs: 60000, // metric export interval (min 1000ms)
       captureContent: false,
+      skillContentHash: false, // opt in to content-derived skill versions
+      traceAttributes: [], // retain named attributes normally filtered from traces
+      logAttributes: [], // retain named attributes normally filtered from logs
+      metricAttributes: [], // retain named attributes normally filtered from metrics
     },
   },
 }
@@ -74,6 +78,16 @@ semantic-convention metrics such as
 original names. Leave the option unset to preserve every current metric name.
 Enabling or changing this option renames the affected metric series, so update
 dashboards, alerts, and recording rules that query the old names.
+
+`skillContentHash` adds `openclaw.skill.version` to `openclaw.skill.used`
+trace spans. It hashes the skill instructions and support files only when the
+setting is `true`; enabling diagnostics or OTel alone does not perform this
+filesystem work.
+
+The three signal-specific attribute lists opt named attributes back into that
+signal after its default privacy/cardinality filter. Keep the lists narrow:
+identifiers suitable for traces can create excessive metric cardinality or
+expose correlation data in logs.
 
 ### Environment variables
 

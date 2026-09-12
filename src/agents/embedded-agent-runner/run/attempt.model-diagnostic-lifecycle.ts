@@ -38,6 +38,7 @@ import type { StreamFn } from "../../runtime/index.js";
 
 export type ModelCallDiagnosticContext = {
   runId: string;
+  agentId?: string;
   sessionKey?: string;
   sessionId?: string;
   provider: string;
@@ -128,6 +129,7 @@ function baseModelCallEvent(
 ): ModelCallEventBase {
   return {
     runId: ctx.runId,
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     callId,
     ...(ctx.sessionKey && { sessionKey: ctx.sessionKey }),
     ...(ctx.sessionId && { sessionId: ctx.sessionId }),
@@ -235,6 +237,7 @@ function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelC
 function modelCallHookContext(eventBase: ModelCallEventBase): PluginHookAgentContext {
   return Object.freeze({
     runId: eventBase.runId,
+    ...(eventBase.agentId ? { agentId: eventBase.agentId } : {}),
     trace: eventBase.trace,
     ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
     ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),

@@ -1,8 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { recordCommandPoll } from "../agents/command-poll-backoff.js";
 import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
+  MAX_DIAGNOSTIC_CONTENT_CHARS,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
@@ -20,11 +23,46 @@ import {
   stopDiagnosticHeartbeat,
 } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
+import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticStateForTest();
   setDiagnosticsEnabledForProcess(true);
   vi.useRealTimers();
+});
+
+it("bounds captured message content before diagnostic dispatch", () => {
+  setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+  const oversizedContent = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
+  const captured: Array<{ userPrompt?: string; finalResponse?: string }> = [];
+  const unsubscribe = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (event.type === "message.processed" && privateData.messageContent) {
+      captured.push(privateData.messageContent);
+    }
+  });
+  try {
+    const lifecycle = createDiagnosticMessageLifecycle({
+      enabled: true,
+      channel: "test",
+      source: "test",
+      trackSessionState: false,
+      userPrompt: oversizedContent,
+    });
+    lifecycle.markProcessed("completed", { finalResponse: oversizedContent });
+  } finally {
+    unsubscribe();
+  }
+
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.userPrompt?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+  expect(captured[0]?.finalResponse?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+  expect(captured[0]?.userPrompt?.charCodeAt((captured[0]?.userPrompt?.length ?? 0) - 1)).not.toBe(
+    0xd83d,
+  );
+  expect(
+    captured[0]?.finalResponse?.charCodeAt((captured[0]?.finalResponse?.length ?? 0) - 1),
+  ).not.toBe(0xd83d);
 });
 
 it("preserves independent tool-loop and poll-backoff policy when diagnostic observation stops", () => {

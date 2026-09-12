@@ -1,9 +1,11 @@
 // Verifies harness lifecycle capability checks, diagnostics, and trace scoping.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
+  MAX_DIAGNOSTIC_CONTENT_CHARS,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPrivateData,
@@ -158,6 +160,7 @@ function captureDiagnosticEvents(
 
 describe("AgentHarness lifecycle runner", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     resetDiagnosticEventsForTest();
   });
 
@@ -480,6 +483,33 @@ describe("AgentHarness lifecycle runner", () => {
       activeCount: 1,
     });
     expect(typeof completedEvent?.durationMs).toBe("number");
+  });
+
+  it("bounds captured harness prompts and responses before diagnostic dispatch", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const oversizedContent = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
+    const params = { ...createAttemptParams(), prompt: oversizedContent };
+    const result = { ...createAttemptResult(), assistantTexts: [oversizedContent] };
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleAttempt(harness, params);
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    const startedPrompt = diagnostics.events[0]?.privateData.harnessContent?.userPrompt;
+    const completedResponse = diagnostics.events[1]?.privateData.harnessContent?.finalResponse;
+    expect(startedPrompt?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+    expect(completedResponse?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+    expect(startedPrompt?.charCodeAt((startedPrompt?.length ?? 0) - 1)).not.toBe(0xd83d);
+    expect(completedResponse?.charCodeAt((completedResponse?.length ?? 0) - 1)).not.toBe(0xd83d);
   });
 
   it("reports canonical timeout attempts as timed out harness diagnostics", async () => {

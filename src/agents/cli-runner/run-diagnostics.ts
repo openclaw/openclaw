@@ -29,6 +29,7 @@ export type ClaudeCliRunDiagnosticLifecycle = {
 type ClaudeCliRunDiagnosticParams = Pick<
   RunCliAgentParams,
   | "abortSignal"
+  | "agentId"
   | "messageChannel"
   | "messageProvider"
   | "model"
@@ -43,6 +44,7 @@ function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticT
   const channel = params.messageChannel ?? params.messageProvider;
   return {
     runId: params.runId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     provider: params.modelProvider ?? "anthropic",

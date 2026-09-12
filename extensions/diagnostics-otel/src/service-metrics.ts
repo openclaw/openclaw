@@ -1,9 +1,10 @@
-import type { Meter, MetricOptions } from "@opentelemetry/api";
+import type { Attributes, Counter, Histogram, Meter, MetricOptions } from "@opentelemetry/api";
 import {
   AGENT_DURATION_MS_BUCKETS,
   CONTEXT_TOKENS_BUCKETS,
   GEN_AI_OPERATION_DURATION_BUCKETS,
   GEN_AI_TOKEN_USAGE_BUCKETS,
+  DROPPED_OTEL_ATTRIBUTE_KEYS,
 } from "./service-constants.js";
 
 const DEFAULT_METRIC_NAME_PREFIX = "openclaw.";
@@ -11,13 +12,43 @@ const DEFAULT_METRIC_NAME_PREFIX = "openclaw.";
 export function createDiagnosticsMetrics(
   meter: Meter,
   metricNamePrefix = DEFAULT_METRIC_NAME_PREFIX,
+  retainedAttributes: string[] = [],
 ) {
+  const retainedMetricAttributes = new Set(retainedAttributes);
+  const filterAttributes = (attributes?: Attributes): Attributes | undefined =>
+    attributes
+      ? Object.fromEntries(
+          Object.entries(attributes).filter(
+            ([key]) => !DROPPED_OTEL_ATTRIBUTE_KEYS.has(key) || retainedMetricAttributes.has(key),
+          ),
+        )
+      : undefined;
+  const wrapCounter = (counter: Counter): Counter => ({
+    add(value, attributes, context) {
+      const filtered = filterAttributes(attributes);
+      if (context) {
+        counter.add(value, filtered, context);
+      } else {
+        counter.add(value, filtered);
+      }
+    },
+  });
+  const wrapHistogram = (histogram: Histogram): Histogram => ({
+    record(value, attributes, context) {
+      const filtered = filterAttributes(attributes);
+      if (context) {
+        histogram.record(value, filtered, context);
+      } else {
+        histogram.record(value, filtered);
+      }
+    },
+  });
   const resolveMetricName = (name: `openclaw.${string}`) =>
     `${metricNamePrefix}${name.slice(DEFAULT_METRIC_NAME_PREFIX.length)}`;
   const createCounter = (name: `openclaw.${string}`, options?: MetricOptions) =>
-    meter.createCounter(resolveMetricName(name), options);
+    wrapCounter(meter.createCounter(resolveMetricName(name), options));
   const createHistogram = (name: `openclaw.${string}`, options?: MetricOptions) =>
-    meter.createHistogram(resolveMetricName(name), options);
+    wrapHistogram(meter.createHistogram(resolveMetricName(name), options));
 
   return {
     gcDurationHistogram: createHistogram("openclaw.gc.duration_ms", {
@@ -66,20 +97,24 @@ export function createDiagnosticsMetrics(
       unit: "1",
       description: "Token usage by type",
     }),
-    genAiTokenUsageHistogram: meter.createHistogram("gen_ai.client.token.usage", {
-      unit: "{token}",
-      description: "Number of input and output tokens used by GenAI client operations",
-      advice: {
-        explicitBucketBoundaries: GEN_AI_TOKEN_USAGE_BUCKETS,
-      },
-    }),
-    genAiOperationDurationHistogram: meter.createHistogram("gen_ai.client.operation.duration", {
-      unit: "s",
-      description: "GenAI client operation duration",
-      advice: {
-        explicitBucketBoundaries: GEN_AI_OPERATION_DURATION_BUCKETS,
-      },
-    }),
+    genAiTokenUsageHistogram: wrapHistogram(
+      meter.createHistogram("gen_ai.client.token.usage", {
+        unit: "{token}",
+        description: "Number of input and output tokens used by GenAI client operations",
+        advice: {
+          explicitBucketBoundaries: GEN_AI_TOKEN_USAGE_BUCKETS,
+        },
+      }),
+    ),
+    genAiOperationDurationHistogram: wrapHistogram(
+      meter.createHistogram("gen_ai.client.operation.duration", {
+        unit: "s",
+        description: "GenAI client operation duration",
+        advice: {
+          explicitBucketBoundaries: GEN_AI_OPERATION_DURATION_BUCKETS,
+        },
+      }),
+    ),
     costCounter: createCounter("openclaw.cost.usd", {
       unit: "1",
       description: "Estimated model cost (USD)",

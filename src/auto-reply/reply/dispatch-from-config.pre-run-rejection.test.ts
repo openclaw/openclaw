@@ -18,6 +18,7 @@ import {
   setDiscordTestRegistry,
   threadInfoMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -32,7 +33,10 @@ let resetReplyRunRegistry: () => void;
 const REJECTED_MODEL = "openai/REJECTED_PRIVATE_TOKEN";
 const SESSION_KEY = "agent:main:session";
 const cfg: OpenClawConfig = {
-  diagnostics: { enabled: true },
+  diagnostics: {
+    enabled: true,
+    otel: { enabled: true, traces: true, captureContent: true },
+  },
   messages: { visibleReplies: "automatic" },
 };
 
@@ -171,6 +175,27 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
       { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
       { messageId: "2", outcome: "completed", reason: undefined },
     ]);
+  });
+
+  it.each([
+    { label: "streamed", reply: undefined },
+    { label: "non-streamed", reply: { text: "diagnostic response" } },
+  ])("records producer-captured output for a $label reply", async ({ reply }) => {
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, opts) => {
+        (opts as InternalGetReplyOptions | undefined)?.onDiagnosticResponse?.(
+          "diagnostic response",
+        );
+        return reply;
+      },
+    });
+
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ finalResponse: "diagnostic response" }),
+    );
   });
 
   it.each<{

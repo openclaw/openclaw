@@ -4514,6 +4514,52 @@ describe("diagnostics-otel service", () => {
     expect(JSON.stringify(skillSpanCall)).not.toContain("session-should-not-export");
   });
 
+  test("exports the loaded skill fingerprint even when the file changes before drain", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-otel-skill-span-"));
+    try {
+      const skillFile = path.join(root, "SKILL.md");
+      writeFileSync(skillFile, "# Loaded skill\n");
+      await startServiceFixture(["traces"], (ctx) => {
+        if (ctx.config.diagnostics?.otel) {
+          ctx.config.diagnostics.otel.skillContentHash = true;
+        }
+      });
+
+      emitTrustedDiagnosticEventWithPrivateData(
+        buildEventFixture("skill.used", {
+          skillName: "traced-skill",
+          trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
+        }),
+        { skillUsage: { skillFile, contentHash: "a".repeat(64) } },
+      );
+      writeFileSync(skillFile, "# Changed after use\n");
+      await waitForDiagnosticEventsDrained();
+
+      const skillSpan = startedSpanOptions("openclaw.skill.used");
+      expect(skillSpan?.attributes?.["openclaw.skill.version"]).toBe(`sha256:${"a".repeat(16)}`);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  test("retains configured trace attributes without changing metric filtering", async () => {
+    await startServiceFixture(["traces", "metrics"], (ctx) => {
+      if (ctx.config.diagnostics?.otel) {
+        ctx.config.diagnostics.otel.traceAttributes = ["openclaw.sessionId"];
+      }
+    });
+
+    await emitTrustedEventAndFlush("run.completed", {
+      agentId: "ops",
+      sessionId: "session-visible-on-trace",
+    });
+
+    const runSpan = startedSpanOptions("openclaw.run");
+    expect(runSpan?.attributes?.["openclaw.agent.id"]).toBe("ops");
+    expect(runSpan?.attributes?.["openclaw.sessionId"]).toBe("session-visible-on-trace");
+    expect(JSON.stringify(telemetryState.counters)).not.toContain("session-visible-on-trace");
+  });
+
   test("exports run, model call, and tool execution lifecycle spans", async () => {
     await startServiceFixture(["traces", "metrics"]);
 
@@ -4525,6 +4571,7 @@ describe("diagnostics-otel service", () => {
       trace: createTestTrace(SPAN_ID),
     });
     emitEvent("model.call.completed", {
+      agentId: "ops",
       api: "completions",
       transport: "http",
       requestPayloadBytes: 1234,
@@ -4592,6 +4639,7 @@ describe("diagnostics-otel service", () => {
     expect(modelOptions?.attributes?.["gen_ai.system"]).toBe("openai");
     expect(modelOptions?.attributes?.["gen_ai.request.model"]).toBe("gpt-5.4");
     expect(modelOptions?.attributes?.["gen_ai.operation.name"]).toBe("text_completion");
+    expect(modelOptions?.attributes?.["openclaw.agent.id"]).toBe("ops");
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "gen_ai.provider.name")).toBe(false);
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.callId")).toBe(false);
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.runId")).toBe(false);

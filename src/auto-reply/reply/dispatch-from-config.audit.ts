@@ -24,6 +24,8 @@ export type DispatchProcessedOutcome = "completed" | "skipped" | "error";
 export type DispatchProcessedOptions = {
   reason?: string;
   error?: string;
+  userPrompt?: string;
+  finalResponse?: string;
 };
 
 function resolveCompletedInboundAuditReason(
