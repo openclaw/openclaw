@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
+import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
 import {
   buildOpenAIQuicksilverDelegationPrompt,
   type OpenAIQuicksilverTranscriptEntry,
@@ -122,11 +123,27 @@ export class OpenAIQuicksilverDelegationController {
   private stopped = false;
   private drainDisposition: "abort" | "detach" | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
+  private readonly publicDelegations: OpenAILiveDelegationQueue | undefined;
 
   constructor(
     private readonly options: OpenAIQuicksilverDelegationControllerOptions,
     private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
   ) {
+    if (isOpenAIGptLiveApiModel(options.model)) {
+      this.publicDelegations = new OpenAILiveDelegationQueue({
+        isActive: () => !this.stopped && !this.drainDisposition && !options.signal.aborted,
+        readInput: () => this.transcript.latestUserInput(),
+        dispatch: (id, input) => this.startDelegation(id, input),
+        onExpired: (id) => {
+          this.sendAppend(
+            { type: "delegation.context.append", delegation_item_id: id },
+            "Ask the user to repeat their request; no user transcript was received.",
+            "speakable",
+          );
+        },
+        onError: (error) => this.fail(error),
+      });
+    }
     this.completionClaimsAdopted = options.runAgentConsult.adoptCompletionClaims !== undefined;
     options.runAgentConsult.adoptCompletionClaims?.();
     if (options.signal.aborted) {
@@ -199,6 +216,7 @@ export class OpenAIQuicksilverDelegationController {
           onTranscript: this.options.onTranscript,
           canAppend: () => !this.stopped,
         });
+        this.publicDelegations?.resume();
       } else {
         this.transcript.append(event);
         this.options.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
@@ -228,16 +246,20 @@ export class OpenAIQuicksilverDelegationController {
       this.options.onAudio(Buffer.from(audio, "base64"));
       return;
     }
-    const input = event.prompt ?? this.transcript.latestUserInput();
-    if (event.prompt === undefined && !input.trim()) {
-      this.sendAppend(
-        { type: "delegation.context.append", delegation_item_id: event.id },
-        "Ask the user to repeat their request; no user transcript was received.",
-        "speakable",
-      );
-      return;
+    if (this.publicDelegations) {
+      this.publicDelegations.enqueue(event.id);
+    } else {
+      const input = event.prompt ?? this.transcript.latestUserInput();
+      if (event.prompt === undefined && !input.trim()) {
+        this.sendAppend(
+          { type: "delegation.context.append", delegation_item_id: event.id },
+          "Ask the user to repeat their request; no user transcript was received.",
+          "speakable",
+        );
+        return;
+      }
+      this.startDelegation(event.id, input);
     }
-    this.startDelegation(event.id, input);
   }
 
   sendSessionContext(text: string, channel: "speakable" | "commentary"): void {
@@ -253,6 +275,7 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     this.drainDisposition = disposition;
+    this.publicDelegations?.stop();
     this.revokeRequesterFinal();
     this.pendingDelegation = undefined;
     if (disposition === "abort") {
@@ -264,6 +287,7 @@ export class OpenAIQuicksilverDelegationController {
     if (this.stopped) {
       return;
     }
+    this.publicDelegations?.stop();
     this.flushTranscript();
     this.markStopped();
     this.consultController?.abort(reason);
@@ -275,6 +299,7 @@ export class OpenAIQuicksilverDelegationController {
     if (this.stopped) {
       return;
     }
+    this.publicDelegations?.stop();
     this.flushTranscript();
     this.markStopped();
   }

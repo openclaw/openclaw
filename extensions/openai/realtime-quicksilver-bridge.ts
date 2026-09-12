@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import WebSocket, { type RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
+import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
 import {
   buildOpenAIQuicksilverDelegationPrompt,
   type OpenAIQuicksilverTranscriptEntry,
@@ -69,6 +70,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private inboundTelephonyResampler = createStreamingPcmResampler(8_000, PCM_SAMPLE_RATE);
   private outboundTelephonyResampler = createStreamingPcmResampler(PCM_SAMPLE_RATE, 8_000);
   private activeDelegations = new Set<string>();
+  private publicDelegations: OpenAILiveDelegationQueue | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
   private readonly requestIds = {
     realtimeSessionId: randomUUID(),
@@ -126,6 +128,21 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.socket = connected.socket;
+    if (isOpenAIGptLiveApiModel(this.config.model)) {
+      this.publicDelegations = new OpenAILiveDelegationQueue({
+        isActive: () => this.lifecycle.acceptsEvents(connection),
+        readInput: () => this.transcript.latestUserInput(),
+        dispatch: (id, input) => this.startDelegation(id, input, connection),
+        onExpired: (id) =>
+          this.sendContext(
+            "delegation.context.append",
+            id,
+            "Ask the user to repeat their request; no user transcript was received.",
+            "speakable",
+          ),
+        onError: (error) => this.fail(connection, error),
+      });
+    }
     captureOpenAIQuicksilverTransportEvent(this.runtime, "local", "ws-open");
 
     let reachedReady = false;
@@ -517,64 +534,20 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
               ? `session.${event.role === "user" ? "input" : "output"}_transcript.delta`
               : `${event.role === "user" ? "input" : "output"}_transcript.added`,
       });
+      this.publicDelegations?.resume();
       return;
     }
     if (event.kind === "delegation") {
-      const input = event.prompt ?? this.transcript.latestUserInput();
-      if (!input.trim()) {
-        this.sendContext(
-          "delegation.context.append",
+      if (this.publicDelegations) {
+        this.publicDelegations.enqueue(event.id);
+      } else {
+        this.startDelegation(
           event.id,
-          "Ask the user to repeat their request; no user transcript was received.",
-          "speakable",
+          event.prompt ?? this.transcript.latestUserInput(),
+          connection,
+          event.prompt,
         );
-        return;
       }
-      const handleInput = this.config.handleDelegationInput;
-      if (handleInput) {
-        let responded = false;
-        try {
-          const admission = handleInput(input, (message) => {
-            if (!responded && this.lifecycle.acceptsEvents(connection)) {
-              responded = true;
-              this.sendContext("delegation.context.append", event.id, message, "speakable");
-            }
-          });
-          if (admission === "control") {
-            this.transcript.clearPendingUserInput();
-            return;
-          }
-        } catch {
-          this.fail(connection, new Error("GPT-Live control admission failed"));
-          return;
-        }
-      }
-      if (!this.lifecycle.acceptsEvents(connection)) {
-        return;
-      }
-      const snapshot = this.transcript.consume();
-      this.publishTranscriptSnapshots(snapshot.publication, connection);
-      if (!this.lifecycle.acceptsEvents(connection)) {
-        return;
-      }
-      this.activeDelegations.add(event.id);
-      this.config.onEvent?.({
-        direction: "server",
-        type: isOpenAIGptLiveApiModel(this.config.model)
-          ? "session.delegation.created"
-          : "delegation.created",
-        itemId: event.id,
-      });
-      this.config.onToolCall?.({
-        itemId: event.id,
-        callId: event.id,
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args: {
-          question:
-            event.prompt ??
-            buildOpenAIQuicksilverDelegationPrompt({ input, transcript: snapshot.context }),
-        },
-      });
       return;
     }
     const message = projectOpenAIQuicksilverErrorMessage("provider");
@@ -591,6 +564,73 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       reportEvent();
       this.config.onError?.(error);
     }
+  }
+
+  private startDelegation(
+    id: string,
+    input: string,
+    connection: RealtimeVoiceSessionConnection,
+    prompt?: string,
+  ): void {
+    if (!this.lifecycle.acceptsEvents(connection)) {
+      return;
+    }
+    if (!input.trim()) {
+      this.sendContext(
+        "delegation.context.append",
+        id,
+        "Ask the user to repeat their request; no user transcript was received.",
+        "speakable",
+      );
+      return;
+    }
+    const handleInput = this.config.handleDelegationInput;
+    if (handleInput) {
+      let responded = false;
+      try {
+        const admission = handleInput(input, (message) => {
+          if (!responded && this.lifecycle.acceptsEvents(connection)) {
+            responded = true;
+            this.sendContext("delegation.context.append", id, message, "speakable");
+          }
+        });
+        if (admission === "control") {
+          this.transcript.clearPendingUserInput();
+          return;
+        }
+      } catch {
+        this.fail(connection, new Error("GPT-Live control admission failed"));
+        return;
+      }
+    }
+    if (!this.lifecycle.acceptsEvents(connection)) {
+      return;
+    }
+    const snapshot = this.transcript.consume();
+    this.publishTranscriptSnapshots(snapshot.publication, connection);
+    if (!this.lifecycle.acceptsEvents(connection)) {
+      return;
+    }
+    this.activeDelegations.add(id);
+    this.config.onEvent?.({
+      direction: "server",
+      type: isOpenAIGptLiveApiModel(this.config.model)
+        ? "session.delegation.created"
+        : "delegation.created",
+      itemId: id,
+    });
+    if (!this.lifecycle.acceptsEvents(connection)) {
+      return;
+    }
+    this.config.onToolCall?.({
+      itemId: id,
+      callId: id,
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: {
+        question:
+          prompt ?? buildOpenAIQuicksilverDelegationPrompt({ input, transcript: snapshot.context }),
+      },
+    });
   }
 
   private sendAudioNow(audio: Buffer): void {
@@ -691,6 +731,8 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetTerminalState(): void {
+    this.publicDelegations?.stop();
+    this.publicDelegations = undefined;
     this.activeDelegations.clear();
     this.transcript.clear();
     this.inboundTelephonyResampler = createStreamingPcmResampler(8_000, PCM_SAMPLE_RATE);

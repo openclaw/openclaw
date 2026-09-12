@@ -8,6 +8,7 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("public GPT-Live delegation", () => {
@@ -79,12 +80,17 @@ describe("public GPT-Live delegation", () => {
         start_ms: 600,
         end_ms: 800,
       });
+      vi.useFakeTimers();
       frame({
         type: "session.delegation.created",
         offset_ms: 800,
         delegation: { id: "item_without_user", type: "delegation", target: "client" },
       });
       expect(runAgentConsult).toHaveBeenCalledOnce();
+      expect(parseSent(socket)).not.toContainEqual(
+        expect.objectContaining({ delegation_id: "item_without_user" }),
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
       expect(parseSent(socket)).toContainEqual({
         type: "session.commentary.append",
         delegation_id: "item_without_user",
@@ -93,6 +99,82 @@ describe("public GPT-Live delegation", () => {
     } finally {
       controller.stop(new Error("test complete"));
     }
+  });
+
+  it("retains early public notices and claims each id before dispatch or later transcript delivery", async () => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
+    const { controller, socket } = createDelegationHarness({
+      model: "gpt-live-1",
+      runAgentConsult,
+    });
+    try {
+      controller.handleEvent({ kind: "delegation", id: "early" });
+      controller.handleEvent({ kind: "delegation", id: "early" });
+      controller.handleEvent({ kind: "transcript-delta", role: "assistant", text: "I can help." });
+      controller.handleEvent({ kind: "transcript-delta", role: "user", text: " " });
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      expect(parseSent(socket)).toEqual([]);
+      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check my flight." });
+      expect(runAgentConsult).toHaveBeenCalledOnce();
+      expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("Check my flight.");
+      await nextEventLoopTurn();
+      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check the train." });
+      controller.handleEvent({ kind: "delegation", id: "early" });
+      expect(runAgentConsult).toHaveBeenCalledOnce();
+      controller.handleEvent({ kind: "delegation", id: "next" });
+      expect(runAgentConsult).toHaveBeenCalledTimes(2);
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("Check the train.");
+    } finally {
+      controller.stop(new Error("test complete"));
+    }
+  });
+
+  it.each(["stop", "detach", "abort", "drain-abort", "drain-detach"] as const)(
+    "revokes pending public notices on %s before transcript drain or timeout",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const { controller, socket, sessionController, runAgentConsult } = createDelegationHarness({
+        model: "gpt-live-1",
+      });
+      controller.handleEvent({ kind: "delegation", id: "pending" });
+      if (boundary === "stop") controller.stop(new Error("closed"));
+      else if (boundary === "detach") controller.detach();
+      else if (boundary === "abort") sessionController.abort();
+      else controller.beginTranscriptDrain(boundary === "drain-abort" ? "abort" : "detach");
+      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Late request." });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      expect(parseSent(socket)).toEqual([]);
+      controller.stop(new Error("test complete"));
+    },
+  );
+
+  it("bounds unresolved notices and revokes their waits when the provider floods them", async () => {
+    vi.useFakeTimers();
+    const { controller, socket, runAgentConsult, onFatalError } = createDelegationHarness({
+      model: "gpt-live-1",
+    });
+    for (let index = 0; index <= 32; index += 1) {
+      controller.handleEvent({ kind: "delegation", id: `pending-${index}` });
+    }
+    expect(onFatalError).toHaveBeenCalledExactlyOnceWith(
+      new Error("GPT-Live delegation notice limit exceeded"),
+    );
+    controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Late request." });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    expect(parseSent(socket)).toEqual([]);
+    controller.stop(new Error("test complete"));
+  });
+
+  it("revokes an early notice when its arriving transcript callback stops the call", () => {
+    const { controller, runAgentConsult } = createDelegationHarness({
+      model: "gpt-live-1",
+      onTranscript: () => controller.stop(new Error("closed by transcript consumer")),
+    });
+    controller.handleEvent({ kind: "delegation", id: "pending" });
+    controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check the forecast." });
+    expect(runAgentConsult).not.toHaveBeenCalled();
   });
 
   it("keeps recent corrections in long public transcripts and saves snapshots once before stopping", async () => {
