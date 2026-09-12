@@ -282,6 +282,7 @@ const ModelCompatSchema = z
     sendSessionIdHeader: z.boolean().optional(),
     supportsEagerToolInputStreaming: z.boolean().optional(),
     supportsLongCacheRetention: z.boolean().optional(),
+    dropCumulativeTextDeltaReplays: z.boolean().optional(),
   } satisfies Record<keyof ModelCompatConfig, z.ZodType>)
   .strict()
   .optional();

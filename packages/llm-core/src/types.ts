@@ -557,6 +557,8 @@ export interface OpenAICompletionsCompat {
   supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Drop a streaming text delta whose payload exactly equals the whole accumulated visible text of the message (8+ chars). Some compatible providers intermittently resend full content inside a single delta frame; because `text_delta` is additive by contract, replaying the whole text doubles live assistant output. Off by default; enable per model for affected providers. Default: false. */
+  dropCumulativeTextDeltaReplays?: boolean;
 }
 
 /** Compatibility settings for OpenAI Responses APIs. */

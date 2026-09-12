@@ -327,6 +327,106 @@ export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage">
   };
 };
 
+type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
+  // Some compatible providers attach usage per choice instead of per chunk.
+  usage?: ChatCompletionChunk["usage"];
+  // Some compatible providers stream a complete message in place of delta.
+  message?: ChatCompletionChunk["choices"][number]["delta"];
+};
+
+export type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
+  choices: OpenAICompatibleChoice[];
+};
+
+// Minimum length for a text delta to be considered a cumulative full-text replay.
+// Short exact repeats (e.g. "Ha" after "Ha") are plausible model output and must
+// keep flowing; a delta that restates the entire message so far is not.
+const CUMULATIVE_TEXT_DELTA_REPLAY_MIN_CHARS = 8;
+
+/**
+ * Recognizes the provider-quirk frame that restates previously accepted text
+ * inside a single text delta. `text_delta` is additive by contract
+ * (`AssistantMessageEvent`; consumers rebuild text by replaying deltas from the
+ * latest start/end checkpoint), so appending such a frame doubles live output.
+ * Guarding at the producer keeps every downstream consumer on a single additive
+ * accumulation path.
+ *
+ * The ledger tracks filtered visible text at the admission seam, so it advances
+ * with every released piece and never runs against a stale prefix. The
+ * comparison unit is one provider frame's whole visible contribution within
+ * the current text block: a frame restating only earlier blocks is the first
+ * delta of a new block and must keep flowing, and a released piece of a frame
+ * that continues must never be classified on its own.
+ */
+export function createCumulativeReplayGuard(enabled: boolean) {
+  let acceptedText = "";
+  let textBlockStartLength = 0;
+  let textBlockStartPending = false;
+  const trackBlockBoundary = (opensTextBlock: boolean) => {
+    if (opensTextBlock) {
+      if (!textBlockStartPending) {
+        textBlockStartLength = acceptedText.length;
+        textBlockStartPending = true;
+      }
+    } else {
+      textBlockStartPending = false;
+    }
+  };
+  const restatesAcceptedText = (text: string) =>
+    enabled &&
+    text.length >= CUMULATIVE_TEXT_DELTA_REPLAY_MIN_CHARS &&
+    text.length === acceptedText.length &&
+    text === acceptedText &&
+    acceptedText.length > textBlockStartLength;
+  return {
+    /**
+     * Classifies one complete provider frame's visible contribution without
+     * recording it. Returns false when the frame restates all accepted text
+     * including the current block's content; the caller must then drop every
+     * visible piece of the frame. `frameComplete` must be false while the
+     * parser still buffers frame input: a released prefix can restate the
+     * block even though the frame continues, so equality must not classify it
+     * as a replay.
+     */
+    classifyFrame(visible: string, opensTextBlock: boolean, frameComplete: boolean): boolean {
+      trackBlockBoundary(opensTextBlock);
+      if (frameComplete && restatesAcceptedText(visible)) {
+        log.debug("Dropped a cumulative text delta replay", {
+          deltaLength: visible.length,
+          acceptedTextLength: acceptedText.length,
+        });
+        return false;
+      }
+      return true;
+    },
+    /**
+     * Records one visible-text piece of an already classified frame. Every
+     * visible-text feeder (content pieces and visible reasoning details) must
+     * route through this seam, or the ledger under-describes the block.
+     * `compare` marks the piece as a complete frame of its own, which may
+     * drop it as a replay. `opensTextBlock` must be true when the piece will
+     * start a new text block (current block is not text, or the visible-text
+     * source changed).
+     */
+    admitTextDelta(text: string, opensTextBlock: boolean, compare: boolean): boolean {
+      trackBlockBoundary(opensTextBlock);
+      if (compare && restatesAcceptedText(text)) {
+        log.debug("Dropped a cumulative text delta replay", {
+          deltaLength: text.length,
+          acceptedTextLength: acceptedText.length,
+        });
+        return false;
+      }
+      acceptedText += text;
+      return true;
+    },
+    /** Clears the pending block boundary once the new text block materialized (`text_start`). */
+    onTextStart(): void {
+      textBlockStartPending = false;
+    },
+  };
+}
+
 export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;

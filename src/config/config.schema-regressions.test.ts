@@ -592,4 +592,30 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts and preserves the openai-completions cumulative replay guard compat flag", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          "replay-probe": {
+            baseUrl: "https://replay-probe.example.test/v1",
+            apiKey: "synthetic-test-key",
+            models: [
+              {
+                id: "replay-probe-text",
+                name: "Replay Probe Text",
+                compat: { dropCumulativeTextDeltaReplays: true },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const provider = res.config.models?.providers?.["replay-probe"];
+      expect(provider?.models?.[0]?.compat?.dropCumulativeTextDeltaReplays).toBe(true);
+    }
+  });
 });

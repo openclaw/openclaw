@@ -42,6 +42,7 @@ type SupportedOpenAICompatFields = Pick<
   | "cacheControlFormat"
   | "sendSessionAffinityHeaders"
   | "supportsLongCacheRetention"
+  | "dropCumulativeTextDeltaReplays"
 >;
 
 type SupportedOpenAIResponsesCompatFields = Pick<
