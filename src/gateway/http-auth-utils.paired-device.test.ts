@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
@@ -43,7 +44,7 @@ it.each(["operator.admin", "operator.read"])(
         },
       });
       expect(token).not.toBeNull();
-      const bodyStarted = Promise.withResolvers<void>();
+      const bodyStarted = createDeferred();
       let effects = 0;
       const handlePluginRequest = createGatewayPluginRequestHandler({
         registry: createGatewayTestRegistry({
@@ -123,13 +124,13 @@ it.each(["operator.admin", "operator.read"])(
           });
           expect(effects).toBe(previousEffects);
           for (const credential of [token!.token, "wrong-token"]) {
-            const response = await sendRequest(server, {
+            const rejected = await sendRequest(server, {
               path: "/profile",
               method: "PUT",
               authorization: `Bearer ${credential}`,
             });
-            expect(response.res.statusCode).toBe(401);
-            expect(JSON.parse(response.getBody())).toEqual({
+            expect(rejected.res.statusCode).toBe(401);
+            expect(JSON.parse(rejected.getBody())).toEqual({
               error: { message: "Unauthorized", type: "unauthorized" },
             });
           }

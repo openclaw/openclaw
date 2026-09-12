@@ -95,10 +95,7 @@ export type AuthorizedGatewayHttpRequest = {
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
-type AuthenticatedHttpUserProfile = Pick<
-  AuthorizedGatewayHttpRequest,
-  "authenticatedUserProfile" | "operatorRolePolicy"
->;
+type AuthenticatedHttpUserProfile = Awaited<ReturnType<typeof resolveAuthenticatedHttpUserProfile>>;
 
 export type GatewayHttpRequestAuthCheckResult =
   | {
@@ -123,9 +120,7 @@ type GatewayHttpRequestAuthCheckParams = Omit<GatewayHttpRequestAuthParams, "res
   cfg?: OpenClawConfig;
 };
 
-type GatewayHttpConnectAuthorizer = (
-  params: Parameters<typeof authorizeHttpGatewayConnect>[0],
-) => Promise<GatewayAuthResult>;
+type GatewayHttpConnectAuthorizer = typeof authorizeHttpGatewayConnect;
 
 export type AuthorizedControlUiReadRequest = AuthenticatedHttpUserProfile & {
   authMethod: NonNullable<GatewayAuthResult["method"]>;
@@ -423,14 +418,9 @@ export async function authorizeControlUiSessionOwnerReadRequestOrReply(
   return null;
 }
 
-export async function authorizeGatewayHttpRequestOrReply(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<AuthorizedGatewayHttpRequest | null> {
+export async function authorizeGatewayHttpRequestOrReply(
+  params: GatewayHttpRequestAuthParams,
+): Promise<AuthorizedGatewayHttpRequest | null> {
   return await authorizeGatewayHttpRequestWithOrReply(params, authorizeHttpGatewayConnect);
 }
 
@@ -526,20 +516,16 @@ export function authorizeControlUiPluginCookieRequest(
   };
 }
 
-export async function authorizePluginGatewayHttpRequestOrReply(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  getResolvedAuth?: () => ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  requestPath: string;
-  resolveOperatorScopes: (
-    req: IncomingMessage,
-    requestAuth: AuthorizedGatewayHttpRequest,
-  ) => string[];
-}): Promise<{
+export async function authorizePluginGatewayHttpRequestOrReply(
+  params: GatewayHttpRequestAuthParams & {
+    getResolvedAuth?: () => ResolvedGatewayAuth;
+    requestPath: string;
+    resolveOperatorScopes: (
+      req: IncomingMessage,
+      requestAuth: AuthorizedGatewayHttpRequest,
+    ) => string[];
+  },
+): Promise<{
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: string[];
 } | null> {
@@ -588,14 +574,9 @@ export async function authorizePluginGatewayHttpRequestOrReply(params: {
     : null;
 }
 
-export async function checkGatewayHttpRequestAuth(params: {
-  req: IncomingMessage;
-  auth: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  cfg?: OpenClawConfig;
-}): Promise<GatewayHttpRequestAuthCheckResult> {
+export async function checkGatewayHttpRequestAuth(
+  params: GatewayHttpRequestAuthCheckParams,
+): Promise<GatewayHttpRequestAuthCheckResult> {
   return await checkGatewayHttpRequestAuthWith(params, authorizeHttpGatewayConnect);
 }
 
@@ -659,19 +640,15 @@ async function checkGatewayHttpRequestAuthWith(
   };
 }
 
-export async function authorizeScopedGatewayHttpRequestOrReply(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  operatorMethod: string;
-  resolveOperatorScopes: (
-    req: IncomingMessage,
-    requestAuth: AuthorizedGatewayHttpRequest,
-  ) => string[];
-}): Promise<{
+export async function authorizeScopedGatewayHttpRequestOrReply(
+  params: GatewayHttpRequestAuthParams & {
+    operatorMethod: string;
+    resolveOperatorScopes: (
+      req: IncomingMessage,
+      requestAuth: AuthorizedGatewayHttpRequest,
+    ) => string[];
+  },
+): Promise<{
   cfg: OpenClawConfig;
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: string[];
