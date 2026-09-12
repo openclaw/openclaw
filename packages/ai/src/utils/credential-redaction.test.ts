@@ -2,6 +2,47 @@ import { describe, expect, it, vi } from "vitest";
 import { projectDiagnosticValue } from "./credential-redaction.js";
 
 describe("diagnostic descriptor snapshots", () => {
+  it("keeps media and credential classification isolated through reentrant policy callbacks", () => {
+    const nested: unknown[] = [];
+    expect(
+      projectDiagnosticValue(
+        {
+          outer: { mime_type: "image/png", DATA: "QUJDRA==", "api-key": "synthetic-private" },
+          second: { Password: "synthetic-private", "safe-label": "kept" },
+        },
+        {
+          omitField(key) {
+            if (key === "outer") {
+              nested.push(
+                projectDiagnosticValue({
+                  "Access-Token": "synthetic-private",
+                  visible_key: "inner",
+                }),
+              );
+            }
+            return false;
+          },
+          projectMedia(key, media) {
+            nested.push(
+              projectDiagnosticValue({
+                input_image_url: "https://media.invalid/private",
+                safe: "media",
+              }),
+            );
+            return { [key]: { redacted: true, bytes: media.bytes } };
+          },
+        },
+      ),
+    ).toEqual({
+      outer: { mime_type: "image/png", DATA: { redacted: true, bytes: 4 } },
+      second: { "safe-label": "kept" },
+    });
+    expect(nested).toEqual([
+      { visible_key: "inner" },
+      { input_image_url: "<redacted>", safe: "media" },
+    ]);
+  });
+
   it("visits numeric keys before other proxy keys when bounding shared references", () => {
     const shared = { detail: "safe" };
     const value = new Proxy(

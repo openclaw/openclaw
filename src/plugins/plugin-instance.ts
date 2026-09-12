@@ -247,14 +247,10 @@ export class PluginInstance {
 
   private enter<T>(token: object, run: () => T): T {
     const current = invocation.getStore();
-    // Node can reuse an identical store instead of copying the entire async context map.
-    const invoke = () =>
-      invocation.run(
-        current?.instance === this && current.token === token ? current : { instance: this, token },
-        run,
-      );
+    const call =
+      current?.instance === this && current.token === token ? current : { instance: this, token };
     if (!this.owner) {
-      return invoke();
+      return invocation.run(call, run);
     }
     const { record } = this.owner;
     const generation = getPluginRuntimeGenerationRegistry();
@@ -271,8 +267,9 @@ export class PluginInstance {
         pluginOrigin: record.origin,
         pluginTrustedOfficialInstall: record.trustedOfficialInstall,
       },
-      invoke,
+      run,
       registry,
+      call,
     );
   }
 

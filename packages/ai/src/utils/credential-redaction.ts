@@ -24,6 +24,19 @@ const MEDIA_FIELD_NAME_RE = new RegExp(
 );
 const MEDIA_PAYLOAD_SUFFIX_RE = new RegExp(`^(?:${MEDIA_PAYLOAD_SUFFIXES})$`, "u");
 const MEDIA_WRAPPER_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)s?(?:_|$)/iu;
+const DIAGNOSTIC_FIELD_SEPARATOR_RE = /[^a-z0-9]/g;
+const MEDIA_TYPE_RE = /^(?:input|output)?(?:audio|image|video)/u;
+const MEDIA_MIME_RE = /^(?:audio|image|video)\//iu;
+const MEDIA_ARRAY_INDEX_RE = /^(?:0|[1-9]\d*)$/u;
+const MEDIA_URL_SUFFIX_RE = /(?:uri|url)$/u;
+const MEDIA_MIME_FIELDS = [
+  "mimeType",
+  "mime_type",
+  "mediaType",
+  "media_type",
+  "contentType",
+  "content_type",
+];
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_HEADER_RE = /\b((?:set-)?cookie\s*:\s*)([^\r\n]+)/giu;
@@ -93,7 +106,7 @@ function hasSensitiveProseContent(value: string): boolean {
 }
 
 function normalizeDiagnosticFieldName(value: string): string {
-  return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+  return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
 }
 
 function isCredentialFieldName(normalized: string): boolean {
@@ -132,16 +145,16 @@ function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | un
 
 function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
   const type = descriptors.type?.value;
-  return (
-    (typeof type === "string" &&
-      /^(?:input|output)?(?:audio|image|video)/u.test(normalizeDiagnosticFieldName(type))) ||
-    ["mimeType", "mime_type", "mediaType", "media_type", "contentType", "content_type"].some(
-      (key) => {
-        const mime = descriptors[key]?.value;
-        return typeof mime === "string" && /^(?:audio|image|video)\//iu.test(mime);
-      },
-    )
-  );
+  if (typeof type === "string" && MEDIA_TYPE_RE.test(normalizeDiagnosticFieldName(type))) {
+    return true;
+  }
+  for (const key of MEDIA_MIME_FIELDS) {
+    const mime = descriptors[key]?.value;
+    if (typeof mime === "string" && MEDIA_MIME_RE.test(mime)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 type DiagnosticMediaField =
@@ -171,11 +184,13 @@ function extractDiagnosticMediaField(
   const mediaField = MEDIA_FIELD_NAME_RE.test(normalized) || MEDIA_WRAPPER_NAME_RE.test(key);
   const contextualPayload = parentMedia && MEDIA_PAYLOAD_SUFFIX_RE.test(normalized);
   if (!privateField && !mediaField && !contextualPayload) {
-    const nestedMedia =
-      value !== null && (typeof value === "object" || /^(?:0|[1-9]\d*)$/u.test(key));
-    return parentMedia && nestedMedia ? { kind: "context" } : undefined;
+    return parentMedia &&
+      value !== null &&
+      (typeof value === "object" || MEDIA_ARRAY_INDEX_RE.test(key))
+      ? { kind: "context" }
+      : undefined;
   }
-  if (/(?:uri|url)$/u.test(normalized)) {
+  if (MEDIA_URL_SUFFIX_RE.test(normalized)) {
     return { kind: "redacted" };
   }
   const encoded = diagnosticBytes(value, true) ?? (typeof value === "string" ? value : undefined);
