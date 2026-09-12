@@ -15,10 +15,8 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-} from "../../sessions/session-lifecycle-admission.js";
+import * as sessionLifecycleAdmission from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -360,9 +358,10 @@ describe("current-session completion media", () => {
         identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
         assertAllowed: () => {},
       });
+      const releaseSpy = vi.spyOn(sessionLifecycleAdmission, "getSessionWorkAdmissionRelease");
       const commit = fixture.commit();
       try {
-        await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
+        await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
         expect(fixture.records()).toEqual([]);
         await replaceSessionEntry(fixture.scope, {
           sessionId: "replacement-session",
@@ -377,6 +376,7 @@ describe("current-session completion media", () => {
       } finally {
         admission.release();
         await commit;
+        releaseSpy.mockRestore();
         fixture.unsubscribe();
       }
     });

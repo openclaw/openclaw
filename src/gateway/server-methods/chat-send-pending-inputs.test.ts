@@ -29,7 +29,12 @@ import { SessionTranscriptProjectionUnavailableError } from "../../config/sessio
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { commitBackgroundResultToSession } from "../../sessions/background-session-result.js";
+import * as sessionLifecycleAdmission from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  getSessionWorkAdmissionRelease,
+} from "../../sessions/session-lifecycle-admission.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -59,6 +64,7 @@ describe("ordinary browser input admission", () => {
       active?: boolean;
       preserveContent?: boolean;
       transientProjectionFailures?: number;
+      dispatchAfterRelease?: () => Promise<void>;
     } = {},
   ) {
     const active = options.active !== false;
@@ -133,6 +139,7 @@ describe("ordinary browser input admission", () => {
         throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
       }
       await dispatchRelease.promise;
+      await options.dispatchAfterRelease?.();
       return {};
     });
     const context = createDirectChatContext({ getRuntimeConfig, chatQueuedTurns: new Map() });
@@ -193,6 +200,107 @@ describe("ordinary browser input admission", () => {
       },
     };
   }
+
+  it("lets an acknowledged chat finish nested admission before committing its background result", async () => {
+    const nestedController = new AbortController();
+    const commitController = new AbortController();
+    let nestedFinished = false;
+    let commitSettled = false;
+    const fixture = await createBrowserFollowupFixture({
+      active: false,
+      dispatchAfterRelease: async () => {
+        // The real gateway dispatch still owns its outer source admission here.
+        // Reply execution needs this inner admission before that outer lease can settle.
+        const nested = await beginSessionWorkAdmission({
+          scope: fixture.scope.storePath,
+          identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
+          assertAllowed: () => {},
+          signal: nestedController.signal,
+        });
+        try {
+          const recorder = await fixture.dispatchedRecorder;
+          await recorder.persistApproved();
+          nestedFinished = true;
+        } finally {
+          nested.release();
+        }
+      },
+    });
+    const drainSpy = vi.spyOn(sessionLifecycleAdmission, "getSessionWorkAdmissionRelease");
+    let commit: ReturnType<typeof commitBackgroundResultToSession> | undefined;
+    try {
+      const ack = await fixture.send();
+      expect(ack).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.anything(),
+      );
+      await fixture.dispatchedRecorder;
+      const source = loadSessionEntry(fixture.scope);
+      expect(source?.sessionId).toBe(fixture.scope.sessionId);
+      drainSpy.mockClear();
+      commit = commitBackgroundResultToSession({
+        agentId: fixture.scope.agentId,
+        sessionKey: fixture.scope.sessionKey,
+        expectedGeneration: {
+          sessionId: fixture.scope.sessionId,
+          lifecycleRevision: source?.lifecycleRevision,
+        },
+        text: "The detached review is complete.",
+        idempotencyKey: "cron-current-completion:chat-admission-review",
+        provenance: { kind: "cron", jobId: "review", runId: "chat-admission-review" },
+        config: { session: { store: fixture.scope.storePath } },
+        signal: commitController.signal,
+      });
+      void commit.then(
+        () => {
+          commitSettled = true;
+        },
+        () => {
+          commitSettled = true;
+        },
+      );
+      // Observe the real source-drain request, rather than relying on a sleep to
+      // place completion between the outer gateway lease and its inner reply lease.
+      await vi.waitFor(() =>
+        expect(drainSpy).toHaveBeenCalledWith({
+          scope: fixture.scope.storePath,
+          identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
+        }),
+      );
+      expect(commitSettled).toBe(false);
+      const dispatch = fixture.finishDispatch();
+      await vi.waitFor(() => expect(nestedFinished).toBe(true));
+      await dispatch;
+      await expect(commit).resolves.toMatchObject({ ok: true });
+      const transcript = loadTranscriptEventsSync(fixture.scope);
+      expect(transcript).toHaveLength(fixture.activeTranscript.length + 2);
+      expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      const results = transcript
+        .filter(isRecord)
+        .filter((event) => isRecord(event.message) && event.message.model === "automation-result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.message).toMatchObject({
+        content: [{ type: "text", text: "The detached review is complete." }],
+        openclawAutomation: { kind: "cron", jobId: "review", runId: "chat-admission-review" },
+      });
+      expect(
+        getSessionWorkAdmissionRelease({
+          scope: fixture.scope.storePath,
+          identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
+        }),
+      ).toBeUndefined();
+    } finally {
+      // Also break the pre-fix ownership cycle on assertion failure, so this
+      // regression can be red-run without leaving shared Gateway admission state.
+      commitController.abort();
+      nestedController.abort();
+      await fixture.cleanup();
+      await commit?.catch(() => undefined);
+      drainSpy.mockRestore();
+    }
+  });
 
   async function createMentionFixture(
     options: { active?: boolean; preserveContent?: boolean } = {},

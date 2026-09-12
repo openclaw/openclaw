@@ -8,6 +8,7 @@ import { callGatewayHandler } from "../gateway/server-methods/skills.test-helper
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
+import * as sessionLifecycleAdmission from "./session-lifecycle-admission.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -48,6 +49,9 @@ describe("commitBackgroundResultToSession", () => {
       assertAllowed: () => {},
     });
     let commitSettled = false;
+    const controller = new AbortController();
+    const releaseSpy = vi.spyOn(sessionLifecycleAdmission, "getSessionWorkAdmissionRelease");
+    let laterAdmission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
     const updates: unknown[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const commit = commitBackgroundResultToSession({
@@ -58,76 +62,99 @@ describe("commitBackgroundResultToSession", () => {
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
       config: target.config,
+      signal: controller.signal,
     });
-    void commit.then(() => {
-      commitSettled = true;
-    });
+    void commit.then(
+      () => {
+        commitSettled = true;
+      },
+      () => {
+        commitSettled = true;
+      },
+    );
 
-    await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
-    expect(commitSettled).toBe(false);
-    let laterAdmissionSettled = false;
-    const laterAdmission = beginSessionWorkAdmission({
-      scope: target.storePath,
-      identities: [target.sessionKey, target.sessionId],
-      assertAllowed: () => {},
-    });
-    void laterAdmission.then(() => {
-      laterAdmissionSettled = true;
-    });
-    await Promise.resolve();
-    expect(laterAdmissionSettled).toBe(false);
-    admission.release();
+    try {
+      await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
+      expect(commitSettled).toBe(false);
+      let laterAdmissionSettled = false;
+      laterAdmission = beginSessionWorkAdmission({
+        scope: target.storePath,
+        identities: [target.sessionKey, target.sessionId],
+        assertAllowed: () => {},
+        signal: controller.signal,
+      });
+      void laterAdmission.then(
+        () => {
+          laterAdmissionSettled = true;
+        },
+        () => {},
+      );
+      await vi.waitFor(() => expect(laterAdmissionSettled).toBe(true));
+      expect(commitSettled).toBe(false);
+      admission.release();
+      await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledTimes(2));
+      expect(commitSettled).toBe(false);
+      (await laterAdmission).release();
 
-    const first = await commit;
-    expect(first).toMatchObject({ ok: true });
-    (await laterAdmission).release();
-    const retry = await commitBackgroundResultToSession({
-      agentId: "main",
-      sessionKey: target.sessionKey,
-      expectedGeneration: target.generation,
-      text: "Automation finished while the chat was active.",
-      idempotencyKey: "cron-current-completion:cron:job-1:1000",
-      provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
-      config: target.config,
-    });
-    expect(retry).toEqual(first);
-    await expect(
-      commitBackgroundResultToSession({
+      const first = await commit;
+      expect(first).toMatchObject({ ok: true });
+      const retry = await commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
         expectedGeneration: target.generation,
-        text: "A different completion must not reuse the committed run.",
+        text: "Automation finished while the chat was active.",
         idempotencyKey: "cron-current-completion:cron:job-1:1000",
         provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
         config: target.config,
-      }),
-    ).rejects.toThrow("conflicts with the admitted message");
-
-    const events = await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-    });
-    expect(events).toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({
-        type: "message",
-        message: expect.objectContaining({
-          api: "openclaw-transcript",
+      });
+      expect(retry).toEqual(first);
+      await expect(
+        commitBackgroundResultToSession({
+          agentId: "main",
+          sessionKey: target.sessionKey,
+          expectedGeneration: target.generation,
+          text: "A different completion must not reuse the committed run.",
           idempotencyKey: "cron-current-completion:cron:job-1:1000",
-          model: "automation-result",
-          openclawAutomation: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
-          provider: "openclaw",
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Automation finished while the chat was active." }],
-          usage: expect.objectContaining({ input: 0, output: 0, totalTokens: 0 }),
+          provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
+          config: target.config,
         }),
-      }),
-    ]);
-    expect(updates).toHaveLength(1);
-    unsubscribe();
+      ).rejects.toThrow("conflicts with the admitted message");
+
+      const events = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      });
+      expect(events).toEqual([
+        expect.objectContaining({ type: "session" }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            api: "openclaw-transcript",
+            idempotencyKey: "cron-current-completion:cron:job-1:1000",
+            model: "automation-result",
+            openclawAutomation: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
+            provider: "openclaw",
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Automation finished while the chat was active." }],
+            usage: expect.objectContaining({ input: 0, output: 0, totalTokens: 0 }),
+          }),
+        }),
+      ]);
+      expect(updates).toHaveLength(1);
+    } finally {
+      controller.abort();
+      admission.release();
+      await laterAdmission?.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+      await commit.catch(() => {});
+      releaseSpy.mockRestore();
+      unsubscribe();
+    }
   });
 
   it("cancels a background completion's pure wait without waiting for old work release", async () => {
@@ -175,7 +202,6 @@ describe("commitBackgroundResultToSession", () => {
           ),
         );
         await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
-        expect(getActiveSessionLifecycleMutationCount()).toBe(1);
         expect(prepareDisplayContent).not.toHaveBeenCalled();
         pending.push(
           admission.run(async () => {
