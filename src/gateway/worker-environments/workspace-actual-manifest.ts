@@ -25,7 +25,7 @@ import {
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
-  | { type: "file"; mode: number; size: number; sha256: string }
+  | { type: "file"; mode: number; size: number; sha256: string; content?: Buffer }
   | { type: "unsupported" };
 
 function localPath(root: string, relative: string): string {
@@ -54,6 +54,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
   maxBytes: number | ((openedSize: number) => number),
   root?: string,
   signal?: AbortSignal,
+  options?: { includeContent?: boolean },
 ): Promise<WorkspaceFileSnapshot> {
   signal?.throwIfAborted();
   const handle = await fs.open(
@@ -75,8 +76,10 @@ export async function readWorkspaceFileSnapshotWithLimit(
       return { type: "unsupported" };
     }
     const identity = workspaceStatIdentity(owner, before);
-    let sha256 = hashMemo?.get(identity);
+    const includeContent = options?.includeContent === true;
+    let sha256 = includeContent ? undefined : hashMemo?.get(identity);
     let size = Number(before.size);
+    let content: Buffer | undefined;
     if (sha256) {
       if (metrics) {
         metrics.memoHitCount += 1;
@@ -85,6 +88,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
       const hashStartedAt = performance.now();
       const hash = createHash("sha256");
       const buffer = Buffer.allocUnsafe(64 * 1024);
+      const chunks: Buffer[] = [];
       size = 0;
       for (;;) {
         signal?.throwIfAborted();
@@ -99,9 +103,16 @@ export async function readWorkspaceFileSnapshotWithLimit(
           }
           return { type: "unsupported" };
         }
-        hash.update(buffer.subarray(0, bytesRead));
+        const chunk = buffer.subarray(0, bytesRead);
+        hash.update(chunk);
+        if (includeContent) {
+          chunks.push(Buffer.from(chunk));
+        }
       }
       sha256 = hash.digest("hex");
+      if (includeContent) {
+        content = Buffer.concat(chunks, size);
+      }
       if (metrics) {
         metrics.contentHashCount += 1;
         metrics.contentHashDurationMs += performance.now() - hashStartedAt;
@@ -118,10 +129,35 @@ export async function readWorkspaceFileSnapshotWithLimit(
       mode: gitFileMode(Number(after.mode & 0o777n)),
       size,
       sha256,
+      ...(content ? { content } : {}),
     };
   } finally {
     await handle.close();
   }
+}
+
+export async function readWorkspaceFileBytesWithLimit(
+  expectedPath: string,
+  maxBytes: number,
+  root?: string,
+  signal?: AbortSignal,
+): Promise<
+  | { type: "file"; mode: number; size: number; sha256: string; content: Buffer }
+  | { type: "unsupported" }
+> {
+  const snapshot = await readWorkspaceFileSnapshotWithLimit(expectedPath, maxBytes, root, signal, {
+    includeContent: true,
+  });
+  if (snapshot.type !== "file" || !snapshot.content) {
+    return { type: "unsupported" };
+  }
+  return {
+    type: "file",
+    mode: snapshot.mode,
+    size: snapshot.size,
+    sha256: snapshot.sha256,
+    content: snapshot.content,
+  };
 }
 
 export async function readActualWorkspaceManifestImpl(params: {
