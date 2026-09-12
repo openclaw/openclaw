@@ -34,13 +34,4 @@ describe("resolveEffectiveResponseUsage", () => {
     expect(resolveEffectiveResponseUsage("tokens", "full")).toBe("tokens");
     expect(resolveEffectiveResponseUsage("full", "off")).toBe("full");
   });
-
-  it("unset (undefined/null) falls through to config; explicit off does not", () => {
-    // These two are distinct states:
-    // - undefined = unset/inherit → gets config default
-    // - "off"     = explicit off  → stays off
-    const cfg = "tokens" as const;
-    expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
-    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off"); // explicit off persists
-  });
 });

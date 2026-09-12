@@ -44,8 +44,10 @@ that supervise the Gateway as a child process, see
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
 - The Gateway offers `permessage-deflate`. Peers that negotiate it (browsers, `ws`
-  clients) receive frames of 4 KiB and up compressed; smaller frames such as
-  streaming deltas stay raw. Context takeover is disabled in both directions, so
+  clients) receive frames of 32 KiB and up compressed. Smaller session/tool updates
+  and ordinary agent results stay raw so serial compression callbacks do not delay
+  queued RPC replies. Large histories and rosters still compress. Context takeover
+  is disabled in both directions, so
   each frame compresses independently. Peers that do not offer the extension are
   unaffected. Payload limits apply to the inflated size.
 

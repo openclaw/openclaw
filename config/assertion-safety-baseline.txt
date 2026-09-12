@@ -2274,10 +2274,8 @@ src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/parse-duration.ts	2
-src/cli/plugin-install-plan.ts	1
 src/cli/plugins-authoring-command.ts	8
 src/cli/plugins-command-helpers.ts	1
-src/cli/plugins-install-config.ts	2
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	9
 src/cli/precomputed-help.ts	1
@@ -3118,7 +3116,7 @@ src/mcp/channel-bridge.ts	6
 src/mcp/channel-shared.ts	3
 src/mcp/codex-supervision-tools-serve.ts	6
 src/mcp/openclaw-tools-serve-config.ts	1
-src/mcp/plugin-tools-handlers.ts	3
+src/mcp/plugin-tools-handlers.ts	2
 src/media-generation/provider-registry.ts	1
 src/media-understanding/attachments.select.ts	1
 src/media-understanding/entry-capabilities.ts	1
@@ -3501,7 +3499,7 @@ src/state/openclaw-agent-db-schema.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	4
 src/state/openclaw-agent-db-session-provenance.ts	2
 src/state/openclaw-agent-standing-intents-schema.ts	1
-src/state/openclaw-database-preflight.ts	2
+src/state/openclaw-database-preflight.ts	1
 src/state/openclaw-database-verify.impl.ts	1
 src/state/openclaw-database-verify.worker.ts	1
 src/state/openclaw-quarantine-store.ts	2

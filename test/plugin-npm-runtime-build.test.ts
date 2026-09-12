@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   symlinkSync,
   writeFileSync,
@@ -41,6 +42,50 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it.each([
+    "missing-directory",
+    "missing-manifest",
+    "malformed-manifest",
+    "no-extensions",
+    "javascript-only",
+  ])("reports selected package input without touching output (%s)", async (scenario) => {
+    const packageDir = path.join(tempDirs.make("openclaw-plugin-runtime-input-"), "selected");
+    const manifestPath = path.join(packageDir, "package.json");
+    const outDir = path.join(packageDir, "dist");
+    if (scenario !== "missing-directory") {
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(path.join(outDir, "sentinel.js"), "keep\n");
+    }
+    if (scenario === "malformed-manifest") {
+      writeFileSync(manifestPath, "{");
+    } else if (scenario === "no-extensions" || scenario === "javascript-only") {
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: "input-fixture",
+          version: "1.0.0",
+          ...(scenario === "javascript-only" ? { openclaw: { extensions: ["./index.js"] } } : {}),
+        }),
+      );
+      writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
+    }
+
+    const result = buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" });
+    if (scenario === "missing-directory" || scenario === "missing-manifest") {
+      await expect(result).rejects.toMatchObject({ code: "ENOENT", path: manifestPath });
+    } else if (scenario === "malformed-manifest") {
+      await expect(result).rejects.toBeInstanceOf(SyntaxError);
+    } else {
+      await expect(result).resolves.toBeNull();
+    }
+    if (scenario === "missing-directory") {
+      expect(existsSync(packageDir)).toBe(false);
+    } else {
+      expect(readdirSync(outDir)).toEqual(["sentinel.js"]);
+      expect(readFileSync(path.join(outDir, "sentinel.js"), "utf8")).toBe("keep\n");
+    }
+  });
+
   it("builds a private worker without registering it as a plugin entry", async () => {
     const packageDir = tempDirs.make("openclaw-plugin-runtime-worker-");
     mkdirSync(path.join(packageDir, "src"));

@@ -144,4 +144,43 @@ describe("gateway request scope", () => {
       );
     });
   });
+
+  it("isolates combined plugin identities across concurrent registry scopes", async () => {
+    const runtimeScope = await importGatewayRequestScopeModule();
+    const parent = {
+      ...TEST_SCOPE,
+      pluginId: "parent",
+      pluginSource: "parent-source",
+      pluginOrigin: "bundled" as const,
+      pluginTrustedOfficialInstall: true,
+    };
+    const registries = [createEmptyPluginRegistry(), createEmptyPluginRegistry()];
+    await runtimeScope.withPluginRuntimeGatewayRequestScope(parent, async () => {
+      await Promise.all(
+        registries.map((registry, index) =>
+          runtimeScope.withPluginRuntimePluginScope(
+            { pluginId: `child-${index}` },
+            async () => {
+              await Promise.resolve();
+              const scoped = runtimeScope.getPluginRuntimeGatewayRequestScope()!;
+              expect(scoped).toEqual({
+                ...TEST_SCOPE,
+                pluginId: `child-${index}`,
+                pluginRegistry: registry,
+                declaredProviderOwners: undefined,
+              });
+              expect(Object.hasOwn(scoped, "pluginSource")).toBe(false);
+              expect(Object.hasOwn(scoped, "pluginOrigin")).toBe(false);
+              expect(Object.hasOwn(scoped, "pluginTrustedOfficialInstall")).toBe(false);
+              scoped.pluginSource = "child-only";
+              expect(parent.pluginSource).toBe("parent-source");
+              expect(requireActivePluginRegistry()).toBe(registry);
+            },
+            registry,
+          ),
+        ),
+      );
+      expectGatewayScope(runtimeScope, parent);
+    });
+  });
 });

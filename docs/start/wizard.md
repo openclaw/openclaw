@@ -148,6 +148,24 @@ writer, and reviewer with separate workspaces, completed identities, and written
 role contracts. The chief of staff delegates suitable tasks and verifies specialist
 results before reporting to you.
 
+Guided setup creates the team after the selected provider passes its connection
+check. A failed check returns to provider selection without creating team members.
+Choosing **Skip** creates the workspaces for later use and reports that AI access
+still needs configuration.
+Guided setup remembers the chosen coordinator across restarts, including an
+interruption after provider activation but before member creation.
+
+For a team, `--workspace` is the parent directory; every member uses
+`<workspace>/<agent-id>`. After all members have been created, interrupted setup
+keeps that parent as its recovery workspace. Retry
+`openclaw onboard --workspace <workspace>` without `--team` to finish setup. Completion
+checks the full team roster and every member's workspace before closing the
+setup receipt; an incomplete or changed team stays pending with an error.
+
+If member creation itself fails, already-created members are retained and are
+not recreated automatically. Inspect `openclaw agents list` and repair the
+incomplete roster before retrying setup.
+
 Select the team directly in an interactive or non-interactive run with `--team`:
 
 ```bash

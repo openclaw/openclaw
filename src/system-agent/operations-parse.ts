@@ -59,6 +59,7 @@ export type SystemAgentCommandDeps = {
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
+  applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
   runPluginUninstall?: (
     pluginId: string,

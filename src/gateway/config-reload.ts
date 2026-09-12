@@ -681,8 +681,8 @@ export function startGatewayConfigReloader(opts: {
       if (entries.length === Object.keys(expected).length) {
         // A completed watcher application can settle this exact committed install.
         // Manual reloads carry no install hashes and always create a replacement.
-        const { capturePluginGenerationArtifact } =
-          await import("../plugins/plugin-generation-artifact.js");
+        const { inspectPluginGenerationSources } =
+          await import("../plugins/plugin-generation-source-inspection.js");
         await checkpoint();
         assertCurrent();
         const covered = pluginLifecycle.pluginIds.every((id) => {
@@ -705,27 +705,19 @@ export function startGatewayConfigReloader(opts: {
           registry === getActivePluginRegistry() &&
           metadata === getProcessGatewayPluginMetadataSnapshot()
         ) {
-          const sources = new Map<string, ReturnType<typeof capturePluginGenerationArtifact>>();
+          const source = inspectPluginGenerationSources(
+            entries.map((entry) => ({
+              pluginId: entry.pluginId,
+              rootDir: entry.rootDir,
+              entryFile: entry.source === entry.manifestPath ? entry.source : undefined,
+            })),
+          );
           for (const [id, digest] of Object.entries(expected)) {
-            const entry = entries.find((indexedEntry) => indexedEntry.pluginId === id);
-            if (!entry) {
-              throw new Error(`Plugin ${id} captured source changed after installation`);
-            }
-            const entryFile = entry.source === entry.manifestPath ? entry.source : undefined;
-            const key = `${entry.rootDir}\0${entryFile ?? ""}`;
-            let source = sources.get(key);
-            if (!source) {
-              source = capturePluginGenerationArtifact(entry.rootDir, entryFile);
-              source.dispose();
-              sources.set(key, source);
-            }
-            if (source.sourceDigest !== digest) {
+            if (source.sourceDigests[id] !== digest) {
               throw new Error(`Plugin ${id} captured source changed after installation`);
             }
           }
-          for (const source of sources.values()) {
-            source.assertSourceCurrent();
-          }
+          source.assertSourceCurrent();
           assertCurrent();
           application?.settle("applied");
           return completeApplication(completed.runtime);

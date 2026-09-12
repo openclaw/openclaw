@@ -32,6 +32,8 @@ openclaw doctor
     - Confirm the Gateway is running continuously.
     - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
     - `reason: not-due` in run output means the manual run was checked with `openclaw automations run <jobId> --due` and the job was not due yet.
+    - If the job's execution agent cannot be resolved, automatic and manual attempts record a failed task and a skipped run-history entry with the reason. Select an agent with `openclaw automations edit <jobId> --agent <id>`.
+    - If a capped job's stored named creator account is unavailable, the run fails before model/tool execution. Job details, run history, and warning logs name the account. Re-add it to the channel configuration, or recreate the automation from the intended account; changing the delivery `--account` does not change creator authority. Legacy jobs without account metadata keep their existing execution policy.
 
   </Accordion>
   <Accordion title="Job fired but no delivery">

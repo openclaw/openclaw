@@ -54,7 +54,23 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation` and each plugin's runtime state separately from configured enablement.
 - `plugins.inspect` (`operator.read`) inspects one plugin with `{ pluginId }`, including declared capabilities, grants, trust details, and a `reviewToken` for capability consent.
 - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
-- `plugins.install` (`operator.admin`) supports an official catalog entry with `{ source: "official", pluginId, acknowledgeInstallPolicyWarning? }` or a ClawHub package with `{ source: "clawhub", packageName, version?, acknowledgeInstallPolicyWarning? }`. When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks.
+- `plugins.install` (`operator.admin`) accepts these source-specific request fields:
+
+  | `source`      | Fields                                                                     |
+  | ------------- | -------------------------------------------------------------------------- |
+  | `bundled`     | `pluginId`, optional `spec`                                                |
+  | `clawhub`     | `packageName`, optional `version`, `expectedPluginId`, `expectedIntegrity` |
+  | `git`         | `spec`                                                                     |
+  | `local`       | `path`, optional `link`                                                    |
+  | `marketplace` | `marketplace`, `plugin`                                                    |
+  | `npm`         | `spec`, optional `pin`, `expectedPluginId`, `expectedIntegrity`            |
+  | `npm-pack`    | `archivePath`                                                              |
+  | `official`    | `pluginId`, optional `version: "latest"`, `pin`                            |
+
+  Each request can also include `mode: "install" | "update"`, `acknowledgeInstallPolicyWarning: true`, and `acknowledgeCapabilities: { reviewToken }`. Omitted `mode` means install. Local paths, npm-pack archives, marketplace sources, and local Git sources require a connection the Gateway identifies as local; paths refer to that Gateway host. Use an npm spec for a specific official package version.
+
+  When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks.
+
 - `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled, acknowledgeCapabilities? }`. The response includes the updated catalog entry and any slot-selection warnings.
 - `plugins.reload` (`operator.admin`) reloads one or more discovered plugins with `{ plugins: [{ pluginId, installHash?, sourceDigests? }], acknowledgeCapabilities? }`, preserving configured enablement. Send 1–64 targets; a one-plugin request uses the same array envelope. The response contains `pluginIds`, `restartRequired: false`, and a required `runtime` receipt.
 - `plugins.refresh` (`operator.admin`) refreshes plugin metadata and applies the resulting registry with `{}`.

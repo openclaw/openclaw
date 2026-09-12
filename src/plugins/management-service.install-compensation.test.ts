@@ -19,11 +19,12 @@ import {
   projectPluginRuntimeFailure,
 } from "./lifecycle.js";
 import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const mocks = vi.hoisted(() => ({ install: vi.fn(), persist: vi.fn() }));
+const mocks = vi.hoisted(() => ({ install: vi.fn(), commit: vi.fn() }));
 vi.mock("./clawhub.js", () => ({
   installPluginFromClawHub: (...args: unknown[]) => mocks.install(...args),
 }));
@@ -39,10 +40,58 @@ vi.mock("./install.js", async (importOriginal) => ({
 vi.mock("./marketplace.js", () => ({
   installPluginFromMarketplace: (...args: unknown[]) => mocks.install(...args),
 }));
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
-  persistPluginInstall: (...args: unknown[]) => mocks.persist(...args),
+vi.mock("./install-record-commit.js", () => ({
+  commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commit(...args),
 }));
+vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index-records.js")>()),
+  loadInstalledPluginIndexInstallRecords: async () => ({}),
+}));
+vi.mock("./discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./discovery.js")>()),
+  discoverOpenClawPlugins: () => ({ candidates: [], diagnostics: [] }),
+}));
+vi.mock("./manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryCore: (
+      params: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
+    ) =>
+      params?.discovery
+        ? actual.loadPluginManifestRegistryCore(params)
+        : {
+            plugins: Object.entries(params?.installRecords ?? {}).map(([id, record]) =>
+              recordPluginManifestInstallOwner(
+                {
+                  id,
+                  channels: [],
+                  providers: [],
+                  cliBackends: [],
+                  skills: [],
+                  hooks: [],
+                  origin: "global",
+                  rootDir: record.installPath,
+                  manifestPath: `${record.installPath}/openclaw.plugin.json`,
+                },
+                id,
+              ),
+            ),
+            diagnostics: [],
+          },
+  };
+});
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: () => ({ index: { plugins: [] }, byPluginId: new Map() }),
+}));
+vi.mock("./slot-selection.js", () => ({
+  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+}));
+vi.mock("./registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: async () => undefined,
+}));
+vi.mock("./status.js", () => ({ buildPluginSnapshotReport: () => ({ plugins: [] }) }));
 const { installManagedPluginSource } = await import("./management-install.js");
 const snapshot = { config: {}, baseHash: "base-hash", writeOptions: {} };
 const acceptCapabilities: PluginCapabilityConsentHandler = async (review) => ({
@@ -63,7 +112,30 @@ const requests = [
 ] satisfies ManagedPluginSourceInstallRequest[];
 
 describe("managed plugin install transactions", () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    mocks.install.mockReset();
+    mocks.commit.mockReset().mockImplementation(async ({ nextConfig }) => ({
+      configWrite: {
+        path: "/tmp/openclaw.json",
+        nextConfig,
+        persistedHash: "committed",
+        persistedSourceConfig: nextConfig,
+      },
+    }));
+  });
+
+  it("returns the committed bundled configuration to the management owner", async () => {
+    const config = { plugins: { entries: { demo: { enabled: true } } } };
+    const installed = await installManagedPluginSource({
+      request: {
+        source: "bundled",
+        rawSpec: "demo",
+        bundledSource: { pluginId: "demo", localPath: "/bundled/demo" },
+      },
+      snapshot,
+    });
+    expect(installed).toMatchObject({ ok: true, config });
+  });
 
   it("rechecks the initiating owner after awaited capability consent", async () => {
     const expired = new Error("approval owner expired during review");
@@ -96,7 +168,7 @@ describe("managed plugin install transactions", () => {
         },
       }),
     ).rejects.toBe(expired);
-    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.commit).not.toHaveBeenCalled();
   });
 
   it.each(requests)("settles $source payloads at the config commit boundary", async (request) => {
@@ -107,7 +179,7 @@ describe("managed plugin install transactions", () => {
       "runtime-apply",
       "none",
     ] as const) {
-      mocks.persist.mockClear();
+      mocks.commit.mockReset();
       const home = await fs.realpath(tempDirs.make("openclaw-managed-upgrade-"));
       const sourceDir = path.join(home, "incoming");
       const targetDir = path.join(home, "extensions", "demo");
@@ -137,30 +209,19 @@ describe("managed plugin install transactions", () => {
             )
           : new Error(failure);
       let active = true;
-      mocks.persist.mockImplementation(
-        async (
-          params: Parameters<typeof import("./install-persistence.js").persistPluginInstall>[0],
-        ) => {
-          params.beforePersistentApply?.();
-          expect(params.install.acceptedSurface?.tools).toEqual(["demo.write"]);
-          if (request.source === "marketplace") {
-            expect(params.install).toMatchObject({
-              source: "marketplace",
-              marketplaceSource: request.marketplace,
-              marketplacePlugin: request.plugin,
-            });
-          }
-          if (failure === "before-commit") {
-            throw conflict;
-          }
-          params.onCommitted?.();
-          if (failure === "after-commit") {
-            throw conflict;
-          }
-          await params.applyRuntime?.({ config: {}, pluginIds: ["demo"], reason: "install" });
-          return {};
-        },
-      );
+      mocks.commit.mockImplementation(async ({ nextConfig }) => {
+        if (failure === "before-commit") {
+          throw conflict;
+        }
+        return {
+          configWrite: {
+            path: path.join(home, "openclaw.json"),
+            nextConfig,
+            persistedHash: "committed",
+            persistedSourceConfig: nextConfig,
+          },
+        };
+      });
       mocks.install.mockImplementation(
         async (params: {
           onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
@@ -225,6 +286,15 @@ describe("managed plugin install transactions", () => {
         request,
         snapshot,
         env: { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") },
+        ...(failure === "after-commit"
+          ? {
+              runtime: {
+                log: () => {
+                  throw conflict;
+                },
+              },
+            }
+          : {}),
         ...(failure === "runtime-apply"
           ? {
               applyRuntime: async () => {
@@ -243,7 +313,7 @@ describe("managed plugin install transactions", () => {
         await expect(installed).resolves.toMatchObject({ ok: true });
       } else if (failure === "authority-closed") {
         await expect(installed).rejects.toThrow("authority-closed");
-        expect(mocks.persist).not.toHaveBeenCalled();
+        expect(mocks.commit).not.toHaveBeenCalled();
       } else if (failure === "after-commit" || failure === "runtime-apply") {
         const rejected = await installed.catch((error: unknown) => error);
         expect(rejected).toBeInstanceOf(PluginInstallPersistedError);
@@ -264,6 +334,18 @@ describe("managed plugin install transactions", () => {
         await expect(installed).rejects.toBe(conflict);
         expect(projectPluginRuntimeFailure(conflict)).not.toHaveProperty("persistence");
       }
+      if (failure !== "authority-closed") {
+        expect(mocks.commit.mock.calls[0]?.[0].nextInstallRecords.demo).toMatchObject({
+          acceptedSurface: { tools: ["demo.write"] },
+        });
+        if (request.source === "marketplace") {
+          expect(mocks.commit.mock.calls[0]?.[0].nextInstallRecords.demo).toMatchObject({
+            source: "marketplace",
+            marketplaceSource: request.marketplace,
+            marketplacePlugin: request.plugin,
+          });
+        }
+      }
       expect(onCapabilityConsent).toHaveBeenCalledOnce();
       expect(await fs.readFile(path.join(targetDir, "version"), "utf8"), failure).toBe(
         failure === "before-commit" || failure === "authority-closed" ? "1.0.0" : "2.0.0",
@@ -280,7 +362,7 @@ describe("managed plugin install transactions", () => {
     await fs.writeFile(path.join(sourcePath, "version"), "operator-owned");
     const conflict = new Error("config changed during plugin link");
     mocks.install.mockResolvedValue({ ok: true, pluginId: "demo", targetDir: sourcePath });
-    mocks.persist.mockRejectedValue(conflict);
+    mocks.commit.mockRejectedValue(conflict);
     await expect(
       installManagedPluginSource({
         request: {
@@ -318,13 +400,9 @@ describe("managed plugin install transactions", () => {
             params,
           ),
       );
-      mocks.persist.mockImplementation(async (params: { onCommitted?: () => void }) => {
-        if (settlement === "rollback") {
-          throw conflict;
-        }
-        params.onCommitted?.();
-        return {};
-      });
+      if (settlement === "rollback") {
+        mocks.commit.mockRejectedValue(conflict);
+      }
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const installed = installManagedPluginSource({
         request: { source: "local", path: "/incoming", recordSource: "path", mode: "update" },

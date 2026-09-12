@@ -1,5 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
+import { Directive, directive } from "lit/directive.js";
+import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
@@ -151,6 +153,7 @@ export function renderMessageMarkdown(
   const recovered = recoverFullMessage && disclosure?.expanded;
   const text = renderMarkdownText(
     recovered ? (disclosure.markdown ?? markdown) : markdown,
+    messageKey,
     opts.isStreaming,
     recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
     duplicateSuffix,
@@ -208,8 +211,43 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
+class MarkdownPartsDirective extends Directive {
+  private messageKey: string | undefined;
+  private source = "";
+  private stableHtml = "";
+  private fragments: string[] = [];
+  private generation = {};
+
+  render(messageKey: string, source: string, [stableHtml, tailHtml]: readonly [string, string]) {
+    if (
+      this.messageKey !== messageKey ||
+      !source.startsWith(this.source) ||
+      !stableHtml.startsWith(this.stableHtml)
+    ) {
+      this.fragments = [];
+      this.stableHtml = "";
+      this.generation = {};
+    }
+    if (stableHtml.length > this.stableHtml.length) {
+      this.fragments.push(stableHtml.slice(this.stableHtml.length));
+    }
+    this.messageKey = messageKey;
+    this.source = source;
+    this.stableHtml = stableHtml;
+    // Canonical HTML proves continuity; live DOM also contains the reader's
+    // control choices and Markdown enhancements, which must stay on its nodes.
+    return keyed(
+      this.generation,
+      html`${this.fragments.map((fragment) => unsafeHTML(fragment))}${unsafeHTML(tailHtml)}`,
+    );
+  }
+}
+
+const markdownParts = directive(MarkdownPartsDirective);
+
 function renderMarkdownText(
   markdown: string,
+  messageKey: string,
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
@@ -222,9 +260,7 @@ function renderMarkdownText(
     const terminalPart = parts[1].trim() ? 1 : 0;
     parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
   }
-  // Separate Lit parts preserve completed code controls and diagrams while the
-  // streaming tail changes; the Markdown splitter still owns container boundaries.
-  const content = parts.map((part) => unsafeHTML(part));
+  const content = markdownParts(messageKey, markdown, parts);
   return html` <div class="chat-text" dir="${detectTextDirection(markdown)}">${content}</div> `;
 }
 

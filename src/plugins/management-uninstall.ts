@@ -16,6 +16,7 @@ import {
 } from "./install-config-mutation.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
+import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   removePluginInstallRecordFromRecords,
@@ -232,6 +233,7 @@ export async function uninstallPluginWithPolicy(
     beforePersistentApply?: () => void;
     signal?: AbortSignal;
     applyRuntime?: PluginLifecycleRuntimeApply;
+    deferRuntime?: PluginInstallRuntimeDeferral;
     onPreview?: (preview: PreparedPluginUninstall) => void;
     onWarning?: (warning: string) => void;
     onComplete?: (result: PluginUninstallOutcome) => void;
@@ -296,9 +298,10 @@ export async function uninstallPluginWithPolicy(
               baseHash: snapshot.baseHash,
               writeOptions: {
                 ...guardedWriteOptions(snapshot.writeOptions),
-                afterWrite: params.applyRuntime
-                  ? { mode: "none", reason: "plugin lifecycle applies runtime" }
-                  : { mode: "auto" },
+                afterWrite:
+                  params.applyRuntime || params.deferRuntime
+                    ? { mode: "none", reason: "plugin lifecycle applies runtime" }
+                    : { mode: "auto" },
               },
             }),
           );
@@ -345,7 +348,7 @@ export async function uninstallPluginWithPolicy(
             writeOptions: {
               ...guardedWriteOptions(snapshot.writeOptions),
               ...(cli || params.applyRuntime ? { allowConfigSizeDrop: true } : {}),
-              ...(params.applyRuntime
+              ...(params.applyRuntime || params.deferRuntime
                 ? {
                     afterWrite: {
                       mode: "none" as const,
@@ -358,6 +361,7 @@ export async function uninstallPluginWithPolicy(
             },
           }),
         );
+        params.deferRuntime?.record({ operation: "uninstall", pluginId, write: committed });
         const warnings = [
           ...(!cli
             ? collectClawPluginUninstallWarnings({

@@ -2,22 +2,31 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteCoordinator } from "./sqlite-coordinator.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
-import { withSqliteSourceHandle, withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
+import { readSqliteSchemaHeader, type SqliteSchemaHeader } from "./sqlite-schema-header.js";
+import {
+  withSqliteSourceHandle,
+  withSqliteSourceHandleAsync,
+  withSqliteSourceReadDatabase,
+} from "./sqlite-source-handle.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
 const SQLITE_HEADER_BYTES = 20;
+const SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS = 30_000;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
@@ -459,7 +468,9 @@ async function createOnlineReadOnlyBackup(
     }
     const source = openNodeSqliteDatabase(pathname, { readOnly: true });
     try {
-      source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+      source.exec(
+        `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
+      );
       source.prepare("PRAGMA schema_version;").get();
       await sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath));
       source.exec("ROLLBACK;");
@@ -610,6 +621,72 @@ function prepareReadOnlySourceSyncInProcess(
   }
   throw new Error(`SQLite source did not stabilize for read-only inspection: ${canonicalPath}`, {
     cause: lastChange,
+  });
+}
+
+/** Consume a private snapshot and retain both read and cleanup failures. */
+export function readSqliteSchemaHeaderFromSnapshot(
+  prepared: PreparedSqliteReadOnlyLocation,
+  signal?: AbortSignal,
+): SqliteSchemaHeader {
+  return runWithSqliteCoordinator(
+    {
+      release: () => {
+        if (!prepared.cleanup()) {
+          throw new Error(`SQLite read-only worker snapshot cleanup failed: ${prepared.location}`);
+        }
+      },
+    },
+    "SQLite schema header snapshot",
+    () => {
+      signal?.throwIfAborted();
+      const database = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      try {
+        setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+        return readSqliteSchemaHeader(database);
+      } finally {
+        database.close();
+      }
+    },
+  );
+}
+
+/** Fixed metadata inspection in the read-only child; no payload scan or backup
+ * unless source journal state requires private recovery/artifact preservation. */
+export function inspectSqliteSchemaHeaderInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandleAsync(pathname, async () => {
+    const canonicalPath = fs.realpathSync.native(pathname);
+    const mode = readSourceJournalMode(canonicalPath);
+    const sidecars = readSourceSidecars(canonicalPath);
+    if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
+      let readError: unknown;
+      try {
+        return withSqliteSourceReadDatabase(canonicalPath, (database) => {
+          try {
+            setSqliteBusyTimeout(database, SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS);
+            return readSqliteSchemaHeader(database);
+          } catch (error) {
+            readError = error;
+            throw error;
+          }
+        });
+      } catch (error) {
+        // Only SQLite's recovery-required refusal permits private recovery.
+        // Ordinary I/O, admission, and native close errors must stay failures.
+        if (
+          error !== readError ||
+          !isSqliteReadOnlyError(error) ||
+          !statIfPresent(`${canonicalPath}-journal`) ||
+          readSourceJournalMode(canonicalPath) !== "rollback"
+        ) {
+          throw error;
+        }
+      }
+    }
+    // An incomplete WAL family would create source sidecars on native open.
+    // The existing snapshot owner also handles hot rollback recovery privately.
+    const prepared = await prepareReadOnlySourceInProcess(canonicalPath, stagingRoot);
+    return readSqliteSchemaHeaderFromSnapshot(prepared);
   });
 }
 

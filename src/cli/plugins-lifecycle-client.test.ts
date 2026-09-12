@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 
-const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn() }));
+const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn() }));
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.call }));
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({ gateway: { port: 18789 } }) }));
-const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
+const { resolvePluginLifecycleGateway, resolvePluginBatchReload } =
+  await import("./plugins-lifecycle-client.js");
 
 describe("plugin lifecycle CLI transport", () => {
   beforeEach(() => {
     mocks.lock.mockReset().mockResolvedValue({ port: 19001 });
+    mocks.config.mockReset().mockReturnValue({ gateway: { port: 18789 } });
     mocks.call.mockReset().mockResolvedValue({ runtime: { generation: 2 } });
   });
 
@@ -26,11 +28,49 @@ describe("plugin lifecycle CLI transport", () => {
     );
   });
 
+  it("leaves plugin config validation to the install owner when dispatching recovery", async () => {
+    mocks.config.mockImplementation(() => {
+      throw Object.assign(new Error("owned plugin path is missing"), { code: "INVALID_CONFIG" });
+    });
+    const gateway = await resolvePluginLifecycleGateway();
+    expect(gateway).not.toBeNull();
+    await expect(
+      gateway!("plugins.install", { source: "local", path: "/replacement" }),
+    ).resolves.toEqual({ runtime: { generation: 2 } });
+    expect(mocks.call).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugins.install",
+        localPortOverride: 19001,
+        ignoreEnvUrlOverride: true,
+      }),
+    );
+  });
+
   it("selects offline execution only when no local owner exists", async () => {
     mocks.lock.mockResolvedValue(null);
     expect(await resolvePluginLifecycleGateway()).toBeNull();
     expect(mocks.call).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "requires an actual batch application receipt (present=%s)",
+    async (present) => {
+      const runtime = { operationId: "batch", generation: 2, pluginIds: ["demo"] };
+      const targets = [{ pluginId: "demo", installHash: "a".repeat(64) }];
+      const warnings = ["Previous plugin cleanup did not finish."];
+      mocks.call.mockResolvedValue(present ? { runtime, warnings } : {});
+      const reload = await resolvePluginBatchReload();
+      expect(reload).toBeDefined();
+      if (present) {
+        await expect(reload!(targets)).resolves.toEqual({ ...runtime, warnings });
+      } else {
+        await expect(reload!(targets)).rejects.toThrow("did not confirm");
+      }
+      expect(mocks.call).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ method: "plugins.reload", params: { plugins: targets } }),
+      );
+    },
+  );
 
   it("propagates a lost reply without retrying a possibly committed mutation", async () => {
     const failure = new Error("connection lost");

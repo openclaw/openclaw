@@ -1536,7 +1536,16 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
-      config: testConfig,
+      config: {
+        ...testConfig,
+        channels: {
+          discord: {
+            accounts: {
+              creator: {},
+            },
+          },
+        },
+      },
       agentAccountId: "delivery",
       scheduledToolPolicy: {
         version: 1,
@@ -1560,9 +1569,19 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
-      config: testConfig,
+      config: {
+        ...testConfig,
+        channels: {
+          discord: {
+            accounts: {
+              creator: {},
+            },
+          },
+        },
+      },
       agentAccountId: "delivery",
       messageChannel: "discord",
+      messageProvider: "discord",
       scheduledToolPolicy: {
         version: 1,
         mode: "account",

@@ -2,10 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadConfigForInstall } from "../cli/plugins-install-config.js";
-import { tryInstallHookPackFromLocalPath } from "../cli/plugins-install-hook-fallback.js";
+import { installPluginWithHookFallback } from "../cli/plugins-install-hook-fallback.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { loadConfigForInstall } from "../plugins/install-config.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -100,19 +99,12 @@ describe.each([
 
       const snapshot = await loadConfigForInstall({
         rawSpec: sourceDir,
-        normalizedSpec: sourceDir,
-        resolvedPath: sourceDir,
       });
-      const installResult = await withPluginLifecycleLease({}, async (lease) =>
-        tryInstallHookPackFromLocalPath({
-          snapshot,
-          resolvedPath: sourceDir,
-          installMode: "install",
-          safetyOverrides: { config: snapshot.config },
-          link,
-          assertOwned: lease.assertOwned.bind(lease),
-        }),
-      );
+      const installResult = await installPluginWithHookFallback({
+        request: { source: "local", path: sourceDir, mode: "install", link },
+        snapshot,
+        safetyOverrides: { config: snapshot.config },
+      });
       expect(installResult).toEqual({ ok: true });
 
       const installed = await readConfigFileSnapshot();

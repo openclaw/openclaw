@@ -39,6 +39,7 @@ async function callHandler(
   params: Record<string, unknown>,
   runtimeConfig: Record<string, unknown> = {},
   applyRuntime: PluginLifecycleRuntimeApply = async () => application,
+  localClient = false,
 ) {
   let ok: boolean | null = null;
   let response: unknown;
@@ -49,7 +50,8 @@ async function callHandler(
   )({
     params,
     req: {} as never,
-    client: null as never,
+    // Minimal transport fixture: only the host-attested ingress marker is read here.
+    client: (localClient ? { internal: { isLocalClient: true } } : null) as never,
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig: () => runtimeConfig,
@@ -92,6 +94,40 @@ describe("plugin management Gateway mutation handlers", () => {
     managementMocks.reload.mockReset();
     managementMocks.setEnabled.mockReset();
     managementMocks.uninstall.mockReset();
+  });
+
+  it.each([
+    { source: "local", path: "/tmp/demo.tgz" },
+    { source: "npm-pack", archivePath: "/tmp/demo.tgz" },
+    { source: "git", spec: "git:file:///tmp/demo.git" },
+    { source: "marketplace", marketplace: "/tmp/marketplace", plugin: "demo" },
+    { source: "marketplace", marketplace: "registered-marketplace", plugin: "demo" },
+    { source: "marketplace", marketplace: "https://example.test/marketplace.json", plugin: "demo" },
+  ])("requires host-attested local ingress for $source artifacts", async (request) => {
+    managementMocks.install.mockResolvedValue({ plugin: workboard, application });
+    expect(await callHandler("plugins.install", request)).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("Gateway host") },
+    });
+    expect(managementMocks.install).not.toHaveBeenCalled();
+    expect(await callHandler("plugins.install", request, {}, undefined, true)).toMatchObject({
+      ok: true,
+      response: { restartRequired: false, runtime: application },
+    });
+    expect(managementMocks.install).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ request }),
+    );
+  });
+
+  it.each([
+    { source: "npm", spec: "demo@1.2.3" },
+    { source: "git", spec: "git:https://example.test/demo.git@v1" },
+  ])("keeps remote $source source requests on the install owner", async (request) => {
+    managementMocks.install.mockResolvedValue({ plugin: workboard, application });
+    expect(await callHandler("plugins.install", request)).toHaveProperty("ok", true);
+    expect(managementMocks.install).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ request }),
+    );
   });
 
   it.each([undefined, ["Plugin cleanup did not finish; inspect the Gateway log."]])(

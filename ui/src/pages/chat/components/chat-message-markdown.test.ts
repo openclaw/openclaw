@@ -2,8 +2,9 @@
 // Contract for full-message eligibility: the Gateway marks every display-
 // capped projection; pending inputs share assistant expansion without gaining
 // transcript mutation actions.
-import { render } from "lit";
+import { html, nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -180,35 +181,118 @@ describe("user message disclosure", () => {
 });
 
 describe("streaming message Markdown", () => {
-  it("retains completed fence controls while the following paragraph streams", () => {
-    const container = document.createElement("div");
-    const prefix = "```ts\nconst answer = 42;\n```\n\n";
-    const renderTail = (tail: string) =>
+  it.each([
+    { stage: "following paragraph", tail: "The answer is ready.", isStreaming: true },
+    {
+      stage: "later paragraph",
+      tail: "The answer is ready.\n\nMore is arriving.",
+      isStreaming: true,
+    },
+    {
+      stage: "completed reply with its message owner retained",
+      tail: "The answer is ready.",
+      isStreaming: false,
+    },
+  ])("retains completed code choices in the $stage", async ({ tail, isStreaming }) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const code = Array.from({ length: 10 }, (_, index) => `const value${index} = ${index};`).join(
+      "\n",
+    );
+    const prefix = `\`\`\`ts\n${code}\n\`\`\`\n\n`;
+    const renderTail = (text: string, streaming: boolean) =>
       render(
-        renderMessageMarkdown(
-          prefix + tail,
-          "retained-fence",
-          { role: "assistant", isStreaming: true },
-          { codeBlockInteraction: "interactive" },
-        ),
+        html`<section ${markdownBlocks()} @click=${handleMarkdownCodeBlockClick}>
+          ${renderMessageMarkdown(
+            prefix + text,
+            "retained-fence",
+            { role: "assistant", isStreaming: streaming },
+            { codeBlockInteraction: "interactive", linkFavicons: !streaming },
+          )}
+        </section>`,
         container,
       );
-    container.addEventListener("click", handleMarkdownCodeBlockClick);
-    renderTail("The answer");
-    const code = container.querySelector("code");
-    const wrapper = container.querySelector(".code-block-wrapper");
-    expect(code).not.toBeNull();
-    container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
-    expect(wrapper?.classList.contains("is-wrapped")).toBe(true);
+    try {
+      renderTail("The answer", true);
+      await Promise.resolve();
+      container.querySelector<HTMLButtonElement>(".code-block-expand")?.click();
+      container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
+      expect(container.querySelector(".code-block-expand")?.getAttribute("aria-expanded")).toBe(
+        "true",
+      );
+      expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
 
-    renderTail("The answer is ready.");
+      renderTail(tail, isStreaming);
+      await Promise.resolve();
 
-    expect(container.querySelector("code")).toBe(code);
-    expect(container.querySelector(".code-block-wrapper")?.classList.contains("is-wrapped")).toBe(
-      true,
-    );
-    expect(container.querySelector(".chat-text > p")?.textContent).toBe("The answer is ready.");
-    container.removeEventListener("click", handleMarkdownCodeBlockClick);
+      expect(container.querySelector(".code-block-expand")?.getAttribute("aria-expanded")).toBe(
+        "true",
+      );
+      expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      expect(container.querySelector(".code-block-wrapper.is-expanded.is-wrapped")).not.toBeNull();
+      expect(container.querySelector(".chat-text > p:last-child")?.textContent).toBe(
+        tail.split("\n\n").at(-1),
+      );
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it.each([
+    "message identity",
+    "source correction",
+    "render options",
+    "reference definition",
+  ] as const)("updates streaming Markdown after a %s change", async (change) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const source = "```ts\nconst original = 42;\n```\n\nSee [guide][ref]\n\nTail";
+    const show = (markdown: string, key = "message", interactive = true) =>
+      render(
+        html`<section ${markdownBlocks()} @click=${handleMarkdownCodeBlockClick}>
+          ${renderMessageMarkdown(
+            markdown,
+            key,
+            { role: "assistant", isStreaming: true },
+            { codeBlockInteraction: interactive ? "interactive" : "static" },
+          )}
+        </section>`,
+        container,
+      );
+    try {
+      show(source);
+      await Promise.resolve();
+      container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
+      expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+
+      if (change === "message identity") {
+        show(source, "other-message");
+        expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
+          "false",
+        );
+      } else if (change === "source correction") {
+        show(source.replace("const original = 42;", "const corrected = 43;"));
+        expect(container.querySelector("code")?.textContent).toBe("const corrected = 43;\n");
+      } else if (change === "render options") {
+        show(source, "message", false);
+        expect(container.querySelector(".code-block-wrap")).toBeNull();
+        expect(container.querySelector(".code-block-copy")).not.toBeNull();
+      } else {
+        show(`${source}\n\n[ref]: https://example.com/guide`);
+        expect(container.querySelector('a[href="https://example.com/guide"]')?.textContent).toBe(
+          "guide",
+        );
+      }
+      expect(container.querySelectorAll("pre code")).toHaveLength(1);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
   });
 
   it.each([
@@ -230,6 +314,22 @@ describe("streaming message Markdown", () => {
 
     expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
     expect(container.querySelector(`${owner} > .chat-duplicate-count`)?.textContent).toBe("×3");
+    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
+
+    render(
+      renderMessageMarkdown(
+        `${markdown}\n\nMore`,
+        "streaming-duplicate",
+        { role: "assistant", isStreaming: true },
+        {},
+        { count: 4, label: "Four identical messages" },
+      ),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
+    expect(
+      container.querySelector(".chat-text > p:last-child > .chat-duplicate-count")?.textContent,
+    ).toBe("×4");
     expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
   });
 });

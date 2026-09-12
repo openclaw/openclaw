@@ -132,6 +132,7 @@ function makeStarterParams(params?: { entry?: unknown; loadLatest?: unknown }) {
       replyOptionMedia: [],
     },
     imageOrder: [],
+    abortSignal: new AbortController().signal,
     userTurnTranscriptRecorder: {},
     logGateway: { warn: vi.fn() },
   } as unknown as Parameters<typeof createChatSendMessageInjectionStarter>[0];
@@ -440,6 +441,7 @@ describe("createChatSendMessageInjectionStarter", () => {
 
     return {
       target,
+      abortSignal: new AbortController().signal,
       request: {
         p: { sessionKey, message: rawMessage, idempotencyKey: "steer-input" },
         rawMessage,

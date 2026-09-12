@@ -18,7 +18,8 @@ For its full command contract, flags, source-selection rules, and edge cases, se
 
 Typical workflow: find a package, install it, enable it, then verify the plugin's
 runtime registrations. Control UI actions apply to the running Gateway without
-restarting it. The CLI also supports npm, git, and local-path installs; see
+restarting it. CLI installs also use the running local Gateway for npm, Git,
+local paths and archives, npm-pack tarballs, and marketplace sources. See
 [Apply changes and inspect](#apply-changes-and-inspect) for those paths.
 
 ## Use the Control UI
@@ -260,19 +261,18 @@ paths, and the `memory` and `contextEngine` slots.
 ## Apply changes and inspect
 
 Control UI actions and the Gateway plugin-management RPCs apply plugin changes
-without restarting the Gateway. Ordinary CLI enable, disable, and uninstall
-commands use the running Gateway when available; updates refresh it after the
-local package operation finishes. Without a running Gateway, those commands
-update the local installation for its next startup.
+without restarting the Gateway. Ordinary CLI install, enable, disable, and
+uninstall commands use the running local Gateway when available; updates refresh
+it after the local package operation finishes. Without a running Gateway, those
+commands update the local installation for its next startup.
 
-CLI installation from npm, git, archives, and local paths still uses the local
-installer and requests a Gateway restart. Use Control UI installation for
-official or ClawHub packages when you need synchronous application without a
-restart. If automatic restart is disabled, restart before checking the locally
-installed runtime surfaces:
+CLI installation supports npm, Git, local paths and archives, npm-pack tarballs,
+marketplace sources, and official or ClawHub packages through that same owner.
+See [Install](/cli/plugins#install) for source selection and capability consent.
+After an offline installation, start the Gateway to use the installed runtime
+surfaces. To inspect their registration:
 
 ```bash
-openclaw gateway restart
 openclaw plugins inspect <plugin-id> --runtime --json
 ```
 

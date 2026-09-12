@@ -9,16 +9,59 @@ import {
   createSqliteSnapshotStagingDirectory,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
+  readSqliteSchemaHeaderFromSnapshot,
   removeTempDirectory,
   SQLITE_SNAPSHOT_STAGING_PREFIX,
   type PreparedSqliteReadOnlyLocation,
 } from "./sqlite-readonly-location.js";
 import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
+import type { SqliteSchemaHeader } from "./sqlite-schema-header.js";
 import { withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
 import {
   hasStateDatabaseSourceExclusion,
+  prepareStateDatabaseCanonicalMutation,
   prepareStateDatabaseMutationSnapshot,
 } from "./state-database-coordinator.js";
+
+/** Inspect metadata without copying the payload. Exclusive task-local scopes
+ * must use their snapshot owner: a child cannot borrow that source authority. */
+export async function inspectSqliteSchemaHeader(
+  pathname: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  options.signal?.throwIfAborted();
+  if (
+    prepareStateDatabaseCanonicalMutation(pathname) ||
+    hasStateDatabaseSourceExclusion(pathname)
+  ) {
+    const prepared = await prepareSqliteReadOnlyLocation(pathname, options);
+    return readSqliteSchemaHeaderFromSnapshot(prepared, options.signal);
+  }
+  // Reserve cleanup ownership before launch even if only journal recovery will
+  // need a copy. Cancellation joins the child before deleting unpublished bytes.
+  const stagingRoot = await createSqliteSnapshotStagingDirectory();
+  let header: SqliteSchemaHeader;
+  try {
+    options.signal?.throwIfAborted();
+    header = await runSqliteReadOnlyWorker(pathname, {
+      mode: "schema-header",
+      stagingRoot,
+      signal: options.signal,
+    });
+    options.signal?.throwIfAborted();
+  } catch (error) {
+    if (!removeTempDirectory(stagingRoot)) {
+      throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  if (!removeTempDirectory(stagingRoot)) {
+    throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`);
+  }
+  return header;
+}
 
 // Keep parent launch orchestration out of the native snapshot child's import graph.
 export async function prepareSqliteReadOnlyLocation(

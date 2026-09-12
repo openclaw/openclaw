@@ -251,7 +251,12 @@ sidebarTitle: "Voice and speech"
     The public API uses `/v1/live/sessions` for WebRTC creation and primary
     WebSockets. Direct sockets start with `session.start`; browser sessions
     start during the SDP exchange. A Gateway sideband handles delegated work
-    while browser media stays on WebRTC. Public transcript events are fragments,
+    while browser media stays on WebRTC. Public Live instructions describe
+    `session.thinking.append` as quiet context and `session.commentary.append`
+    as spoken updates. Custom instructions should preserve that distinction;
+    the Codex route uses its separate commentary/speakable channel contract.
+
+    Public transcript events are fragments,
     not completed turns. The Gateway owns persistence of bounded received-text
     snapshots; clients display captions without saving another copy. Both live
     captions and saved snapshots can span several exchanges by the same speaker;

@@ -705,6 +705,27 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it.each([
+    { customType: "run-failed-before-reply", label: "Error" },
+    { customType: "cloud-workspace-recovery-failed", label: "Error" },
+    { customType: "system-notice", label: "System" },
+  ])("labels $customType notices as $label", ({ customType, label }) => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "custom",
+        customType,
+        content: "Notice details",
+        display: true,
+        timestamp: Date.now(),
+      },
+      "custom",
+    );
+    expect(container.querySelector(".chat-sender-name")?.textContent).toBe(label);
+    expect(container.textContent).toContain("Notice details");
+  });
+
   it("preserves paragraph breaks around assistant attachments in rendered markdown", () => {
     const container = document.createElement("div");
 

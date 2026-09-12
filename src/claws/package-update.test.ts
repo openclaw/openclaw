@@ -1,4 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { ensureInstallTargetAvailable } from "../infra/install-target.js";
+import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-commit.js";
+import type { installManagedPlugin } from "../plugins/management-mutations.js";
+import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
+import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
 import { installClawPackages } from "./packages.js";
@@ -10,6 +20,9 @@ import {
   type ResolvedClawPackage,
 } from "./types.js";
 import { CLAW_UPDATE_PLAN_SCHEMA_VERSION, type ClawUpdatePlan } from "./update-plan.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(closeOpenClawStateDatabaseForTest);
 
 function ref(kind: "skill" | "plugin", name: string, version: string): PersistedClawPackageRef {
   return {
@@ -424,51 +437,170 @@ describe("applyClawPackageUpdate", () => {
     expect(replaceExpected).not.toHaveBeenCalled();
   });
 
-  it("allows only the expected prior version conflict for an owned plugin upgrade", async () => {
-    const previous = ref("plugin", "audit", "0.9.0");
-    const preflightPlugin = vi.fn(async () => ({
-      ok: false as const,
-      code: "plugin_version_conflict" as const,
-      request: {} as never,
-      installedVersion: "0.9.0",
-      expectedVersion: "1.0.0",
-    }));
-    const installPackages = vi.fn(
-      async (_plan: ClawAddPlan, options: Parameters<typeof installClawPackages>[1]) => {
-        expect(options).toBeDefined();
-        const preflight = await options!.deps?.preflightPlugin?.({
+  it.each([false, true])(
+    "retains an owned upgrade through late provenance failure=%s",
+    async (lateFailure) => {
+      const root = dirs.make("claw-owned-upgrade-");
+      const targetDir = path.join(root, "plugins", "audit");
+      await fs.mkdir(targetDir, { recursive: true });
+      const env = {
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      };
+      await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+      const integrity = `sha256:${"a".repeat(64)}`;
+      const previous = { ...ref("plugin", "audit", "0.9.0"), integrity };
+      const targetPlan = {
+        ...addPlan,
+        actions: addPlan.actions
+          .filter((action) => action.id === "plugin:audit")
+          .map((action) =>
+            Object.assign({}, action, {
+              details: Object.assign({}, action.details, { integrity }),
+            }),
+          ),
+      };
+      const failure = new Error("late provenance failure");
+      let committed = false;
+      const priorRecords = {
+        audit: {
+          source: "clawhub" as const,
           clawhubPackage: "audit",
-          rawSpec: "clawhub:audit@1.0.0",
-          expectedVersion: "1.0.0",
-        });
-        expect(preflight).toMatchObject({ ok: true, action: "install" });
-        return [ref("plugin", "audit", "1.0.0")];
-      },
-    );
-
-    await expect(
-      applyClawPackageUpdate(
-        plan([
-          {
-            kind: "package",
-            id: "plugin:audit",
-            action: "change",
-            target: "clawhub:audit@1.0.0",
-            blocked: false,
-            reason: "owned upgrade",
-          },
-        ]),
-        manifest,
-        addPlan,
-        {
-          installPackages,
-          readRefs: () => [previous],
-          replaceExpected: vi.fn(),
-          packageDeps: { preflightPlugin },
+          installPath: targetDir,
+          version: "0.9.0",
+          integrity,
         },
-      ),
-    ).resolves.toMatchObject({ appliedIds: ["plugin:audit"] });
-  });
+      };
+      const currentRecords = { audit: { ...priorRecords.audit, version: "1.0.0" } };
+      const uninstallPlugin = vi.fn(async () => {});
+      const reloadPlugins = vi.fn(async () => {
+        expect(hasPluginLifecycleLease()).toBe(false);
+        return { operationId: "upgrade", generation: 4, pluginIds: ["audit"] };
+      });
+      const installPlugin = vi.fn(async (params: Parameters<typeof installManagedPlugin>[0]) => {
+        if (params.request.source !== "clawhub") {
+          throw new Error("expected ClawHub request");
+        }
+        const result = await ensureInstallTargetAvailable({
+          targetDir,
+          mode: params.request.mode ?? "install",
+          alreadyExistsError: "plugin already exists",
+        });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        const write = await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: priorRecords,
+          nextInstallRecords: currentRecords,
+          nextConfig: {},
+          writeOptions: { afterWrite: { mode: "none", reason: "owned upgrade fixture" } },
+        });
+        params.deferRuntime?.record({
+          operation: "install",
+          pluginId: "audit",
+          sourceDigests: {},
+          write,
+        });
+        committed = true;
+      });
+      await withEnvAsync(env, async () => {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {},
+          nextInstallRecords: priorRecords,
+          nextConfig: {},
+          writeOptions: { afterWrite: { mode: "none", reason: "prior owner fixture" } },
+        });
+        const pending = applyClawPackageUpdate(
+          plan([
+            {
+              kind: "package",
+              id: "plugin:audit",
+              action: "change",
+              target: "clawhub:audit@1.0.0",
+              blocked: false,
+              reason: "owned upgrade",
+            },
+          ]),
+          manifest,
+          targetPlan,
+          {
+            env,
+            reloadPlugins,
+            readRefs: () => [previous],
+            replaceExpected: () => {
+              if (lateFailure && committed) {
+                throw failure;
+              }
+            },
+            runtime: {
+              log: () => {},
+              error: () => {},
+              exit: () => {
+                throw new Error("unexpected exit");
+              },
+            },
+            packageDeps: {
+              installPlugin,
+              uninstallPlugin,
+              readPackageRefs: () => [{ ...previous, version: "1.0.0" }],
+              resolvePlugin: async () => ({
+                status: "found",
+                pluginId: "audit",
+                installedVersion: "1.0.0",
+                record: currentRecords.audit,
+              }),
+              acquirePackageLease: () => ({ heartbeat: () => {}, release: () => {} }),
+              preflightPlugin: (params) =>
+                preflightPluginInstall({
+                  ...params,
+                  loadInstallRecords: async () => ({
+                    audit: { source: "clawhub", clawhubPackage: "audit", version: "0.9.0" },
+                  }),
+                }),
+              probePlugin: async (params) => {
+                const probeTarget = path.join(
+                  params.extensionsDir ?? path.dirname(targetDir),
+                  "audit",
+                );
+                const available = await ensureInstallTargetAvailable({
+                  targetDir: probeTarget,
+                  mode: params.mode ?? "install",
+                  alreadyExistsError: "plugin already exists",
+                });
+                if (!available.ok) {
+                  return available;
+                }
+                return {
+                  ok: true,
+                  pluginId: "audit",
+                  packageName: "audit",
+                  targetDir: probeTarget,
+                  extensions: [],
+                  clawhub: {
+                    source: "clawhub",
+                    clawhubFamily: "code-plugin",
+                    clawhubUrl: "https://clawhub.ai",
+                    clawhubPackage: "audit",
+                    integrity,
+                  },
+                };
+              },
+            },
+          },
+        );
+        if (lateFailure) {
+          const error = await pending.catch((reason: unknown) => reason);
+          expect(uninstallPlugin).not.toHaveBeenCalled();
+          expect(error).toMatchObject({ partial: true, cause: { cause: failure } });
+        } else {
+          await expect(pending).resolves.toMatchObject({ appliedIds: ["plugin:audit"] });
+        }
+        expect(installPlugin).toHaveBeenCalledOnce();
+        expect(uninstallPlugin).not.toHaveBeenCalled();
+        expect(reloadPlugins).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it("rejects an owned plugin upgrade when another owner appears before install", async () => {
     const previous = ref("plugin", "audit", "0.9.0");

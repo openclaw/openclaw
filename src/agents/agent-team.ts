@@ -14,7 +14,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../utils.js";
 import { createAgent, validateAgentIdInput, type CreateAgentSuccess } from "./agent-create.js";
-import { loadAgentTeamPreset, loadAgentRole } from "./agent-roles.js";
+import { loadAgentTeamPreset, loadAgentRole, validateAgentTeamMemberIds } from "./agent-roles.js";
 import { listAgentEntries } from "./agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
@@ -52,12 +52,9 @@ export async function createAgentTeam(
     return { role: member.role, id: validation.agentId };
   });
   const ids = members.map(({ id }) => id);
-  if (new Set(ids).size !== ids.length) {
-    return {
-      status: "error",
-      message:
-        "Team member ids must be distinct after applying the coordinator and prefix options.",
-    };
+  const memberIdsError = validateAgentTeamMemberIds(ids);
+  if (memberIdsError) {
+    return { status: "error", message: memberIdsError };
   }
   // Validate every role before any agent becomes visible.
   await Promise.all(members.map(({ role }) => loadAgentRole(role)));

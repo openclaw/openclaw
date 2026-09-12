@@ -1,6 +1,10 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import { pluginInstanceState } from "./plugin-instance-scope.js";
+import {
+  getPluginInstanceOwner,
+  getPluginValueInstance,
+  pluginInstanceState,
+} from "./plugin-instance-scope.js";
 import type { PluginInstanceResource } from "./plugin-instance.types.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
@@ -8,6 +12,7 @@ import type {
   PluginRecord,
   PluginRegistry,
 } from "./registry-types.js";
+import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 
 type RouteViews = Set<WeakRef<PluginRegistry>>;
 type RouteOwner = PluginInstanceResource | string | undefined;
@@ -34,6 +39,26 @@ function resolveEntryOwner(registry: PluginRegistry, entry: PluginHttpRouteRegis
   return captured
     ? captured.owner
     : resolveOwner(registry, entry.pluginId, pluginInstanceState.values.get(entry.handler));
+}
+
+/** Shared raw callbacks keep the exact owner captured when their route was registered. */
+export function runPluginHttpRoute<T>(
+  registry: PluginRegistry,
+  entry: PluginHttpRouteRegistration,
+  value: object,
+  run: () => T,
+): T {
+  // Retry responses are host code; their retired owner remains only for route cleanup.
+  if (entry.handoff) {
+    return run();
+  }
+  const owner = entryViews.get(entry)?.owner;
+  const instance =
+    (owner && typeof owner !== "string" ? getPluginInstanceOwner(owner)?.instance : undefined) ??
+    getPluginValueInstance(value);
+  return instance
+    ? withPluginRuntimeGenerationRegistryScope(registry, () => instance.runConsumer(run))
+    : run();
 }
 
 function viewsByOwner(registry: PluginRegistry) {

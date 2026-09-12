@@ -15,6 +15,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
+import * as taskSessionAccess from "../task-session-access.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import {
   captureRespond,
@@ -29,9 +30,22 @@ beforeEach(async () => {
   resetTaskRegistryForTests({ persist: false });
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetTaskRegistryForTests({ persist: false });
   await state.cleanup();
 });
+
+function simulateExpensiveAccessSlices() {
+  let workMs = performance.now();
+  const prepareAccess = taskSessionAccess.prepareTaskSessionReadFilter;
+  vi.spyOn(performance, "now").mockImplementation(() => workMs);
+  vi.spyOn(taskSessionAccess, "prepareTaskSessionReadFilter").mockImplementation((...args) => {
+    const filter = prepareAccess(...args);
+    // Cross the elapsed-work yield boundary while retaining real access checks.
+    workMs += 20;
+    return filter;
+  });
+}
 
 describe("task page access snapshots", () => {
   it.each(["canonical", "main alias", "distinct requesters", "warm"] as const)(
@@ -107,6 +121,7 @@ describe("task page access snapshots", () => {
         }
         return parse(value, reviver);
       });
+      simulateExpensiveAccessSlices();
       const yielded = new Promise<{ parses: number; handles: number }>((resolve) => {
         setImmediate(() =>
           resolve({
@@ -186,6 +201,7 @@ describe("task page access snapshots", () => {
       broadcast: () => {},
       getSessionEventSubscriberConnIds: () => new Set<string>(),
     };
+    simulateExpensiveAccessSlices();
     const accessRevision = readGatewayAccessRevision();
     // Exercise both an already-selected requester and one not yet visited when the scan yields.
     const mutation = new Promise<void>((resolve, reject) => {

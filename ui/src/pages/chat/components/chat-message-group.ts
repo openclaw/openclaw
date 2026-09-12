@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
@@ -303,6 +304,20 @@ export function resolveMessageGroupSenderLabel(
   opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
+  if (normalizedRole === "custom") {
+    const isError = group.messages.every(({ message }) => {
+      const customType = asNullableRecord(message)?.customType;
+      return (
+        customType === "run-failed-before-reply" || customType === "cloud-workspace-recovery-failed"
+      );
+    });
+    if (isError) {
+      return t("chat.messages.errorSender");
+    }
+    return group.messages.every(({ message }) => workspaceResultConflictFromTranscript(message))
+      ? t("chat.workspaceConflict.eventSender")
+      : t("common.system");
+  }
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
@@ -319,11 +334,7 @@ export function resolveMessageGroupSenderLabel(
       ? (userLabel ?? assistantName)
       : normalizedRole === "tool"
         ? t("chat.messages.toolSender")
-        : group.messages.every((item) =>
-              Boolean(workspaceResultConflictFromTranscript(item.message)),
-            )
-          ? t("chat.workspaceConflict.eventSender")
-          : normalizedRole;
+        : normalizedRole;
 }
 
 function isActivityMessageGroup(group: MessageGroup): boolean {
