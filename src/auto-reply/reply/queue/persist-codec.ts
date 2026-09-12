@@ -814,6 +814,48 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
   };
 }
 
+/**
+ * Work already held by the canonical pending-input owner.
+ *
+ * `stageApproved` writes a durable receipt before acknowledgement, and that
+ * owner runs its own restart recovery with fresh-admission checks. A second
+ * runnable copy here would replay accepted input outside `withPendingInput`,
+ * so the original receipt would stay claimable and the turn could execute
+ * twice. This queue persists only routes the receipt owner does not cover.
+ */
+export function isCanonicalPendingInputOwnedFollowup(item: FollowupRun): boolean {
+  return item.userTurnTranscriptRecorder?.getPendingInputMessage?.() !== undefined;
+}
+
+/**
+ * Drop receipt-owned sources while keeping each retained source paired with its
+ * summary line. Restore rejects the whole group when the two lengths disagree,
+ * so the filter has to move both arrays together.
+ */
+function retainPersistableSummarySources(
+  sources: readonly FollowupRun[],
+  lines: readonly string[],
+): { sources: FollowupRun[]; lines: string[] } {
+  if (lines.length !== sources.length) {
+    // Unpaired input is already outside the restore contract; leave it for the
+    // existing fail-closed path rather than inventing an alignment here.
+    return {
+      sources: sources.filter((source) => !isCanonicalPendingInputOwnedFollowup(source)),
+      lines: [...lines],
+    };
+  }
+  const retainedSources: FollowupRun[] = [];
+  const retainedLines: string[] = [];
+  for (const [index, source] of sources.entries()) {
+    if (isCanonicalPendingInputOwnedFollowup(source)) {
+      continue;
+    }
+    retainedSources.push(source);
+    retainedLines.push(lines[index]!);
+  }
+  return { sources: retainedSources, lines: retainedLines };
+}
+
 export function toPersistedQueueEntry(queue: FollowupQueueState): PersistedQueueEntry {
   const summarizedSources = new Set([
     ...queue.summarySources,
@@ -824,7 +866,8 @@ export function toPersistedQueueEntry(queue: FollowupQueueState): PersistedQueue
     ...[...queue.inFlight].filter(
       (source) => !queue.items.includes(source) && !summarizedSources.has(source),
     ),
-  ];
+  ].filter((item) => !isCanonicalPendingInputOwnedFollowup(item));
+  const summary = retainPersistableSummarySources(queue.summarySources, queue.summaryLines);
   return {
     // Keep in-flight identities in SQLite until channel delivery succeeds (or
     // fail-closed discard). Memory inFlight is overflow protection only.
@@ -835,16 +878,24 @@ export function toPersistedQueueEntry(queue: FollowupQueueState): PersistedQueue
     cap: queue.cap,
     dropPolicy: queue.dropPolicy,
     droppedCount: queue.droppedCount,
-    summaryLines: queue.summaryLines,
-    summarySources: queue.summarySources.map(toPersistedRun),
-    summaryElisions: queue.summaryElisions.map((entry) => ({
-      // Runtime grouping includes sensitive authority and prompt fields. Each
-      // persisted elision already preserves its group boundary and sources.
-      contextKey: "",
-      count: entry.count,
-      sources: entry.sources.map(toPersistedRun),
-      summaryLines: entry.summaryLines,
-    })),
+    summaryLines: summary.lines,
+    summarySources: summary.sources.map(toPersistedRun),
+    summaryElisions: queue.summaryElisions.flatMap((entry) => {
+      const elision = retainPersistableSummarySources(entry.sources, entry.summaryLines);
+      if (elision.sources.length === 0) {
+        return [];
+      }
+      return [
+        {
+          // Runtime grouping includes sensitive authority and prompt fields. Each
+          // persisted elision already preserves its group boundary and sources.
+          contextKey: "",
+          count: elision.sources.length,
+          sources: elision.sources.map(toPersistedRun),
+          summaryLines: elision.lines,
+        },
+      ];
+    }),
     evictedSummaryCount: queue.evictedSummaryCount,
     ...(queue.lastRun !== undefined ? { lastRun: projectRunForPersist(queue.lastRun) } : {}),
   };

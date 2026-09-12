@@ -87,14 +87,14 @@ function appendQueueItem(params: {
   runFollowup?: (run: FollowupRun) => Promise<void>;
   restartIfIdle: boolean;
   front: boolean;
-}): void {
+}): { releaseRecentMessageId?: () => void } {
   params.queue.lastEnqueuedAt = Date.now();
   params.queue.lastRun = params.run.run;
   params.run.queueAbortSignal = params.queue.abortController.signal;
   params.queue.items[params.front ? "unshift" : "push"](params.run);
-  if (params.recentMessageIdKey) {
-    recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
-  }
+  const releaseRecentMessageId = params.recentMessageIdKey
+    ? recordRecentQueueMessageId(params.run, params.recentMessageIdKey)
+    : undefined;
   const runFollowup = params.runFollowup;
   if (runFollowup) {
     rememberFollowupDrainCallback(params.key, runFollowup);
@@ -124,6 +124,7 @@ function appendQueueItem(params: {
   if (params.restartIfIdle && !params.queue.draining) {
     kickFollowupDrainIfIdle(params.key);
   }
+  return { ...(releaseRecentMessageId ? { releaseRecentMessageId } : {}) };
 }
 
 function captureQueueMutationState(queue: FollowupQueueState) {
@@ -171,14 +172,17 @@ function rollbackFailedDurableAdmission(params: {
   key: string;
   run: FollowupRun;
   restore: () => void;
+  releaseRecentMessageId?: () => void;
   err: unknown;
 }): false {
   params.restore();
   defaultRuntime.error?.(
     `rejected followup enqueue for ${params.key}: persistence failed: ${String(params.err)}`,
   );
-  // Failed durable admission never delivered. Lifecycle completion invokes
-  // the current dedupe owner's abandonment hook so the inbound retry can re-admit.
+  // Failed durable admission never delivered. Release the exact message-id
+  // reservation first: runs without a turnAdoptionLifecycle have no abandonment
+  // hook, so lifecycle completion alone would leave the retry suppressed.
+  params.releaseRecentMessageId?.();
   completeFollowupRunLifecycle(params.run);
   return false;
 }
@@ -187,7 +191,7 @@ function appendQueueItemWithPersist(params: Parameters<typeof appendQueueItem>[0
   const itemsSnapshot = params.queue.items.slice();
   const lastEnqueuedAtSnapshot = params.queue.lastEnqueuedAt;
   const lastRunSnapshot = params.queue.lastRun;
-  appendQueueItem(params);
+  const { releaseRecentMessageId } = appendQueueItem(params);
   try {
     persistFollowupQueuesOrThrow();
     bindDurableCancellation(params.run);
@@ -196,6 +200,7 @@ function appendQueueItemWithPersist(params: Parameters<typeof appendQueueItem>[0
     return rollbackFailedDurableAdmission({
       key: params.key,
       run: params.run,
+      ...(releaseRecentMessageId ? { releaseRecentMessageId } : {}),
       restore: () => {
         params.queue.items.length = 0;
         params.queue.items.push(...itemsSnapshot);
@@ -416,7 +421,7 @@ export function enqueueFollowupRun(
     }
     return false;
   }
-  appendQueueItem({
+  const { releaseRecentMessageId } = appendQueueItem({
     key,
     queue,
     run,
@@ -432,6 +437,7 @@ export function enqueueFollowupRun(
       return rollbackFailedDurableAdmission({
         key,
         run,
+        ...(releaseRecentMessageId ? { releaseRecentMessageId } : {}),
         restore: restoreAdmissionSnapshot,
         err,
       });

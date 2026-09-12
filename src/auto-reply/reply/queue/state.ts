@@ -9,7 +9,9 @@ import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import { normalizeThinkLevel, resolveSupportedThinkingLevel } from "../../thinking.js";
 import {
   clearRestoredPendingDrainKey,
+  markFollowupQueueKeyLocallyOwned,
   persistFollowupQueuesOrThrow,
+  releaseFollowupQueueKeyLocalOwnership,
   restoreFollowupQueues,
 } from "./persist.js";
 import {
@@ -193,8 +195,53 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     target: created,
     settings,
   });
+  // Materializing the queue takes durable delete authority for this key, so a
+  // later snapshot may remove its row once the queue empties.
+  markFollowupQueueKeyLocallyOwned(key);
   FOLLOWUP_QUEUES.set(key, created);
   return created;
+}
+
+/**
+ * Drop process-local queue authority for an orderly restart, leaving the durable
+ * snapshot intact.
+ *
+ * `clearFollowupQueue` is intentional cancellation and persists the queue's
+ * removal. Restart retirement is not cancellation — startup recovery is supposed
+ * to replay this work — so the row stays and delete authority is handed back so
+ * that a later snapshot driven by another key cannot remove it.
+ */
+export function retireFollowupQueueForRestart(key: string): number {
+  const cleaned = key.trim();
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return 0;
+  }
+  const retiredItems = queue.items.slice();
+  const retiredSources = [
+    ...queue.summarySources,
+    ...queue.summaryElisions.flatMap((elision) => elision.sources),
+  ];
+  const retired = retiredItems.length + queue.droppedCount;
+
+  queue.items.length = 0;
+  queue.inFlight.clear();
+  queue.droppedCount = 0;
+  queue.summaryLines = [];
+  queue.summarySources = [];
+  queue.summaryElisions = [];
+  queue.evictedSummaryCount = 0;
+  queue.lastRun = undefined;
+  queue.lastEnqueuedAt = 0;
+  FOLLOWUP_QUEUES.delete(cleaned);
+  // Release before completing lifecycles so a hook that triggers a snapshot
+  // still retains this row.
+  releaseFollowupQueueKeyLocalOwnership(cleaned);
+  queue.abortController.abort();
+  for (const item of [...retiredItems, ...retiredSources]) {
+    completeFollowupRunLifecycle(item);
+  }
+  return retired;
 }
 
 export function clearFollowupQueue(key: string): number {

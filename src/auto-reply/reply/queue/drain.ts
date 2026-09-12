@@ -45,7 +45,11 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { clearRestoredPendingDrainKey, persistFollowupQueuesOrThrow } from "./persist.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
+import {
+  FOLLOWUP_QUEUES,
+  retireFollowupQueueForRestart,
+  trimSummaryElisionsToCap,
+} from "./state.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -86,9 +90,11 @@ function bindFollowupRestartDrainSignal(): void {
     "abort",
     () => {
       // Durable input recovery owns restart replay. Retire process-local queue
-      // authority synchronously so it cannot keep the old Gateway alive.
+      // authority synchronously so it cannot keep the old Gateway alive, but
+      // keep each durable row: retirement is not cancellation, and startup
+      // recovery replays exactly this work.
       for (const key of FOLLOWUP_RUN_CALLBACKS.keys()) {
-        clearFollowupQueue(key);
+        retireFollowupQueueForRestart(key);
       }
       FOLLOWUP_RUN_CALLBACKS.clear();
     },
