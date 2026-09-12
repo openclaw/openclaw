@@ -531,7 +531,10 @@ it("preserves operation errors and queue release when the native logging sink th
   diagnostics.setDiagnosticsEnabledForProcess(true);
   const logger = logging.getLogger();
   const transport = expectDefined(logger.settings.attachedTransports[0], "native logger transport");
-  const previousWrite = transport.write;
+  const previousWrite = expectDefined(
+    Object.getOwnPropertyDescriptor(transport, "write"),
+    "native logger write descriptor",
+  );
   const failedSink = vi.fn(() => {
     throw new Error("diagnostic sink unavailable");
   });
@@ -565,7 +568,7 @@ it("preserves operation errors and queue release when the native logging sink th
   } finally {
     release.resolve();
     await Promise.allSettled([first, second]);
-    transport.write = previousWrite;
+    Object.defineProperty(transport, "write", previousWrite);
     await logging.flushLogger();
     diagnostics.setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
     logging.setLoggerOverride(null);

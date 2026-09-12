@@ -245,7 +245,7 @@ export function analyzeConfigSchema(raw: unknown): ConfigSchemaAnalysis {
 }
 
 function normalizeSchemaNode(
-  schema: JsonSchema,
+  input: JsonSchema,
   path: Array<string | number>,
   compositionBranch = false,
   inheritedCompositionType?: string,
@@ -253,17 +253,16 @@ function normalizeSchemaNode(
 ): ConfigSchemaAnalysis {
   // Zod emits primitive unions as type arrays; keep their branch editor and
   // sibling constraints on the same normalization path as anyOf schemas.
-  if (
+  const schema =
     !compositionBranch &&
-    !schema.anyOf &&
-    !schema.oneOf &&
-    !schema.allOf &&
-    Array.isArray(schema.type) &&
-    new Set(schema.type.filter((type) => type !== "null")).size > 1 &&
-    schema.type.every((type) => type === "null" || SCALAR_UNION_TYPES.has(type))
-  ) {
-    schema = { ...schema, type: undefined, anyOf: schema.type.map((type) => ({ type })) };
-  }
+    !input.anyOf &&
+    !input.oneOf &&
+    !input.allOf &&
+    Array.isArray(input.type) &&
+    new Set(input.type.filter((type) => type !== "null")).size > 1 &&
+    input.type.every((type) => type === "null" || SCALAR_UNION_TYPES.has(type))
+      ? { ...input, type: undefined, anyOf: input.type.map((type) => ({ type })) }
+      : input;
   const unsupported = new Set<string>();
   const normalized: JsonSchema = { ...schema };
   const pathLabel = pathKey(path) || "<root>";
