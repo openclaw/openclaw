@@ -1008,7 +1008,6 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
 extensions/qa-lab/src/providers/mock-openai/server.ts	15
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
-extensions/qa-lab/src/qa-bus-protocol.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	2
 extensions/qa-lab/src/runtime-parity.ts	3
