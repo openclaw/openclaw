@@ -144,6 +144,8 @@ During the initial handoff, the chat placement menu and stop confirmation use th
 
 Choose **Icon & color** from a single session's context menu to give its sidebar row one persistent emoji or monochrome icon. The picker includes common emoji and six named icons: `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`. Choose **Custom emoji…** to enter any single emoji; on macOS, press Control-Command-Space to open the system emoji picker, or press Windows-period on Windows. The `sessions` agent tool can set the same `icon` field. An empty value removes it. This decoration replaces the owner avatar in the leading glyph slot, but temporary attention state always takes precedence so an operator request cannot be hidden.
 
+With **Person** grouping, hover or focus a person’s header and choose **Show only {name}** to filter to that owner, including yourself. Choose **Show everyone** on the active header to clear the owner filter. Active owner, **Involving me**, and non-default status filters appear beside **Sessions** in the toolbar. Click that summary to clear all filters and return to active sessions.
+
 ## Session colors
 
 Choose **Icon & color** from a session menu and select a color swatch to add a narrow color stripe to its sidebar row and a matching dot beside the chat title. Pick one of eight colors, or choose **Default** to clear only the color. **Reset to default** clears both the icon and color. The colors match Claude Code’s `/color` names, so imported Claude Code sessions keep the same color. Imported catalog rows show their color without offering color editing.
