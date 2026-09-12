@@ -308,7 +308,7 @@ Use this to preview or apply reconciliation, cleanup stamping, and pruning for t
 
 Reconciliation is runtime-aware:
 
-- ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
+- ACP tasks require a live in-process turn in the Gateway. Registry-backed subagent tasks require an owning subagent run, not merely a retained child session. Gateway maintenance marks previously stranded tasks lost when neither a live run nor a current or durable subagent owner remains; standalone CLI checks and failed ownership reads do not establish that absence. Yielded, queued, recovering, and replacement runs retain ownership.
 - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
 - Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
 - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check; standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.

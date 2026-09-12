@@ -8,7 +8,7 @@ import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
-import { reconcileOrphanedRun, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -359,22 +359,6 @@ export function createSubagentRegistrySweeper(params: {
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
             const orphanReason = resolveSubagentRunOrphanReason({ entry });
-            if (orphanReason) {
-              if (
-                reconcileOrphanedRun({
-                  runId,
-                  entry,
-                  reason: orphanReason,
-                  source: "resume",
-                  runs,
-                  resumedRuns,
-                })
-              ) {
-                mutatedRunIds.add(runId);
-              }
-              continue;
-            }
-
             const sessionEntry = loadSubagentSessionEntry({
               childSessionKey: entry.childSessionKey,
               storeCache,
@@ -402,10 +386,13 @@ export function createSubagentRegistrySweeper(params: {
             await params.completeSubagentRunWithRecovery(
               {
                 runId,
+                expectedEntry: entry,
                 endedAt: now,
                 outcome: {
                   status: "error",
-                  error: "subagent run lost active execution context",
+                  error: orphanReason
+                    ? `subagent run orphaned: ${orphanReason}`
+                    : "subagent run lost active execution context",
                 },
                 reason: SUBAGENT_ENDED_REASON_ERROR,
                 sendFarewell: true,

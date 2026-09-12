@@ -25,7 +25,7 @@ import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lif
 import {
   freezeRunResultAtCompletion,
   refreshPendingFinalDeliveryPayload,
-  safeFinalizeSubagentTaskRun,
+  finalizeSubagentTaskRun,
 } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -575,7 +575,7 @@ export async function completeSubagentRunAttempt(
     // A steer abort ends one agent run but continues the same detached task.
     // The successor must remain able to publish its eventual terminal state.
     if (provisionalKillSnapshot) {
-      const finalizedTasks = safeFinalizeSubagentTaskRun(params, {
+      const finalizedTasks = finalizeSubagentTaskRun(params, {
         entry,
         outcome: executionOutcome,
         taskResolution: postCaptureTaskResolution,
@@ -631,7 +631,7 @@ export async function completeSubagentRunAttempt(
         throw error;
       }
       if (!suppressTaskFinalization) {
-        safeFinalizeSubagentTaskRun(params, {
+        finalizeSubagentTaskRun(params, {
           entry,
           outcome: executionOutcome,
         });

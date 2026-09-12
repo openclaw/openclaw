@@ -33,8 +33,10 @@ from their existing child transcript. Recovery handles both sessions marked
 `abortedLastRun: true` and hard kills that prevented the shutdown marker from
 being written. For a hard kill, the child session must still identify the exact
 running sub-agent from the retired Gateway process, with no newer run or admitted
-work owning that session. Stale interrupted runs are finalized without a resume;
-other stale unended restored runs are pruned.
+work owning that session. Stale interrupted runs and other stale unended restored
+runs are finalized without a resume. Orphaned runs settle their background task
+before cleanup, so retained child sessions do not leave phantom running activity.
+If the task update fails, completion remains available for retry.
 
 An accepted recovery keeps the original task, Task Flow, requester, and child
 session identities. The task returns to `running` as the replacement execution

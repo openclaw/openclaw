@@ -13,6 +13,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagents/registry/subagent-recovery-state.js";
+import { hasSubagentTaskOwner } from "../agents/subagents/registry/subagent-registry-read.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -59,6 +60,7 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
+import { readTaskBackingInstance } from "./task-backing-authority.js";
 import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
 import { getTaskRegistryMaintenanceSnapshot } from "./task-registry-maintenance-snapshot.js";
 import {
@@ -110,6 +112,7 @@ type TaskRegistryMaintenanceRuntime = {
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
+  hasSubagentTaskOwner?: typeof hasSubagentTaskOwner;
   isBackgroundExecSessionActive?: typeof isBackgroundExecSessionActive;
   hasActiveAcpTurn: (sessionKey: string, agentId?: string) => boolean;
   parseAgentSessionKey: typeof parseAgentSessionKey;
@@ -151,6 +154,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
+  hasSubagentTaskOwner,
   isBackgroundExecSessionActive,
   hasActiveAcpTurn: (sessionKey, agentId) =>
     isAcpTurnActive(resolveAcpSessionTarget({ cfg: getRuntimeConfig(), sessionKey, agentId })),
@@ -194,7 +198,8 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
     | "cli_runtime_not_authoritative"
     | "cron_runtime_not_authoritative"
     | "lost_grace_pending"
-    | "subagent_recovery_wedged";
+    | "subagent_recovery_wedged"
+    | "subagent_owner_missing";
   detail?: string;
   ageMs: number;
   childSessionKey?: string;
@@ -455,9 +460,43 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
         return false;
       }
     }
+    const registryBackedSubagent =
+      task.runtime === "subagent" && readTaskBackingInstance(task.detail)?.runtime === "subagent";
+    if (
+      registryBackedSubagent &&
+      task.runId &&
+      taskRegistryMaintenanceRuntime.getAgentRunContext(task.runId)
+    ) {
+      return true;
+    }
     const entry = findTaskSessionEntry(task, context);
     if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
       return false;
+    }
+    if (registryBackedSubagent) {
+      // Only the Gateway can rule out a live owner. A retained session is not
+      // that owner; the registry also preserves yielded and recovery obligations.
+      const taskRunId = task.runId?.trim();
+      if (
+        !taskRunId ||
+        !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative() ||
+        !taskRegistryMaintenanceRuntime.hasSubagentTaskOwner
+      ) {
+        return true;
+      }
+      try {
+        return taskRegistryMaintenanceRuntime.hasSubagentTaskOwner({
+          taskRunId,
+          childSessionKey,
+          requesterSessionKey: task.ownerKey,
+        });
+      } catch (error) {
+        log.warn("Unable to establish subagent task ownership during maintenance", {
+          taskId: task.taskId,
+          error,
+        });
+        return true;
+      }
     }
     return Boolean(entry);
   }
@@ -476,6 +515,9 @@ function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupCo
     const entry = findTaskSessionEntry(task, context);
     if (entry && isSubagentRecoveryWedgedEntry(entry)) {
       return formatSubagentRecoveryWedgedReason(entry);
+    }
+    if (readTaskBackingInstance(task.detail)?.runtime === "subagent") {
+      return "subagent run ownership missing";
     }
   }
   return "backing session missing";
@@ -979,7 +1021,14 @@ function explainActiveTaskRetention(params: {
     }
   }
   if (!hasBackingSession(params.task, params.context)) {
-    return { decision: "would_reconcile", reason: "backing_session_missing" };
+    return {
+      decision: "would_reconcile",
+      reason:
+        params.task.runtime === "subagent" &&
+        readTaskBackingInstance(params.task.detail)?.runtime === "subagent"
+          ? "subagent_owner_missing"
+          : "backing_session_missing",
+    };
   }
   if (params.task.runtime === "cron" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
     return { decision: "retained", reason: "cron_runtime_not_authoritative" };
