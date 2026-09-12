@@ -184,6 +184,52 @@ describe("cdp.helpers internal", () => {
       );
     });
 
+    it("releases without waiting when unread body cancel never settles", async () => {
+      let cancelStarted = false;
+      const cancel = vi.fn(() => {
+        cancelStarted = true;
+        return new Promise<void>(() => {});
+      });
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          bodyUsed: false,
+          body: { cancel },
+        } as unknown as Response,
+        release,
+      });
+
+      const { release: guardedRelease } = await fetchCdpChecked(
+        "http://127.0.0.1:9222/json/version",
+        250,
+        undefined,
+        { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
+      );
+
+      const startedAt = Date.now();
+      await expect(
+        Promise.race([
+          guardedRelease(),
+          new Promise<never>((_, reject) => {
+            AbortSignal.timeout(1_000).addEventListener("abort", () => {
+              reject(new Error("release hung waiting for body.cancel"));
+            });
+          }),
+        ]),
+      ).resolves.toBeUndefined();
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(cancelStarted).toBe(true);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+      expect(elapsedMs).toBeLessThan(1_000);
+      console.log(
+        `[browser cdp cancel-nofollow proof] cancel_started=${cancelStarted} release_called=${release.mock.calls.length} elapsed_ms=${elapsedMs}`,
+      );
+    });
+
     it("registers a managed-proxy bypass for the exact sanitized fetch URL", async () => {
       const release = vi.fn();
       registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);

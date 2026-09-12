@@ -470,17 +470,14 @@ export async function fetchCdpChecked(
     // Abort first: cloned bodies can keep cancellation pending, and a
     // caller-owned reader can leave a partially consumed stream locked.
     ctrl.abort();
-    try {
-      // Status-only and failed probes do not consume their response streams.
-      // Cancel them before releasing the guard so Undici frees the CDP socket.
-      if (response && !response.bodyUsed) {
-        await response.body?.cancel();
-      }
-    } catch {
-      // A broken response stream must not mask the result or skip guard cleanup.
-    } finally {
-      await guardedRelease?.();
+    // Status-only and failed probes do not consume their response streams.
+    // Start cancel before releasing the guard so Undici frees the CDP socket.
+    // Do not await cancel: teed/debug streams can leave cancel pending forever
+    // (same invariant as Google Chat fetchOk).
+    if (response && !response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
     }
+    await guardedRelease?.();
   };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
