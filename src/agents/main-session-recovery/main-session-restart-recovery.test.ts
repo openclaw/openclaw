@@ -5720,6 +5720,12 @@ describe("main-session-restart-recovery", () => {
       bestEffortDeliver: true,
       forceRestartSafeTools: true,
     });
+    expect(gatewayCall?.params?.message).toContain(
+      "the tool surface has been narrowed to replay-safe tools",
+    );
+    expect(gatewayCall?.params?.message).toContain(
+      "the full tool surface restores on the next user turn",
+    );
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("running");
