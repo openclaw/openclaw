@@ -26,6 +26,7 @@ export const gatewayMethodsIsolatedTestFiles = [
 // re-exports. These need both a fresh graph and the plain Vitest runner.
 export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-chat.retired-projection.test.ts",
+  "src/gateway/server-plugin-subagent-runtime.overrides.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
 ];
 
