@@ -301,11 +301,11 @@ function tryCreateCronTaskRunRecord(params: {
   startedAt: number;
   runId: string;
   childSessionKey?: string;
-  ownerlessManualRun?: true;
+  ownerlessRun?: true;
 }): { runId: string; taskId: string; flowId?: string } | undefined {
   try {
     const childSessionKey = params.childSessionKey;
-    const agentId = params.ownerlessManualRun
+    const agentId = params.ownerlessRun
       ? undefined
       : params.job
         ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
@@ -418,8 +418,8 @@ export function tryFinishCronTaskRun(
     taskRunId?: string;
     job?: CronJob;
     event: CronEvent & { action: "finished" };
-    /** An acknowledged rejection needs history without claiming an agent executed. */
-    ownerlessManualRun?: true;
+    /** An ownerless attempt needs history without claiming an agent executed. */
+    ownerlessRun?: true;
     errorClassification?: CronRunErrorClassification;
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
@@ -445,7 +445,7 @@ export function tryFinishCronTaskRun(
             startedAt,
             runId: candidateRunId,
             childSessionKey: entry.sessionKey,
-            ownerlessManualRun: result.ownerlessManualRun,
+            ownerlessRun: result.ownerlessRun,
           });
     const taskRunId = existingCandidate?.runtime === "cron" ? candidateRunId : created?.runId;
     if (!taskRunId) {
@@ -521,7 +521,7 @@ export function tryFinishCronTaskRun(
           startedAt,
           runId: taskRunId,
           childSessionKey: entry.sessionKey,
-          ownerlessManualRun: result.ownerlessManualRun,
+          ownerlessRun: result.ownerlessRun,
         });
         if (recreated) {
           updated = finalize(recreated.runId);
