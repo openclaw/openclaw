@@ -376,6 +376,121 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ).toEqual([argv]);
   });
 
+  it.each([
+    {
+      name: "tooling",
+      options: ["--exclude", "test/scripts/run-vitest.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"] },
+    },
+    {
+      name: "Docker tooling",
+      options: ["--exclude", "test/scripts/docker-build-helper.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/docker-build-helper.test.ts"] },
+    },
+    {
+      name: "UI",
+      options: ["--exclude", "ui/src/pages/chat/chat-send.test.ts"],
+      expectedOptions: { exclude: ["ui/src/pages/chat/chat-send.test.ts"] },
+    },
+    {
+      name: "browser UI",
+      options: ["--exclude", "ui/src/components/markdown-mermaid.runtime.browser.test.ts"],
+      expectedOptions: { exclude: ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"] },
+    },
+    {
+      name: "inline",
+      options: ["--exclude=test/scripts/run-vitest.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"] },
+    },
+    {
+      name: "empty inline",
+      options: ["--exclude=", "test/scripts/run-vitest.test.ts"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"] },
+    },
+    {
+      name: "comma",
+      options: [
+        "--exclude",
+        "test/scripts/run-vitest.test.ts,test/scripts/docker-build-helper.test.ts",
+      ],
+      expectedOptions: {
+        exclude: ["test/scripts/run-vitest.test.ts,test/scripts/docker-build-helper.test.ts"],
+      },
+    },
+    {
+      name: "pipe",
+      options: [
+        "--exclude",
+        "test/scripts/run-vitest.test.ts|test/scripts/docker-build-helper.test.ts",
+      ],
+      expectedOptions: {
+        exclude: ["test/scripts/run-vitest.test.ts|test/scripts/docker-build-helper.test.ts"],
+      },
+    },
+    {
+      name: "name regexp",
+      options: ["--testNamePattern", "test/scripts/(run-vitest|test-projects).test.ts"],
+      expectedOptions: { testNamePattern: "test/scripts/(run-vitest|test-projects).test.ts" },
+    },
+    {
+      name: "repeated",
+      options: [
+        "--exclude",
+        "test/scripts/run-vitest.test.ts",
+        "--exclude",
+        "test/scripts/run-vitest-progress.test.ts",
+      ],
+      expectedOptions: {
+        exclude: ["test/scripts/run-vitest.test.ts", "test/scripts/run-vitest-progress.test.ts"],
+      },
+    },
+    {
+      name: "following flag",
+      options: ["--exclude", "test/scripts/run-vitest.test.ts", "--passWithNoTests=false"],
+      expectedOptions: { exclude: ["test/scripts/run-vitest.test.ts"], passWithNoTests: false },
+    },
+    {
+      name: "missing operand before flag",
+      options: ["--exclude=", "--passWithNoTests=false"],
+      expectedOptions: { exclude: [true], passWithNoTests: false },
+    },
+    {
+      name: "native separator",
+      options: ["--", "test/scripts/run-vitest.test.ts"],
+      expectedOptions: { "--": ["test/scripts/run-vitest.test.ts"] },
+    },
+  ])(
+    "keeps $name option operands out of implicit config selection",
+    ({ options, expectedOptions }) => {
+      const argv = ["run", ...options];
+      const native = parseCLI(["vitest", ...argv]);
+
+      expect(native.filter).toEqual([]);
+      expect(native.options).toMatchObject(expectedOptions);
+      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+      expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(native);
+    },
+  );
+
+  it("routes a positional UI test independently of excluded tooling files", () => {
+    const argv = [
+      "list",
+      "ui/src/pages/chat/chat-send.test.ts",
+      "--exclude",
+      "test/scripts/run-vitest.test.ts",
+      "--passWithNoTests=false",
+    ];
+    const native = parseCLI(["vitest", ...argv]);
+
+    expect(native.filter).toEqual(["ui/src/pages/chat/chat-send.test.ts"]);
+    expect(native.options.exclude).toEqual(["test/scripts/run-vitest.test.ts"]);
+    expect(native.options.passWithNoTests).toBe(false);
+    expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+    expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(
+      parseCLI(["vitest", "--config", "test/vitest/vitest.ui.config.ts", ...argv]),
+    );
+  });
+
   it("routes explicit tooling tests through the tooling config", () => {
     expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
       "run",
