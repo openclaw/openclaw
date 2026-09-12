@@ -232,7 +232,7 @@ beforeEach(() => {
   mocks.maybeRestartService.mockResolvedValue(undefined);
   mocks.maybeStopService.mockImplementation(async ({ phase }) => inspectOrStopService(phase));
   mocks.prepareMutableUpdate.mockResolvedValue(undefined);
-  mocks.pluginPreflight.mockResolvedValue(undefined);
+  mocks.pluginPreflight.mockResolvedValue([]);
   mocks.readGitRecovery.mockResolvedValue({ serviceRestartSafe: true });
   mocks.runGitUpdate.mockResolvedValue({ ...successfulUpdate, mode: "git" });
   mocks.runPackageUpdate.mockResolvedValue(successfulUpdate);
@@ -403,11 +403,16 @@ describe("mutable update execution", () => {
           expect(targetVersion).toBe("1.0.7");
           expect(mocks.serviceStopped).toBe(false);
           if (outcome === "incompatible") {
-            throw new UpdatePreMutationError(
-              "plugin-incompatible",
-              "fixture installed plugin is incompatible",
-            );
+            return [
+              {
+                pluginId: "fixture",
+                reason: "Installed plugin is incompatible and its replacement is unavailable.",
+                message: "Fixture plugin update needs a retry.",
+                guidance: [],
+              },
+            ];
           }
+          return [];
         });
         mocks.revalidateSchemaContext.mockImplementation(async (context) => {
           if (outcome === "changed-owner" && events.includes("preflight")) {
@@ -439,17 +444,17 @@ describe("mutable update execution", () => {
           packageTargetVersion: undefined,
         });
         expect(events).toEqual(
-          outcome === "available" ? ["staged", "preflight", "rehearsal"] : ["staged", "preflight"],
+          outcome === "changed-owner"
+            ? ["staged", "preflight"]
+            : ["staged", "preflight", "rehearsal"],
         );
         expect(execution?.mutationStarted).toBe(false);
         expect(mocks.serviceStopped).toBe(false);
-        expect(execution?.result.status).toBe(outcome === "available" ? "ok" : "error");
-        if (outcome !== "available") {
+        expect(execution?.result.status).toBe(outcome === "changed-owner" ? "error" : "ok");
+        if (outcome === "changed-owner") {
           expect(mocks.validateCanary).not.toHaveBeenCalled();
           expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-          expect(execution?.result.reason).toBe(
-            outcome === "incompatible" ? "plugin-incompatible" : "database-schema-preflight",
-          );
+          expect(execution?.result.reason).toBe("database-schema-preflight");
         }
       });
     },
@@ -470,6 +475,7 @@ describe("mutable update execution", () => {
         let databaseAdvanced = target !== "artifact-state-change";
         mocks.pluginPreflight.mockImplementation(async () => {
           databaseAdvanced = true;
+          return [];
         });
         mocks.checkTargetSchemas.mockImplementation(async (versions) => ({
           incompatible:
@@ -585,17 +591,17 @@ describe("mutable update execution", () => {
   });
 
   it.each([
-    { failure: "missing", contract: "api", range: ">=1.0.0", refused: false },
-    { failure: "metadata", contract: "api", range: ">=1.0.0", refused: false },
-    { failure: "throw", contract: "api", range: ">=1.0.0", refused: false },
-    { failure: "missing", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
-    { failure: "metadata", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
-    { failure: "throw", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
-    { failure: "metadata", contract: "host", range: ">=1.0.2", refused: true },
-    { failure: "throw", contract: "host", range: ">=1.0.2", refused: true },
+    { failure: "missing", contract: "api", range: ">=1.0.0", incompatible: false },
+    { failure: "metadata", contract: "api", range: ">=1.0.0", incompatible: false },
+    { failure: "throw", contract: "api", range: ">=1.0.0", incompatible: false },
+    { failure: "missing", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
+    { failure: "metadata", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
+    { failure: "throw", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
+    { failure: "metadata", contract: "host", range: ">=1.0.2", incompatible: true },
+    { failure: "throw", contract: "host", range: ">=1.0.2", incompatible: true },
   ])(
-    "refuses unresolved incompatible plugins before mutation ($failure, $contract, $range)",
-    async ({ failure, contract, range, refused }) => {
+    "preserves plugin admission and exception handling ($failure, $contract, $range)",
+    async ({ failure, contract, range, incompatible }) => {
       await withTestDir({ prefix: "openclaw-plugin-admission-" }, async (installPath) => {
         await fs.writeFile(
           path.join(installPath, "package.json"),
@@ -616,8 +622,9 @@ describe("mutable update execution", () => {
           failure === "missing"
             ? "No matching version found"
             : "registry connection failed: ECONNRESET";
+        const metadataFailure = new Error(error);
         if (failure === "throw") {
-          mocks.npmMetadata.mockRejectedValue(new Error(error));
+          mocks.npmMetadata.mockRejectedValue(metadataFailure);
         } else {
           mocks.npmMetadata.mockResolvedValue({
             ok: false,
@@ -631,32 +638,48 @@ describe("mutable update execution", () => {
         mocks.pluginPreflight.mockImplementation(actual.preflightConfiguredNpmPluginTargets);
 
         const execution = await executeMutableUpdate(executionParams("package"));
+        const unclassifiedFailure = incompatible && failure === "throw";
 
-        expect(execution?.result.status).toBe(refused ? "error" : "ok");
-        if (refused) {
-          expect(execution?.result.reason).toBe("plugin-incompatible");
-          expect(execution?.failure?.detail).toContain('Plugin "demo" (installed 1.0.0)');
-          expect(execution?.failure?.detail).toContain(range);
-          expect(execution?.failure?.detail).toContain("core 1.0.1");
-          expect(execution?.failure?.detail).toContain("@example/demo@1.0.1");
-          expect(execution?.failure?.detail).toContain(error);
-          if (failure !== "missing") {
-            expect(execution?.failure?.detail).toContain("registry could not be reached");
-            expect(execution?.failure?.detail).toContain("Retry when the registry is reachable");
-          }
+        expect(execution?.result.status).toBe(unclassifiedFailure ? "error" : "ok");
+        expect(mocks.npmMetadata).toHaveBeenCalledTimes(incompatible ? 1 : 0);
+        expect(mocks.serviceStopped).toBe(false);
+        if (unclassifiedFailure) {
+          expect(execution?.result.reason).toBe("update-failed");
+          expect(execution?.failure?.cause).toBe(metadataFailure);
           expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
           expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-          expect(mocks.serviceStopped).toBe(false);
         } else {
+          const warnings = await mocks.pluginPreflight.mock.results[0]?.value;
           expect(execution?.result.reason).toBeUndefined();
+          expect(mocks.prepareMutableUpdate).toHaveBeenCalledOnce();
           expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
+          if (incompatible) {
+            expect(warnings).toEqual([
+              expect.objectContaining({
+                pluginId: "demo",
+                reason: expect.stringContaining(range),
+                message:
+                  'Plugin "demo" update availability could not be confirmed; the core update can continue.',
+                guidance: [],
+              }),
+            ]);
+            expect(warnings[0]?.reason).toContain("Installed 1.0.0");
+            expect(warnings[0]?.reason).toContain("@example/demo@1.0.1");
+            expect(warnings[0]?.reason).toContain(error);
+            if (failure === "metadata") {
+              expect(warnings[0]?.reason).toContain("registry could not be reached");
+            }
+            expect(mocks.runtimeError).toHaveBeenCalledWith(warnings[0]?.message);
+          } else {
+            expect(warnings).toEqual([]);
+          }
         }
       });
     },
   );
 
   it("waits for plugin availability before preparing a package update", async () => {
-    const available = createDeferred();
+    const available = createDeferred<[]>();
     mocks.pluginPreflight.mockImplementation(() => available.promise);
     const execution = executeMutableUpdate(executionParams("package"));
     try {
@@ -665,7 +688,7 @@ describe("mutable update execution", () => {
       expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
       expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
     } finally {
-      available.resolve();
+      available.resolve([]);
     }
     expect((await execution)?.result).toBe(successfulUpdate);
     expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
@@ -675,6 +698,7 @@ describe("mutable update execution", () => {
     let configChanged = false;
     mocks.pluginPreflight.mockImplementation(async () => {
       configChanged = true;
+      return [];
     });
     mocks.revalidateSchemaContext.mockImplementation(async (context) => {
       if (configChanged) {

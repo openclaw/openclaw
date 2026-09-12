@@ -6,7 +6,10 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import type { GitHubPublicationOptions } from "./github-publication-controller.ts";
+import {
+  GitHubPublicationController,
+  type GitHubPublicationOptions,
+} from "./github-publication-controller.ts";
 import { createTestSessionCapability } from "./session-capability.test-support.ts";
 import type { GitHubPublicationBinding, SessionGateway } from "./session-capability.ts";
 
@@ -169,7 +172,11 @@ function publicationHarness() {
     updatedAt: 1,
   });
   const attach = (session = row("publication")) => {
-    const binding = sessions.githubPublication.attach(session, vi.fn())!;
+    const binding = sessions.githubPublication.attach(
+      session,
+      vi.fn(),
+      GitHubPublicationController,
+    )!;
     binding.sync({
       canWrite: true,
       personalReady: true,

@@ -13,7 +13,7 @@
 // binary's hidden `openclaw update finalize` entrypoint — the designed
 // "external core runtime change" finalizer that runs doctor plus
 // `updatePluginsAfterCoreUpdate` (which calls
-// `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true, disableOnFailure: true })`
+// `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true })`
 // and `runPostCorePluginConvergence`). Finalization never restarts, so the RPC
 // handler keeps ownership of the gateway restart.
 import fs from "node:fs/promises";
@@ -248,11 +248,8 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   }
 }
 
-// Fold a finalize failure into the update result so the RPC handler's existing
-// `result.status === "ok"` restart gate skips the restart: restarting on the new
-// core after convergence failed would load the stale plugins we just failed to
-// reconcile. Mirrors the CLI, which exits non-zero before restarting on
-// post-core convergence failure.
+// Required core/config finalization failures keep the RPC's restart gate closed.
+// Individual plugin problems exit successfully and remain separate notices.
 export function foldPostCoreFinalizeIntoResult(
   result: UpdateRunResult,
   outcome: PostCoreFinalizeOutcome,

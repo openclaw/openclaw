@@ -1202,25 +1202,7 @@ class ChatComposerLayoutTest {
     val height = mutableStateOf(720.dp)
     val viewModel = showChat(viewportWidth = 720.dp, viewportHeight = { height.value }, fontScale = { 1.5f }, useChatShell = true)
     val owner = viewModel.captureChatShareOwner()
-    val sent = ConcurrentLinkedQueue<JsonObject>()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
-    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "chat.send") {
-        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
-        sent.add(payload)
-        buildJsonObject {
-          put("runId", payload.getValue("idempotencyKey"))
-          put("status", JsonPrimitive("started"))
-        }.toString()
-      } else {
-        originalRequest(gatewayId, method, params)
-      }
-    }
-    try {
-      requestField.set(controller, request)
+    withChatSendRequests { sent ->
       composeRule.runOnIdle {
         viewModel.chatComposerState.addAttachments(
           owner,
@@ -1298,6 +1280,30 @@ class ChatComposerLayoutTest {
       }
       assertEquals(JsonPrimitive(edited), sent.single()["message"])
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+    }
+  }
+
+  private fun withChatSendRequests(assertions: (ConcurrentLinkedQueue<JsonObject>) -> Unit) {
+    val sent = ConcurrentLinkedQueue<JsonObject>()
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      if (method == "chat.send") {
+        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+        sent.add(payload)
+        buildJsonObject {
+          put("runId", payload.getValue("idempotencyKey"))
+          put("status", JsonPrimitive("started"))
+        }.toString()
+      } else {
+        originalRequest(gatewayId, method, params)
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      assertions(sent)
     } finally {
       requestField.set(controller, originalRequest)
     }
@@ -1362,25 +1368,7 @@ class ChatComposerLayoutTest {
     val height = mutableStateOf(720.dp)
     val viewModel = showChat(viewportWidth = 720.dp, viewportHeight = { height.value }, useChatShell = true)
     val owner = viewModel.captureChatShareOwner()
-    val sent = ConcurrentLinkedQueue<JsonObject>()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
-    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "chat.send") {
-        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
-        sent.add(payload)
-        buildJsonObject {
-          put("runId", payload.getValue("idempotencyKey"))
-          put("status", JsonPrimitive("started"))
-        }.toString()
-      } else {
-        originalRequest(gatewayId, method, params)
-      }
-    }
-    try {
-      requestField.set(controller, request)
+    withChatSendRequests { sent ->
       val editor = composeRule.onNode(hasSetTextAction())
       val draft = "Visible draft"
       editor.performClick().performTextReplacement(draft)
@@ -1416,8 +1404,6 @@ class ChatComposerLayoutTest {
       composeRule.waitUntil { composeRule.runOnIdle { sent.isNotEmpty() } }
       assertEquals(listOf(JsonPrimitive(edited)), sent.map { it["message"] })
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
-    } finally {
-      requestField.set(controller, originalRequest)
     }
   }
 
@@ -4368,25 +4354,7 @@ class ChatComposerLayoutTest {
     val owner = viewModel.captureChatShareOwner()
     assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
     assertTrue("The composer must have a routable controller owner", controller.isCurrentComposerOwner(owner))
-    val sent = ConcurrentLinkedQueue<JsonObject>()
-    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
-    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
-      if (method == "chat.send") {
-        val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
-        sent.add(payload)
-        buildJsonObject {
-          put("runId", payload.getValue("idempotencyKey"))
-          put("status", JsonPrimitive("started"))
-        }.toString()
-      } else {
-        originalRequest(gatewayId, method, params)
-      }
-    }
-    try {
-      requestField.set(controller, request)
+    withChatSendRequests { sent ->
       val draft = "Physical follow-up"
       val editor = composeRule.onNode(hasSetTextAction())
       editor.performClick()
@@ -4403,8 +4371,6 @@ class ChatComposerLayoutTest {
       }
       assertEquals(List(expectedSends) { JsonPrimitive(draft) }, sent.map { it["message"] })
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(if (expectedSends == 0) draft else "")))
-    } finally {
-      requestField.set(controller, originalRequest)
     }
   }
 

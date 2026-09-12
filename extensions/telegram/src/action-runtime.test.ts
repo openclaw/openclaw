@@ -931,6 +931,37 @@ describe("handleTelegramAction", () => {
     expect(sendStickerTelegram).not.toHaveBeenCalled();
   });
 
+  it("returns sticker search results from asynchronous storage", async () => {
+    telegramActionRuntime.searchStickers = vi.fn(async () => [
+      {
+        fileId: "fox-file",
+        fileUniqueId: "fox-id",
+        description: "A waving fox",
+        cachedAt: "2026-01-26T12:00:00.000Z",
+      },
+    ]);
+    const result = await handleTelegramAction(
+      { action: "searchSticker", query: "fox" },
+      telegramConfig({ actions: { sticker: true } }),
+    );
+    expect(resultDetails(result)).toEqual({
+      ok: true,
+      count: 1,
+      stickers: [{ fileId: "fox-file", description: "A waving fox" }],
+    });
+  });
+
+  it("returns sticker statistics from asynchronous storage", async () => {
+    const stats = {
+      count: 2,
+      oldestAt: "2026-01-20T12:00:00.000Z",
+      newestAt: "2026-01-26T12:00:00.000Z",
+    };
+    telegramActionRuntime.getCacheStats = vi.fn(async () => stats);
+    const result = await handleTelegramAction({ action: "stickerCacheStats" }, telegramConfig({}));
+    expect(resultDetails(result)).toEqual({ ok: true, ...stats });
+  });
+
   it("sends stickers when enabled", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", actions: { sticker: true } } },
