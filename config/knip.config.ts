@@ -525,6 +525,8 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Focused Meet tests consume this serialization seam; production embeds it in-module via .toString().
+    "extensions/google-meet/src/transports/google-meet-page-scripts.ts": ["exports"],
   },
   workspaces: {
     ".": {

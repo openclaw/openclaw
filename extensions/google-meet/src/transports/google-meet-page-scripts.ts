@@ -4,6 +4,32 @@ import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES } from "./types.js";
 
 const GOOGLE_MEET_CAPTION_SETTLE_MS = 1_000;
 
+/**
+ * Serializes the Meet status payload for the browser transport.
+ * Caption rows carry live DOM nodes, and the page's own objects (`__soy`) hold
+ * circular back-references, so a plain JSON.stringify throws
+ * "Converting circular structure to JSON" and fails the whole status evaluate
+ * (inCall stays false, no audio bridge, recover-tab breaks the same way).
+ * DOM nodes are dropped; revisited objects are elided instead of recursed.
+ * Self-contained so the in-page script embeds exactly this source.
+ */
+export function stringifyMeetStatusResult(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key: string, current: unknown) => {
+    if (current !== null && typeof current === "object") {
+      // SAFETY: DOM-node probe only — nodeType number check drops nodes, no shape assumed.
+      if (typeof (current as { nodeType?: unknown }).nodeType === "number") {
+        return undefined;
+      }
+      if (seen.has(current)) {
+        return "[Circular]";
+      }
+      seen.add(current);
+    }
+    return current;
+  });
+}
+
 export function meetStatusScript(params: {
   allowMicrophone: boolean;
   autoJoin: boolean;
@@ -13,6 +39,7 @@ export function meetStatusScript(params: {
   readOnly?: boolean;
 }) {
   return `async () => {
+  const stringifyResult = ${stringifyMeetStatusResult.toString()};
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const manualActionFor = (reason, message) => ({ reason, message });
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
@@ -483,7 +510,11 @@ export function meetStatusScript(params: {
     lastCaptionAt = last?.at;
     lastCaptionSpeaker = last?.speaker;
     lastCaptionText = last?.text;
-    recentTranscript = lines.slice(-5);
+    recentTranscript = lines.slice(-5).map((entry) => ({
+      at: entry.at,
+      speaker: entry.speaker,
+      text: entry.text
+    }));
   }
   const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText);
   const leaveReason = !inCall && /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
@@ -506,7 +537,7 @@ export function meetStatusScript(params: {
   } else if (!inCall && (allowMicrophone ? !microphoneChoice : !noMicrophoneChoice) && /do you want people to hear you in the meeting/i.test(pageText)) {
     manualAction = manualActionFor("meet-audio-choice-required", allowMicrophone ? "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry." : "Meet is showing the microphone choice. Choose the no-microphone option in the OpenClaw browser profile, then retry.");
   }
-  return JSON.stringify({
+  return stringifyResult({
     clickedJoin: Boolean(join),
     clickedMicrophoneChoice: Boolean(allowMicrophone && microphoneChoice),
     inCall,
