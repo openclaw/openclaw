@@ -233,23 +233,38 @@ export function collectAdmissionProtectedSessionIds(params: {
     [...admissionIdentities].map((identity) => normalizeStoreSessionKey(identity)),
   );
   const db = getSessionKysely(params.database.db);
-  const admittedKeys: string[] = [];
+  const admittedKeyBytes: string[] = [];
   // Normalize lightweight keys before reading payloads; unrelated saved prompts can be large.
   for (const row of iterateSqliteQuerySync(
     params.database.db,
-    db.selectFrom("session_nodes").select("session_key"),
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", db.fn<string>("hex", ["session_key"]).as("key_bytes")]),
   )) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
-      admittedKeys.push(row.session_key);
+      admittedKeyBytes.push(row.key_bytes);
     }
   }
-  const rows = admittedKeys.length
+  const rows = admittedKeyBytes.length
     ? iterateSqliteQuerySync(
         params.database.db,
         db
           .selectFrom("session_nodes")
           .select(["entry_json", "current_session_id"])
-          .where("session_key", "in", sqliteStringSet(admittedKeys)),
+          // Keep stored keys inside SQLite: Node TEXT rebinding can change raw UTF-16 keys.
+          // The key-only subquery scans the existing index before fetching matched payloads.
+          .where(
+            "session_key",
+            "in",
+            db
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where(
+                db.fn<string>("hex", ["session_key"]),
+                "in",
+                sqliteStringSet(admittedKeyBytes),
+              ),
+          ),
       )
     : [];
   for (const row of rows) {

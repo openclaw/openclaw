@@ -80,3 +80,48 @@ it("reads only admitted entry payloads while protecting normalized keys and ever
   expect(collectAdmissionProtectedSessionIds({ database: { db }, storePath })).toEqual(new Set());
   expect(payloadReads).toBe(0);
 });
+
+it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
+  "preserves admission protection through raw %s key decoding",
+  async (encoding) => {
+    const db = new DatabaseSync(":memory:");
+    onTestFinished(() => db.close());
+    db.exec(`
+      PRAGMA encoding='${encoding}';
+      CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, current_session_id TEXT, entry_json TEXT);
+      CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, session_key TEXT);
+    `);
+    const insert = db.prepare("INSERT INTO session_nodes VALUES (CAST(? AS TEXT), ?, ?)");
+    const addWindow = db.prepare("INSERT INTO session_windows VALUES (?, CAST(? AS TEXT))");
+    const expected = new Set<string>();
+    for (const [index, suffix] of ["\uFFFE", "\uFFFF", "\uD800", "\uDC00", "\0tail"].entries()) {
+      const key = `agent:main:dashboard:raw-${index}-${suffix}`;
+      // Bind a BLOB so SQLite retains the original encoding before Node decodes the key.
+      const bytes = Buffer.from(key, encoding === "UTF-8" ? "utf8" : "utf16le");
+      if (encoding === "UTF-16be") {
+        bytes.swap16();
+      }
+      const sessionId = `current-${index}`;
+      const previousSessionId = `previous-${index}`;
+      insert.run(bytes, sessionId, JSON.stringify({ sessionId, previousSessionId, updatedAt: 1 }));
+      addWindow.run(`historical-${index}`, bytes);
+      expected.add(sessionId).add(previousSessionId).add(`historical-${index}`);
+    }
+    const identities = db
+      .prepare("SELECT session_key FROM session_nodes")
+      .all()
+      .map((row) => String(row.session_key));
+    for (const identity of identities) {
+      expected.add(identity);
+    }
+    const storePath = `synthetic-raw-admission-${encoding}`;
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities,
+      assertAllowed: () => {},
+    });
+    onTestFinished(() => admission.release());
+
+    expect(collectAdmissionProtectedSessionIds({ database: { db }, storePath })).toEqual(expected);
+  },
+);
