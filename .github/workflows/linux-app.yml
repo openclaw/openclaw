@@ -20,9 +20,19 @@ permissions:
 
 jobs:
   build:
-    name: Build Linux companion
+    name: Build Linux companion (${{ matrix.arch }})
     # Match the release build base for native tests and manually built bundles.
-    runs-on: ubuntu-22.04
+    # GitHub's hosted ubuntu-22.04-arm runner is native aarch64, free for
+    # public repos; no cross-compilation or QEMU involved.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -80,9 +90,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/linux/src-tauri/target
-          key: linux-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          # runner.os is "Linux" for both amd64 and arm64 hosted runners;
+          # include the matrix arch explicitly or the two legs would restore
+          # and poison each other's incompatible target/ directories.
+          key: linux-app-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
           restore-keys: |
-            linux-app-${{ runner.os }}-
+            linux-app-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -127,7 +140,7 @@ jobs:
         if: always() && steps.inline-browser.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: linux-inline-browser
+          name: linux-inline-browser-${{ matrix.arch }}
           retention-days: 14
           if-no-files-found: warn
           path: ${{ runner.temp }}/linux-inline-browser
@@ -187,7 +200,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && failure() && steps.first-run.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: linux-first-run-failure
+          name: linux-first-run-failure-${{ matrix.arch }}
           retention-days: 14
           if-no-files-found: error
           path: ${{ runner.temp }}/linux-first-run.log
@@ -203,19 +216,27 @@ jobs:
             echo "Expected one AppImage, found ${#appimages[@]}"
             exit 1
           fi
+          # Official Arch Linux publishes no aarch64 build under this pinned
+          # digest (Arch Linux ARM is a separate project with its own images);
+          # the cross-distro shell-container check only runs on amd64 until an
+          # equivalent pinned aarch64 image is chosen. The FUSE-based
+          # extraction/launch check below still covers both architectures.
+          extra_args=()
+          if [[ "${{ matrix.arch }}" == "amd64" ]]; then
+            extra_args+=(--shell-container "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a")
+          fi
           xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
             /usr/bin/python3 apps/linux/tests/packaged_runtime_smoke.py \
             "${appimages[0]}" \
             --output "${RUNNER_TEMP}/linux-packaged-runtime" \
             --require-fuse \
-            --shell-container \
-              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+            "${extra_args[@]}"
 
       - name: Upload packaged runtime failure evidence
         if: github.event_name == 'workflow_dispatch' && failure() && steps.packaged-runtime.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: linux-packaged-runtime-failure
+          name: linux-packaged-runtime-failure-${{ matrix.arch }}
           retention-days: 14
           if-no-files-found: warn
           path: ${{ runner.temp }}/linux-packaged-runtime
@@ -224,7 +245,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: openclaw-linux-companion
+          name: openclaw-linux-companion-${{ matrix.arch }}
           retention-days: 14
           if-no-files-found: error
           path: |

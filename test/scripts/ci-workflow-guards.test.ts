@@ -18105,7 +18105,7 @@ describe("Linux App validation routing", () => {
           linux
             .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
             .map((step) => step.with?.name),
-        ).toEqual(["linux-inline-browser"]);
+        ).toEqual(["linux-inline-browser-${{ matrix.arch }}"]);
       }
     },
   );
@@ -18898,8 +18898,14 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(appImageTools).toMatch(/continuous[\s\S]*digest-pinned/u);
 
   const prLinux = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
-  expect(prLinux.jobs.build["runs-on"]).toBe("ubuntu-22.04");
-  expect(prLinux.jobs.build.strategy).toBeUndefined();
+  expect(prLinux.jobs.build["runs-on"]).toContain("matrix.runner");
+  // amd64 keeps the release build base (ubuntu-22.04); aarch64 uses GitHub's
+  // free native hosted ubuntu-22.04-arm runner, same Ubuntu version to match
+  // the amd64 leg's documented glibc floor.
+  expect(prLinux.jobs.build.strategy.matrix.include).toEqual([
+    { arch: "amd64", runner: "ubuntu-22.04" },
+    { arch: "aarch64", runner: "ubuntu-22.04-arm" },
+  ]);
   expect(prLinux.on.workflow_dispatch?.inputs).toBeUndefined();
   const abiScannerTest = expectDefined(
     (prLinux.jobs.build.steps as WorkflowStep[]).find(
