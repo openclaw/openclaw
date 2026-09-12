@@ -244,9 +244,15 @@ describe("Git candidate activation", () => {
     ).toEqual([]);
   }
 
-  it.each(["success", "config-refused", "requester-revoked", "doctor-error", "missing"] as const)(
+  it.each([
+    ["success", undefined],
+    ["config-refused", "repair-requires-config-change"],
+    ["requester-revoked", "requester-revoked"],
+    ["doctor-error", "doctor-failed"],
+    ["missing", "doctor-entry-missing"],
+  ] as const)(
     "uses the CLI activation Doctor and preserves its outcome: %s",
-    async (outcome) => {
+    async (outcome, reason) => {
       const targetSha = await advanceRemote();
       const configChanges: UpdateDoctorConfigChange[] = [{ kind: "key", key: "agents" }];
       const runGitDoctor = vi.fn(async (doctorRoot: string) => {
@@ -283,17 +289,7 @@ describe("Git candidate activation", () => {
       expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root);
       expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
       expect(result.status).toBe(outcome === "success" ? "ok" : "error");
-      expect(result.reason).toBe(
-        outcome === "success"
-          ? undefined
-          : outcome === "config-refused"
-            ? "repair-requires-config-change"
-            : outcome === "requester-revoked"
-              ? "requester-revoked"
-              : outcome === "missing"
-                ? "doctor-entry-missing"
-                : "doctor-failed",
-      );
+      expect(result.reason).toBe(reason);
       if (outcome !== "requester-revoked" && outcome !== "missing") {
         expect(result.steps.find((step) => step.name === "openclaw doctor")?.configChanges).toEqual(
           configChanges,
