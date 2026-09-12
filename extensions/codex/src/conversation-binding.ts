@@ -83,6 +83,7 @@ async function runBoundTurn(params: {
   data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
+  audioInputAttachmentIndexes?: readonly number[];
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;
@@ -369,6 +370,7 @@ async function runBoundTurn(params: {
             input: buildCodexConversationTurnInput({
               prompt: params.prompt,
               event: params.event,
+              audioInputAttachmentIndexes: params.audioInputAttachmentIndexes,
             }),
             cwd: workspaceDir,
             ...(sessionRoot ? { runtimeWorkspaceRoots: [sessionRoot] } : {}),
@@ -521,6 +523,7 @@ export async function runBoundTurnWithMissingThreadRecovery(params: {
   data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
+  audioInputAttachmentIndexes?: readonly number[];
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;

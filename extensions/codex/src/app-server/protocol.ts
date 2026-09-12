@@ -104,6 +104,8 @@ export type CodexInitializeResponse = {
   platformOs?: string;
 };
 
+type CodexAudioUserInput = { type: "audio"; url: string } | { type: "localAudio"; path: string };
+
 export type CodexUserInput =
   | {
       type: "text";
@@ -121,6 +123,7 @@ export type CodexUserInput =
       type: "localImage";
       path: string;
     }
+  | CodexAudioUserInput
   | {
       type: "skill";
       name: string;
