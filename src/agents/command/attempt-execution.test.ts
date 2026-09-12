@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
 
@@ -507,6 +508,41 @@ describe("claudeCliSessionTranscriptHasContent", () => {
         homeDir: tmpDir,
       }),
     ).toBe(true);
+  });
+
+  it("resolves the transcript under $CLAUDE_CONFIG_DIR/projects when configured", async () => {
+    const workspaceDir = await makeWorkspace();
+    const configDir = path.join(tmpDir, "claude-config");
+    await withEnvAsync({ CLAUDE_CONFIG_DIR: configDir, HOME: tmpDir }, async () => {
+      await writeClaudeProjectFile(
+        workspaceDir,
+        "config-dir-session",
+        `${JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "hello from config dir" }],
+          },
+        })}\n`,
+      );
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId: "config-dir-session",
+          workspaceDir,
+          homeDir: tmpDir,
+        }),
+      ).toBe(true);
+    });
+    // Outside the env override the transcript must not resolve under the
+    // default <homeDir>/.claude/projects tree, proving it was written to and
+    // read from $CLAUDE_CONFIG_DIR/projects instead.
+    expect(
+      await claudeCliSessionTranscriptHasContent({
+        sessionId: "config-dir-session",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
   });
 
   it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
