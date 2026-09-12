@@ -204,7 +204,8 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              accounts: [personal],
+              // Reopening retries an empty inventory; a populated one stays cached.
+              accounts: input === "keyboard" ? [] : [personal],
               nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
@@ -275,6 +276,13 @@ suite.define(() => {
             links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
           });
           await expect.poll(() => loading.isVisible()).toBe(false);
+          await expect
+            .poll(() => more.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+        } else {
+          expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+            refreshRequests.length,
+          );
         }
         expect(
           await picker
