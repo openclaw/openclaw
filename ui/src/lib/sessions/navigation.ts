@@ -177,6 +177,9 @@ export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
   if (isCronSessionKey(row.key)) {
     return false;
   }
+  if (row.classification === "heartbeat") {
+    return true;
+  }
   if (row.createdActor?.type === "system") {
     return true;
   }

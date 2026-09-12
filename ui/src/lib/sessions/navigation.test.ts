@@ -123,6 +123,52 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.activeRowKey).toBe("agent:main:explicit:incident-debug");
   });
 
+  it("hides heartbeat sessions with the system toggle independently of automation", () => {
+    const heartbeat: GatewaySessionRow = {
+      key: "agent:main:discord:channel:123:heartbeat",
+      kind: "direct",
+      classification: "heartbeat",
+      label: "discord:g-123-heartbeat",
+      updatedAt: 200,
+    };
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      heartbeat,
+    ];
+
+    const hidden = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+      showCron: true,
+    });
+    expect(hidden.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+
+    const shown = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+      showSystem: true,
+    });
+    expect(shown.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat", heartbeat.key]);
+  });
+
+  it("keeps a selected heartbeat session visible with the system toggle off", () => {
+    const heartbeat: GatewaySessionRow = {
+      key: "agent:main:discord:channel:123:heartbeat",
+      kind: "direct",
+      classification: "heartbeat",
+      updatedAt: 200,
+    };
+
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([heartbeat]),
+      resultAgentId: "main",
+      sessionKey: heartbeat.key,
+    });
+    expect(navigation.visibleSessions).toEqual([heartbeat]);
+  });
+
   it("uses the caller's sort order before applying the recent-session projection", () => {
     const navigation = resolveSessionNavigation({
       result: sessionsResult([
@@ -436,6 +482,11 @@ describe("isSystemCreatedSessionRow", () => {
     ["run + label stays visible", { createdVia: "run", label: "My batch job" }, false],
     ["operator creation stays visible", { createdVia: "operator" }, false],
     ["legacy row without provenance stays visible", {}, false],
+    [
+      "gateway-classified heartbeat is system despite a derived label",
+      { classification: "heartbeat", label: "discord:g-123-heartbeat" },
+      true,
+    ],
     [
       "cron row with system actor is owned by the automation toggle",
       { key: "agent:main:cron:job", createdVia: "cron", createdActor: { type: "system" } },
