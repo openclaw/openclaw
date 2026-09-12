@@ -12,7 +12,7 @@ Sonar chat completions, direct or via OpenRouter (AI-synthesized answers with
 citations).
 
 <Note>
-This page covers the Perplexity **provider** setup. For the Perplexity **tool** (how the agent uses it), see [Perplexity search](/tools/perplexity-search).
+This page covers the Perplexity **provider** setup. For the Perplexity **tool** (how the agent uses it), see [Perplexity search](/tools/perplexity-search). To use Perplexity's **Agent API** as an LLM model provider (Claude, GPT, Gemini through one key), see [Perplexity Agent API](/providers/perplexity-agent-api).
 </Note>
 
 | Property    | Value                                                                  |
@@ -103,21 +103,30 @@ Native-only filters return a descriptive error on the chat-completions path.
     </Warning>
   </Accordion>
 
-  <Accordion title="OpenRouter proxy setup">
-    To route Perplexity searches through OpenRouter, set an `OPENROUTER_API_KEY`
-    (prefix `sk-or-`) instead of a native Perplexity key. OpenClaw detects the
-    key and switches to the Sonar transport automatically. Useful if you already
-    have OpenRouter billing set up and want to consolidate providers there.
+  <Accordion title="OpenRouter / Sonar compatibility (legacy)">
+    Existing OpenClaw installs configured against Perplexity Sonar through OpenRouter continue to work. The plugin switches to the Sonar chat-completions transport when any of these is set:
+
+    - `OPENROUTER_API_KEY` in the Gateway environment, when no higher-priority credential is available
+    - An `sk-or-...` key stored in `plugins.entries.perplexity.config.webSearch.apiKey`
+    - `plugins.entries.perplexity.config.webSearch.baseUrl` or `.model`
+
+    Credential precedence is `plugins.entries.perplexity.config.webSearch.apiKey`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`. The first available credential determines endpoint inference unless an explicit `baseUrl` or `model` forces the legacy transport.
+
+    In that mode the provider returns one AI-synthesized answer with citations instead of structured Search API results. `count` is accepted for shared-tool compatibility but does not change that one-answer shape. The Search API filters `country`, `language`, `date_after`/`date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return a `not supported` error on the chat-completions path; `freshness` still applies as `search_recency_filter`. New setups should use a `pplx-` key against the native Search API.
+
   </Accordion>
 </AccordionGroup>
 
 ## Related
 
-<CardGroup cols={2}>
+<CardGroup cols={3}>
   <Card title="Perplexity search tool" href="/tools/perplexity-search" icon="magnifying-glass">
     How the agent invokes Perplexity searches and interprets results.
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full configuration reference including plugin entries.
+  </Card>
+  <Card title="Perplexity Agent API" href="/providers/perplexity-agent-api" icon="robot">
+    Use Perplexity's Agent API as an LLM model provider for OpenClaw.
   </Card>
 </CardGroup>
