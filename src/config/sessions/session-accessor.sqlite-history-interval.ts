@@ -167,7 +167,7 @@ function readHistoricalDisplayEventRange(
   return positionTranscriptDisplayEvents(
     projection,
     displaySource,
-    [...older.reverse(), ...newer].map((row, index) => ({
+    [...older.toReversed(), ...newer].map((row, index) => ({
       event: parseStoredTranscriptEvent(row.event_json),
       eventSeq: row.event_seq,
       seq: start + index + 1,
