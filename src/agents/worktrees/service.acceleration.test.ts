@@ -43,6 +43,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   let backend: WorktreeFilesystemBackend;
 
   beforeEach(async () => {
+    // Hosted runners can install system-wide LFS filters, which intentionally
+    // disable acceleration. Each case owns its checkout policy instead.
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     const root = tempDirs.make("openclaw-worktree-acceleration-");
     repo = await initializeRepository(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -136,6 +139,18 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(listTemplates(env)).toEqual([]);
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
     expect(await git(created.path, "status", "--porcelain")).toBe("");
+  });
+
+  it("uses native Git when the repository configures a checkout filter", async () => {
+    await git(repo, "config", "filter.fixture.required", "true");
+    const created = await service.create({ repoRoot: repo, name: "filtered", baseRef: "HEAD" });
+
+    expect(backend.createTemplate).not.toHaveBeenCalled();
+    expect(backend.cloneTemplate).not.toHaveBeenCalled();
+    expect(listTemplates(env)).toEqual([]);
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+    expect(await git(created.path, "symbolic-ref", "--short", "HEAD")).toBe(created.branch);
   });
 
   it("replaces stale source and expires its template without removing live manual worktrees", async () => {
