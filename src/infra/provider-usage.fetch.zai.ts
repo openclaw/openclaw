@@ -1,8 +1,11 @@
 // Fetches and normalizes Z.ai provider usage records.
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { fetchUsageJson, parseUsageResetAt } from "./provider-usage.fetch.shared.js";
+import {
+  fetchUsageJson,
+  parseFiniteNumber,
+  parseUsageResetAt,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -27,7 +30,11 @@ function normalizeZaiUsage(value: unknown): NormalizedZaiUsage | undefined {
     return undefined;
   }
   const message = normalizeOptionalString(value.msg);
-  if (value.success !== true || asFiniteNumber(value.code) !== 200) {
+  // Numeric fields arrive as numbers in most responses, but Z.ai has been
+  // observed returning string-typed numerics (e.g. "200", "40"). Parse both
+  // forms like the sibling provider fetchers do, so a valid window is never
+  // silently treated as missing/zero.
+  if (value.success !== true || parseFiniteNumber(value.code) !== 200) {
     return { ok: false, message };
   }
 
@@ -41,9 +48,9 @@ function normalizeZaiUsage(value: unknown): NormalizedZaiUsage | undefined {
     }
     limits.push({
       type: normalizeOptionalString(rawLimit.type),
-      percentage: asFiniteNumber(rawLimit.percentage),
-      unit: asFiniteNumber(rawLimit.unit),
-      number: asFiniteNumber(rawLimit.number),
+      percentage: parseFiniteNumber(rawLimit.percentage),
+      unit: parseFiniteNumber(rawLimit.unit),
+      number: parseFiniteNumber(rawLimit.number),
       nextResetTime: normalizeOptionalString(rawLimit.nextResetTime),
     });
   }
