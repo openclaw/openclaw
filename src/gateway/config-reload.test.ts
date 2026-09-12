@@ -1777,6 +1777,7 @@ function createReloaderHarness(
   );
   const onConfigAccepted = vi.fn(options.onConfigAccepted ?? (async () => {}));
   const onConfigRevisionApplied = vi.fn(options.onConfigRevisionApplied ?? (() => {}));
+  const onReloadEnabledChange = vi.fn<(enabled: boolean) => void>();
   const onEffectiveConfigUnchanged = vi.fn(
     options.onEffectiveConfigUnchanged ?? (async () => ({ rollback: async () => {} })),
   );
@@ -1840,6 +1841,7 @@ function createReloaderHarness(
     onConfigChange,
     onConfigApplied,
     onConfigRevisionApplied,
+    onReloadEnabledChange,
     onConfigAccepted,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit,
@@ -1855,6 +1857,7 @@ function createReloaderHarness(
     onConfigChange,
     onConfigApplied,
     onConfigRevisionApplied,
+    onReloadEnabledChange,
     onConfigAccepted,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit,
@@ -3837,25 +3840,44 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("notifies change listeners when reload mode off skips the runtime apply", async () => {
+  it("updates reload owners only for accepted off/on policy, including skipped runtime apply", async () => {
     const initialConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "off" } },
+      gateway: { reload: { mode: "hybrid" } },
     };
     const nextConfig: OpenClawConfig = {
       gateway: { reload: { mode: "off" } },
       ui: { prefs: { themeMode: "light" } },
     };
-    const readSnapshot = vi.fn(async () =>
-      makeSnapshot({ config: nextConfig, hash: "mode-off-write" }),
-    );
+    let snapshot = makeSnapshot({ config: nextConfig, hash: "mode-off-write" });
+    const readSnapshot = vi.fn(async () => snapshot);
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
     await harness.reloader.ready;
+    expect(harness.onReloadEnabledChange.mock.calls).toEqual([[true]]);
 
     await flushWatcherChange(harness);
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).not.toHaveBeenCalled();
     expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
+    expect(harness.onReloadEnabledChange.mock.calls).toEqual([[true], [false]]);
+
+    snapshot = makeSnapshot({
+      config: initialConfig,
+      valid: false,
+      raw: '{ "gateway": { "reload": { "mode": "hybrid" }, "port": "invalid" } }',
+      hash: "invalid-reenable",
+      issues: [{ path: "gateway.port", message: "Expected number" }],
+    });
+    await flushWatcherChange(harness);
+    expect(harness.onReloadEnabledChange.mock.calls).toEqual([[true], [false]]);
+
+    // The effective runtime never changed while off, so returning to its
+    // original config must still re-enable independent reload owners.
+    snapshot = makeSnapshot({ config: initialConfig, hash: "mode-on-write" });
+    await flushWatcherChange(harness);
+    expect(harness.onReloadEnabledChange.mock.calls).toEqual([[true], [false], [true]]);
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
     await harness.reloader.stop();
   });
 
@@ -4595,6 +4617,9 @@ describe("startGatewayConfigReloader", () => {
     const initialConfig = {
       gateway: { reload: {} },
     } satisfies OpenClawConfig;
+    const configA = {
+      gateway: { reload: { mode: "off" } },
+    } satisfies OpenClawConfig;
     const invalidConfigB = {
       gateway: { reload: {}, port: 18790 },
     } satisfies OpenClawConfig;
@@ -4602,9 +4627,9 @@ describe("startGatewayConfigReloader", () => {
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValueOnce(
         makeSnapshot({
-          config: initialConfig,
-          sourceConfig: initialConfig,
-          runtimeConfig: initialConfig,
+          config: configA,
+          sourceConfig: configA,
+          runtimeConfig: configA,
           hash: "plugin-read-a",
         }),
       )
@@ -4645,6 +4670,7 @@ describe("startGatewayConfigReloader", () => {
     expect(readSnapshot).toHaveBeenCalledTimes(3);
     expect(harness.onConfigAccepted).not.toHaveBeenCalled();
     expect(pausedRestartDebt).toBe(true);
+    expect(harness.onReloadEnabledChange.mock.calls).toEqual([[true]]);
     expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).not.toHaveBeenCalled();

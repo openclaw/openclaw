@@ -183,6 +183,14 @@ retired process are not kept. Extension relay settings still require a Gateway
 restart. Snapshot defaults apply to the next snapshot, and tab-cleanup settings
 apply on the next sweep.
 
+TLS certificate renewal watches the files at the running Gateway's accepted
+certificate, key, and CA paths. Valid replacement material updates existing and
+future HTTPS listeners, discovery, and pairing fingerprints without interrupting
+connections. Incomplete or invalid replacements keep the previous material serving.
+Reload mode `off` pauses renewal; re-enabling checks changes made while paused.
+TLS configuration and path changes still require a Gateway restart. Remote
+certificate pins remain operator-controlled; see [Gateway TLS](/gateway/config-gateway#gateway-tls).
+
 Authentication rate-limit changes retain recorded failures, earned lockout
 deadlines, and pending loopback delays. New limits and loopback exemptions apply
 to subsequent attempts; tightening the attempt limit can lock a client based on

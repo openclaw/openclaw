@@ -8,12 +8,15 @@ import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-rout
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
 
-const loadGatewayTlsServerRuntimeMock = vi.hoisted(() =>
-  vi.fn(async () => ({ fingerprintSha256: "" })),
+const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/tls/gateway.js").inspectGatewayTlsCertificate>(async () => ({
+    ok: false,
+    error: "public certificate missing",
+  })),
 );
 
 vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsServerRuntime: loadGatewayTlsServerRuntimeMock,
+  inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
 
 function createLogger() {
@@ -297,8 +300,8 @@ describe("supervised gateway lock recovery", () => {
     },
   );
 
-  it("retries non-mutating TLS fingerprint loads until certificate material is ready", async () => {
-    loadGatewayTlsServerRuntimeMock.mockClear();
+  it("retries public certificate inspection while TLS material is unavailable", async () => {
+    inspectGatewayTlsCertificateMock.mockClear();
     const probeHealth = testing.createConfiguredGatewayHealthProbe({
       gateway: { tls: { enabled: true, autoGenerate: true } },
     });
@@ -306,14 +309,10 @@ describe("supervised gateway lock recovery", () => {
     await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
     await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
 
-    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenCalledTimes(2);
-    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenNthCalledWith(1, {
+    expect(inspectGatewayTlsCertificateMock).toHaveBeenCalledTimes(2);
+    expect(inspectGatewayTlsCertificateMock).toHaveBeenCalledWith({
       enabled: true,
-      autoGenerate: false,
-    });
-    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenNthCalledWith(2, {
-      enabled: true,
-      autoGenerate: false,
+      autoGenerate: true,
     });
   });
 
