@@ -54,6 +54,7 @@ import {
   rejectConfigNonFiniteNumbers,
   resolveManagedRuntimeEnvBaseline,
 } from "./io.read-helpers.js";
+import { configWriteCommittedSnapshot } from "./io.types.js";
 import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import { injectExplicitlySetPaths, projectConfigWriteSource } from "./io.write-prepare.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
@@ -1199,24 +1200,10 @@ async function replaceConfigFileUnlocked(
       nextConfig,
       fallbackWriteOptions,
     );
-    const persisted = await readConfigSnapshotForMutation({
-      ownedConfigPathForWrite: snapshot.path,
-      io: params.io,
-      writeOptions: mergedWriteOptions,
-    });
-    if (!persisted.snapshot.exists || !persisted.snapshot.valid) {
-      throw new ConfigWritePostCommitError({
-        configPath: snapshot.path,
-        rollbackStatus: "not-restored",
-        cause: createInvalidConfigError(
-          snapshot.path,
-          formatInvalidConfigDetails(persisted.snapshot.issues),
-        ),
-      });
-    }
+    const committed = written?.[configWriteCommittedSnapshot];
     writeResult = {
-      persistedHash: resolveConfigSnapshotHash(persisted.snapshot),
-      persistedConfig: persisted.snapshot.sourceConfig,
+      persistedHash: committed?.hash ?? written?.persistedHash ?? null,
+      persistedConfig: committed?.sourceConfig ?? written?.persistedConfig ?? nextConfig,
       persistedSourceConfig: written?.persistedSourceConfig,
     };
   }

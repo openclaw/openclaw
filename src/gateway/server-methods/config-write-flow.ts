@@ -270,8 +270,7 @@ export async function commitGatewayConfigWrite(params: {
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
-    // Persisted hash of the re-read file (resolveConfigSnapshotHash), i.e.
-    // exactly what a follow-up config.get reports — writers ack against it.
+    // Acknowledge this commit; a later config.get can observe an external edit.
     hash: result.persistedHash,
     ...(application
       ? {

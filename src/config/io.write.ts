@@ -5,7 +5,7 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   getUpdateDoctorConfigWriteAuthority,
   assertUpdateDoctorConfigInputHash,
@@ -55,6 +55,7 @@ import {
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
+import { hashConfigRevision } from "./io.snapshot.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteInputBasis,
@@ -62,7 +63,11 @@ import type {
   InternalConfigWriteResult,
   ReadConfigFileSnapshotInternalResult,
 } from "./io.types.js";
-import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
+import {
+  ConfigRuntimeRefreshError,
+  configWriteCommittedSnapshot,
+  configWritePostCommitRollback,
+} from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
 import {
   ConfigWritePostCommitError,
@@ -340,7 +345,14 @@ export async function writeConfigFileFromContext(
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
   const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
-  const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
+  const includeFileHashes: Record<string, string> = {};
+  const includeFileTargets: Record<string, string> = {};
+  const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(
+    stampedOutputConfig,
+    includeFileHashes,
+    includeFileTargets,
+  );
+  const committedRevision = hashConfigRevision(json, includeFileHashes, includeFileTargets);
   // Compare resolved modes: an unchanged authored $include has no local mode literal.
   const gatewayModeAfter = resolveGatewayMode(sourceConfigForPreflight);
   const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
@@ -470,62 +482,44 @@ export async function writeConfigFileFromContext(
   let committed = false;
   let rollbackStatus: ConfigWriteRollbackStatus = "not-restored";
   try {
-    const beforeCommit = options.beforeCommit;
+    const hasCapturedIncludes = Object.keys(includeFileHashes).length > 0;
+    options.assertConfigPathForWrite?.();
+    if (options.baseSnapshot) {
+      assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+    }
+    if (deps.fs.existsSync(configPath)) {
+      await maintainConfigBackups(configPath, deps.fs.promises, options.assertConfigPathForWrite);
+    }
+    if (options.baseSnapshot) {
+      assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+    }
+    options.assertConfigPathForWrite?.();
+    await cronOwnerRefusal?.recheck();
+    options.assertConfigPathForWrite?.();
+    warnIfJSON5CommentsWillBeStripped({
+      raw: snapshot.raw,
+      filePath: configPath,
+      warn: (message) => deps.logger.warn(message),
+      skipOutputLogs: options.skipOutputLogs,
+    });
+    await options.beforeCommit?.();
     const guardedFs = createGuardedConfigFileSystem(
       configPath,
       deps.fs,
       options.assertConfigPathForWrite,
+      options.baseSnapshot || hasCapturedIncludes
+        ? { snapshot, includeGraph: { hashes: includeFileHashes, targets: includeFileTargets } }
+        : undefined,
     );
-    const result = await replaceFileAtomic({
+    // Keep rename and copy publication in one turn after asynchronous preparation.
+    const result = replaceFileAtomicSync({
       filePath: configPath,
       content: json,
       dirMode: 0o700,
       mode: 0o600,
       tempPrefix: path.basename(configPath),
-      // fs-safe's copy fallback has no final authority hook. Guarded operations
-      // must publish by rename so a failed attempt cannot continue under stale authority.
-      copyFallbackOnPermissionError: !beforeCommit,
-      fileSystem: beforeCommit
-        ? {
-            promises: {
-              ...guardedFs.promises,
-              rename: async (source, destination) => {
-                await beforeCommit();
-                options.assertConfigPathForWrite?.();
-                if (options.baseSnapshot) {
-                  assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
-                }
-                return guardedFs.promises.rename(source, destination);
-              },
-            },
-          }
-        : guardedFs,
-      beforeRename: async () => {
-        options.assertConfigPathForWrite?.();
-        if (options.baseSnapshot) {
-          assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
-        }
-        if (deps.fs.existsSync(configPath)) {
-          await maintainConfigBackups(
-            configPath,
-            deps.fs.promises,
-            options.assertConfigPathForWrite,
-          );
-        }
-        if (options.baseSnapshot) {
-          assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
-        }
-        options.assertConfigPathForWrite?.();
-        await cronOwnerRefusal?.recheck();
-        options.assertConfigPathForWrite?.();
-        // Warn only after backup and config-owner checks succeed.
-        warnIfJSON5CommentsWillBeStripped({
-          raw: snapshot.raw,
-          filePath: configPath,
-          warn: (message) => deps.logger.warn(message),
-          skipOutputLogs: options.skipOutputLogs,
-        });
-      },
+      copyFallbackOnPermissionError: true,
+      fileSystem: guardedFs,
     });
     committed = true;
     try {
@@ -620,6 +614,10 @@ export async function writeConfigFileFromContext(
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
       persistedSourceConfig: sourceConfigForPreflight,
+      [configWriteCommittedSnapshot]: {
+        hash: committedRevision,
+        sourceConfig: sourceConfigForPreflight,
+      },
       [configWritePostCommitRollback]: (assertCurrent) => {
         assertCurrent();
         restoreConfigSnapshotAuditRecord({

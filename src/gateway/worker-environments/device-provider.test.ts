@@ -67,6 +67,9 @@ function deviceRuntime(params: {
   });
   if (params.listCurrentNodes) {
     runtime.bindNodeTransport({
+      async getCurrentNode(nodeId) {
+        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+      },
       listCurrentNodes: params.listCurrentNodes,
       hasCurrentRunner: () => true,
       ...(params.getIssue ? { getIssue: params.getIssue } : {}),

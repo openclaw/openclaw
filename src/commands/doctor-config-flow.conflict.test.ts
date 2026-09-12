@@ -185,9 +185,9 @@ describe("Doctor repair confirmation conflicts", () => {
           let preferredCheckedAfterRename = false;
           let sourceRecheckedAfterRename = false;
           let preferredCreated = false;
-          const rename = fsNode.promises.rename.bind(fsNode.promises);
-          vi.spyOn(fsNode.promises, "rename").mockImplementation(async (source, destination) => {
-            await rename(source, destination);
+          const renameSync = fsNode.renameSync.bind(fsNode);
+          vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {
+            renameSync(source, destination);
             if (destination === configPath) {
               committed = true;
             }

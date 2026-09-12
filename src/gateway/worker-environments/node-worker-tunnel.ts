@@ -188,9 +188,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     if (!transport) {
       throw new Error("device worker node transport is unavailable");
     }
-    const node = (await raceNodeWorkerOperation(transport.listCurrentNodes(), signal)).find(
-      (candidate) => candidate.nodeId === entry.deviceId,
-    );
+    const node = await raceNodeWorkerOperation(transport.getCurrentNode(entry.deviceId), signal);
     if (!node) {
       throw new WorkerTunnelOwnerDisconnectedError(
         "device worker node is not connected with the supervisor dialect",
