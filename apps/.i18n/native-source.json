@@ -2741,7 +2741,7 @@
     {"id":"native.apple.2282d2bdeca50246","source":"Next Match","surface":"apple","sites":[{"kind":"ui-call","path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptSearch.swift"}]},
     {"id":"native.apple.de0f4838e9554464","source":"Next match (⌘G)","surface":"apple","sites":[{"kind":"ui-modifier","path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptSearch.swift"}]},
     {"id":"native.apple.f5f840287aa988ff","source":"Next up","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/WatchApp/Sources/WatchInboxView.swift"}]},
-    {"id":"native.apple.fedfabab4844f04b","source":"No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift"}]},
+    {"id":"native.apple.fedfabab4844f04b","source":"No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.","surface":"apple","sites":[{"kind":"ui-localized-call-multiline","path":"apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift"}]},
     {"id":"native.apple.37db63fd5d16b721","source":"No Gateways saved","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/GatewaySettings.swift"}]},
     {"id":"native.apple.531ebef3784c2b3e","source":"No Results","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift"}]},
     {"id":"native.apple.cb16b17de2bb55f4","source":"No Sound","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/VoiceWakeChime.swift"}]},

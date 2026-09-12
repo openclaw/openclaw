@@ -423,6 +423,53 @@ struct BrowserProfileImportModelTests {
         #expect(model.phase == .hidden)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func `availability reads preserve a pending forced offer using the latest status`(
+        availabilityFinishesFirst: Bool,
+        profileChanges: Bool) async throws
+    {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let offerGate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { offerGate.continuation = $0 }
+        }
+        let offer = Task { await model.refresh(force: true) }
+        while offerGate.continuation == nil {
+            await Task.yield()
+        }
+
+        let latestStatus = BrowserProfileImportStatus(
+            enabled: true,
+            systemProfiles: [profileChanges
+                ? BrowserSystemProfile(browser: "brave", id: "Profile 1", name: "Work", hasCookies: true)
+                : Self.chromeProfile],
+            state: nil,
+            suggestedTarget: profileChanges ? "work-logins" : "imported")
+        stub.statusJSON = try String(decoding: JSONEncoder().encode(latestStatus), as: UTF8.self)
+        let availabilityGate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { availabilityGate.continuation = $0 }
+        }
+        let availability = Task { await model.refreshAvailability() }
+        while availabilityGate.continuation == nil {
+            await Task.yield()
+        }
+
+        if availabilityFinishesFirst {
+            availabilityGate.continuation?.resume()
+            await availability.value
+            offerGate.continuation?.resume()
+        } else {
+            offerGate.continuation?.resume()
+            availabilityGate.continuation?.resume()
+            await availability.value
+        }
+        #expect(await offer.value == .offering)
+        #expect(model.phase == .offering(latestStatus))
+        #expect(model.importAvailable)
+    }
+
     @Test func `availability response stays withdrawn across a local mode round trip`() async {
         let stub = BrowserImportTransportStub()
         let eligibility = BrowserImportEligibilityGate()

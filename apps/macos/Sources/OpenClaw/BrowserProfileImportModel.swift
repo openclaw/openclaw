@@ -80,6 +80,11 @@ final class BrowserProfileImportModel {
         case unavailable(title: String, message: String)
     }
 
+    private struct StatusRequest {
+        let id = UUID()
+        let task: Task<BrowserProfileImportStatus, Error>
+    }
+
     typealias Transport = @MainActor (BrowserProfileImportRequest) async throws -> Data
 
     static let shared = BrowserProfileImportModel()
@@ -87,7 +92,7 @@ final class BrowserProfileImportModel {
     private(set) var phase: Phase = .hidden
     private(set) var importAvailable = false
     @ObservationIgnored private var phaseGeneration = 0
-    @ObservationIgnored private var availabilityGeneration = 0
+    @ObservationIgnored private var statusRequest: StatusRequest?
     /// A dismissal must stick for this app session even while its
     /// fire-and-forget persistence write is pending or lost — otherwise the
     /// next automatic poll reads the still-null server state and re-offers.
@@ -114,16 +119,25 @@ final class BrowserProfileImportModel {
 
     /// Read availability without changing the banner or overriding a remembered dismissal.
     func refreshAvailability() async {
-        self.availabilityGeneration += 1
-        let generation = self.availabilityGeneration
         guard self.isLocalMode() else {
+            self.statusRequest = nil
             self.importAvailable = false
             return
         }
-        let status: BrowserProfileImportStatus? = try? await self.request(
-            method: "GET", path: "/system-profile-import/status", timeoutMs: 5000)
-        guard self.availabilityGeneration == generation else { return }
+        let request = self.startStatusRequest(timeoutMs: 5000)
+        let status = try? await request.task.value
+        guard self.statusRequest?.id == request.id else { return }
         self.importAvailable = self.isLocalMode() && status.map { Self.shouldOffer(status: $0, force: true) } == true
+    }
+
+    private func startStatusRequest(timeoutMs: Double? = nil) -> StatusRequest {
+        let request = StatusRequest(task: Task {
+            guard self.isLocalMode() else { throw CancellationError() }
+            return try await self.request(
+                method: "GET", path: "/system-profile-import/status", timeoutMs: timeoutMs)
+        })
+        self.statusRequest = request
+        return request
     }
 
     /// Phase changes and refresh starts invalidate earlier presentation work,
@@ -182,37 +196,42 @@ final class BrowserProfileImportModel {
         guard shouldApply() else { return (.superseded, false) }
         self.phaseGeneration += 1
         let generation = self.phaseGeneration
-        self.availabilityGeneration += 1
-        let availabilityGeneration = self.availabilityGeneration
-        do {
-            let status: BrowserProfileImportStatus = try await self.request(
-                method: "GET",
-                path: "/system-profile-import/status")
-            guard self.phaseGeneration == generation, self.availabilityGeneration == availabilityGeneration,
-                  self.isOnboarded(), self.isLocalMode(), shouldApply() else { return (.superseded, false) }
-            self.importAvailable = Self.shouldOffer(status: status, force: true)
-            guard Self.shouldOffer(status: status, force: force) else {
-                self.setPhase(.hidden)
-                let message = status.enabled
-                    ? String(
-                        localized: "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.")
-                    : String(
-                        localized: "System browser profile import is disabled in the local Gateway configuration.")
-                return (
-                    .unavailable(title: String(localized: "No browser login available"), message: message),
-                    true)
+        var request = self.startStatusRequest()
+        while true {
+            let result = await request.task.result
+            guard self.phaseGeneration == generation, self.isOnboarded(), self.isLocalMode(), shouldApply(),
+                  let latestRequest = self.statusRequest else { return (.superseded, false) }
+            // Availability reads update the facts, not the user's presentation intent.
+            // Join the latest read so an explicit action uses its profiles and target.
+            if latestRequest.id != request.id {
+                request = latestRequest
+                continue
             }
-            self.setPhase(.offering(status))
-            return (.offering, true)
-        } catch {
-            guard self.phaseGeneration == generation, self.availabilityGeneration == availabilityGeneration,
-                  self.isOnboarded(), self.isLocalMode(), shouldApply() else { return (.superseded, false) }
-            if force { self.setPhase(.hidden) }
-            return (
-                .unavailable(
-                    title: String(localized: "Browser import unavailable"),
-                    message: error.localizedDescription),
-                false)
+            do {
+                let status = try result.get()
+                self.importAvailable = Self.shouldOffer(status: status, force: true)
+                guard Self.shouldOffer(status: status, force: force) else {
+                    self.setPhase(.hidden)
+                    let message = status.enabled
+                        ? String(localized: """
+                        No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.
+                        """)
+                        : String(
+                            localized: "System browser profile import is disabled in the local Gateway configuration.")
+                    return (
+                        .unavailable(title: String(localized: "No browser login available"), message: message),
+                        true)
+                }
+                self.setPhase(.offering(status))
+                return (.offering, true)
+            } catch {
+                if force { self.setPhase(.hidden) }
+                return (
+                    .unavailable(
+                        title: String(localized: "Browser import unavailable"),
+                        message: error.localizedDescription),
+                    false)
+            }
         }
     }
 
@@ -268,7 +287,7 @@ final class BrowserProfileImportModel {
     /// import system profiles, so the banner withdraws on mode switches.
     func handleConnectionModeChange() {
         guard !self.isLocalMode() else { return }
-        self.availabilityGeneration += 1
+        self.statusRequest = nil
         self.importAvailable = false
         self.setPhase(.hidden)
     }
