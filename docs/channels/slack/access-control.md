@@ -117,11 +117,11 @@ restart the Slack monitor. The Gateway remains running.
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
     <Warning>
-    Name-based keys (`#channel-name` or `channel-name`) do **not** match under `groupPolicy: "allowlist"`. The channel lookup is ID-first by default, so a name-based key will never route successfully and all messages in that channel will be silently blocked. This differs from `groupPolicy: "open"`, where the channel key is not required for routing and a name-based key appears to work.
+    Name-based keys (`#channel-name` or `channel-name`) depend on successful Slack lookup to resolve a stable channel ID. Under `groupPolicy: "allowlist"`, unresolved names are denied unless `dangerouslyAllowNameMatching` explicitly enables direct name matching.
 
-    Always use the Slack channel ID as the key. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
+    Prefer the Slack channel ID as the key to avoid that lookup dependency. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
 
-    Correct:
+    Recommended stable ID:
 
     ```json5
     {
@@ -136,7 +136,7 @@ restart the Slack monitor. The Gateway remains running.
     }
     ```
 
-    Incorrect (silently blocked under `groupPolicy: "allowlist"`):
+    Name-based input (requires successful lookup with the default matching policy):
 
     ```json5
     {
