@@ -81,6 +81,18 @@ export type ProviderUsageSnapshot = {
   plan?: string;
   /** Account identity (email) the usage was fetched under, when known. */
   accountEmail?: string;
+  /** Non-secret auth profile identity for account-scoped provider usage. */
+  authProfileId?: string;
+  /** Current provider auth order; included only when an account action needs it. */
+  authProfileOrder?: string[];
+  /** Whether this profile is currently first in the provider auth order. */
+  isPreferred?: boolean;
+  /** Access credential expiry, not subscription expiry. */
+  credentialExpiresAt?: number;
+  /** Display-safe access credential state. */
+  credentialStatus?: "ok" | "expiring" | "expired" | "missing" | "static";
+  /** Whether OpenClaw can refresh this credential type. */
+  credentialRefreshable?: boolean;
   error?: string;
 };
 

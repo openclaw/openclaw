@@ -293,6 +293,77 @@ describe("provider-usage.load", () => {
     }
   });
 
+  it("loads saved OpenAI accounts independently and preserves safe profile metadata", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
+      if (context.authProfileId === "openai:broken") {
+        throw new Error("account rejected");
+      }
+      return {
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [{ label: "Week", usedPercent: 25 }],
+        plan: "plus",
+        accountEmail: context.email,
+      };
+    });
+
+    const summary = await loadProviderUsageSummary({
+      auth: [
+        {
+          provider: "openai",
+          token: "preferred-token",
+          accountId: "account-preferred",
+          authProfileId: "openai:preferred",
+          authProfileOrder: ["openai:preferred", "openai:broken"],
+          isPreferred: true,
+          credentialExpiresAt: 2_000,
+          credentialStatus: "ok",
+          credentialRefreshable: true,
+          email: "preferred@example.com",
+        },
+        {
+          provider: "openai",
+          token: "broken-token",
+          accountId: "account-broken",
+          authProfileId: "openai:broken",
+          authProfileOrder: ["openai:preferred", "openai:broken"],
+          isPreferred: false,
+          credentialStatus: "static",
+          credentialRefreshable: false,
+          email: "broken@example.com",
+        },
+      ],
+      config: {},
+      env: {},
+    });
+
+    expect(summary.providers).toEqual([
+      expect.objectContaining({
+        authProfileId: "openai:preferred",
+        accountEmail: "preferred@example.com",
+        isPreferred: true,
+        credentialExpiresAt: 2_000,
+        credentialStatus: "ok",
+        credentialRefreshable: true,
+        windows: [{ label: "Week", usedPercent: 25 }],
+      }),
+      expect.objectContaining({
+        authProfileId: "openai:broken",
+        accountEmail: "broken@example.com",
+        isPreferred: false,
+        credentialStatus: "static",
+        error: "account rejected",
+      }),
+    ]);
+    expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledTimes(2);
+    expect(resolveProviderUsageSnapshotWithPluginMock.mock.calls[0]?.[0].context.accountId).toBe(
+      "account-preferred",
+    );
+    expect(resolveProviderUsageSnapshotWithPluginMock.mock.calls[1]?.[0].context.accountId).toBe(
+      "account-broken",
+    );
+  });
+
   it("keeps successful provider usage when a sibling auth hook rejects", async () => {
     resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ provider }) => {
       if (provider === "anthropic") {

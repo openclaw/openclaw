@@ -40,6 +40,12 @@
   gap: 14px;
 }
 
+.provider-usage-credential-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .provider-usage-card__header,
 .provider-usage-window__meta,
 .provider-usage-billing-row {
@@ -103,6 +109,32 @@
 .provider-usage-summary {
   color: var(--muted);
   font-size: 11px;
+}
+
+.provider-usage-account {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.provider-usage-account > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.provider-usage-account strong {
+  color: var(--text-strong);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.provider-usage-preference {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .provider-usage-windows,

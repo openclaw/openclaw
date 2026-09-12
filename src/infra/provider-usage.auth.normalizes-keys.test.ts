@@ -398,7 +398,92 @@ describe("resolveProviderAuths key normalization", () => {
           { openai: ["openai:default"] },
         );
       },
-      expected: [{ provider: "openai", token: "chatgpt-token" }],
+      expected: [
+        {
+          provider: "openai",
+          token: "chatgpt-token",
+          authProfileId: "openai:default",
+          authProfileOrder: ["openai:default"],
+          isPreferred: true,
+          credentialStatus: "static",
+          credentialRefreshable: false,
+        },
+      ],
+    });
+  });
+
+  it("returns every saved OpenAI subscription profile in current priority order", async () => {
+    await withSuiteHome(async (home) => {
+      seedProfiles(
+        {
+          "openai:work": {
+            type: "token",
+            provider: "openai",
+            token: "work-token",
+            email: "work@example.com",
+          },
+          "openai:personal": {
+            type: "token",
+            provider: "openai",
+            token: "personal-token",
+            email: "personal@example.com",
+          },
+          "openai:expired": {
+            type: "token",
+            provider: "openai",
+            token: "expired-token",
+            expires: Date.now() - 60_000,
+            email: "expired@example.com",
+          },
+          "openai:api": { type: "api_key", provider: "openai", key: "api-key" },
+        },
+        {
+          openai: ["openai:personal", "openai:api", "openai:work", "openai:expired"],
+        },
+      );
+      authProfileMocks.resolvedProfiles.set("openai:personal", {
+        apiKey: "personal-token",
+        provider: "openai",
+      });
+      authProfileMocks.resolvedProfiles.set("openai:work", {
+        apiKey: "work-token",
+        provider: "openai",
+      });
+      authProfileMocks.resolvedProfiles.set("openai:expired", null);
+
+      const auths = await resolveProviderAuths({
+        providers: ["openai"],
+        store: authProfileMocks.store,
+        agentDir: agentDirForHome(home),
+        config: {},
+        env: buildSuiteEnv(home),
+      });
+
+      expect(auths).toEqual([
+        expect.objectContaining({
+          token: "personal-token",
+          authProfileId: "openai:personal",
+          authProfileOrder: ["openai:personal", "openai:api", "openai:work", "openai:expired"],
+          isPreferred: true,
+          credentialStatus: "static",
+          credentialRefreshable: false,
+        }),
+        expect.objectContaining({
+          token: "work-token",
+          authProfileId: "openai:work",
+          isPreferred: false,
+          credentialStatus: "static",
+          credentialRefreshable: false,
+        }),
+        expect.objectContaining({
+          token: "",
+          authProfileId: "openai:expired",
+          isPreferred: false,
+          credentialStatus: "expired",
+          credentialRefreshable: false,
+          authError: "Credential unavailable",
+        }),
+      ]);
     });
   });
 
