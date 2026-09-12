@@ -211,7 +211,10 @@ function buildConfigRestartSentinelPayload(params: {
     deliveryContext: params.deliveryContext,
     threadId: params.threadId,
     message: params.note ?? null,
-    doctorHint: formatDoctorNonInteractiveHint(),
+    // A hot-applied write requires no restart, so a diagnostic follow-up with
+    // write semantics (doctor --non-interactive) is not actionable. Only a
+    // restart-requiring write carries the doctor hint for post-restart checks.
+    doctorHint: params.requiresRestart ? formatDoctorNonInteractiveHint() : null,
     stats: {
       mode: params.mode,
       root: params.configPath,
@@ -328,7 +331,13 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     threadId,
     note,
   });
-  const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
+  // Persist the restart sentinel only when the write actually requires a
+  // Gateway restart. A hot-applied write has no restart notice to deliver on
+  // the next start; persisting it anyway causes a stale notice to replay on an
+  // unrelated later startup (see #144063).
+  const sentinelPersisted = restartRequirement.requiresRestart
+    ? await tryWriteRestartSentinelPayload(payload)
+    : false;
   const restart = restartRequirement.scheduleDirectRestart
     ? scheduleGatewaySigusr1Restart({
         delayMs: restartDelayMs,
