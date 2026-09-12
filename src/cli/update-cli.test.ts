@@ -418,7 +418,11 @@ vi.mock("../process/exec.js", async () => {
       return {
         code: 0,
         stdout: Buffer.from(
-          JSON.stringify(mode === "inventory" ? [] : { versions: [], pluginPaths: {} }),
+          JSON.stringify(
+            mode === "inventory"
+              ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
+              : { versions: [], pluginPaths: {} },
+          ),
         ),
         stderr: Buffer.alloc(0),
       };

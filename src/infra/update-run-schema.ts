@@ -11,7 +11,7 @@ import {
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
-import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity.js";
+import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
 const timestamp = z.number().int().nonnegative();
 const version = z.object({
