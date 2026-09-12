@@ -16,7 +16,7 @@ import {
   resolveUiConversationIdentity,
   type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
-import type { ApplicationGatewaySnapshot } from "./context.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 export function createGatewayEventObserver(options: {
   isAttached: () => boolean;
