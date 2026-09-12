@@ -329,7 +329,12 @@ describe("buildGatewayReloadPlan", () => {
           },
         } as never,
         registerService(service) {
-          registry.services.push({ pluginId: "browser", source: "test", service });
+          registry.services.push({
+            pluginId: "browser",
+            source: "test",
+            origin: "bundled",
+            service,
+          });
         },
       }),
     );
@@ -353,7 +358,7 @@ describe("buildGatewayReloadPlan", () => {
       }
       const profiles = buildGatewayReloadPlan(["browser.profiles.openclaw.headless"]);
       expect(profiles.restartGateway).toBe(false);
-      expect(profiles.restartServices.size).toBe(0);
+      expect(profiles.restartServices).toEqual(new Set());
       expect(
         buildGatewayReloadPlan(["browser.extensionRelay.allowLegacyAuth"]).restartGateway,
       ).toBe(true);
