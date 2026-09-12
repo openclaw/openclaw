@@ -12,7 +12,7 @@ import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 
 type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
-import { resolveGatewayStartupPluginIdsFromRegistry } from "./gateway-startup-plugin-ids.js";
+import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-ids.js";
 import {
   createGeneratedPluginTempRoot,
   installGeneratedPluginTempRootCleanup,
@@ -592,13 +592,13 @@ describe("bundled plugin metadata", () => {
     ].toSorted((left, right) => left.localeCompare(right));
 
     expect(
-      resolveGatewayStartupPluginIdsFromRegistry({
+      resolveGatewayStartupPluginPlanFromRegistry({
         config: {},
         env: {},
         index,
         manifestRegistry,
         platform: "linux",
-      }),
+      }).pluginIds,
     ).toEqual(expectedPluginIds);
   });
 
@@ -607,13 +607,13 @@ describe("bundled plugin metadata", () => {
     const index = createInstalledPluginIndexForManifests(manifestRegistry);
 
     expect(
-      resolveGatewayStartupPluginIdsFromRegistry({
+      resolveGatewayStartupPluginPlanFromRegistry({
         config: {},
         env: process.env,
         index,
         manifestRegistry,
         platform: "darwin",
-      }),
+      }).pluginIds,
     ).toContain("bonjour");
   });
 
@@ -635,12 +635,12 @@ describe("bundled plugin metadata", () => {
     const manifestRegistry = createRepoBundledManifestRegistry();
 
     expect(
-      resolveGatewayStartupPluginIdsFromRegistry({
+      resolveGatewayStartupPluginPlanFromRegistry({
         config,
         env: {},
         index: createInstalledPluginIndexForManifests(manifestRegistry),
         manifestRegistry,
-      }),
+      }).pluginIds,
     ).toContain("openai");
   });
 
@@ -649,13 +649,13 @@ describe("bundled plugin metadata", () => {
     const index = createInstalledPluginIndexForManifests(manifestRegistry);
 
     expect(
-      resolveGatewayStartupPluginIdsFromRegistry({
+      resolveGatewayStartupPluginPlanFromRegistry({
         config: { plugins: { entries: { bonjour: { enabled: true } } } },
         env: process.env,
         index,
         manifestRegistry,
         platform: "linux",
-      }),
+      }).pluginIds,
     ).toContain("bonjour");
   });
 
