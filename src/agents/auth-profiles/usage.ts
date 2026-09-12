@@ -14,6 +14,7 @@ import {
 import { z } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
+import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
@@ -488,7 +489,9 @@ async function runWhamHalfOpenReprobe(params: {
     agentDir: params.agentDir,
     updater: (freshStore) => {
       const currentProfile = freshStore.profiles[params.profileId];
+      const currentStats = freshStore.usageStats?.[params.profileId];
       if (
+        !currentStats ||
         !isSameWhamCredential(params.expectedProfile, currentProfile) ||
         !shouldHalfOpenProbeWhamBlock({
           store: freshStore,
@@ -497,10 +500,6 @@ async function runWhamHalfOpenReprobe(params: {
           now: params.startedAt,
         })
       ) {
-        return false;
-      }
-      const currentStats = freshStore.usageStats?.[params.profileId];
-      if (!currentStats) {
         return false;
       }
       currentStats.lastProbeAt = params.startedAt;
@@ -579,9 +578,16 @@ export async function maybeReprobeWhamBlockedProfiles(params: {
           profileId,
           expectedProfile: structuredClone(profile),
           startedAt: now,
-        }).finally(() => {
-          whamReprobesInFlight.delete(probeKey);
-        });
+        })
+          .catch((error: unknown) => {
+            const code = sqlitePrimaryResultCode(error);
+            if (code !== 8 && code !== 10 && code !== 13) {
+              throw error;
+            }
+          })
+          .finally(() => {
+            whamReprobesInFlight.delete(probeKey);
+          });
         whamReprobesInFlight.set(probeKey, task);
       }
       await task;
