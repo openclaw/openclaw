@@ -143,12 +143,14 @@ Register each capability inside `register(api)` alongside your existing
     explicit models. An omitted surface retains bridge behavior. Browser session
     creation supplies `supportsVideoFrames: true` for camera-capable callers and
     `false` for audio-only callers; catalog discovery leaves the requirement
-    unspecified. OpenAI preserves its camera-capable browser default until a
-    caller explicitly requests audio only. Talk sets `autoRespondToAudio: false`
+    unspecified. OpenAI selects GPT-Live by account unless the caller requires
+    video or manual responses. Talk sets `autoRespondToAudio: false`
     when Gateway relay policy controls responses. `talk.catalog` resolves the
     provider's discovery default for the configured Talk agent and provider
     settings, excluding an explicit model; readiness and capabilities use the
     effective model overrides.
+    Optional `talk.catalog` inputs `provider` and `model` resolve capabilities
+    for a specific realtime launch without changing saved configuration.
 
     ```typescript
     api.registerRealtimeVoiceProvider({

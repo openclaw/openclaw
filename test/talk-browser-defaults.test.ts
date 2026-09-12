@@ -1,4 +1,5 @@
 // @vitest-environment node
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -19,8 +20,20 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/talk/provider-registry.js", () => ({
-  canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => id,
-  getRealtimeVoiceProvider: (id: string) => mocks.providers.find((provider) => provider.id === id),
+  canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => {
+    const normalized = id?.trim().toLowerCase();
+    return (
+      mocks.providers.find(
+        (provider) => provider.id === normalized || provider.aliases?.includes(normalized ?? ""),
+      )?.id ?? normalized
+    );
+  },
+  getRealtimeVoiceProvider: (id: string) =>
+    mocks.providers.find(
+      (provider) =>
+        provider.id === id.trim().toLowerCase() ||
+        provider.aliases?.includes(id.trim().toLowerCase()),
+    ),
   listRealtimeVoiceProviders: () => mocks.providers,
 }));
 vi.mock("../src/tts/provider-registry.js", () => ({
@@ -93,13 +106,35 @@ beforeEach(() => {
 describe("OpenAI browser Talk catalog defaults", () => {
   it.each([
     {
-      label: "unpinned camera-capable browser",
+      label: "unpinned browser",
       model: undefined,
-      camera: true,
-      expected: "gpt-realtime-2.1",
+      camera: false,
+      expected: "gpt-live-1",
     },
     { label: "explicit GA", model: "gpt-realtime-2.1", camera: true, expected: "gpt-realtime-2.1" },
     { label: "explicit Live", model: "gpt-live-1", camera: false, expected: "gpt-live-1" },
+    {
+      label: "Live launch over configured GA",
+      model: "gpt-realtime-2.1",
+      launchModel: "gpt-live-1",
+      camera: false,
+      expected: "gpt-live-1",
+    },
+    {
+      label: "GA launch over configured Live",
+      model: "gpt-live-1",
+      launchModel: "gpt-realtime-2.1",
+      camera: true,
+      expected: "gpt-realtime-2.1",
+    },
+    {
+      label: "GA launch through a provider alias",
+      model: "gpt-live-1",
+      launchModel: "gpt-realtime-2.1",
+      launchProvider: " OPENAI-VOICE ",
+      camera: true,
+      expected: "gpt-realtime-2.1",
+    },
     {
       label: "audio-only browser",
       model: undefined,
@@ -109,7 +144,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
     },
   ])(
     "preserves $label from discovery through session creation",
-    async ({ model, camera, expected, audioOnly }) => {
+    async ({ model, launchModel, launchProvider, camera, expected, audioOnly }) => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
@@ -140,7 +175,19 @@ describe("OpenAI browser Talk catalog defaults", () => {
             cancelBrowserSession: async () => undefined,
           },
         });
-        mocks.providers = [provider];
+        provider.aliases = ["openai-voice"];
+        mocks.providers = [
+          provider,
+          {
+            id: "other",
+            label: "Other voice provider",
+            isConfigured: ({ providerConfig }) => providerConfig.model === model,
+            createBridge: () => {
+              throw new Error("unused");
+            },
+          },
+        ];
+        const catalogs: TalkCatalogResult[] = [];
         const request = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
           if (method === "talk.client.close") {
             return {} as T;
@@ -202,6 +249,9 @@ describe("OpenAI browser Talk catalog defaults", () => {
           if (failure) {
             throw new Error(failure);
           }
+          if (method === "talk.catalog") {
+            catalogs.push(payload as TalkCatalogResult);
+          }
           return payload as T;
         };
         const onVideoCapability = vi.fn();
@@ -209,17 +259,22 @@ describe("OpenAI browser Talk catalog defaults", () => {
           { request } as GatewayBrowserClient,
           "agent:main:main",
           audioOnly ? {} : { onVideoCapability },
+          launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {},
         );
         try {
           await session.start();
           expect(mocks.createSession).toHaveBeenCalledWith({
             sessionKey: "agent:main:main",
+            ...(launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {}),
             capabilities: camera ? ["voice-transcript", "camera-frame"] : ["voice-transcript"],
           });
           expect(mocks.providerRequests).toHaveLength(1);
           expect(mocks.providerRequests[0]?.model).toBe(expected);
           if (!audioOnly) {
             expect(onVideoCapability).toHaveBeenCalledWith(camera);
+            expect(catalogs[0]?.realtime.providers).toContainEqual(
+              expect.objectContaining({ id: "other", configured: true }),
+            );
           }
           if (camera) {
             expect(mocks.providerRequests[0]?.tools).toContainEqual(

@@ -121,7 +121,7 @@ describe("OpenAI Talk account defaults", () => {
       name: "browser discovery",
       context: { surface: "browser-session" as const },
       rawConfig: {},
-      model: "gpt-realtime-2.1",
+      model: "gpt-live-1",
     },
     {
       name: "manual replies",

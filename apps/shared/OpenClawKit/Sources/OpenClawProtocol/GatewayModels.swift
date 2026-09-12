@@ -19225,7 +19225,18 @@ public struct TalkAgentControlResult: Codable, Sendable {
     }
 }
 
-public struct TalkCatalogParams: Codable, Sendable {}
+public struct TalkCatalogParams: Codable, Sendable {
+    public let provider: String?
+    public let model: String?
+
+    public init(
+        provider: String? = nil,
+        model: String? = nil)
+    {
+        self.provider = provider
+        self.model = model
+    }
+}
 
 public struct TalkCatalogResult: Codable, Sendable {
     public let modes: [AnyCodable]

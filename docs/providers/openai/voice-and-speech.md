@@ -191,15 +191,15 @@ sidebarTitle: "Voice and speech"
 
     #### GPT-Live API
 
-    Audio-only Talk clients and Gateway relay sessions select GPT-Live when no
-    model is configured. An OpenAI Platform key, API-key profile, or
+    Talk and Gateway relay sessions select GPT-Live when no model is configured.
+    An OpenAI Platform key, API-key profile, or
     `OPENAI_API_KEY` selects `gpt-live-1` with `marin`; a ChatGPT-only account
     selects `gpt-live-1-codex` with `cove`. A configured Platform credential
     takes precedence over ChatGPT sign-in, including when that credential needs repair.
 
-    The camera-capable Control UI and browser discovery retain `gpt-realtime-2.1`.
-    Audio-only browser clients explicitly negotiate without camera frames to use
-    the account-aware default. `talk.catalog` describes the configured Talk
+    GPT-Live is audio-only, so the Control UI does not offer camera capture with
+    this default. Choose `gpt-realtime-2.1` explicitly to use the camera.
+    `talk.catalog` describes the configured Talk
     agent's default for its discovery surface; a session scoped to another agent
     resolves that agent's accounts when it starts.
 
