@@ -238,6 +238,57 @@ describe("agent runtime plugin registries", () => {
     }
   });
 
+  it("retains the first inbound provider owner when the model selection needs no new plugins", async () => {
+    const config = {};
+    const workspaceDir = "/tmp/first-inbound-workspace";
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      workspaceDir,
+      manifestRegistry: makeRegistry([{ id: "gateway-owned", origin: "bundled", channels: [] }]),
+    });
+    const inbound = createEmptyPluginRegistry();
+    inbound.plugins.push(createPluginRecord({ id: "gateway-owned" }));
+    const provider = {
+      id: "fixture-transcript",
+      name: "Fixture transcript",
+      sourceKinds: ["posthoc-transcript" as const],
+    };
+    inbound.transcriptSourceProviders.push({
+      pluginId: "gateway-owned",
+      source: "/fixture/index.js",
+      provider,
+    });
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(() => ({
+      config,
+      pluginIds: ["gateway-owned"],
+    }));
+    hoisted.loadPluginRegistryHandle
+      .mockImplementationOnce(() => inbound)
+      .mockImplementation(() => {
+        throw new Error("model selection reloaded its already prepared provider owner");
+      });
+
+    const prepared = await prepareWorkspacePluginRegistries(
+      {
+        agentDir: "/tmp/agent",
+        config,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [
+          { provider: "mock-capture", modelId: "fixture", runtime: "openclaw" },
+        ],
+      },
+      metadataSnapshot,
+      createPreparedInboundRegistryLoader(),
+      true,
+    );
+
+    expect(prepared.inboundPluginRegistry).toBe(inbound);
+    expect(prepared.runtimePluginRegistry).toBe(inbound);
+    expect(prepared.runtimePluginRegistry?.transcriptSourceProviders[0]?.provider).toBe(provider);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
+  });
+
   it("reuses the current Gateway generation and loads only the imported-plugin delta", async () => {
     const config = {} as never;
     const workspaceDir = "/tmp/default-workspace";

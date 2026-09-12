@@ -7,6 +7,7 @@ import {
 } from "./captured-registration.js";
 import { createPluginRecord } from "./loader-records.js";
 import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
+import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
@@ -35,7 +36,13 @@ describe("captured plugin registration", () => {
         throw new Error("not provider execution");
       };
       const factory = vi.fn((context: PluginCapabilityCatalogContext) => {
-        expect(context).toBe(resolvePluginCapabilityCatalogContext());
+        if (captured) {
+          expect(context).toBe(resolvePluginCapabilityCatalogContext());
+        } else {
+          const instance = getPluginInstance(record);
+          expect(instance).toBeDefined();
+          expect(getPluginValueInstance(context)).toBe(instance);
+        }
         const provider = {
           id: "factory-provider",
           label: "Factory provider",

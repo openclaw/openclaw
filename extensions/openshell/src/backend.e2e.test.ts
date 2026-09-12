@@ -793,7 +793,9 @@ describe("openshell sandbox backend e2e", () => {
               env: { "INVALID-NAME": "fixture" },
               usePty: false,
             }),
-          ).rejects.toThrow("Invalid SSH sandbox environment variable name");
+          ).rejects.toThrow(
+            'Invalid sandbox environment variable name "INVALID-NAME"; use a POSIX variable name.',
+          );
           await expect(
             candidate.validateWorkdir?.(`${candidate.workdir}/missing-directory`),
           ).resolves.toBeNull();

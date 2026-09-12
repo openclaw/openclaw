@@ -1,30 +1,41 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
 import config from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance;
+let catalogObserver: GatewayClient | undefined;
+let catalogChanged = createDeferred<void>();
+let providerRequestsPath: string;
 const tempDirs = createTempDirTracker();
 const suite = createControlUiE2eSuite({
   name: "Partial refresh with a real Gateway",
   startServerBeforeBrowser: true,
   async startServer() {
     const mockProvider = path.join(tempDirs.make("partial-refresh-provider-"), "copilot.mjs");
+    providerRequestsPath = path.join(path.dirname(mockProvider), "provider-requests.log");
+    await fs.writeFile(providerRequestsPath, "");
     await fs.writeFile(
       mockProvider,
       `
+      import { appendFileSync } from "node:fs";
       const fetch = globalThis.fetch;
       globalThis.fetch = (input, init) => {
         const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
         if (url.href === "https://api.github.com/copilot_internal/user") {
+          appendFileSync(${JSON.stringify(providerRequestsPath)}, "unavailable\\n");
           return Promise.resolve(new Response("Fixture provider unavailable", { status: 503 }));
         }
         if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
@@ -50,14 +61,42 @@ const suite = createControlUiE2eSuite({
     });
     try {
       await instance.startGateway();
+      catalogObserver = await acquireGatewayTestClient(
+        {
+          url: instance.url,
+          token: instance.gatewayToken,
+          clientName: "test",
+          mode: "test",
+          scopes: ["operator.admin"],
+          sharedStateMode: "read-only",
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: instance.state.statePath("catalog-observer-device.sqlite"),
+          }),
+          onEvent: ({ event }) => {
+            if (event === "chat.metadata.changed") {
+              catalogChanged.resolve();
+              catalogChanged = createDeferred<void>();
+            }
+          },
+        },
+        {
+          timeoutMs: 10_000,
+          timeoutMessage: "Catalog observer connection timed out",
+          closeMessage: "Catalog observer closed",
+        },
+      );
       return {
         baseUrl: `http://127.0.0.1:${instance.port}/`,
         close: async () => {
+          await catalogObserver?.stopAndWait();
+          catalogObserver = undefined;
           await instance.cleanup();
           tempDirs.cleanup();
         },
       };
     } catch (error) {
+      await catalogObserver?.stopAndWait();
+      catalogObserver = undefined;
       await instance.cleanup();
       tempDirs.cleanup();
       throw error;
@@ -89,8 +128,35 @@ suite.define(() => {
       model: "openai/gpt-5.4",
     });
     await call("sessions.patch", { key, thinkingLevel: "high" });
-    const catalog: ModelCatalogResult = JSON.parse(
+    const requestsBefore = (await fs.readFile(providerRequestsPath, "utf8"))
+      .split("\n")
+      .filter(Boolean).length;
+    let changed = catalogChanged.promise;
+    const foreground: ModelCatalogResult = JSON.parse(
       await call("models.list", { agentId: "main", view: "configured", refresh: true }),
+    );
+    let catalog = foreground;
+    // Pending is not failure. Await publication, without repeating provider acquisition.
+    while (catalog.pendingProviders?.length) {
+      await changed;
+      changed = catalogChanged.promise;
+      catalog = await catalogObserver!.request<ModelCatalogResult>("models.list", {
+        agentId: "main",
+        view: "configured",
+      });
+    }
+    const providerRequests = await fs.readFile(providerRequestsPath, "utf8");
+    await fs.writeFile(path.join(suite.artifactDir, "provider-requests.log"), providerRequests);
+    const requestsAfter = providerRequests.split("\n").filter(Boolean).length;
+    await fs.writeFile(
+      path.join(suite.artifactDir, "provider-request-counts.json"),
+      JSON.stringify({ before: requestsBefore, after: requestsAfter }),
+    );
+    // An explicit refresh may join startup discovery; either path must reach the fixture.
+    expect(requestsAfter).toBeGreaterThan(0);
+    await fs.writeFile(
+      path.join(suite.artifactDir, "models-list-foreground.json"),
+      JSON.stringify(foreground, null, 2),
     );
     await fs.writeFile(
       path.join(suite.artifactDir, "models-list.json"),

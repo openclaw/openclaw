@@ -185,9 +185,8 @@ export function prepareWorkspacePluginRegistries(
                 : basePluginIds !== undefined
                   ? { basePluginIds }
                   : {}),
-            ...(reusableGeneration?.pluginRegistry
-              ? { reusableRegistry: reusableGeneration.pluginRegistry }
-              : {}),
+            // The loader still checks the selected plugin plan before reusing this owner.
+            ...(baseRegistry ? { reusableRegistry: baseRegistry } : {}),
             config: input.config,
             env: input.env ?? process.env,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
