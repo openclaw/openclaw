@@ -46,6 +46,64 @@ function transcript(id: string, phrase: string) {
   );
 }
 
+it.each([{ allAgents: true }, { agent: "retired" }])(
+  "admits transcript-only retired agents through the public selector %j",
+  async (selector) => {
+    await withOpenClawTestState({ label: "doctor-transcript-only" }, async (state) => {
+      const sessions = state.sessionsDir("retired");
+      fs.mkdirSync(sessions, { recursive: true });
+      const store = path.join(sessions, "sessions.json");
+      const id = "77777777-7777-4777-8777-777777777777";
+      const source = path.join(sessions, `${id}.jsonl`);
+      const bytes = transcript(id, "retiredhistoryneedle");
+      fs.writeFileSync(source, bytes);
+      const sqlitePath = resolveTargetSqlitePath(
+        { agentId: "retired", storePath: store },
+        state.env,
+      );
+      expect(fs.existsSync(store)).toBe(false);
+      expect(fs.existsSync(sqlitePath)).toBe(false);
+      for (const mode of ["dry-run", "validate"] as const) {
+        const report = await runDoctorSessionSqlite({ mode, ...selector, cfg: {}, env: state.env });
+        expect(report.targets).toEqual([
+          expect.objectContaining({ agentId: "retired", legacyEntries: 1 }),
+        ]);
+        expect(fs.existsSync(sqlitePath)).toBe(false);
+        expect(fs.readFileSync(source, "utf8")).toBe(bytes);
+      }
+      const report = await runDoctorSessionSqlite({
+        mode: "import",
+        ...selector,
+        cfg: {},
+        env: state.env,
+      });
+      expect(report.totals.importedEntries).toBe(1);
+      expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
+      closeOpenClawAgentDatabasesForTest();
+      expect(
+        searchSessionTranscripts({
+          agentId: "retired",
+          env: state.env,
+          query: "retiredhistoryneedle",
+        }).hits,
+      ).toEqual([expect.objectContaining({ sessionId: id })]);
+      const archived = report.targets.flatMap((target) => target.archivedTranscriptFiles);
+      expect(archived).toHaveLength(1);
+      expect(fs.readFileSync(archived[0]!, "utf8")).toBe(bytes);
+      expect(
+        (
+          await runDoctorSessionSqlite({
+            mode: "import",
+            ...selector,
+            cfg: {},
+            env: state.env,
+          })
+        ).totals.importedEntries,
+      ).toBe(0);
+    });
+  },
+);
+
 it("imports valid unregistered primary history without changing its current logical owner", async () => {
   await withOpenClawTestState({ label: "doctor-discovery" }, async (state) => {
     const sessions = state.sessionsDir();

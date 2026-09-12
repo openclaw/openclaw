@@ -288,7 +288,13 @@ function resolveDoctorSessionSqliteTargets(params: {
   if (params.store) {
     return resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env });
   }
-  if (params.mode === "restore" || params.mode === "recover") {
+  const discoversHistory =
+    params.mode === "dry-run" || params.mode === "import" || params.mode === "validate";
+  if (
+    params.mode === "restore" ||
+    params.mode === "recover" ||
+    (discoversHistory && params.agent)
+  ) {
     const candidates = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
       env: params.env,
     });
@@ -302,8 +308,11 @@ function resolveDoctorSessionSqliteTargets(params: {
     return resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env });
   }
   if (params.allAgents) {
-    const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
-    if (params.mode !== "dry-run" && params.mode !== "import" && params.mode !== "validate") {
+    // Discovery must admit validated directories even before either registry exists.
+    const targets = discoversHistory
+      ? resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, { env: params.env })
+      : resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
+    if (!discoversHistory) {
       return targets;
     }
     const legacyStorePath = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
