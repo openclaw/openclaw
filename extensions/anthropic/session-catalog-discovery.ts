@@ -34,7 +34,7 @@ const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES = 8;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
-const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli"]);
+const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli", "sdk-ts"]);
 
 type CatalogDiscoveryCacheEntry = {
   // The module-global cache is keyed by canonical transcript path, so an entry must also record the
