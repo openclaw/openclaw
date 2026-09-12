@@ -8,6 +8,7 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import {
   invalidateModelCatalogCache,
+  beginModelCatalogRead,
   modelCatalogCache,
   modelCatalogKey,
   modelCatalogParams,
@@ -67,15 +68,13 @@ export function peekModelCatalog(
   client: ModelCatalogClient,
   options: ModelsListParams,
 ): ModelCatalogResult | undefined {
-  const cache = modelCatalogCache.get(client);
+  const cache = modelCatalogCache.get(client)?.entries;
   const key = modelCatalogKey(modelCatalogParams(options));
   const entry = cache?.get(key);
   if (entry?.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
     entry.result = undefined;
     entry.expiresAt = undefined;
-    if (entry.pending.size === 0) {
-      cache?.delete(key);
-    }
+    // Keep ordering until bounded eviction so an older unresolved read cannot refill this slot.
     return undefined;
   }
   if (cache && entry?.result) {
@@ -101,16 +100,17 @@ export async function loadModelCatalog(
       return result;
     }
   }
-  const cache = modelCatalogCache.get(client) ?? new Map<string, ModelCatalogEntry>();
-  modelCatalogCache.set(client, cache);
+  const owner = modelCatalogCache.get(client);
   const key = modelCatalogKey(params);
-  const entry: ModelCatalogEntry = cache.get(key) ?? { scope: params, pending: new Map() };
+  const entry: ModelCatalogEntry = owner?.entries.get(key) ?? { scope: params, pending: new Map() };
   const existing = entry.pending.get(timeoutMs);
   if (existing && !existing.controller?.signal.aborted) {
     return await subscribeToSharedRequest(existing, {}, signal);
   }
 
   const controller = signal ? new AbortController() : undefined;
+  const read = beginModelCatalogRead(client, params, controller?.signal);
+  const cache = read.cache.entries;
   const pending: ModelCatalogRequest = {
     refresh: params.refresh === true,
     controller,
@@ -123,47 +123,28 @@ export async function loadModelCatalog(
       : client.request<ModelCatalogResult>("models.list", params)
     )
       .then((result) => {
-        if (
-          !controller?.signal.aborted &&
-          !result.refreshFailed &&
-          modelCatalogCache.get(client) === cache &&
-          cache.get(key) === entry &&
-          entry.pending.get(timeoutMs) === pending
-        ) {
-          // Ordinary winners retire competing readers, but cannot retire explicit discovery.
-          for (const [budget, request] of entry.pending) {
-            if (pending.refresh || !request.refresh) {
-              entry.pending.delete(budget);
-            }
-          }
-          // Reads in other views during explicit discovery may still describe its old generation.
-          if (params.refresh) {
-            cache.clear();
-            cache.set(key, entry);
-          }
-          publishModelCatalogResult(entry, result);
-          trimModelCatalogCache(cache);
-        }
+        publishModelCatalogResult(read, params, result);
         return result;
       })
       .finally(() => {
+        read.cache.reads.delete(read);
         if (
-          modelCatalogCache.get(client) === cache &&
+          modelCatalogCache.get(client) === read.cache &&
           cache.get(key) === entry &&
           entry.pending.get(timeoutMs) === pending
         ) {
           entry.pending.delete(timeoutMs);
-          if (!entry.result && entry.pending.size === 0) {
+          if (!entry.result && entry.publishedRead === undefined && entry.pending.size === 0) {
             cache.delete(key);
           }
-          trimModelCatalogCache(cache);
+          trimModelCatalogCache(read.cache);
         }
       }),
   };
   entry.pending.set(timeoutMs, pending);
   cache.delete(key);
   cache.set(key, entry);
-  trimModelCatalogCache(cache);
+  trimModelCatalogCache(read.cache);
   return await subscribeToSharedRequest(pending, {}, signal);
 }
 

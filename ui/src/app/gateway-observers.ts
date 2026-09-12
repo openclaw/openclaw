@@ -1,6 +1,31 @@
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 
+export function createGatewayEventObserver(options: {
+  isAttached: () => boolean;
+  isCurrent: () => boolean;
+  project: (event: GatewayEventFrame) => GatewayEventFrame | undefined;
+  record: (event: GatewayEventFrame) => void;
+  listeners: ReadonlySet<(event: GatewayEventFrame) => void>;
+}): (event: GatewayEventFrame) => void {
+  return (incomingEvent) => {
+    if (!options.isAttached()) {
+      return;
+    }
+    const event = options.project(incomingEvent);
+    if (!event) {
+      return;
+    }
+    try {
+      options.record(event);
+    } catch (error) {
+      // A broken log observer must not prevent application observers from updating.
+      console.error("[gateway] event handler error:", error);
+    }
+    notifyGatewayObservers(options.listeners, event, "event listener", options.isCurrent);
+  };
+}
+
 export function notifyGatewayObservers<T>(
   listeners: ReadonlySet<(value: T) => void>,
   value: T,

@@ -1,11 +1,14 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ModelsSnapshotEvent } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as modelCatalogAuth from "../server-model-catalog-auth.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -37,6 +40,11 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
             type: "api_key",
             provider: "fixture",
             key: "synthetic-saved-account-key",
+          },
+          "fixture:replacement-account": {
+            type: "api_key",
+            provider: "fixture",
+            key: "synthetic-replacement-account-key",
           },
         },
       },
@@ -186,6 +194,82 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           expect(publications).toHaveLength(1);
         } finally {
           await disconnectGatewayClient(saved);
+        }
+      }
+      const acquisitionStarted = createDeferred<void>();
+      const releaseAcquisition = createDeferred<void>();
+      const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
+      const acquisition = vi
+        .spyOn(modelCatalogAuth, "readPreparedCatalog")
+        .mockImplementationOnce(async (...args) => {
+          // The registered reader has captured the saved account before catalog acquisition.
+          acquisitionStarted.resolve();
+          await releaseAcquisition.promise;
+          return readPreparedCatalog(...args);
+        });
+      const racingPublications: ModelsSnapshotEvent[] = [];
+      const sessionChanges: unknown[] = [];
+      let racingClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        racingClient = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          modelCatalog: { agentId: "alpha", sessionKey },
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          origin: `http://127.0.0.1:${port}`,
+          scopes: ["operator.admin"],
+          onEvent(event) {
+            if (event.event === "models.snapshot") {
+              racingPublications.push(event.payload as ModelsSnapshotEvent);
+            } else if (event.event === "sessions.changed") {
+              sessionChanges.push(event.payload);
+            }
+          },
+        });
+        await withTestTimeout(
+          acquisitionStarted.promise,
+          10_000,
+          "Initial catalog acquisition did not start",
+        );
+        await racingClient.request("sessions.subscribe", { agentId: "alpha" });
+        await racingClient.request("sessions.patch", {
+          key: sessionKey,
+          agentId: "alpha",
+          model: "fixture/first@fixture:replacement-account",
+        });
+        await expect
+          .poll(() => sessionChanges)
+          .toContainEqual(expect.objectContaining({ sessionKey, reason: "patch" }));
+        await expect(
+          racingClient.request("models.list", { agentId: "alpha", sessionKey }),
+        ).resolves.toMatchObject({
+          accountSelection: { authProfileId: "fixture:replacement-account" },
+        });
+        expect(racingPublications).toEqual([]);
+        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+        releaseAcquisition.resolve();
+        await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+        // A response on this same socket is a delivery barrier after initial work settles.
+        await expect(
+          racingClient.request("models.list", { agentId: "alpha", sessionKey }),
+        ).resolves.toMatchObject({
+          models: [{ id: "first", provider: "fixture", available: true }],
+          accountSelection: {
+            authProfileId: "fixture:replacement-account",
+            source: "user",
+          },
+        });
+        for (const publication of racingPublications) {
+          expect(publication.catalog.accountSelection).toMatchObject({
+            authProfileId: "fixture:replacement-account",
+          });
+        }
+      } finally {
+        releaseAcquisition.resolve();
+        acquisition.mockRestore();
+        if (racingClient) {
+          await disconnectGatewayClient(racingClient);
         }
       }
       for (const clientName of [

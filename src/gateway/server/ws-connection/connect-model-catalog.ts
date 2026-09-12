@@ -89,6 +89,7 @@ export async function publishConnectModelCatalog(
               type: "event",
               event: "models.snapshot",
               payload: {
+                target: requestedScope,
                 scope,
                 // SAFETY: This response comes only from the registered models.list handler.
                 catalog: frame.payload as ModelsListResult,

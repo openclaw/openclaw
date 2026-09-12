@@ -5,10 +5,7 @@ import {
   resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  ModelCatalogTarget,
-  ModelsSnapshotEvent,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogTarget } from "../../../packages/gateway-protocol/src/index.js";
 import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
@@ -31,8 +28,9 @@ import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-wi
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { createInitialModelCatalogRead } from "../lib/model-catalog-cache.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
-import { readSessionDefaults, resolveUiConversationIdentity } from "../lib/sessions/session-key.ts";
+import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
 import type {
@@ -46,7 +44,12 @@ import {
   createGatewayControlUiReloadOptions,
   isSameOriginGateway,
 } from "./gateway-control-ui-reload.ts";
-import { createGatewayEventLog, notifyGatewayObservers } from "./gateway-observers.ts";
+import {
+  createGatewayEventLog,
+  createGatewayEventObserver,
+  notifyGatewayObservers,
+} from "./gateway-observers.ts";
+import { readSuspensionPhase } from "./gateway-readiness.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -64,16 +67,6 @@ type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfa
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
-
-function readSuspensionPhase(payload: unknown): ApplicationGatewaySnapshot["suspensionPhase"] {
-  const phase = asOptionalRecord(payload)?.phase;
-  return phase === "accepting" ||
-    phase === "preparing" ||
-    phase === "draining" ||
-    phase === "prepared"
-    ? phase
-    : undefined;
-}
 
 export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
@@ -441,6 +434,7 @@ export function createApplicationGateway(
     stopCanvasSurfaceLease();
     client?.stop();
 
+    const initialCatalog = createInitialModelCatalogRead();
     const nextClient = createClient({
       url: nextConnection.gatewayUrl,
       token: nextConnection.token.trim() ? nextConnection.token : undefined,
@@ -458,12 +452,15 @@ export function createApplicationGateway(
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
       get modelCatalog() {
-        return options.getModelCatalogTarget?.(nextConnection.gatewayUrl);
+        return initialCatalog.captureTarget(
+          options.getModelCatalogTarget?.(nextConnection.gatewayUrl),
+        );
       },
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
         }
+        initialCatalog.start(nextClient, hello);
         // The submitted secret is unclassified until this Gateway reports its mode.
         // Clear an old token too when the origin now uses password or proxy auth.
         persistSessionToken(
@@ -642,39 +639,13 @@ export function createApplicationGateway(
           connect();
         }
       },
-      onEvent: (event) => {
-        // A replaced socket can still deliver queued events; never let it
-        // project presence or history into the current gateway connection.
-        if (client !== nextClient) {
-          return;
-        }
-        if (event.event === "models.snapshot") {
-          // SAFETY: The negotiated authenticated snapshot carries ModelsSnapshotEvent.
-          const publication = event.payload as ModelsSnapshotEvent;
-          if (publication.scope.sessionKey) {
-            event = {
-              ...event,
-              payload: {
-                ...publication,
-                scope: resolveUiConversationIdentity(
-                  { hello: snapshot.hello, assistantAgentId: snapshot.assistantAgentId },
-                  publication.scope.sessionKey,
-                  publication.scope.agentId,
-                ),
-              },
-            };
-          }
-        }
-        try {
-          recordGatewayEvent(event);
-        } catch (error) {
-          // Preserve protocol-client isolation: a broken log subscriber must
-          // not prevent chat, approvals, or the remaining app from updating.
-          console.error("[gateway] event handler error:", error);
-        }
-        const isActiveClient = () => isCurrentClient(nextClient);
-        notifyGatewayObservers(eventListeners, event, "event listener", isActiveClient);
-      },
+      onEvent: createGatewayEventObserver({
+        isAttached: () => client === nextClient,
+        isCurrent: () => isCurrentClient(nextClient),
+        project: (event) => initialCatalog.receive(event, snapshot),
+        record: recordGatewayEvent,
+        listeners: eventListeners,
+      }),
     });
     client = nextClient;
     setSnapshot({

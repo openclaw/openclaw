@@ -12,6 +12,7 @@ import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
@@ -35,6 +36,7 @@ export function resolveChatMetadataReadParams(
       return undefined;
     }
     // Persisted session state owns account pins; a caller cannot replace them with a draft id.
+    const sessionsMutationVersion = readSessionsMutationVersion(context);
     const session = loadGatewaySessionEntryReadOnly(params.sessionKey, {
       agentId: requested.agentId,
       projection: "list",
@@ -47,6 +49,7 @@ export function resolveChatMetadataReadParams(
       }),
       sessionKey: session.canonicalKey,
       sessionEntry: session.entry,
+      isCurrent: () => readSessionsMutationVersion(context) === sessionsMutationVersion,
       requesterProfileId: resolveAuthenticatedProfileId(client),
     };
   }

@@ -6,6 +6,7 @@ export type ModelCatalogTarget = NonNullable<ConnectParams["modelCatalog"]>;
 
 /** Published configured projection for one authenticated connection's initial scope. */
 export type ModelsSnapshotEvent = {
+  target: ModelCatalogTarget;
   scope: ModelCatalogScope;
   catalog: ModelsListResult;
 };

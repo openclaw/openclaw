@@ -1,7 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { ModelsSnapshotEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import "../components/app-topbar.ts";
 import "../components/modal-dialog.ts";
@@ -24,7 +23,7 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
-import { invalidateModelCatalogCache, seedModelCatalogCache } from "../lib/model-catalog-cache.ts";
+import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   isUiGlobalSessionKey,
@@ -518,11 +517,6 @@ class OpenClawShell
         invalidateModelAuthStatusRequests(client);
         invalidateChatMetadataStore(client);
       }
-    }
-    if (client && event.event === "models.snapshot") {
-      // SAFETY: The authenticated connect dispatcher emits this as ModelsSnapshotEvent.
-      const publication = event.payload as ModelsSnapshotEvent;
-      seedModelCatalogCache(client, publication.scope, publication.catalog);
     }
     this.shellGateway.handleGatewayEvent(event);
   };
