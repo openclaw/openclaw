@@ -1439,6 +1439,55 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("read exact <location> with `read`");
   });
 
+  it("allows loading another applicable skill when the active workflow requires it", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain(
+      "Up-front max one; read another applicable skill when the active workflow requires it. Never invent paths.",
+    );
+    expect(prompt).toContain("Never invent paths.");
+    expect(prompt).toContain("Several: most specific");
+    // The old wording closed the door on later skill reads after up-front selection.
+    expect(prompt).not.toContain("Up-front max one. Never invent paths.");
+  });
+
+  it("lets execution bias pause for workflow-required decisions, not only safety blockers", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain("## Execution Bias");
+    expect(prompt).toContain(
+      "- Non-final turn: advance with tools, or ask one decision the applicable workflow requires (a safety-blocking decision always qualifies).",
+    );
+    // The old wording permitted asking only a safety-blocking decision.
+    expect(prompt).not.toContain("ask one safety-blocking decision");
+  });
+
+  it("makes applicable skill workflow gates override generic execution bias", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain(
+      "- Applicable skill workflow gates (prerequisites, required decisions, ordering) override generic Execution Bias; safety rules and tool policy stay authoritative.",
+    );
+    expect(prompt).toContain(
+      "- Continue to done/real blocker; no plan-only finish when tools can act.",
+    );
+  });
+
   it("omits code-mode skill guidance when the actual exec tool is unavailable", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

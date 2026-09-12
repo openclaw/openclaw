@@ -270,7 +270,7 @@ function buildSkillsSection(params: {
       ? 'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.'
       : `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
     "Several: most specific. None: read none.",
-    "Up-front max one. Never invent paths.",
+    "Up-front max one; read another applicable skill when the active workflow requires it. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
     trimmed,
     "",
@@ -507,7 +507,8 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   return [
     "## Execution Bias",
     "- Actionable request: act now.",
-    "- Non-final turn: advance with tools, or ask one safety-blocking decision.",
+    "- Non-final turn: advance with tools, or ask one decision the applicable workflow requires (a safety-blocking decision always qualifies).",
+    "- Applicable skill workflow gates (prerequisites, required decisions, ordering) override generic Execution Bias; safety rules and tool policy stay authoritative.",
     "- Continue to done/real blocker; no plan-only finish when tools can act.",
     "- Weak/empty result: vary query/path/command/source, then conclude.",
     "- Mutable facts: live-check files/git/time/versions/services/processes/packages.",
