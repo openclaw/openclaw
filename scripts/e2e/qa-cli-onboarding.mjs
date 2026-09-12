@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildScriptEvidenceSummary, QA_EVIDENCE_FILENAME } from "../../extensions/qa-lab/api.js";
+import {
+  buildScriptEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+  readQaScenarioById,
+} from "../../extensions/qa-lab/api.js";
 import { createQaScriptEvidenceWriter } from "../../test/e2e/qa-lab/runtime/script-evidence.js";
 
 const args = process.argv.slice(2);
@@ -14,6 +18,7 @@ if (artifactBaseIndex === -1 || !artifactBase || artifactBase.startsWith("-")) {
 const boundaries = [
   {
     id: "cli-gateway-auth-storage",
+    coverageId: "cli.gateway-auth-storage",
     title: "CLI Gateway auth storage",
     markers: [
       "QA_ASSERT cli.gateway-auth-storage.token-ref pass",
@@ -22,16 +27,19 @@ const boundaries = [
   },
   {
     id: "cli-guided-onboarding",
+    coverageId: "cli.guided-onboarding",
     title: "CLI guided onboarding",
     marker: "QA_ASSERT cli.guided-onboarding pass",
   },
   {
     id: "cli-remote-onboarding",
+    coverageId: "cli.remote-onboarding",
     title: "CLI remote onboarding",
     marker: "QA_ASSERT cli.remote-onboarding pass",
   },
   {
     id: "cli-targeted-reconfiguration",
+    coverageId: "cli.targeted-reconfiguration",
     title: "CLI targeted reconfiguration",
     markers: [
       "QA_ASSERT cli.targeted-reconfiguration.reset pass",
@@ -39,6 +47,12 @@ const boundaries = [
     ],
   },
 ];
+const primaryCoverageIds = new Set(readQaScenarioById("cli-onboarding").coverage?.primary ?? []);
+for (const boundary of boundaries) {
+  if (!primaryCoverageIds.has(boundary.coverageId)) {
+    throw new Error(`Onboarding boundary is not catalog-owned: ${boundary.coverageId}`);
+  }
+}
 const writer = createQaScriptEvidenceWriter({
   artifactBase,
   logFileName: "cli-onboarding.log",
@@ -118,6 +132,7 @@ const evidence = buildScriptEvidenceSummary({
   targets: boundaries.map((boundary) => ({
     id: boundary.id,
     title: boundary.title,
+    primaryCoverageIds: [boundary.coverageId],
     sourcePath: "scripts/e2e/qa-cli-onboarding.mjs",
   })),
   results,

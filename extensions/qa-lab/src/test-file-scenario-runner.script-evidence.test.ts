@@ -195,10 +195,7 @@ describe("qa test file scenario runner", () => {
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
       test: { kind: "script-producer-check", id: "script-producer.web-ui.smoke" },
-      coverage: [
-        { id: "qa.coverage", role: "primary" },
-        { id: "qa.reporting", role: "secondary" },
-      ],
+      coverage: [],
       execution: {
         runner: "evidence-producer-script",
         artifacts: [
@@ -285,10 +282,7 @@ describe("qa test file scenario runner", () => {
     expect(evidence.entries).toHaveLength(2);
     expect(evidence.entries[0]).toMatchObject({
       test: { kind: "script-producer-check", id: "script-producer.web-ui.smoke" },
-      coverage: [
-        { id: "qa.coverage", role: "primary" },
-        { id: "qa.reporting", role: "secondary" },
-      ],
+      coverage: [],
       result: {
         status: "fail",
         failure: { reason: "Script producer check failed." },
@@ -409,10 +403,7 @@ describe("qa test file scenario runner", () => {
       expect(
         result.evidence.entries.find((entry) => entry.test.id === "scenario-script"),
       ).toMatchObject({
-        coverage: [
-          { id: "qa.coverage", role: "primary" },
-          { id: "qa.reporting", role: "secondary" },
-        ],
+        coverage: [],
         execution: {
           artifacts: [{ kind: "log", path: expect.stringContaining("producer.log") }],
           runner: "evidence-producer-script",
