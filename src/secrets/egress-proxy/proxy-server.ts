@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import {
@@ -8,6 +9,7 @@ import {
 } from "node:http";
 import { Agent as HttpsAgent, createServer as createHttpsServer } from "node:https";
 import net, { type Socket } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import type { Duplex, Readable, Writable } from "node:stream";
 import { rootCertificates } from "node:tls";
@@ -56,6 +58,7 @@ export type SecretEgressSentinelBinding = Readonly<{
 export type SecretEgressProxyHandle = {
   caCertPath: string;
   proxyOrigin: string;
+  gitTrustBundlePath: string;
   getCertificateStatus: () => SecretEgressCertificateStatus;
   registerRun: (
     run: Readonly<{ instanceId: string; runId: string }>,
@@ -232,6 +235,55 @@ function swapRequestHeaders(params: {
   return { headers: output, substituted };
 }
 
+function addConfiguredCaFile(sources: Set<string>, rawFile: string): void {
+  const file = rawFile.startsWith("~") ? path.join(os.homedir(), rawFile.slice(1)) : rawFile;
+  try {
+    const content = fs.readFileSync(file, "utf8");
+    // Only accept files that actually carry a certificate, so a misconfigured
+    // or empty path degrades to the proxy-only bundle instead of corrupting it.
+    if (/-----BEGIN CERTIFICATE-----/u.test(content)) {
+      sources.add(content.trim());
+    }
+  } catch {
+    // Unreadable CA source; the git bundle falls back to proxy trust only.
+  }
+}
+
+/**
+ * Every operator-configured CA source, captured for the git trust bundle.
+ * Git honors GIT_SSL_CAINFO over http.sslCAInfo, so pointing it at a
+ * proxy-only bundle would break private-CA bypass destinations. Merging the
+ * env CA files and the effective git-configured CA keeps both trusts.
+ */
+function userConfiguredCaSources(): string[] {
+  const sources = new Set<string>();
+  for (const key of ["GIT_SSL_CAINFO", "SSL_CERT_FILE"] as const) {
+    const configured = process.env[key];
+    if (configured) {
+      addConfiguredCaFile(sources, configured);
+    }
+  }
+  // Best-effort: git may be absent, or no trust key may be set. "system"
+  // means the OpenSSL system roots, which the proxy bundle already carries.
+  // --get-regexp also catches per-URL overrides (http.<url>.sslCAInfo).
+  const configured = spawnSync("git", ["config", "--get-regexp", "\\.sslCAInfo$"], {
+    timeout: 2_000,
+    encoding: "utf8",
+  });
+  if (configured.status === 0 && configured.stdout) {
+    for (const line of configured.stdout.split("\n")) {
+      // Keys never contain whitespace, and the value is the remainder of the
+      // line, so the first whitespace split carries paths with spaces too.
+      const separator = line.search(/\s/u);
+      const caFile = (separator === -1 ? line : line.slice(separator + 1)).trim();
+      if (caFile && caFile !== "system") {
+        addConfiguredCaFile(sources, caFile);
+      }
+    }
+  }
+  return [...sources];
+}
+
 /** Starts one authenticated, loopback-only substitution proxy. */
 export async function startSecretEgressProxyServer(params: {
   caDir: string;
@@ -242,7 +294,15 @@ export async function startSecretEgressProxyServer(params: {
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
-  fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
+  const proxyTrustBundle = `${rootCertificates.join("\n")}\n${caPem}`;
+  fs.writeFileSync(trustBundlePath, proxyTrustBundle, { mode: 0o644 });
+  // Git is the TLS client that honors none of the CA vars below, and a plain
+  // proxy bundle would clobber the private CAs an operator configured for
+  // bypassed git hosts. GIT_SSL_CAINFO points at a git-specific bundle that
+  // merges those operator CA sources with the proxy trust instead.
+  const gitTrustBundlePath = path.join(params.caDir, "git-trust-bundle.pem");
+  const gitTrustBundle = [proxyTrustBundle, ...userConfiguredCaSources()].join("\n");
+  fs.writeFileSync(gitTrustBundlePath, gitTrustBundle, { mode: 0o644 });
   const upstreamTlsAgent = new HttpsAgent({
     ca: [...rootCertificates, caPem],
   });
@@ -604,6 +664,7 @@ export async function startSecretEgressProxyServer(params: {
   return {
     caCertPath: certificates.caCertPath,
     proxyOrigin,
+    gitTrustBundlePath,
     getCertificateStatus: certificates.getStatus,
     registerRun: (run, bindings = []) => {
       if (stopped) {
@@ -645,6 +706,7 @@ export async function startSecretEgressProxyServer(params: {
         SSL_CERT_FILE: trustBundlePath,
         CURL_CA_BUNDLE: trustBundlePath,
         REQUESTS_CA_BUNDLE: trustBundlePath,
+        GIT_SSL_CAINFO: gitTrustBundlePath,
       };
     },
     revokeRun: (run) => {

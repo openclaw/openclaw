@@ -168,6 +168,35 @@ describe("secret egress registration lifecycle", () => {
     ).not.toThrow();
   });
 
+  it("exposes a git trust bundle that preserves operator CA sources", () => {
+    const proxyBundle = fs.readFileSync(proxyEnv.NODE_EXTRA_CA_CERTS!, "utf8");
+    const gitBundle = fs.readFileSync(proxy.gitTrustBundlePath, "utf8");
+    expect(proxy.gitTrustBundlePath).not.toBe(proxyEnv.NODE_EXTRA_CA_CERTS);
+    expect(gitBundle).toContain(proxyBundle);
+  });
+
+  it("merges env and git-configured CA files into the git trust bundle", async () => {
+    vi.unstubAllEnvs();
+    const extraDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-egress-git-ca-"));
+    const caFile = path.join(extraDir, "extra-ca.pem");
+    fs.writeFileSync(caFile, fs.readFileSync(proxy.caCertPath));
+    const caText = fs.readFileSync(caFile, "utf8").trim();
+    vi.stubEnv("SSL_CERT_FILE", caFile);
+    vi.stubEnv("GIT_SSL_CAINFO", caFile);
+    const gitConfigFile = path.join(extraDir, "gitconfig");
+    fs.writeFileSync(gitConfigFile, `[http]\n\tsslCAInfo = ${caFile}\n`);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", gitConfigFile);
+    vi.stubEnv("GIT_CONFIG_SYSTEM", "/dev/null");
+    const mergedProxy = await startSecretEgressProxyServer({
+      caDir: fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-egress-git-ca-proxy-")),
+      onAudit: () => {},
+    });
+    const mergedGitBundle = fs.readFileSync(mergedProxy.gitTrustBundlePath, "utf8");
+    expect(mergedGitBundle).toContain(caText);
+    await mergedProxy.stop();
+    fs.rmSync(extraDir, { recursive: true, force: true });
+  });
+
   it("renews cached leaves without replacing client trust or established connections", async () => {
     const issued: X509Certificate[] = [];
     const issueLeaf = proxyCa.generateLocalProxyLeaf;
