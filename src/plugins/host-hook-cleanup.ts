@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import type {
   PluginHostCleanupFailure,
@@ -60,6 +61,9 @@ async function clearPluginSessionStores(params: {
   for (const target of storeTargets) {
     if (params.shouldCleanup && !params.shouldCleanup()) {
       break;
+    }
+    if (readAgentDatabaseAdmissionRefusal(target.agentId)) {
+      continue;
     }
     cleared += await cleanupPluginHostSessionStore({
       agentId: target.agentId,

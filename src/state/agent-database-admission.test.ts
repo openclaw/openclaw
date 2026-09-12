@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("agent database admission", () => {
-  it.each(["secondary", "default", "system"] as const)(
+  it.each(["secondary", "registered secondary", "default", "system"] as const)(
     "isolates a divergent %s agent database at startup",
     async (role) => {
       const stateDir = tempDirs.make("openclaw-divergent-admission-");
@@ -43,11 +43,18 @@ describe("agent database admission", () => {
         },
       };
       const source = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+      if (role === "registered secondary") {
+        openOpenClawAgentDatabase({ agentId: "cleaner", env });
+      }
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const target = path.join(stateDir, "agents", "cleaner", "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+      fs.copyFileSync(
+        source,
+        target,
+        role === "registered secondary" ? 0 : fs.constants.COPYFILE_EXCL,
+      );
       const { DatabaseSync } = requireNodeSqlite();
       const database = new DatabaseSync(target);
       try {
@@ -58,7 +65,7 @@ describe("agent database admission", () => {
       const copyBytes = fs.readFileSync(target);
       const startup = () =>
         assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config });
-      if (role !== "secondary") {
+      if (role === "default" || role === "system") {
         await expect(startup()).rejects.toThrow("belongs to agent main; requested agent cleaner");
         expect(fs.readFileSync(target)).toEqual(copyBytes);
         return;

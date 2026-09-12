@@ -6,6 +6,7 @@ import {
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { GetPublishedPreparedModelCatalogOwnerParams } from "../../agents/prepared-model-catalog.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -161,7 +162,11 @@ export function createChatMetadataHarness(
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
   const invalidProjections = new WeakSet<object>();
-  const getPreparedOwner = vi.fn((): PreparedModelRuntimeSnapshot | undefined => owner);
+  const getPreparedOwner = vi.fn(
+    (
+      _params?: GetPublishedPreparedModelCatalogOwnerParams,
+    ): PreparedModelRuntimeSnapshot | undefined => owner,
+  );
   const getPreparedAuthStore = vi.fn(() => authStore);
   const getAuthStoreRevision = vi.fn(() => authStoreRevision);
   const getSkillsVersion = vi.fn(() => skillsVersion);
