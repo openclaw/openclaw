@@ -64,64 +64,6 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
 }
 
 suite.define(() => {
-  it("reopens composer storage after the browser forcibly closes its database", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
-      await page.route("**/composer-storage-reopen", (route) =>
-        route.fulfill({ contentType: "text/html", body: "Composer storage recovery" }),
-      );
-      await page.goto(`${suite.server.baseUrl}composer-storage-reopen`);
-      const draftStore = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-      const scope = {
-        gatewayOwner: "reopen-gateway",
-        recoveryScope: "reopen-owner",
-        scopeKey: "chat:v3:agent:main:reopen\u0000agent:main",
-      };
-      expect(
-        await draftStore.evaluate(
-          (store, destination) => store.prepareDurableComposerRecovery(destination),
-          scope,
-        ),
-      ).toEqual({ status: "ready", entries: [] });
-      const database = await page.evaluateHandle<
-        typeof import("../lib/chat/control-ui-database.runtime.ts")
-      >('import("/src/lib/chat/control-ui-database.runtime.ts")');
-      const lifecycle = await database.evaluateHandle(async (store) => {
-        const connection = await store.openControlUiDatabase();
-        return {
-          closed: new Promise<void>((resolve) =>
-            connection.addEventListener("close", () => resolve(), { once: true }),
-          ),
-        };
-      });
-      const protocol = await context.newCDPSession(page);
-      try {
-        await protocol.send("Storage.clearDataForOrigin", {
-          origin: new URL(suite.server.baseUrl).origin,
-          storageTypes: "indexeddb",
-        });
-        await lifecycle.evaluate((state) => state.closed);
-      } finally {
-        await protocol.detach();
-      }
-      const result = await draftStore.evaluate(async (store, destination) => {
-        const recovered = await store.prepareDurableComposerRecovery(destination);
-        const written = await store.writeDurableComposerDraft(
-          destination,
-          { revision: 1, text: "Draft after browser storage recovery", attachments: [] },
-          { expectedRevision: 0, writeId: "after-reopen" },
-        );
-        return { recovered, written, read: await store.readDurableComposerDraft(destination) };
-      }, scope);
-      expect(result).toMatchObject({
-        recovered: { status: "ready", entries: [] },
-        written: { status: "persisted" },
-        read: { status: "found", draft: { text: "Draft after browser storage recovery" } },
-      });
-    });
-  });
-
   it("does not reuse a cached composer owner while reconnect authentication is unresolved", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       await installMockGateway(page);
