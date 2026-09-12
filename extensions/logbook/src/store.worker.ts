@@ -45,6 +45,7 @@ import type {
 type Database = import("node:sqlite").DatabaseSync;
 
 const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const FRAME_PRUNE_BATCH_SIZE = 64;
 class LogbookDatabaseStore {
   private readonly db: Database;
   private readonly query;
@@ -247,23 +248,6 @@ class LogbookDatabaseStore {
                 updated_ms: eb.ref("excluded.updated_ms"),
               })),
             ),
-        ),
-        currentFramePath: prepareSqliteQuerySync<number, { path: string }>(db, (p) =>
-          this.query
-            .selectFrom("frames")
-            .select("path")
-            .where(
-              "id",
-              "=",
-              p((id) => id),
-            ),
-        ),
-        deleteFrame: prepareSqliteQuerySync<number>(db, (p) =>
-          this.query.deleteFrom("frames").where(
-            "id",
-            "=",
-            p((id) => id),
-          ),
         ),
       };
     } catch (error) {
@@ -591,16 +575,25 @@ class LogbookDatabaseStore {
       this.db,
       () => {
         let count = 0;
-        for (const row of rows) {
-          const current = this.statements.currentFramePath(row.id).rows[0];
-          if (!current) {
-            continue;
-          }
-          if (current.path !== row.path) {
-            throw new Error(`Logbook frame ${row.id} changed path while pruning`);
+        for (let offset = 0; offset < rows.length; offset += FRAME_PRUNE_BATCH_SIZE) {
+          const batch = rows.slice(offset, offset + FRAME_PRUNE_BATCH_SIZE);
+          const ids = batch.map((row) => row.id);
+          const currentPaths = new Map(
+            executeSqliteQuerySync(
+              this.db,
+              this.query.selectFrom("frames").select(["id", "path"]).where("id", "in", ids),
+            ).rows.map((row) => [row.id, row.path]),
+          );
+          for (const row of batch) {
+            if (currentPaths.has(row.id) && currentPaths.get(row.id) !== row.path) {
+              throw new Error(`Logbook frame ${row.id} changed path while pruning`);
+            }
           }
           // ON DELETE SET NULL clears surviving cards' keyframes in the same commit.
-          const result = this.statements.deleteFrame(row.id);
+          const result = executeSqliteQuerySync(
+            this.db,
+            this.query.deleteFrom("frames").where("id", "in", ids),
+          );
           count += Number(expectDefined(result.numAffectedRows, "Logbook pruned frame count"));
         }
         return count;
