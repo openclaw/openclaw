@@ -17,9 +17,9 @@ import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 
 interface FuzzyBoundary {
   /** Original offset when the normalized boundary begins a replacement. */
-  start?: number;
+  readonly start?: number;
   /** Original offset when the normalized boundary ends a replacement. */
-  end?: number;
+  readonly end?: number;
 }
 
 interface FuzzyNormalizedFile {
@@ -118,7 +118,7 @@ function buildFuzzyBoundaries(
     for (let offset = sourceLineStart; offset <= keptLineEnd; offset++) {
       const boundary = nfkcBoundaries[offset];
       if (boundary) {
-        boundaries[normalizedLineStart + offset - sourceLineStart] = { ...boundary };
+        boundaries[normalizedLineStart + offset - sourceLineStart] = boundary;
       }
     }
 
@@ -137,7 +137,7 @@ function buildFuzzyBoundaries(
     }
 
     const afterNewline = nfkcBoundaries[sourceLineEnd + 1];
-    boundaries[normalizedLineEnd + 1] = afterNewline ? { ...afterNewline } : undefined;
+    boundaries[normalizedLineEnd + 1] = afterNewline;
     normalizedLineStart = normalizedLineEnd + 1;
     sourceLineStart = sourceLineEnd + 1;
   }
