@@ -82,6 +82,18 @@ export function clearRestoredPendingDrainKey(key: string): void {
   restoredPendingDrainKeys.delete(key);
 }
 
+function hasRestoredPendingWork(key: string): boolean {
+  const queue = FOLLOWUP_QUEUES.get(key);
+  return Boolean(
+    queue &&
+    (queue.items.length > 0 ||
+      queue.inFlight.size > 0 ||
+      queue.droppedCount > 0 ||
+      queue.summarySources.length > 0 ||
+      queue.summaryElisions.length > 0),
+  );
+}
+
 /**
  * Map a heartbeat/reply session key back to a restored follow-up queue key.
  * Isolated heartbeats run under `<base>:heartbeat` while the durable queue
@@ -97,7 +109,10 @@ export function resolveRestoredFollowupQueueRecoveryKey(
   for (const raw of candidates) {
     const key = raw?.trim();
     if (key && restoredPendingDrainKeys.has(key)) {
-      return key;
+      if (hasRestoredPendingWork(key)) {
+        return key;
+      }
+      restoredPendingDrainKeys.delete(key);
     }
   }
   for (const raw of candidates) {
@@ -111,7 +126,10 @@ export function resolveRestoredFollowupQueueRecoveryKey(
         break;
       }
       if (restoredPendingDrainKeys.has(cursor)) {
-        return cursor;
+        if (hasRestoredPendingWork(cursor)) {
+          return cursor;
+        }
+        restoredPendingDrainKeys.delete(cursor);
       }
     }
   }
@@ -576,7 +594,10 @@ function persistedQueueEntryCarriesInboundContext(data: PersistedQueueEntry): bo
 export function persistFollowupQueuesOrThrow(): void {
   const entries: Array<[string, PersistedQueueEntry]> = [];
   for (const [key, queue] of FOLLOWUP_QUEUES) {
-    if (!queue || (queue.items.length === 0 && queue.droppedCount === 0)) {
+    if (
+      !queue ||
+      (queue.items.length === 0 && queue.inFlight.size === 0 && queue.droppedCount === 0)
+    ) {
       continue;
     }
     entries.push([key, toPersistedQueueEntry(queue)]);

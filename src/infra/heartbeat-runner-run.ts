@@ -63,9 +63,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       cfg,
       agentId,
       hasChatDelivery: Boolean(
-        !isRestoreOnlyCarrierWake &&
-          delivery.to &&
-          (visibility.showAlerts || visibility.showOk),
+        !isRestoreOnlyCarrierWake && delivery.to && (visibility.showAlerts || visibility.showOk),
       ),
     })
       ? createHeartbeatTypingCallbacks({

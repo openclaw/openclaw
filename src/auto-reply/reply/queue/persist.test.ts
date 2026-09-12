@@ -33,7 +33,7 @@ import {
   readFollowupPersistQueueEntry as readPersistedQueueEntry,
 } from "./persist.test-helpers.js";
 import { resetRecentQueuedMessageIdDedupe } from "./recent-message-ids.js";
-import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
 describe("persistFollowupQueues / restoreFollowupQueues", () => {
@@ -191,7 +191,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       evictedSummaryCount?: number;
     };
     expect(persisted.summarySources?.[0]?.prompt).toBe("summarized overflow");
-    expect(persisted.summaryElisions?.[0]?.contextKey).toBe("route-a");
+    expect(persisted.summaryElisions?.[0]?.contextKey).toBe("");
     expect(persisted.summaryElisions?.[0]?.sources?.[0]?.prompt).toBe("elided sibling");
     expect(persisted.summaryElisions?.[0]?.sourceRefs).toBeUndefined();
     expect(persisted.evictedSummaryCount).toBe(3);
@@ -203,7 +203,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
     expect(restored?.summarySources.map((item) => item.prompt)).toEqual(["summarized overflow"]);
     expect(restored?.summaryElisions).toHaveLength(1);
-    expect(restored?.summaryElisions[0]?.contextKey).toBe("route-a");
+    expect(restored?.summaryElisions[0]?.contextKey).toBe("");
     expect(restored?.summaryElisions[0]?.count).toBe(1);
     expect(restored?.summaryElisions[0]?.sources[0]?.prompt).toBe("elided sibling");
     expect(restored?.summaryElisions[0]?.summaryLines).toEqual(["elided sibling"]);
@@ -251,13 +251,14 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     const blocker = path.join(tmpDir, "not-a-directory");
     fs.writeFileSync(blocker, "file");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const failedRun = {
+      ...makeFollowupRun("retry-after-persist-fail"),
+      messageId: "tg-82572-retry",
+      turnAdoptionLifecycle: { onAdopted: async () => undefined },
+    } satisfies FollowupRun;
     process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
     try {
-      const admitted = enqueueFollowupRun(
-        TEST_KEY,
-        { ...makeFollowupRun("retry-after-persist-fail"), messageId: "tg-82572-retry" },
-        SETTINGS,
-      );
+      const admitted = enqueueFollowupRun(TEST_KEY, failedRun, SETTINGS);
       expect(admitted).toBe(false);
       expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items ?? []).toEqual([]);
     } finally {
@@ -375,6 +376,30 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     persistFollowupQueues();
 
     expect(followupQueueEntryContainsPrompt(TEST_KEY, "in flight")).toBe(true);
+  });
+
+  it("keeps admitted in-flight items after they leave the pending list", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    const item = makeFollowupRun("admitted aggregate source");
+    queue.inFlight.add(item);
+
+    persistFollowupQueuesOrThrow();
+
+    expect(followupQueueEntryContainsPrompt(TEST_KEY, "admitted aggregate source")).toBe(true);
+  });
+
+  it("clears a restored-drain marker with its queue", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("restored"));
+    persistFollowupQueuesOrThrow();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+    expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(true);
+
+    expect(clearFollowupQueue(TEST_KEY)).toBe(1);
+
+    expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(false);
   });
 
   it("omits current inbound prompt context from persist+restore", () => {
@@ -901,6 +926,32 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       sourceChannel: "telegram",
     });
     expect(persistedLastRun?.inputProvenance).not.toHaveProperty("sourceSessionKey");
+  });
+
+  it("does not persist sensitive delivery grouping fields after real overflow", () => {
+    const settings: QueueSettings = {
+      mode: "steer",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    for (const [index, secret] of ["alpha-secret", "beta-secret", "gamma-secret"].entries()) {
+      const item = makeFollowupRun(`message-${index}`);
+      item.run.extraSystemPrompt = secret;
+      item.run.extraSystemPromptStatic = `static-${secret}`;
+      item.run.inputProvenance = {
+        kind: "external_user",
+        sourceChannel: "telegram",
+        sourceSessionKey: `source-${secret}`,
+      };
+      expect(enqueueFollowupRun(TEST_KEY, item, settings, "none")).toBe(true);
+    }
+
+    const raw = JSON.stringify(loadFollowupQueueEntries());
+    for (const secret of ["alpha-secret", "beta-secret", "gamma-secret"]) {
+      expect(raw).not.toContain(secret);
+      expect(raw).not.toContain(`source-${secret}`);
+    }
   });
 
   it("round-trips auth profile selection through restore", () => {

@@ -72,6 +72,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         agentId: params.agentId,
         ownerConnId: normalizeOptionalChatText(params.ownerConnId),
         ownerDeviceId: normalizeOptionalChatText(params.ownerDeviceId),
+        onCancellationRequested: () => lifecycle.onCancellationRequested?.(),
       });
       if (enqueued && !releaseWorkAdmission) {
         // Retain the session fence until this detached queued turn is adopted.

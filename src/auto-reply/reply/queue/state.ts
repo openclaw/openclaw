@@ -7,7 +7,11 @@ import { resolveThinkingDefault } from "../../../agents/model-thinking-default.j
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import { normalizeThinkLevel, resolveSupportedThinkingLevel } from "../../thinking.js";
-import { persistFollowupQueuesOrThrow, restoreFollowupQueues } from "./persist.js";
+import {
+  clearRestoredPendingDrainKey,
+  persistFollowupQueuesOrThrow,
+  restoreFollowupQueues,
+} from "./persist.js";
 import {
   completeFollowupRunLifecycle,
   type FollowupQueueState,
@@ -197,6 +201,7 @@ export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
   const queue = getExistingFollowupQueue(cleaned);
   if (!queue) {
+    clearRestoredPendingDrainKey(cleaned);
     return 0;
   }
   const clearedItems = queue.items.slice();
@@ -245,6 +250,7 @@ export function clearFollowupQueue(key: string): number {
     FOLLOWUP_QUEUES.set(cleaned, queue);
     throw err;
   }
+  clearRestoredPendingDrainKey(cleaned);
   queue.abortController.abort();
   for (const item of clearedItems) {
     completeFollowupRunLifecycle(item);

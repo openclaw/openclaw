@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resolveAttemptWorkspaceSandbox } from "../../agents/embedded-agent-runner/run/attempt-setup.js";
+import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import {
   resolveSessionPermissionCoreToolPolicy,
   resolveSessionPermissionExecMode,
@@ -70,7 +70,7 @@ describe("followup queue restart session permission policy", () => {
       expect(restored?.run.permissionMode).toBe("workspace");
       expect(restored?.run.sessionRoot).toBe(sessionRoot);
 
-      const runParams = buildEmbeddedRunBaseParams({
+      const runParams = await buildEmbeddedRunBaseParams({
         run: restored!.run,
         provider: restored!.run.provider,
         model: restored!.run.model,

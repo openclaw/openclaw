@@ -814,10 +814,20 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
 }
 
 export function toPersistedQueueEntry(queue: FollowupQueueState): PersistedQueueEntry {
+  const summarizedSources = new Set([
+    ...queue.summarySources,
+    ...queue.summaryElisions.flatMap((entry) => entry.sources),
+  ]);
+  const items = [
+    ...queue.items,
+    ...[...queue.inFlight].filter(
+      (source) => !queue.items.includes(source) && !summarizedSources.has(source),
+    ),
+  ];
   return {
     // Keep in-flight identities in SQLite until channel delivery succeeds (or
     // fail-closed discard). Memory inFlight is overflow protection only.
-    items: queue.items.map(toPersistedRun),
+    items: items.map(toPersistedRun),
     lastEnqueuedAt: queue.lastEnqueuedAt,
     mode: queue.mode,
     debounceMs: queue.debounceMs,
@@ -827,7 +837,9 @@ export function toPersistedQueueEntry(queue: FollowupQueueState): PersistedQueue
     summaryLines: queue.summaryLines,
     summarySources: queue.summarySources.map(toPersistedRun),
     summaryElisions: queue.summaryElisions.map((entry) => ({
-      contextKey: entry.contextKey,
+      // Runtime grouping includes sensitive authority and prompt fields. Each
+      // persisted elision already preserves its group boundary and sources.
+      contextKey: "",
       count: entry.count,
       sources: entry.sources.map(toPersistedRun),
       summaryLines: entry.summaryLines,

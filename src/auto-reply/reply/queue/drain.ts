@@ -389,7 +389,6 @@ function consumeCanceledQueueSummarySources(
   const snapshot = captureSummaryQueueState(queue);
   try {
     consumeQueueSummaryDelivery(queue, {
-      prompt: "",
       droppedCount: canceled.length,
       sources: [...canceled],
     });
@@ -397,6 +396,13 @@ function consumeCanceledQueueSummarySources(
   } catch (error) {
     restoreSummaryQueueState(queue, snapshot);
     throw error;
+  }
+}
+
+function removeCanceledFollowups(items: FollowupRun[], canceled: readonly FollowupRun[]): void {
+  removeQueuedItemsByRef(items, canceled);
+  for (const item of canceled) {
+    completeFollowupRunLifecycle(item);
   }
 }
 
@@ -1537,6 +1543,12 @@ async function drainElidedOverflowSummary(params: {
   if (!entry) {
     return true;
   }
+  if (!entry.contextKey) {
+    const restoredSource = entry.sources[0];
+    if (restoredSource) {
+      entry.contextKey = resolveFollowupDeliveryContextKey(restoredSource);
+    }
+  }
   const retainedSources =
     params.queue.summaryElisions.length === 1
       ? resolveOverflowSummarySourceGroup(params.queue).filter(
@@ -1825,7 +1837,6 @@ export function scheduleFollowupDrain(
             const consumeAdmittedGroup = () => {
               cancellation.admit();
               admitted = true;
-              removeQueuedItemsByRef(queue.items, activeGroupItems);
               for (const item of activeGroupItems) {
                 if (item !== aggregateOwner) {
                   retireFollowupRunCancellation(item);

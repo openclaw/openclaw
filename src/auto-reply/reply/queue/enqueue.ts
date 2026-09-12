@@ -24,7 +24,6 @@ import { persistFollowupQueuesOrThrow } from "./persist.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
-  releaseRecentQueueMessageId,
   resetRecentQueuedMessageIdDedupe,
 } from "./recent-message-ids.js";
 import {
@@ -178,10 +177,8 @@ function rollbackFailedDurableAdmission(params: {
   defaultRuntime.error?.(
     `rejected followup enqueue for ${params.key}: persistence failed: ${String(params.err)}`,
   );
-  // Lifecycle-less runs keep the reservation for the five-minute TTL on
-  // completeFollowupRunLifecycle. Failed durable admission never delivered, so
-  // the same inbound retry must be re-admittable.
-  releaseRecentQueueMessageId(params.run);
+  // Failed durable admission never delivered. Lifecycle completion invokes
+  // the current dedupe owner's abandonment hook so the inbound retry can re-admit.
   completeFollowupRunLifecycle(params.run);
   return false;
 }
@@ -193,6 +190,7 @@ function appendQueueItemWithPersist(params: Parameters<typeof appendQueueItem>[0
   appendQueueItem(params);
   try {
     persistFollowupQueuesOrThrow();
+    bindDurableCancellation(params.run);
     return true;
   } catch (err) {
     return rollbackFailedDurableAdmission({
@@ -207,6 +205,34 @@ function appendQueueItemWithPersist(params: Parameters<typeof appendQueueItem>[0
       err,
     });
   }
+}
+
+function bindDurableCancellation(run: FollowupRun): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (!lifecycle) {
+    return;
+  }
+  lifecycle.onCancellationRequested = () => {
+    let found = false;
+    for (const queue of FOLLOWUP_QUEUES.values()) {
+      const sources = [
+        ...queue.items,
+        ...queue.inFlight,
+        ...queue.summarySources,
+        ...queue.summaryElisions.flatMap((entry) => entry.sources),
+      ];
+      for (const source of sources) {
+        if (source.turnAdoptionLifecycle === lifecycle) {
+          source.canceled = true;
+          found = true;
+        }
+      }
+    }
+    if (!found) {
+      throw new Error("queued followup cancellation owner is no longer durable");
+    }
+    persistFollowupQueuesOrThrow();
+  };
 }
 
 export function enqueueFollowupRun(
@@ -247,7 +273,8 @@ export function enqueueFollowupRun(
       return false;
     }
     const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-  run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
+    const previousAcceptanceTail = queue.steerAcceptanceTail;
+    run.steerPending = { phase: "waiting", predecessor: previousAcceptanceTail, settle };
     queue.steerAcceptanceTail = acceptance;
     if (
       !appendQueueItemWithPersist({
@@ -409,6 +436,7 @@ export function enqueueFollowupRun(
         err,
       });
     }
+    bindDurableCancellation(run);
     completeDeferredDrops(deferredOverflowDrops);
   } else {
     options.collectDeferredDrops?.push(...deferredOverflowDrops);

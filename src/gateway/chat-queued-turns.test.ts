@@ -61,6 +61,57 @@ describe("chat-queued-turns", () => {
     expect(map.get("run-abort")).toBeUndefined();
   });
 
+  it("persists operator cancellation before aborting the queued controller", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    const order: string[] = [];
+    controller.signal.addEventListener("abort", () => order.push("abort"));
+    expect(
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "run-durable-cancel",
+        controller,
+        sessionId: "sess-durable-cancel",
+        sessionKey: "main",
+        onCancellationRequested: () => order.push("persist"),
+      }),
+    ).toBe(true);
+
+    expect(
+      abortQueuedChatTurnById(map, {
+        runId: "run-durable-cancel",
+        sessionKey: "main",
+        stopReason: "rpc",
+      }),
+    ).toEqual({ aborted: true });
+    expect(order).toEqual(["persist", "abort"]);
+  });
+
+  it("rejects cancellation when the durable tombstone write fails", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    registerQueuedChatTurn({
+      chatQueuedTurns: map,
+      runId: "run-failed-durable-cancel",
+      controller,
+      sessionId: "sess-failed-durable-cancel",
+      sessionKey: "main",
+      onCancellationRequested: () => {
+        throw new Error("sqlite unavailable");
+      },
+    });
+
+    expect(() =>
+      abortQueuedChatTurnById(map, {
+        runId: "run-failed-durable-cancel",
+        sessionKey: "main",
+        stopReason: "rpc",
+      }),
+    ).toThrow("sqlite unavailable");
+    expect(controller.signal.aborted).toBe(false);
+    expect(map.has("run-failed-durable-cancel")).toBe(true);
+  });
+
   it("does not let a stale abort listener remove a reused run id", () => {
     const map = emptyMap();
     const first = new AbortController();

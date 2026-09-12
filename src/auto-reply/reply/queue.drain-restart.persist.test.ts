@@ -340,7 +340,7 @@ describe("followup queue drain restart persistence", () => {
     }
   });
 
-  it("restores canceled entries when acknowledgement fails and does not execute them after restart", async () => {
+  it("retains canceled tombstones when acknowledgement fails and does not execute them after restart", async () => {
     const tmpDir = tempDirs.make("openclaw-queue-abort-ack-fail-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
@@ -399,10 +399,6 @@ describe("followup queue drain restart persistence", () => {
       expect(
         retained?.items?.some((item) => item.prompt === abortedPrompt && item.canceled === true),
       ).toBe(true);
-      expect(FOLLOWUP_QUEUES.get(key)?.items.some((item) => item.prompt === abortedPrompt)).toBe(
-        true,
-      );
-
       replaceSpy.mockRestore();
       originalReplace({ entries: retainedEntries ?? [] });
       FOLLOWUP_QUEUES.delete(key);
