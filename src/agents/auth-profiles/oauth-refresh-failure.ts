@@ -9,6 +9,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
  * commands without trusting raw provider text.
  */
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
+import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 import type { AuthProfileFailureReason } from "./types.js";
 
 export type OAuthRefreshFailureReason =
@@ -320,9 +321,14 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
 /** Build the login command operators should run after OAuth refresh failure. */
 export function buildOAuthRefreshFailureLoginCommand(
   provider: string | null | undefined,
-  options?: { profileId?: string | null },
+  options?: { profileId?: string | null; surface?: "cli" | "chat" },
 ): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  if (options?.surface === "chat") {
+    return formatProviderLoginCommand(
+      sanitizedProvider === "claude-cli" ? null : sanitizedProvider,
+    );
+  }
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   if (sanitizedProvider === "claude-cli") {
     // claude-cli is not a standalone provider id; it is the Anthropic provider

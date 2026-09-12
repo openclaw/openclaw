@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isCronSelfRemovalCurrent, type CronActiveJobMarker } from "../active-jobs.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
@@ -246,7 +247,7 @@ export function cronRunReceiptPersistHooks(params: {
   const deferTerminal = terminal && isCronRunReceiptSettlementPending(params.handle);
   return {
     beforeWrite: (database) => {
-      const unavailableError = `cron job agent is unavailable: ${params.handle.agentId}`;
+      const unavailableError = describeUnavailableCronAgent(params.handle.agentId);
       const recordsUnavailableGuard =
         terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
       if (

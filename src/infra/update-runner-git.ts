@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
+import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
 import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { runStep } from "./update-runner-command.js";
 import {
   buildUpdateDoctorEnv,
@@ -15,7 +15,11 @@ import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
-import { runGitDoctorStep, runGitUpstreamStep } from "./update-runner-git-steps.js";
+import {
+  resolveGitDoctorEntry,
+  runGitDoctorStep,
+  runGitUpstreamStep,
+} from "./update-runner-git-steps.js";
 import {
   prepareGitMutation,
   readBranchName,
@@ -621,20 +625,8 @@ export async function updateGitCheckout(params: {
 
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
-      const doctorEntry = path.join(gitRoot, "openclaw.mjs");
-      const doctorEntryExists = await fs.stat(doctorEntry).then(
-        () => true,
-        () => false,
-      );
-      if (!doctorEntryExists) {
-        steps.push({
-          name: "openclaw doctor entry",
-          command: `verify ${doctorEntry}`,
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: `missing ${doctorEntry}`,
-        });
+      const doctorEntry = await resolveGitDoctorEntry(gitRoot, steps);
+      if (!doctorEntry) {
         return await rollbackError("doctor-entry-missing");
       }
       const doctorNodePath = await resolveStableNodePath(process.execPath);
@@ -647,6 +639,7 @@ export async function updateGitCheckout(params: {
       recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
       const doctorStep = await runGitDoctorStep({
         root: gitRoot,
+        runDoctor: opts.runGitDoctor,
         entryPath: doctorEntry,
         nodePath: doctorNodePath,
         fix: doctorPolicy.fix,
@@ -658,8 +651,13 @@ export async function updateGitCheckout(params: {
           deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
         }),
       });
+      if (!doctorStep) {
+        return await rollbackError("doctor-entry-missing");
+      }
       if (doctorStep.exitCode !== 0 && !doctorStep.advisory) {
-        return await rollbackError("doctor-failed");
+        return await rollbackError(
+          getUpdateDoctorConfigFailureReason(doctorStep.configWriteRefusal) ?? "doctor-failed",
+        );
       }
     }
 
@@ -710,7 +708,9 @@ export async function updateGitCheckout(params: {
       exitCode: 1,
       stderrTail: String(error),
     });
-    return await rollbackError("unexpected-error");
+    return await rollbackError(
+      error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
+    );
   } finally {
     await candidateTransfer?.cleanup(step("git candidate pack cleanup", [], gitRoot));
     await runtimePromotion?.cleanup();

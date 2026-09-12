@@ -42,8 +42,8 @@ Astra uses the Responses API for agent tool calls. It supports text and image
 input, a 1,050,000-token context window, and up to 128,000 output tokens.
 OpenClaw retains its ordinary 272,000-token active input budget by default.
 The supported reasoning efforts are `low`, `medium`, `high`, `xhigh`, and `max`.
-OpenClaw defaults Astra to `low` on both the OpenClaw and Codex runtimes to
-limit reasoning cost and subscription-budget consumption on ordinary prompts.
+OpenClaw defaults Astra to `medium` on both the OpenClaw and Codex runtimes
+when the account supports that effort.
 The OpenAI provider owns this default, so model selection, Control UI, and
 Codex turn requests share it. Explicit agent, model, global, and session
 thinking settings still take precedence; switching models does not clear an

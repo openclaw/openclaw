@@ -46,6 +46,7 @@ import {
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -101,7 +102,6 @@ import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
-import { resolveUpdateRequestReply } from "./update-request.js";
 
 type ResetCommandAction = "new" | "reset";
 
@@ -353,14 +353,12 @@ export async function getReplyFromConfig(
       }),
     };
   });
+  const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
+  if (refusal) {
+    return { text: `${refusal.reason}\n${refusal.repairHint}`, isError: true };
+  }
   const agentSessionKey = initialAgentScope.agentSessionKey;
   const agentId = initialAgentScope.agentId;
-  const updateRequestReply = opts?.isHeartbeat
-    ? undefined
-    : resolveUpdateRequestReply({ ctx: finalized, cfg, agentId, sessionKey: agentSessionKey });
-  if (updateRequestReply) {
-    return markReplyPayloadForSourceSuppressionDelivery(updateRequestReply);
-  }
   if (
     preparedReplyDispatchRuntime &&
     !publishedModelCatalogOwnerMatchesAgent(preparedReplyDispatchRuntime, agentId)

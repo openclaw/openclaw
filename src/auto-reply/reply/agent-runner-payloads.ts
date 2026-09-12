@@ -15,6 +15,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -23,7 +24,8 @@ import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
+import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
 import {
   applyReplyThreading,
   isRenderablePayload,
@@ -165,10 +167,8 @@ export async function buildReplyPayloads(params: {
   silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
-  /** Payload keys sent directly (not via pipeline) during tool flush. */
-  directlySentBlockKeys?: Set<string>;
-  /** Payloads successfully sent directly during tool flush. */
-  directlySentBlockPayloads?: ReplyPayload[];
+  /** Direct receipts distinguish confirmed sends from retained retry custody. */
+  directBlockDeliveries?: DirectBlockDelivery[];
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
@@ -316,53 +316,56 @@ export async function buildReplyPayloads(params: {
       );
     }
   }
-  const directlySentTextFragmentsByAssistantMessage = new Map<number | undefined, string[]>();
-  for (const sentPayload of params.directlySentBlockPayloads ?? []) {
+  const retryBlockedDirectPayloads = (params.directBlockDeliveries ?? [])
+    .filter((delivery) => delivery.pending || !shouldRetryReplyDispatch(delivery.outcome))
+    .map((delivery) => delivery.payload);
+  const directTextFragmentsByAssistantMessage = new Map<number | undefined, string[]>();
+  for (const sentPayload of retryBlockedDirectPayloads) {
+    if (!isReplyPayloadTerminalContent(sentPayload)) {
+      continue;
+    }
     const sentText = sentPayload.text ?? resolveSendableOutboundReplyParts(sentPayload).trimmedText;
     if (!sentText) {
       continue;
     }
     const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
-    const fragments = directlySentTextFragmentsByAssistantMessage.get(assistantMessageIndex);
+    const fragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex);
     if (fragments) {
       fragments.push(sentText);
     } else {
-      directlySentTextFragmentsByAssistantMessage.set(assistantMessageIndex, [sentText]);
+      directTextFragmentsByAssistantMessage.set(assistantMessageIndex, [sentText]);
     }
   }
-  const isDirectlySentBlockPayload = (payload: ReplyPayload) => {
+  const isDirectBlockRetryBlocked = (payload: ReplyPayload) => {
     const contentKey = createBlockReplyContentKey(payload);
-    if (!params.directlySentBlockKeys?.has(contentKey)) {
-      return false;
-    }
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    return (
-      assistantMessageIndex === undefined ||
-      !params.directlySentBlockPayloads?.length ||
-      params.directlySentBlockPayloads.some(
-        (sentPayload) =>
-          getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex === assistantMessageIndex &&
-          createBlockReplyContentKey(sentPayload) === contentKey,
-      )
+    return retryBlockedDirectPayloads.some(
+      (sentPayload) =>
+        isReplyPayloadTerminalContent(sentPayload) &&
+        (assistantMessageIndex === undefined ||
+          getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex === assistantMessageIndex) &&
+        createBlockReplyContentKey(sentPayload) === contentKey,
     );
   };
-  const hasDirectlySentText = (payload: ReplyPayload): boolean => {
-    if (isDirectlySentBlockPayload(payload)) {
+  const isDirectTextRetryBlocked = (payload: ReplyPayload): boolean => {
+    if (isDirectBlockRetryBlocked(payload)) {
       return true;
     }
     const text = resolveSendableOutboundReplyParts(payload).trimmedText;
-    if (!text || !params.directlySentBlockPayloads?.length) {
+    if (!text || !retryBlockedDirectPayloads.length) {
       return false;
     }
     const normalizedText = text.trim();
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    const applicableFragments =
-      directlySentTextFragmentsByAssistantMessage.get(assistantMessageIndex);
+    const applicableFragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex);
     return applicableFragments ? applicableFragments.join("").trim() === normalizedText : false;
   };
   const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
     if (payload.isError || payload.isFallbackNotice) {
       return payload;
+    }
+    if (params.blockReplyPipeline?.isFinalPayloadRetryBlocked?.(payload)) {
+      return null;
     }
     const reply = resolveSendableOutboundReplyParts(payload);
     if (!reply.hasMedia) {
@@ -375,7 +378,7 @@ export async function buildReplyPayloads(params: {
       );
       const wasSent = hasRichContent
         ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
-        : params.blockReplyPipeline?.hasSentPayload(payload) || hasDirectlySentText(payload);
+        : params.blockReplyPipeline?.hasSentPayload(payload) || isDirectTextRetryBlocked(payload);
       if (wasSent) {
         return null;
       }
@@ -390,10 +393,14 @@ export async function buildReplyPayloads(params: {
       mediaUrls: undefined,
       audioAsVoice: undefined,
     });
-    const textWasSent = params.blockReplyPipeline?.hasSentPayload(textOnlyPayload)
-      ? true
-      : hasDirectlySentText(textOnlyPayload);
-    if (!textWasSent) {
+    const textShouldBeOmitted =
+      params.blockReplyPipeline?.hasSentPayload(textOnlyPayload) ||
+      params.blockReplyPipeline?.isFinalPayloadRetryBlocked?.(
+        copyReplyPayloadMetadata(payload, { text: payload.text }),
+      )
+        ? true
+        : isDirectTextRetryBlocked(textOnlyPayload);
+    if (!textShouldBeOmitted) {
       return payload;
     }
     return copyReplyPayloadMetadata(payload, {
@@ -406,33 +413,34 @@ export async function buildReplyPayloads(params: {
     ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockSend(payload) ?? [])
     : params.blockStreamingEnabled
       ? dedupedPayloads.flatMap((payload) =>
-          params.blockReplyPipeline?.hasSentPayload(payload) || isDirectlySentBlockPayload(payload)
+          params.blockReplyPipeline?.hasSentPayload(payload) || isDirectBlockRetryBlocked(payload)
             ? []
             : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
         )
-      : params.directlySentBlockKeys?.size
+      : retryBlockedDirectPayloads.length > 0
         ? dedupedPayloads.flatMap((payload) =>
-            isDirectlySentBlockPayload(payload)
+            isDirectBlockRetryBlocked(payload)
               ? []
               : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
           )
         : dedupedPayloads;
-  const blockSentMediaUrls = await normalizeSentMediaUrlsForDedupe({
+  const blockMediaUrlsToOmit = await normalizeSentMediaUrlsForDedupe({
     sentMediaUrls: [
       ...(params.blockStreamingEnabled
         ? (params.blockReplyPipeline?.getSentMediaUrls() ?? [])
         : []),
-      ...(params.directlySentBlockPayloads ?? []).flatMap(
+      ...(params.blockReplyPipeline?.getRetryBlockedMediaUrls?.() ?? []),
+      ...retryBlockedDirectPayloads.flatMap(
         (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
       ),
     ],
     normalizeMediaPaths: params.normalizeMediaPaths,
   });
   const filteredPayloads =
-    blockSentMediaUrls.length > 0
+    blockMediaUrlsToOmit.length > 0
       ? (await loadReplyPayloadsDedupeRuntime()).filterMessagingToolMediaDuplicates({
           payloads: contentSuppressedPayloads,
-          sentMediaUrls: blockSentMediaUrls,
+          sentMediaUrls: blockMediaUrlsToOmit,
         })
       : contentSuppressedPayloads;
   return {

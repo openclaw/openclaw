@@ -848,10 +848,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   font-size: var(--control-ui-text-sm);
 }
 
-.new-session-page__environment-picker > .session-menu__separator {
-  flex-shrink: 0;
-}
-
 .new-session-page__menu-chevron {
   display: inline-flex;
   margin-left: auto;

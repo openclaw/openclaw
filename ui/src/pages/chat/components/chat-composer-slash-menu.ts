@@ -408,7 +408,7 @@ function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHo
   const current = host.getTextarea()?.value ?? host.getDraft();
   const caret = host.getTextarea()?.selectionStart ?? current.length;
   const invocation = findDirectInlineSlashArgumentInvocation(current, caret);
-  if (!invocation || !host.canRun(true, invocation.command)) {
+  if (!invocation) {
     return false;
   }
   state.slashMenuMode = "freeform-args";
@@ -447,7 +447,8 @@ export function handleInlineSlashArgKeydown(
     return false;
   }
   event.preventDefault();
-  return submitInlineSlashArgument(state, host, requestUpdate);
+  submitInlineSlashArgument(state, host, requestUpdate);
+  return true;
 }
 
 export function handleSlashMenuKeydown(

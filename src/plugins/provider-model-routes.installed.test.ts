@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
-import { resolveConfiguredModelCatalogOverrides } from "../agents/model-catalog-route.js";
+import { createConfiguredModelCatalogOverridesResolver } from "../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getModelRefStatus, resolveModelRefFromString } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
@@ -384,9 +384,9 @@ describe("installed Arcee catalog identity", () => {
         },
       };
       expect(
-        resolveConfiguredModelCatalogOverrides({
-          cfg,
-          entry: { provider: "arcee", id: "trinity-large-thinking" },
+        createConfiguredModelCatalogOverridesResolver({ cfg })({
+          provider: "arcee",
+          id: "trinity-large-thinking",
         }),
       ).toMatchObject({ name: "Authored route", contextWindow: 32768 });
       const projected = resolveModelProviderAuthConfig({

@@ -411,7 +411,7 @@ describe("models.list", () => {
               id: level,
               label: level,
             })),
-            thinkingDefault: "high",
+            thinkingDefault: "medium",
           },
         ],
       });

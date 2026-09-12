@@ -190,15 +190,30 @@ export function verifyStableMainCloseout(params) {
     );
   }
 
-  const mainChangelog = extractStableChangelogSection(params.mainChangelog, version);
-  const tagChangelog = extractStableChangelogSection(params.tagChangelog, version);
+  const mainChangelog =
+    params.mainRelease?.section?.trimEnd() ??
+    extractStableChangelogSection(params.mainChangelog, version);
+  const tagChangelog =
+    params.tagRelease?.section?.trimEnd() ??
+    extractStableChangelogSection(params.tagChangelog, version);
   if (!mainChangelog) {
     errors.push(`main CHANGELOG.md is missing the ## ${version} section.`);
   }
   if (!tagChangelog) {
     errors.push(`release tag CHANGELOG.md is missing the ## ${version} section.`);
   }
-  if (mainChangelog && tagChangelog && mainChangelog !== tagChangelog) {
+  const mirrored = params.mainRelease?.format === "docs-mirror";
+  if (
+    mirrored &&
+    (!params.mainRelease.record ||
+      !params.tagRelease?.record ||
+      params.mainRelease.record.trimEnd() !== params.tagRelease.record.trimEnd())
+  ) {
+    errors.push(
+      `main changelog ${version} frozen contribution record does not match the shipped release accounting.`,
+    );
+  }
+  if (!mirrored && mainChangelog && tagChangelog && mainChangelog !== tagChangelog) {
     errors.push(
       `main CHANGELOG.md ## ${version} does not exactly match the shipped release section.`,
     );
@@ -356,7 +371,9 @@ export function verifyStableMainCloseout(params) {
     mainSha: params.mainSha,
     mainPackageVersion: mainVersion,
     releaseTagPackageVersion: tagPackageVersion,
-    changelogSha256: sha256(mainChangelog),
+    // This receipt binds the shipped release. Later approved docs prose may
+    // evolve, while the independent frozen contribution record must not.
+    changelogSha256: sha256(tagChangelog),
     ...(existingManifest
       ? copyOwnFields(existingManifest, "apps", "appPlatforms", "appcast", "appcastSha256")
       : {

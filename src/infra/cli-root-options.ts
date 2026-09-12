@@ -145,7 +145,7 @@ function parseCommandArgsWithRootOptions(
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === undefined || (!arg && options.mode !== "command-path")) {
+    if (arg === undefined) {
       break;
     }
     if (!literal && arg === FLAG_TERMINATOR) {

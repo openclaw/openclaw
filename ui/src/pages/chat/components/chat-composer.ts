@@ -8,7 +8,11 @@ import {
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
-import { isChatControlCommand, isModelIndependentChatCommand } from "../../../lib/chat/commands.ts";
+import {
+  canSubmitBeforeChatHistory,
+  isChatControlCommand,
+  isModelIndependentChatCommand,
+} from "../../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -298,7 +302,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       (!goalComposer.active &&
         (props.getAttachments?.() ?? props.attachments ?? []).length === 0 &&
         isModelIndependentChatCommand(draft))) &&
-    (!props.submitDisabledReason || (!goalComposer.active && isChatControlCommand(draft))) &&
+    (!props.submitDisabledReason || (!goalComposer.active && canSubmitBeforeChatHistory(draft))) &&
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
     state.dictation?.locksComposer !== true &&

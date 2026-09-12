@@ -695,7 +695,7 @@ function buildDocsSection(params: {
       ? `OpenClaw behavior questions: docs first${params.readToolName ? ` via \`${params.readToolName}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
       : "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
     params.hasGateway
-      ? "Config field: `gateway(config.schema.lookup)` exact path. Broader: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`."
+      ? "Config field: use `gateway(config.schema.lookup)` with an exact path only when that action is exposed by the tool schema. Otherwise use `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`."
       : "Configuration docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
       ? "If docs are silent/stale, say so and inspect local source."
@@ -1309,7 +1309,7 @@ export function buildAgentSystemPrompt(params: {
       hasOpenClaw
         ? "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
         : hasGateway
-          ? "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human."
+          ? "Config read: `gateway` (`config.get|config.schema.lookup`) only when those actions are exposed by its schema. Write/restart unavailable; ask human."
           : "",
       [
         "For the Gateway hosting this session:",

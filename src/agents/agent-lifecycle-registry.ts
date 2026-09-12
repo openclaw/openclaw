@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
 import {
   beginAgentDeletionJournal,
@@ -248,7 +249,11 @@ export function captureAgentLifecycleBinding(
   options: OpenClawStateDatabaseOptions = {},
 ): AgentLifecycleBinding | undefined {
   const id = normalizeAgentId(agentId);
-  if (!resolveAgentConfig(config, id) || isAgentDeletionBlocked(id, options)) {
+  if (
+    !resolveAgentConfig(config, id) ||
+    readAgentDatabaseAdmissionRefusal(id, options) ||
+    isAgentDeletionBlocked(id, options)
+  ) {
     return undefined;
   }
   return Object.freeze({
@@ -267,6 +272,7 @@ export function matchesAgentLifecycleBinding(
   return (
     id === binding.agentId &&
     Boolean(resolveAgentConfig(config, id)) &&
+    !readAgentDatabaseAdmissionRefusal(id, options) &&
     !isAgentDeletionBlocked(id, options) &&
     isDeepStrictEqual(readAgentProvenance(id, options) ?? null, binding.provenance)
   );

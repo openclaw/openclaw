@@ -50,7 +50,11 @@ enum PrimaryGatewayControlConfiguration: Sendable {
         let removesGatewayMode: Bool
     }
 
-    func replacingRoot(_ current: [String: Any], effectiveLocalPort: Int) throws -> Replacement {
+    func replacingRoot(
+        _ current: [String: Any],
+        effectiveLocalPort: Int,
+        reservedLocalPort: Int? = nil) throws -> Replacement
+    {
         var root = current
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         let previousRemote = gateway["remote"] as? [String: Any] ?? [:]
@@ -91,7 +95,14 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             clearsTargetDefaults = GatewayRemoteConfig.resolveTransport(root: current) != .ssh ||
                 (previousRemote["sshTarget"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) != target
             var remote = Self.replacingRemoteRoute(previousRemote)
-            let tunnelPort = localPort ?? effectiveLocalPort
+            let hadSSHTunnel = ConnectionModeResolver.resolve(root: current).mode == .remote &&
+                GatewayRemoteConfig.resolveTransport(root: current) == .ssh
+            let tunnelPort: Int = if localPort == nil, !hadSSHTunnel, let reservedLocalPort {
+                // A new tunnel must not displace this Mac's running Gateway.
+                Self.port(preferred: effectiveLocalPort, avoiding: reservedLocalPort)
+            } else {
+                localPort ?? effectiveLocalPort
+            }
             guard (1...65535).contains(tunnelPort) else { throw PrimaryGatewayControlError.invalidPort }
             let previousRemotePort = clearsTargetDefaults ? nil : RemotePortTunnel.ports(
                 root: current, sshHost: parsedTarget.host).remote
@@ -151,11 +162,14 @@ enum PrimaryGatewayControlConfiguration: Sendable {
         if GatewayRemoteConfig.resolveRemotePort(root: root) == nil { remote["remotePort"] = ports.remote }
         gateway["remote"] = remote
         if (OpenClawConfigFile.gatewayPort(root: root) ?? legacyPort) == ports.local {
-            gateway["port"] = preferredLocalPort == ports.local
-                ? (preferredLocalPort == 65535 ? 65534 : preferredLocalPort + 1) : preferredLocalPort
+            gateway["port"] = Self.port(preferred: preferredLocalPort, avoiding: ports.local)
         }
         root["gateway"] = gateway
         return Replacement(root: root, clearsTargetDefaults: false, removesGatewayMode: false)
+    }
+
+    private static func port(preferred: Int, avoiding reserved: Int) -> Int {
+        preferred == reserved ? (preferred == 65535 ? 65534 : preferred + 1) : preferred
     }
 
     private static func replacingRemoteRoute(_ previous: [String: Any]) -> [String: Any] {

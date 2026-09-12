@@ -45,6 +45,8 @@ type SqliteSessionImportRowsParams = Pick<
   beforePersistentApply?: () => void;
   allowMalformedRowRepair?: boolean;
   repairLegacyTranscript?: boolean;
+  /** Doctor-discovered history cannot replace the current logical session or window owner. */
+  historicalOnly?: boolean;
   preserveExactStoredKey?: boolean;
   readExactTranscriptRows?: (
     append: (row: { createdAt: number; eventJson: string }) => void,
@@ -115,11 +117,38 @@ function importSqliteSessionRowsInTransaction(
       sessionId: params.entry.sessionId,
     }),
   };
-  // Doctor imports legacy aliases verbatim; canonical-key repair owns their normalization.
-  writeSessionEntry(database, resolved.sessionKey, importedEntry, {
-    allowStoredAliases: true,
-    previousEntry: currentEntry ?? null,
-  });
+  let preserveHistoricalNode = false;
+  if (params.historicalOnly) {
+    const db = getSessionKysely(database.db);
+    const owner = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_key")
+        .where("session_id", "=", params.entry.sessionId),
+    )?.session_key;
+    if (owner && owner !== resolved.sessionKey) {
+      throw new Error(
+        `Historical transcript ${params.entry.sessionId} already belongs to ${owner}`,
+      );
+    }
+    preserveHistoricalNode = Boolean(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("session_key", "=", resolved.sessionKey),
+      ),
+    );
+  }
+  // Historical generations append under their existing node without changing its current pointer.
+  if (!preserveHistoricalNode) {
+    writeSessionEntry(database, resolved.sessionKey, importedEntry, {
+      allowStoredAliases: true,
+      previousEntry: currentEntry ?? null,
+    });
+  }
   // Only trusted SQLite handoffs can transfer ownership and hash exact ordered rows;
   // parsing, deduping, or trusting JSON ownership would break the migration boundary.
   if (params.readExactTranscriptRows) {

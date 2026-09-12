@@ -140,8 +140,43 @@ describe("triage external recovery handoff", () => {
             }),
             2,
           );
+          expect(runtime.writeJson.mock.calls[0]?.[0].suggestedCommands).toHaveLength(5);
+        } else {
+          const output = runtime.log.mock.calls.flat().join("\n");
+          const commands = runtime.log.mock.calls.filter(([line]) => String(line).startsWith("  "));
+          expect(commands).toHaveLength(1);
+          expect(commands[0]?.[0]).toContain("opencode run");
+          expect(output).toContain("No repair agent was started.");
         }
         expect(mocks.spawn).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each(["claude", "codex", undefined] as const)(
+    "gives one non-interactive next action when the detected agent is %s",
+    async (agent) => {
+      mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+        binary === agent ? `/usr/local/bin/${binary}` : undefined,
+      );
+      await withOpenClawTestState({ layout: "split" }, async () => {
+        const runtime = createTriageRuntime();
+        await withTriageTerminal(true, () =>
+          triageCommand(runtime, { nonInteractive: true, noExport: true }),
+        );
+        const output = runtime.log.mock.calls.flat().join("\n");
+        const commands = runtime.log.mock.calls.filter(([line]) => String(line).startsWith("  "));
+        expect(commands).toHaveLength(1);
+        expect(commands[0]?.[0]).toContain(
+          agent === "claude" ? "claude -p" : agent === "codex" ? "codex exec" : "openclaw triage",
+        );
+        expect(output).toContain("No repair agent was started.");
+        expect(output).not.toContain("Ready-to-run agent handoffs:");
+        if (!agent) {
+          expect(output).toContain("Install Claude Code or Codex");
+        }
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(mocks.runUtf8CommandWithTimeout).not.toHaveBeenCalled();
       });
     },
   );
@@ -210,6 +245,7 @@ describe("triage external recovery handoff", () => {
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringMatching(/pi.*(?:not found|not installed|unavailable)/iu),
       );
+      expect(runtime.log).toHaveBeenCalledWith("Install pi on PATH, then run triage again.");
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.spawn).not.toHaveBeenCalled();
     });

@@ -17,14 +17,28 @@ The policy layers that decide which tools a run may call: `tools.profile`, tool 
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 </Note>
 
-| Profile     | Includes                                                                                                                                                                                                                                                |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                                                                                                                                                   |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
-| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
-| `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
+| Profile     | Includes                                                                                                                                                                                                                                                                         |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status`, `gateway` (update only)                                                                                                                                                                                                                                        |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (update only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
+| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (update only), `ask_user` |
+| `full`      | No restriction (same as unset)                                                                                                                                                                                                                                                   |
 
 `coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
+
+The `minimal`, `coding`, and `messaging` profiles include `gateway` with only the
+`update.run` action. This lets owners request an OpenClaw update through the
+existing tool without granting configuration reads. Updates use the same Gateway
+handler as `/update` and the Control UI. External-chat updates require current
+owner authorization and `commands.restart`; Control UI updates retain their
+operator authorization.
+
+The `full` profile and an unset profile retain the tool's configuration-read
+actions. In a limited profile, explicitly add `gateway` to `tools.alsoAllow` to
+enable `config.get` and `config.schema.lookup`. If a provider-specific profile is
+also limited, its `alsoAllow` must grant `gateway` too. Existing global, agent,
+provider, conversation, sandbox, and runtime allow/deny restrictions still decide
+whether the tool is available. Subagent and non-owner restrictions still apply.
 
 ## Tool groups
 

@@ -67,6 +67,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   consumeCronCreatorAuthorityGrant,
   getCronManagementAuthority,
@@ -409,6 +410,21 @@ function respondMissingCronJobId(respond: RespondFn, method: string): void {
   respondInvalidCronParams(respond, method, "missing id");
 }
 
+function respondRefusedCronAgent(agentId: string | undefined, respond: RespondFn): boolean {
+  const refusal = agentId ? readAgentDatabaseAdmissionRefusal(agentId) : undefined;
+  if (!refusal) {
+    return false;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, `${refusal.reason}\n${refusal.repairHint}`, {
+      details: refusal,
+    }),
+  );
+  return true;
+}
+
 function respondCronJobNotFound(
   respond: RespondFn,
   jobId: string,
@@ -550,6 +566,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const wakeConfig = context.getRuntimeConfig();
+    if (respondRefusedCronAgent(resolvedAgentId, respond)) {
+      return;
+    }
     // Resolving a default wake agent can fail; role-free requests must retain their existing path.
     if (wakeConfig.gateway?.roles) {
       const knownWakeAgentId = resolvedAgentId ?? context.cron.getDefaultAgentId();
@@ -886,12 +905,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
-    try {
-      assertCronDoesNotTargetAgentHarness(jobCreate);
-    } catch (err) {
-      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
-      return;
-    }
     if (
       !cronCreateMatchesCallerScope({
         job: jobCreate,
@@ -917,6 +930,20 @@ export const cronHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, timestampValidation.message),
       );
+      return;
+    }
+    if (
+      respondRefusedCronAgent(
+        tryResolveCronJobEffectiveAgentId(jobCreate, context.cron.getDefaultAgentId()),
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      assertCronDoesNotTargetAgentHarness(jobCreate);
+    } catch (err) {
+      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
       return;
     }
     try {
@@ -1084,6 +1111,18 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     if (!cronPatchSessionRefsMatchCaller(patch, callerScope)) {
       respondInvalidCronParams(respond, "cron.update", "session target outside caller scope");
+      return;
+    }
+    if (
+      ("agentId" in patch || "sessionTarget" in patch || "sessionKey" in patch) &&
+      respondRefusedCronAgent(
+        tryResolveCronJobEffectiveAgentId(
+          { ...currentJob, ...patch },
+          context.cron.getDefaultAgentId(),
+        ),
+        respond,
+      )
+    ) {
       return;
     }
     if (patch.schedule) {

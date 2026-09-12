@@ -741,6 +741,102 @@ read -r release < "$OPENCLAW_TEST_FETCH_HOLD"
     },
   );
 
+  it.each([
+    [
+      "commit read",
+      'git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = cat-file ]; then return 1; fi; command git "$@"; }',
+    ],
+    [
+      "scratch allocation",
+      'mktemp() { [ "${DRIFT_FAULT_ACTIVE:-}" != 1 ] || return 1; command mktemp "$@"; }',
+    ],
+    [
+      "mainline diff",
+      'git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = diff ] && [[ "$3" = *"$PR_MAIN_SHA" ]]; then return 1; fi; command git "$@"; }',
+    ],
+    [
+      "prepared diff",
+      'git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = diff ] && [[ "$3" = *"$PREP_HEAD_SHA" ]]; then return 1; fi; command git "$@"; }',
+    ],
+    [
+      "overlap read",
+      'comm() { [ "${DRIFT_FAULT_ACTIVE:-}" != 1 ] || return 1; command comm "$@"; }',
+    ],
+    [
+      "critical file write",
+      'is_mainline_drift_critical_path_for_merge() { rm -f "$critical_file"; mkdir "$critical_file"; return 0; }',
+    ],
+    ["path read", 'read() { [ "${DRIFT_FAULT_ACTIVE:-}" != 1 ] || return 1; builtin read "$@"; }'],
+    ["count read", 'wc() { [ "${DRIFT_FAULT_ACTIVE:-}" != 1 ] || return 1; command wc "$@"; }'],
+    [
+      "diagnostic read",
+      'sed() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = -n ]; then return 1; fi; command sed "$@"; }',
+    ],
+  ])("rejects drift %s failure before merge intent or dispatch", (_name, fault) => {
+    const f = fixture();
+    expect(f.run("prepare-run").status).toBe(0);
+    f.configure({ moveAtChecks: true });
+    const result = f.shell(`
+eval "$(declare -f mainline_drift_requires_sync | sed '1s/mainline_drift_requires_sync/evaluate_actual_drift/')"
+mainline_drift_requires_sync() {
+  local DRIFT_FAULT_ACTIVE=1
+  evaluate_actual_drift "$@"
+}
+${fault}
+# Stop an unfixed verifier before it could create even a synthetic merge intent.
+prepare_squash_merge_body() { echo UNEXPECTED_AFTER_VERIFY >&2; return 99; }
+merge_run 42 || exit 1
+`);
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output, output).toContain("unable to evaluate mainline drift");
+    expect(output).not.toContain("UNEXPECTED_AFTER_VERIFY");
+    expect(output).not.toContain("because behind-main drift is unrelated");
+    expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
+    expect(
+      f.events().some((e) => e.kind === "gh" && e.args?.[0] === "pr" && e.args[1] === "merge"),
+    ).toBe(false);
+    expect(
+      f.git(
+        f.canonical,
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/pr-merge-outcomes/42",
+      ),
+    ).toBe("");
+    expect(f.git(f.origin, "rev-parse", "refs/heads/main")).toBe(f.movedMain);
+    expect(readdirSync(f.root).filter((name) => name.startsWith("openclaw-pr-drift."))).toEqual([]);
+  });
+
+  it.each([false, true])("retains successful unrelated drift results (files=%s)", (hasFiles) => {
+    const f = fixture();
+    const result = f.shell(
+      `PR_MAIN_SHA=${hasFiles ? f.movedMain : f.main}
+if mainline_drift_requires_sync ${f.main} ${f.main}; then
+  exit 99
+else
+  test "$?" -eq 1
+fi`,
+      "/bin/bash",
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(hasFiles ? "no overlap" : "no mainline changes");
+    expect(readdirSync(f.root).filter((name) => name.startsWith("openclaw-pr-drift."))).toEqual([]);
+  });
+
+  it("rejects drift evaluation errors in strict mode", () => {
+    const f = fixture();
+    expect(f.run("prepare-run").status).toBe(0);
+    f.configure({ moveAtChecks: true });
+    f.env.OPENCLAW_PR_STRICT_DRIFT = "1";
+    const result = f.shell(
+      "mainline_drift_requires_sync() { return 2; }\nmerge_verify 42 || exit 1",
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("unable to evaluate mainline drift");
+    expect(result.stdout).not.toContain("because behind-main drift is unrelated");
+  });
+
   it("rejects a moved prepared branch without consuming CI proof", () => {
     const f = fixture();
     expect(f.run("prepare-run").status).toBe(0);

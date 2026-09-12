@@ -25,7 +25,10 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
       policy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
       auditContext?: string;
     }) => {
-      if (!Number.isFinite(params.timeoutMs) || (params.timeoutMs ?? 0) <= 0) {
+      if (
+        params.auditContext !== "discord.endpoint-runtime" &&
+        (!Number.isFinite(params.timeoutMs) || (params.timeoutMs ?? 0) <= 0)
+      ) {
         throw new Error("guarded voice upload fetch requires a finite timeout");
       }
       return {
@@ -61,8 +64,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });

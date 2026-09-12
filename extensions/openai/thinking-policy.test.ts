@@ -41,6 +41,7 @@ describe("OpenAI thinking route provenance", () => {
     { efforts: [], defaultLevel: undefined },
     { efforts: ["high"], defaultLevel: undefined },
     { efforts: ["low", "high"], defaultLevel: "low" },
+    { efforts: ["medium", "high"], defaultLevel: "medium" },
   ])("retains Astra account efforts $efforts", ({ efforts, defaultLevel }) => {
     const profile = resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", "codex", {
       supportedReasoningEfforts: efforts,

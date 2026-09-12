@@ -169,14 +169,15 @@ enum DashboardGatewayCatalog {
 
 enum DashboardPrimaryGatewayError: LocalizedError, Equatable {
     case notPromotable
-    case passwordUnsupported
+    case invalidSetup
 
     var errorDescription: String? {
         switch self {
         case .notPromotable:
             "This Gateway cannot be set as primary."
-        case .passwordUnsupported:
-            "Password authentication is not supported by the Mac app's primary Gateway connection. Use a token instead."
+        case .invalidSetup:
+            "This Gateway setup information is invalid or expired. " +
+                "Ask your Gateway administrator for a new address or setup code."
         }
     }
 }
@@ -188,12 +189,11 @@ struct DashboardPrimaryGatewayAdapter {
         try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
     }
 
-    var persist: @MainActor (AppState, AppState.PrimaryGatewayConfiguration) -> Bool = {
-        $0.replacePrimaryGateway($1)
-    }
-
     func apply(profileID: String) async throws {
+        try Task.checkCancellation()
+        let snapshot = self.state.primaryGatewaySnapshot()
         let endpoint = try await self.endpoint(profileID)
+        try Task.checkCancellation()
         guard let token = endpoint.config.token?
             .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         else {
@@ -204,27 +204,23 @@ struct DashboardPrimaryGatewayAdapter {
                 GatewayTLSStore.loadFingerprint(stableID: $0)
             }
         }
-        try self.apply(url: endpoint.config.url, token: token, tlsFingerprint: tlsFingerprint)
+        try self.state.setPrimaryGateway(.direct(
+            url: endpoint.config.url,
+            token: token,
+            password: nil,
+            tlsFingerprint: tlsFingerprint), replacing: snapshot)
     }
 
-    func apply(link: GatewayConnectDeepLink) throws {
-        if link.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty != nil {
-            throw DashboardPrimaryGatewayError.passwordUnsupported
+    func apply(link: GatewayConnectDeepLink, replacing snapshot: AppState.PrimaryGatewaySnapshot? = nil) throws {
+        try Task.checkCancellation()
+        guard link.isValidEndpoint, let url = link.websocketURL else {
+            throw DashboardPrimaryGatewayError.invalidSetup
         }
-        guard let url = link.websocketURL else {
-            throw DashboardPrimaryGatewayError.notPromotable
-        }
-        try self.apply(
+        try self.state.setPrimaryGateway(.direct(
             url: url,
             token: link.token?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
-            tlsFingerprint: nil)
-    }
-
-    private func apply(url: URL, token: String?, tlsFingerprint: String?) throws {
-        let configuration = AppState.PrimaryGatewayConfiguration(url: url, token: token, tlsFingerprint: tlsFingerprint)
-        guard self.persist(self.state, configuration) else {
-            throw DashboardPrimaryGatewayError.notPromotable
-        }
+            password: link.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+            tlsFingerprint: link.tlsFingerprintSha256), replacing: snapshot)
     }
 }
 
@@ -236,12 +232,13 @@ struct DashboardGatewaySetupCoordinator {
     let openConnectionSettings: () -> Void
 
     func handle(_ link: GatewayConnectDeepLink) {
-        if link.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty != nil {
+        guard link.isValidEndpoint else {
             self.presentError(
-                "Gateway Setup Not Supported",
-                DashboardPrimaryGatewayError.passwordUnsupported.localizedDescription)
+                "Could Not Change Primary Gateway",
+                DashboardPrimaryGatewayError.invalidSetup.localizedDescription)
             return
         }
+        let snapshot = self.adapter.state.primaryGatewaySnapshot()
         let endpoint = "\(link.host):\(link.port)"
         let transport = link.tls ? "TLS" : "an unencrypted private-network connection"
         guard self.confirm(
@@ -249,7 +246,7 @@ struct DashboardGatewaySetupCoordinator {
             "Connect the Mac app directly to \(endpoint) using \(transport)?")
         else { return }
         do {
-            try self.adapter.apply(link: link)
+            try self.adapter.apply(link: link, replacing: snapshot)
             self.openConnectionSettings()
         } catch {
             self.presentError("Could Not Change Primary Gateway", error.localizedDescription)

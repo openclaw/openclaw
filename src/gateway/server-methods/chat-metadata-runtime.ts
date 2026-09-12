@@ -19,6 +19,10 @@ import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
+import {
+  assertAgentDatabaseAdmitted,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../../state/user-model-accounts.js";
 import { resolveChatAccountSelection } from "./chat-account-selection.js";
@@ -28,7 +32,9 @@ import type {
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
 import {
+  hasSessionCatalogContext,
   prepareChatMetadataModelProjection,
+  sessionProjectionKey,
   resolveSessionCatalogProfiles,
   projectChatSessionMetadata,
   type ChatMetadataProjectionFacts,
@@ -116,38 +122,40 @@ export class ChatMetadataSnapshotUnavailableError extends Error {
 
 function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerationFacts {
   const config = deps.getConfig();
-  const agents = listAgentIds(config).map((rawAgentId): PreparedAgentFacts => {
-    const agentId = normalizeAgentId(rawAgentId);
-    // Metadata follows the published lifecycle owner while its replacement gate owns turnover;
-    // display-only config publications must not make that still-current owner disappear.
-    const owner = deps.getPreparedOwner({ agentId, config });
-    if (!owner) {
-      throw new ChatMetadataSnapshotUnavailableError(
-        `prepared chat metadata owner is unavailable for agent "${agentId}"`,
-      );
-    }
-    const workspaceDir = owner.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
-    const fullModelCatalog = owner.readFullModelCatalog?.();
-    const fullCatalogAuth = fullModelCatalog
-      ? getPreparedModelFullCatalogAuth(fullModelCatalog)
-      : undefined;
-    if (fullModelCatalog && !fullCatalogAuth) {
-      throw new Error("prepared full model catalog omitted its auth generation");
-    }
-    return {
-      agentId,
-      owner,
-      authStore: fullCatalogAuth?.authStore ??
-        deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
-          version: 1,
-          profiles: {},
-        },
-      authModes: fullCatalogAuth?.authModes ?? owner.authModes,
-      authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
-      modelCatalog: fullModelCatalog ?? owner.modelCatalog,
-      skillsVersion: deps.getSkillsVersion(workspaceDir),
-    };
-  });
+  const agents = listAgentIds(config)
+    .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
+    .map((rawAgentId): PreparedAgentFacts => {
+      const agentId = normalizeAgentId(rawAgentId);
+      // Metadata follows the published lifecycle owner while its replacement gate owns turnover;
+      // display-only config publications must not make that still-current owner disappear.
+      const owner = deps.getPreparedOwner({ agentId, config });
+      if (!owner) {
+        throw new ChatMetadataSnapshotUnavailableError(
+          `prepared chat metadata owner is unavailable for agent "${agentId}"`,
+        );
+      }
+      const workspaceDir = owner.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
+      const fullModelCatalog = owner.readFullModelCatalog?.();
+      const fullCatalogAuth = fullModelCatalog
+        ? getPreparedModelFullCatalogAuth(fullModelCatalog)
+        : undefined;
+      if (fullModelCatalog && !fullCatalogAuth) {
+        throw new Error("prepared full model catalog omitted its auth generation");
+      }
+      return {
+        agentId,
+        owner,
+        authStore: fullCatalogAuth?.authStore ??
+          deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
+            version: 1,
+            profiles: {},
+          },
+        authModes: fullCatalogAuth?.authModes ?? owner.authModes,
+        authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
+        modelCatalog: fullModelCatalog ?? owner.modelCatalog,
+        skillsVersion: deps.getSkillsVersion(workspaceDir),
+      };
+    });
   return {
     config,
     configKey: resolveRuntimeConfigCacheKey(config),
@@ -177,28 +185,6 @@ function generationFactsMatch(
       candidate.skillsVersion === agent.skillsVersion
     );
   });
-}
-
-function sessionProjectionKey(
-  agentId: string,
-  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
-): string {
-  return [
-    normalizeAgentId(agentId),
-    profiles.preferredProfileId ?? "",
-    profiles.pinnedProfileId ?? "",
-    profiles.profileProvider ?? "",
-    profiles.runtimeOverride ?? "",
-  ].join("\0");
-}
-
-function hasSessionCatalogContext(profiles: ReturnType<typeof resolveSessionCatalogProfiles>) {
-  return (
-    profiles.preferredProfileId !== undefined ||
-    profiles.pinnedProfileId !== undefined ||
-    profiles.profileProvider !== undefined ||
-    profiles.runtimeOverride !== undefined
-  );
 }
 
 async function defaultBuildCommands(params: {
@@ -589,6 +575,7 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {
+    assertAgentDatabaseAdmitted(readParams.agentId);
     const draft = readParams.draftAccountSelection;
     const sessionEntry: ChatMetadataSessionEntry | undefined = draft
       ? { authProfileOverride: draft.authProfileId, authProfileOverrideSource: "user" }
@@ -620,6 +607,7 @@ export function createGatewayChatMetadataRuntime(params: {
   const readStartup = async (
     readParams: ChatStartupProjectionReadParams,
   ): Promise<ChatStartupProjectionResult | undefined> => {
+    assertAgentDatabaseAdmitted(readParams.agentId);
     const profiles = resolveSessionCatalogProfiles(
       readParams.sessionEntry,
       deps.getConfig(),

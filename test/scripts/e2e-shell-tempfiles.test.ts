@@ -357,8 +357,12 @@ exit 42
       );
       expect(defaultResult.status, defaultResult.stderr).toBe(0);
       expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
-        installRef: "@owner/safe",
-        slug: "homeassistant-safe",
+        candidates: [
+          {
+            installRef: "@owner/safe",
+            slug: "homeassistant-safe",
+          },
+        ],
       });
 
       const explicitResult = spawnSync(
@@ -368,9 +372,125 @@ exit 42
       );
       expect(explicitResult.status, explicitResult.stderr).toBe(0);
       expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
-        installRef: "@owner/risky",
-        slug: "preferred",
+        candidates: [
+          {
+            installRef: "@owner/risky",
+            slug: "preferred",
+          },
+        ],
       });
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("falls through a search candidate rejected by live ClawHub security", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-live-risk-test-"));
+    const fakeBin = path.join(tempRoot, "bin");
+    const scratchRoot = path.join(tempRoot, "scratch");
+    const attemptsPath = path.join(tempRoot, "attempts.txt");
+    await mkdir(fakeBin, { recursive: true });
+    await mkdir(scratchRoot, { recursive: true });
+    await writeFile(
+      path.join(fakeBin, "pnpm"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = --silent ]; then shift; fi
+if [ "\${1:-}" = openclaw ]; then shift; fi
+case "\${1:-} \${2:-}" in
+  "skills search")
+    printf '%s\n' '{"results":[{"slug":"risky","installRef":"risky"},{"slug":"safe","installRef":"safe"}]}'
+    ;;
+  "skills install")
+    ref="\${3:-}"
+    printf '%s\n' "$ref" >>${JSON.stringify(attemptsPath)}
+    if [ "$ref" = risky ]; then
+      if [ "\${FAKE_RISK_MODE:-blocked}" = unrelated ]; then
+        printf '%s\n' 'network connection reset' >&2
+        exit 1
+      fi
+      printf '%s\n' '╭─ ClawHub Security Audit ─────────────────────────────────────────────╮' >&2
+      printf '%s\n' '│ risky@1.0.0                                                         │' >&2
+      printf '%s\n' '│ Outcome: Blocked                                                    │' >&2
+      printf '%s\n' '╰──────────────────────────────────────────────────────────────────────╯' >&2
+      exit 1
+    fi
+    skill_dir="$HOME/.openclaw/workspace/skills/safe"
+    mkdir -p "$skill_dir/.clawhub" "$HOME/.openclaw/workspace/.clawhub"
+    printf '%s\n' 'name: Safe' >"$skill_dir/SKILL.md"
+    printf '%s\n' '{"slug":"safe","registry":"https://clawhub.ai","installedVersion":"1.0.0"}' >"$skill_dir/.clawhub/origin.json"
+    printf '%s\n' '{"skills":{"safe":{"version":"1.0.0"}}}' >"$HOME/.openclaw/workspace/.clawhub/lock.json"
+    ;;
+  "skills info")
+    printf '{"skillKey":"safe","baseDir":"%s"}\n' "$HOME/.openclaw/workspace/skills/safe"
+    ;;
+  *) exit 64 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+
+    try {
+      const result = spawnSync("bash", ["scripts/e2e/lib/skills/clawhub-install-proof.sh"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: "",
+          OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "risky",
+          OPENCLAW_TEST_STATE_SCRIPT_B64: "",
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          TMPDIR: scratchRoot,
+        },
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain(
+        "Skipping live ClawHub skill with current security findings: risky",
+      );
+      expect(result.stdout).toContain("E2E_OK installed=safe version=1.0.0");
+      expect((await readFile(attemptsPath, "utf8")).trim().split("\n")).toEqual(["risky", "safe"]);
+
+      await rm(attemptsPath, { force: true });
+      const explicitResult = spawnSync(
+        "bash",
+        ["scripts/e2e/lib/skills/clawhub-install-proof.sh"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_CURRENT_PACKAGE_TGZ: "",
+            OPENCLAW_SKILL_INSTALL_E2E_SLUG: "risky",
+            OPENCLAW_TEST_STATE_SCRIPT_B64: "",
+            PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+            TMPDIR: scratchRoot,
+          },
+        },
+      );
+      expect(explicitResult.status).not.toBe(0);
+      expect((await readFile(attemptsPath, "utf8")).trim()).toBe("risky");
+
+      await rm(attemptsPath, { force: true });
+      const unrelatedResult = spawnSync(
+        "bash",
+        ["scripts/e2e/lib/skills/clawhub-install-proof.sh"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FAKE_RISK_MODE: "unrelated",
+            OPENCLAW_CURRENT_PACKAGE_TGZ: "",
+            OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "risky",
+            OPENCLAW_TEST_STATE_SCRIPT_B64: "",
+            PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+            TMPDIR: scratchRoot,
+          },
+        },
+      );
+      expect(unrelatedResult.status).not.toBe(0);
+      expect((await readFile(attemptsPath, "utf8")).trim()).toBe("risky");
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

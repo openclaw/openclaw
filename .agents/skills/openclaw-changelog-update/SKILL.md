@@ -17,10 +17,28 @@ ordering, grouping, and attribution discipline.
 
 ## Goal
 
-Rebuild the target `CHANGELOG.md` version section from a complete, generated
+Rebuild the target `CHANGELOG/YYYY.M.PATCH.md` release section from a complete, generated
 history manifest, not stale draft notes. Produce grouped user-facing release
 notes sorted by user interest while preserving every relevant issue/PR ref and
 every human `Thanks @...` attribution.
+
+`CHANGELOG.md` is the generated release index. The shared owner
+`scripts/lib/release-changelog.mjs` resolves release sections and contribution
+records from a working tree or a pinned Git ref, including historical refs
+that still contain a monolith. Use `node scripts/release-changelog.mjs read
+--version <version> [--ref <sha-or-tag>]` for a section, or add `--record` for
+its contribution record. A missing split artifact must not fall back to the
+root index. Historical releases without records gain no invented provenance.
+Generated `CHANGELOG/**` files retain exact migrated or mirrored bytes and are
+excluded from generic formatting, like the root changelog. Validate them through
+their owner with `pnpm changelog:check`.
+
+Current writes use the split layout. To save a complete initial section, use
+`node scripts/release-changelog.mjs write --version <version> --file <section.md>`;
+it updates the release entry, matching `CHANGELOG/records/<version>.md` when
+present, and index together. Initial generation retains the section format
+below. Published docs mirrors follow the separate post-release route at the end
+of this skill; initial generation must never overwrite them.
 
 ## Inputs
 
@@ -209,7 +227,10 @@ every human `Thanks @...` attribution.
      that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`
+   - initial release generation keeps its existing credit policy: never thank
+     bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`.
+     The separately approved post-docs GitHub body uses its complete verified
+     human roster, including `@steipete` when credited
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -279,7 +300,9 @@ every human `Thanks @...` attribution.
 - when the complete source section exceeds either limit, the renderer keeps the exact
   grouped editorial notes through the line before
   `### Complete contribution record`, then emits that heading with a stable
-  link to the full contribution record in the tag-pinned `CHANGELOG.md`.
+  link to the full contribution record in the tag-pinned
+  `CHANGELOG/records/YYYY.M.PATCH.md` (historical monolithic tags retain their
+  original `CHANGELOG.md` record link).
   Never truncate a bullet or partial record, and never hand-author a different
   compact form
 - append `### Release verification` only when it fits after the canonical full
@@ -290,17 +313,62 @@ every human `Thanks @...` attribution.
   exact target before it dispatches Full Release Validation, including when local
   generated checks are explicitly skipped
 - `git diff --check`
+- `pnpm changelog:check` validates the split index, records, and marked docs mirrors
 - for docs/changelog-only changes, no broad tests are required
-- stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
+- stage the target release entry, its generated record, and changed index; commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
 - push the release branch without rebasing it onto moving `main`
 - when all fixes and final notes are committed before fresh full qualification,
   record that commit as both Code SHA and Release SHA; use the same successful
   full parent/attempt and its exact publication bytes for both roles
 - only when notes change after Code qualification, require
-  `git diff --name-only <code-sha>..<release-sha>` to print exactly
-  `CHANGELOG.md` before optionally using `changelog-only-release-v1`. That path
+  `git diff --name-only <code-sha>..<release-sha>` to include
+  `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its matching record, and
+  `CHANGELOG.md` before optionally using `split-changelog-release-v1`. Additions
+  or modifications of the selected entry/record are allowed; renames, deletions,
+  other releases, and docs source changes are not. Historical root-only receipts
+  retain `changelog-only-release-v1`. The split path
   retains green Code proof and qualifies new Release SHA package bytes. Any
   other changed path requires fresh product qualification
+
+## Post-release docs mirrors
+
+After explicit approval of the docs publication, publish the approved docs
+sources and their mechanically flattened changelog in the same source PR.
+This is separate from initial release generation; do not run an editorial
+rewrite automatically during release preparation or publication.
+
+Render the ordered docs sources into one full Markdown file, even for a large
+release or a release spanning several docs pages:
+
+```bash
+pnpm changelog:from-docs --version YYYY.M.PATCH \
+  --source docs/releases/YYYY.M.PATCH.md \
+  --output CHANGELOG/YYYY.M.PATCH.md
+pnpm changelog:check
+```
+
+Repeat `--source` in the approved reading order for a multipart release. The
+converter removes presentation wrappers, turns accordion titles into headings,
+expands docs links, and preserves source text, credits, code, tables, and images.
+Unsupported markup fails instead of silently dropping content. Its first-line
+marker binds the ordered source paths and exact source digest. Checks compare
+only marked mirrors against their sources; untouched historical originals stay
+in their initial format. Preserve `CHANGELOG/records/YYYY.M.PATCH.md` as the
+frozen accounting record when replacing reader prose, and regenerate the mirror
+in the same PR whenever its docs sources change.
+
+The approved publication bundle owns source merge, verified docs deployment,
+and the later GitHub Release body update as separate recorded steps. After
+deployment, freshly read the existing release, then update only its body with
+version/statistics, Raw changelog and docs links, one alphabetically deduplicated
+verified human thanks roster, and the unchanged release-verification section.
+Include verified PR, direct-commit, coauthor, and issue credit, including
+`@steipete`; exclude bots. Keep both the 125,000-character and 125,000-byte
+ceilings without truncating credits or proof. GitHub owns native avatars and
+assets. Verify the body readback, resume only incomplete steps, and never retag,
+rebuild, republish assets, or rerun initial publication to replace this body.
+The initial history verifier rejects docs mirrors; use the docs-publication
+workflow for their verification.
 
 ## Extended-Stable Variant
 

@@ -18,15 +18,14 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
 import {
-  assertAgentDeletionPathFence,
   beginAgentDeletionJournal,
   claimCompletedAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
-  prepareAgentDeletionPathFence,
   removeAgentDeletionJournal,
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
+import * as agentDeletionJournal from "./agent-deletion-journal.js";
 import { AGENT_MEDIA_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
@@ -988,44 +987,109 @@ describe("openclaw agent database", () => {
     removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
   });
 
-  it("rejects a database claim prepared before deletion cleanup completes", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentDir = path.join(stateDir, "agents", "deleted", "agent");
-    const databasePath = path.join(agentDir, "survivor.sqlite");
-    const deletion = beginAgentDeletionJournal(
-      {
-        operationId: "deletion",
-        deleteFiles: true,
-        agentId: "deleted",
-        agentDir,
-        workspaceDir: path.join(stateDir, "workspace-deleted"),
-        sessionsDir: path.join(stateDir, "sessions-deleted"),
-      },
-      { env },
-    );
-    const fence = prepareAgentDeletionPathFence(
-      { agentId: "survivor", path: databasePath },
-      { env },
-    );
-
-    runOpenClawStateWriteTransaction(
-      (sharedStateDatabase) =>
-        completeAgentDeletionJournalInDatabase(
-          sharedStateDatabase,
-          deletion.agentId,
-          deletion.operationId,
-        ),
-      { env },
-    );
-
-    expect(() =>
-      runOpenClawStateWriteTransaction(
-        (database) => assertAgentDeletionPathFence(database, fence),
-        { env },
-      ),
-    ).toThrow("deletion journal changed");
-  });
+  describe.each(["registration", "lease claim", "lease drain"] as const)(
+    "deletion journal fencing at %s",
+    (caller) => {
+      it.each([
+        {
+          column: "database_paths_json",
+          value: "[1]",
+          afterPrepare: false,
+          error: "Invalid agent deletion database path journal.",
+        },
+        {
+          column: "cleanup_paths_json",
+          value: "[1]",
+          afterPrepare: false,
+          error: "Invalid agent deletion cleanup path journal.",
+        },
+        {
+          column: "operation_id",
+          value: "replacement",
+          afterPrepare: true,
+          error: "deletion journal changed",
+        },
+        {
+          column: "cleanup_completed",
+          value: 1,
+          afterPrepare: true,
+          error: "deletion journal changed",
+        },
+      ])("refuses a changed $column (after preparation: $afterPrepare)", (change) => {
+        const stateDir = createTempStateDir();
+        const env = { OPENCLAW_STATE_DIR: stateDir };
+        const claim = { agentId: "survivor", path: path.join(stateDir, "survivor.sqlite"), env };
+        const leaseId =
+          caller === "lease drain" ? claimOpenClawAgentDatabaseLease(claim) : undefined;
+        const deletion = beginAgentDeletionJournal(
+          {
+            operationId: "deletion",
+            deleteFiles: true,
+            agentId: "deleted",
+            agentDir: path.join(stateDir, "agents", "deleted", "agent"),
+            workspaceDir: path.join(stateDir, "workspace-deleted"),
+            sessionsDir: path.join(stateDir, "sessions-deleted"),
+          },
+          { env },
+        );
+        const { DatabaseSync } = requireNodeSqlite();
+        const writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+        const registrations = writer.prepare(
+          "SELECT * FROM agent_databases ORDER BY agent_id, path",
+        );
+        const leases = writer.prepare("SELECT * FROM agent_database_leases ORDER BY lease_id");
+        const beforeRegistrations = registrations.all();
+        const beforeLeases = leases.all();
+        const mutate = () =>
+          writer
+            .prepare(`UPDATE agent_deletion_journal SET ${change.column} = ? WHERE agent_id = ?`)
+            .run(change.value, deletion.agentId);
+        const prepare = agentDeletionJournal.prepareAgentDeletionPathFence;
+        const preparation = change.afterPrepare
+          ? vi
+              .spyOn(agentDeletionJournal, "prepareAgentDeletionPathFence")
+              .mockImplementationOnce((...args) => {
+                const fence = prepare(...args);
+                // Commit through another connection after preparation releases its transaction.
+                mutate();
+                return fence;
+              })
+          : undefined;
+        try {
+          if (!change.afterPrepare) {
+            mutate();
+          }
+          expect(() => {
+            if (caller === "registration") {
+              registerOpenClawAgentDatabase(claim);
+            } else if (caller === "lease claim") {
+              claimOpenClawAgentDatabaseLease(claim);
+            } else {
+              assertNoOpenClawAgentDatabaseLeases(deletion.agentId, { env });
+            }
+          }).toThrow(change.error);
+          expect(registrations.all()).toEqual(beforeRegistrations);
+          expect(leases.all()).toEqual(beforeLeases);
+          expect(
+            writer
+              .prepare(`SELECT ${change.column} FROM agent_deletion_journal WHERE agent_id = ?`)
+              .get(deletion.agentId),
+          ).toEqual({ [change.column]: change.value });
+        } finally {
+          preparation?.mockRestore();
+          writer.close();
+          if (leaseId) {
+            releaseOpenClawAgentDatabaseLease(leaseId, { env });
+          }
+          removeAgentDeletionJournal(
+            deletion.agentId,
+            change.column === "operation_id" ? "replacement" : deletion.operationId,
+            { env },
+          );
+        }
+      });
+    },
+  );
 
   it("resolves under the per-agent state directory", () => {
     const stateDir = createTempStateDir();

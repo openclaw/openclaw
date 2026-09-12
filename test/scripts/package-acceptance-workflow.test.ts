@@ -2963,6 +2963,7 @@ function runReleaseChecksInputValidation(
   );
   const fixture = frozenWorkflowFixture(RELEASE_CHECKS_WORKFLOW, "resolve_target", {}, {}, {}, [
     "scripts/full-release-validation-policy.mjs",
+    "scripts/lib/release-changelog.mjs",
     "scripts/full-release-candidate-contract.mjs",
     "scripts/lib/cross-os-release-checks/suite-filter.mjs",
     "scripts/lib/canonical-json.mjs",
@@ -5630,6 +5631,8 @@ gh() {
     done
     cp "$RUNNER_TEMP/preflight-manifest.json" "$destination/"
     cp -R "$RUNNER_TEMP/dependency-evidence" "$destination/"
+  elif [[ "$1 $2" == "release view" ]]; then
+    printf '%s\\n' 'Initial release notes'
   elif [[ "$1 $2" == "release edit" ]]; then
     record notes
   else return 99; fi
@@ -13813,6 +13816,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",
       "scripts/lib/canonical-json.mjs",
       "scripts/lib/cross-os-release-checks/suite-filter.mjs",

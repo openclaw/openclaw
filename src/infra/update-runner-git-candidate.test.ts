@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
+import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -241,6 +243,60 @@ describe("Git candidate activation", () => {
       ),
     ).toEqual([]);
   }
+
+  it.each([
+    ["success", undefined],
+    ["config-refused", "repair-requires-config-change"],
+    ["requester-revoked", "requester-revoked"],
+    ["doctor-error", "doctor-failed"],
+    ["missing", "doctor-entry-missing"],
+  ] as const)(
+    "uses the CLI activation Doctor and preserves its outcome: %s",
+    async (outcome, reason) => {
+      const targetSha = await advanceRemote();
+      const configChanges: UpdateDoctorConfigChange[] = [{ kind: "key", key: "agents" }];
+      const runGitDoctor = vi.fn(async (doctorRoot: string) => {
+        expect(stopped).toBe(true);
+        await expectRuntime(doctorRoot, targetSha);
+        events.push("owned-doctor");
+        if (outcome === "requester-revoked") {
+          throw new UpdateRequesterRevokedError();
+        }
+        if (outcome === "missing") {
+          return null;
+        }
+        return {
+          name: "openclaw doctor",
+          command: "candidate doctor",
+          cwd: doctorRoot,
+          durationMs: 1,
+          exitCode: outcome === "success" ? 0 : 1,
+          configChanges,
+          ...(outcome === "config-refused"
+            ? {
+                configWriteRefusal: {
+                  reason: "include-ownership",
+                  message: "An included file owns the pending config change.",
+                  keys: ["agents"],
+                },
+              }
+            : {}),
+        };
+      });
+
+      const result = await update({ runGitDoctor });
+
+      expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root);
+      expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
+      expect(result.status).toBe(outcome === "success" ? "ok" : "error");
+      expect(result.reason).toBe(reason);
+      if (outcome !== "requester-revoked" && outcome !== "missing") {
+        expect(result.steps.find((step) => step.name === "openclaw doctor")?.configChanges).toEqual(
+          configChanges,
+        );
+      }
+    },
+  );
 
   it.each(["dev", "stable", "beta"] as const)(
     "does not stop or build an already-current %s checkout",

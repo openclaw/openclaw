@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
@@ -33,7 +30,6 @@ export type UpdateCandidateRehearsal = {
   workspaceDir: string;
   env: NodeJS.ProcessEnv;
   port: number;
-  changedConfigKeys: () => Promise<string[]>;
   cleanup: () => Promise<void>;
 };
 
@@ -228,7 +224,6 @@ export async function prepareUpdateCandidateRehearsal(params: {
         pluginPaths,
       ),
     );
-    const baseline: Record<string, unknown> = JSON.parse(serialized);
     await fs.writeFile(configPath, serialized, { mode: 0o600 });
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
@@ -239,17 +234,6 @@ export async function prepareUpdateCandidateRehearsal(params: {
       workspaceDir,
       env,
       port,
-      changedConfigKeys: async () => {
-        const current: unknown = JSON5.parse(await fs.readFile(configPath, "utf8"));
-        if (!isRecord(current)) {
-          throw new Error("Update validation config is not an object.");
-        }
-        // Compare against the same live config projection: private paths, the
-        // canary token and disabled background services are isolation, not repairs.
-        return [...new Set([...Object.keys(baseline), ...Object.keys(current)])]
-          .filter((key) => !isDeepStrictEqual(baseline[key], current[key]))
-          .toSorted();
-      },
       cleanup: () => fs.rm(tempDir, { recursive: true, force: true }),
     };
   } catch (error) {
