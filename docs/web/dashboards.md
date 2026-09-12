@@ -159,6 +159,49 @@ never needs the agent.
   the dashboard main and focuses it; `"split"` reveals it using the current
   arrangement, bringing chat alongside when Dashboard is main.
 
+## Show a website fullscreen
+
+Ask your agent:
+
+> Put https://status.example.com on this dashboard, expand it to fill the task,
+> and pin this session in the sidebar as Status.
+
+The built-in **Website** widget loads the live site directly in your browser.
+It needs no plugin, relay server, or copied website code. A single full-width
+website fills the expanded dashboard; adding other widgets restores the normal
+grid. The website controls its own refreshes and navigation.
+
+The agent creates it with the existing `dashboard` tool:
+
+```json
+{
+  "action": "widget_put",
+  "name": "status",
+  "title": "Status",
+  "pluginKind": "session:website",
+  "props": { "url": "https://status.example.com" },
+  "size": "full"
+}
+```
+
+It then calls `dashboard` with `action: "set_presentation"` and
+`presentation: "expanded"`. Session naming and pinning use the existing
+`sessions` tool. Reuse the widget name to change its URL. The URL and layout
+persist with the board; expanded presentation follows the existing per-device
+task layout preference. Website widgets do not load in gallery thumbnails.
+
+URLs must use HTTPS, contain no username or password, and fit within 2048
+characters. The renderer refuses the Control UI and connected Gateway hostnames,
+including URLs using another port on those hosts.
+The frame supports the website's scripts, forms, storage, and links, but receives
+no injected Gateway tokens, widget tool bridge, or permission to navigate the parent
+app. It follows the website's own authentication and your browser's cookie policy.
+
+Some websites refuse embedding, and some sign-in flows require a separate tab.
+Use **Open website** if the frame stays blank or cannot sign in. OpenClaw does
+not proxy the site or remove its embedding restrictions. This widget is separate
+from custom HTML widgets and does not loosen their sandbox or network grants.
+
 ## What widgets are allowed to do
 
 A widget that only renders needs no approval — it appears instantly, exactly

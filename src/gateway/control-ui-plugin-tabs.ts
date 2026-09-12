@@ -4,6 +4,7 @@ import type {
   PluginControlUiDescriptor as WireControlUiDescriptor,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { BOARD_REPORT_WIDGET_KIND } from "../boards/board-report.js";
+import { BOARD_WEBSITE_WIDGET_KIND } from "../boards/board-website.js";
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
 // Descriptors follow the current Gateway's registry, including request-local snapshots.
@@ -33,6 +34,7 @@ const log = createSubsystemLogger("gateway/control-ui");
 const CORE_CONTROL_UI_WIDGET_KINDS: readonly ControlUiPluginWidgetKind[] = [
   { pluginId: "session", kind: "session:progress", label: "Session progress" },
   { pluginId: "session", kind: BOARD_REPORT_WIDGET_KIND, label: "Report" },
+  { pluginId: "session", kind: BOARD_WEBSITE_WIDGET_KIND, label: "Website" },
 ];
 
 function findControlUiTabGatewayRoute(

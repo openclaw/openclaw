@@ -18,6 +18,7 @@ import {
   type BoardSize,
 } from "./board-layout.js";
 import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
+import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 export type BoardWidgetHtmlDocument = {
@@ -234,6 +235,10 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
   }
   if (params.content.pluginKind === BOARD_REPORT_WIDGET_KIND) {
     parseBoardReport(params.content.props);
+    return;
+  }
+  if (params.content.pluginKind === BOARD_WEBSITE_WIDGET_KIND) {
+    parseBoardWebsite(params.content.props);
     return;
   }
   const propsBytes = Buffer.byteLength(JSON.stringify(params.content.props ?? {}), "utf8");

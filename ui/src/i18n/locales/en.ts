@@ -3753,6 +3753,11 @@ export const en: TranslationMap & {
       kindHtml: "HTML",
       kindPlugin: "Plugin",
       kindReport: "Report",
+      kindWebsite: "Website",
+      websiteOpen: "Open website",
+      websiteEmbedHint: "If this site does not load here, open it in a new tab.",
+      websiteSameOrigin:
+        "Open this website in a new tab. Gateway and Control UI pages cannot be embedded in a website widget.",
       pluginLoading: "Loading plugin widget…",
       disabledPlugin: "Widget from disabled plugin {pluginId}",
     },
