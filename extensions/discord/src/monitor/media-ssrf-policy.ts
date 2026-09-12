@@ -22,7 +22,7 @@ function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | un
   return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
-/** Merges caller network policy with the Discord-owned CDN allowlist. */
+/** Merges caller hostname lists with the Discord CDN allowlist. */
 export function resolveDiscordCdnPolicy(policy?: SsrFPolicy): SsrFPolicy {
   if (!policy) {
     return DISCORD_MEDIA_SSRF_POLICY;
@@ -35,9 +35,18 @@ export function resolveDiscordCdnPolicy(policy?: SsrFPolicy): SsrFPolicy {
     DISCORD_MEDIA_SSRF_POLICY.allowedHostnames,
     policy.allowedHostnames,
   );
+  const {
+    allowPrivateNetwork: _allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: _dangerouslyAllowPrivateNetwork,
+    allowIpv6UniqueLocalRange: _allowIpv6UniqueLocalRange,
+    hostnameAllowlist: _hostnameAllowlist,
+    allowedHostnames: _allowedHostnames,
+    allowRfc2544BenchmarkRange: _allowRfc2544BenchmarkRange,
+    ...callerRest
+  } = policy;
   return {
     ...DISCORD_MEDIA_SSRF_POLICY,
-    ...policy,
+    ...callerRest,
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
     allowRfc2544BenchmarkRange:
