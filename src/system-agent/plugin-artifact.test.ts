@@ -33,7 +33,7 @@ vi.mock("./inference-route.js", () => ({
   sameDefaultInferenceRoute: vi.fn(),
 }));
 vi.mock("./audit.js", () => ({ appendSystemAgentAuditEntry: mocks.audit }));
-vi.mock("../cli/plugins-install-config.js", () => ({
+vi.mock("../plugins/install-config.js", () => ({
   loadConfigForInstall: async () => ({ config: {}, baseHash: "config", writeOptions: {} }),
 }));
 vi.mock("../plugins/management-install.js", () => ({ installManagedPluginSource: mocks.install }));

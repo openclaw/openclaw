@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
+  configWriteMock,
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginSnapshotReportMock,
   loadPluginManifestRegistryMock,
@@ -114,7 +115,6 @@ describe("plugin install persistence warning audiences", () => {
     async (audience) => {
       const { persistPluginInstall } = await import("./install-persistence.js");
       const warn = vi.fn();
-      const onCommitted = vi.fn();
       const cleanupDetail = "npm stderr PRIVATE_NPM_MARKER /private/previous-source/workboard";
       const refreshDetail = "PRIVATE_REFRESH_MARKER /private/registry-source/workboard";
       const configuredSource = "/private/configured-source/workboard/index.js";
@@ -137,7 +137,7 @@ describe("plugin install persistence warning audiences", () => {
         warnings: [cleanupDetail],
       });
       refreshPluginRegistryMock.mockImplementationOnce(async () => {
-        expect(onCommitted).toHaveBeenCalledExactlyOnceWith();
+        expect(configWriteMock).toHaveBeenCalledOnce();
         throw new Error(refreshDetail);
       });
       buildPluginSnapshotReportMock.mockReturnValue({
@@ -149,7 +149,6 @@ describe("plugin install persistence warning audiences", () => {
         snapshot,
         pluginId: "workboard",
         install,
-        onCommitted,
         ...(audience === "management" ? { persistenceLogger: { warn } } : {}),
       });
 

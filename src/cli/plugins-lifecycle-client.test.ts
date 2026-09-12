@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 
-const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn() }));
+const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn() }));
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.call }));
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({ gateway: { port: 18789 } }) }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
 const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
 
 describe("plugin lifecycle CLI transport", () => {
   beforeEach(() => {
     mocks.lock.mockReset().mockResolvedValue({ port: 19001 });
+    mocks.config.mockReset().mockReturnValue({ gateway: { port: 18789 } });
     mocks.call.mockReset().mockResolvedValue({ runtime: { generation: 2 } });
   });
 
@@ -22,6 +23,24 @@ describe("plugin lifecycle CLI transport", () => {
         ignoreEnvUrlOverride: true,
         requiredMethods: ["plugins.refresh", "plugins.reload"],
         scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("leaves plugin config validation to the install owner when dispatching recovery", async () => {
+    mocks.config.mockImplementation(() => {
+      throw Object.assign(new Error("owned plugin path is missing"), { code: "INVALID_CONFIG" });
+    });
+    const gateway = await resolvePluginLifecycleGateway();
+    expect(gateway).not.toBeNull();
+    await expect(
+      gateway!("plugins.install", { source: "local", path: "/replacement" }),
+    ).resolves.toEqual({ runtime: { generation: 2 } });
+    expect(mocks.call).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugins.install",
+        localPortOverride: 19001,
+        ignoreEnvUrlOverride: true,
       }),
     );
   });

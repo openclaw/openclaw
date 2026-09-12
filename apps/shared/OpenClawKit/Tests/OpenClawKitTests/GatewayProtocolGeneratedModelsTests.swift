@@ -16,11 +16,45 @@ struct GatewayProtocolGeneratedModelsTests {
         switch request {
         case let .clawhub(value): #expect(value.acknowledgeinstallpolicywarning == expected)
         case let .official(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .npm(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .git(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .local(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .npmPack(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .marketplace(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .bundled(value): #expect(value.acknowledgeinstallpolicywarning == expected)
         }
         let actualJSON = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
         let expectedJSON = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
         #expect(actualJSON == expectedJSON)
+    }
+
+    @Test(arguments: [
+        #"{"source":"clawhub","packageName":"@fixture/plugin","version":"1.2.3","expectedPluginId":"fixture","expectedIntegrity":"sha512-fixture"}"#,
+        #"{"source":"official","pluginId":"fixture","version":"latest","pin":false}"#,
+        #"{"source":"npm","spec":"@fixture/plugin@1.2.3","pin":true,"expectedPluginId":"fixture","expectedIntegrity":"sha512-fixture"}"#,
+        #"{"source":"git","spec":"git:https://example.invalid/fixture.git#main"}"#,
+        #"{"source":"local","path":"/synthetic/plugins/fixture","link":false}"#,
+        #"{"source":"npm-pack","archivePath":"/synthetic/fixture.tgz"}"#,
+        #"{"source":"marketplace","marketplace":"fixture-market","plugin":"fixture"}"#,
+        #"{"source":"bundled","pluginId":"fixture","spec":"fixture-alias"}"#,
+    ])
+    func `install sources preserve optional intent and reject caller supplied trust`(json: String) throws {
+        var payload = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        payload["mode"] = "update"
+        payload["acknowledgeInstallPolicyWarning"] = true
+        payload["acknowledgeCapabilities"] = ["reviewToken": "reviewed-surface"]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let request = try JSONDecoder().decode(PluginsInstallParams.self, from: data)
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+        #expect(encoded == payload as NSDictionary)
+
+        payload["trustedSourceLinkedOfficialInstall"] = true
+        let callerTrusted = try JSONSerialization.data(withJSONObject: payload)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(PluginsInstallParams.self, from: callerTrusted)
+        }
     }
 
     @Test
@@ -38,8 +72,8 @@ struct GatewayProtocolGeneratedModelsTests {
 
     @Test(arguments: [true, false])
     func `optional install literal initializers preserve and validate supplied values`(literal: Bool) throws {
-        let clawhub = PluginsInstallParamsClawhub(packagename: "fixture", acknowledgeinstallpolicywarning: literal)
-        let official = PluginsInstallParamsOfficial(pluginid: "fixture", acknowledgeinstallpolicywarning: literal)
+        let clawhub = PluginsInstallParamsClawhub(acknowledgeinstallpolicywarning: literal, packagename: "fixture")
+        let official = PluginsInstallParamsOfficial(acknowledgeinstallpolicywarning: literal, pluginid: "fixture")
         #expect(clawhub.acknowledgeinstallpolicywarning == literal)
         #expect(official.acknowledgeinstallpolicywarning == literal)
         for request in [PluginsInstallParams.clawhub(clawhub), .official(official)] {

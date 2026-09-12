@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
-  resolvePluginInstallPreactionRequest,
   type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
+} from "../plugins/install-config.js";
+import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
+import { resolvePluginInstallPreactionRequest } from "./plugin-install-config-policy.js";
 
 const fixture = vi.hoisted(() => ({
   bundledPath: "",

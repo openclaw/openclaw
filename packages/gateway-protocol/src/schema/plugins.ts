@@ -578,20 +578,64 @@ export const PluginsInspectResultSchema = closedObject({
   catalog: Type.Optional(PluginsCatalogGetResultSchema),
 });
 
-/** Trusted official-catalog or acknowledged ClawHub install request. */
+const PluginInstallOptions = {
+  mode: Type.Optional(Type.Union([Type.Literal("install"), Type.Literal("update")])),
+  acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
+  acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
+};
+
+/** Source intent only; install provenance and capability review remain host-owned. */
 export const PluginsInstallParamsSchema = Type.Union([
   closedObject({
+    ...PluginInstallOptions,
     source: Type.Literal("clawhub"),
     packageName: NonEmptyString,
     version: Type.Optional(NonEmptyString),
-    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
-    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
+    expectedPluginId: Type.Optional(NonEmptyString),
+    expectedIntegrity: Type.Optional(NonEmptyString),
   }),
   closedObject({
+    ...PluginInstallOptions,
     source: Type.Literal("official"),
     pluginId: NonEmptyString,
-    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
-    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
+    version: Type.Optional(Type.Literal("latest")),
+    pin: Type.Optional(Type.Boolean()),
+  }),
+  closedObject({
+    ...PluginInstallOptions,
+    source: Type.Literal("npm"),
+    spec: NonEmptyString,
+    pin: Type.Optional(Type.Boolean()),
+    expectedPluginId: Type.Optional(NonEmptyString),
+    expectedIntegrity: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...PluginInstallOptions,
+    source: Type.Literal("git"),
+    spec: NonEmptyString,
+  }),
+  closedObject({
+    ...PluginInstallOptions,
+    source: Type.Literal("local"),
+    path: NonEmptyString,
+    link: Type.Optional(Type.Boolean()),
+  }),
+  closedObject({
+    ...PluginInstallOptions,
+    source: Type.Literal("npm-pack"),
+    archivePath: NonEmptyString,
+  }),
+  closedObject({
+    ...PluginInstallOptions,
+    source: Type.Literal("marketplace"),
+    marketplace: NonEmptyString,
+    plugin: NonEmptyString,
+  }),
+  closedObject({
+    ...PluginInstallOptions,
+    source: Type.Literal("bundled"),
+    pluginId: NonEmptyString,
+    spec: Type.Optional(NonEmptyString),
   }),
 ]);
 

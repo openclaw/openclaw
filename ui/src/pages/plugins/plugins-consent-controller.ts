@@ -298,9 +298,11 @@ export class PluginsConsentController {
       ?.plugins.find(
         (plugin) =>
           plugin.installed &&
-          (request.source === "official"
+          (request.source === "official" || request.source === "bundled"
             ? plugin.id === request.pluginId
-            : plugin.packageName === request.packageName),
+            : request.source === "clawhub"
+              ? plugin.packageName === request.packageName
+              : "expectedPluginId" in request && plugin.id === request.expectedPluginId),
       );
     const messages = this.host.getMessages();
     const saved =
@@ -391,9 +393,9 @@ export class PluginsConsentController {
             isCurrent,
           );
           if (isCurrent()) {
-            const currentObserver = this.mutationObservers.get(installIdentity);
+            const savedInstallObserver = this.mutationObservers.get(installIdentity);
             this.mutationObservers.delete(installIdentity);
-            currentObserver?.onFailure?.(message.text, pluginId);
+            savedInstallObserver?.onFailure?.(message.text, pluginId);
           }
           return;
         }

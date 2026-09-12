@@ -4,7 +4,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { PluginsInspectResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
@@ -21,10 +20,8 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
   if (!owner) {
     return null;
   }
-  const config = getRuntimeConfig();
   const request = <T>(method: string, params: Record<string, unknown>) =>
     callGateway<T>({
-      config,
       method,
       params,
       localPortOverride: owner.port,
