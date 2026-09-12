@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { isCronSessionKey } from "../session-display.ts";
+import { isCronSessionKey, isHeartbeatSessionKey } from "../session-display.ts";
 import { parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   isUiGlobalSessionKey,
@@ -176,6 +176,13 @@ export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
   // system actor, so classifying them here would demand both toggles at once.
   if (isCronSessionKey(row.key)) {
     return false;
+  }
+  // Isolated heartbeat runs are machine-created probes that carry derived
+  // labels, so the provenance checks below would keep them visible. A
+  // user-configured base that itself ends in `:heartbeat` hides with them and
+  // returns with the same toggle.
+  if (isHeartbeatSessionKey(row.key)) {
+    return true;
   }
   if (row.createdActor?.type === "system") {
     return true;

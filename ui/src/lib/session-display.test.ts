@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isCronSessionKey,
+  isHeartbeatSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
@@ -25,6 +26,23 @@ describe("isCronSessionKey", () => {
     ["", false],
   ] as const)("retains automation classification for %j", (key, expected) => {
     expect(isCronSessionKey(key)).toBe(expected);
+  });
+});
+
+describe("isHeartbeatSessionKey", () => {
+  it.each([
+    ["agent:main:alerts:heartbeat", true],
+    [" AGENT:MAIN:ALERTS:HEARTBEAT ", true],
+    ["agent:architect:discord:channel:1544678697813151804:heartbeat", true],
+    // Wake-triggered re-entry collapses to repeated suffixes.
+    ["agent:main:alerts:heartbeat:heartbeat", true],
+    ["alerts:heartbeat", true],
+    ["agent:main:alerts", false],
+    ["heartbeat", true],
+    ["agent:main:heartbeatwatch", false],
+    ["", false],
+  ] as const)("retains system classification for %j", (key, expected) => {
+    expect(isHeartbeatSessionKey(key)).toBe(expected);
   });
 });
 

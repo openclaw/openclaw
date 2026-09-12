@@ -342,6 +342,14 @@ export function isCronSessionKey(key: string): boolean {
   );
 }
 
+// The heartbeat runner keys isolated runs as `<base>:heartbeat` (and repeated
+// suffixes for wake-triggered re-entry), so the trailing segment is a stable
+// routing fact like the cron segment above.
+export function isHeartbeatSessionKey(key: string): boolean {
+  const parts = normalizeLowercaseStringOrEmpty(key).split(":").filter(Boolean);
+  return parts[parts.length - 1] === "heartbeat";
+}
+
 // Wire kinds exclude cron; labels, sorting and grouping share this display classification.
 export function resolveSessionDisplayKind(
   row: GatewaySessionRow,

@@ -441,6 +441,17 @@ describe("isSystemCreatedSessionRow", () => {
       { key: "agent:main:cron:job", createdVia: "cron", createdActor: { type: "system" } },
       false,
     ],
+    [
+      // Heartbeat poll rows carry a derived title, so the provenance checks
+      // alone keep them visible and they eat a limited sidebar slot.
+      "heartbeat run row with a derived label is system",
+      {
+        key: "agent:architect:discord:channel:1544678697813151804:heartbeat",
+        createdVia: "run",
+        label: "discord:g-1544678697813151804-heartbeat",
+      },
+      true,
+    ],
   ] as const)("%s", (_name, fields, expected) => {
     expect(isSystemCreatedSessionRow({ ...base, ...fields } as GatewaySessionRow)).toBe(expected);
   });
