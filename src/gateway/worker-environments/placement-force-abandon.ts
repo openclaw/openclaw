@@ -133,7 +133,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         forceLocalClaim: true,
       });
     }
-    if (current && current.state !== "failed") {
+    if (current && (current.state !== "failed" || current.recoveryError !== recoveryError)) {
       placements.fail({
         sessionId: current.sessionId,
         expectedGeneration: current.generation,

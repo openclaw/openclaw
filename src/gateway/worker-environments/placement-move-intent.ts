@@ -488,6 +488,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
                   sessionId,
                   ...source,
                   expectedGeneration: source.generation,
+                  ...(abandonSource ? { allowPendingWorkspaceResult: true } : {}),
                 },
                 timestamp,
               );

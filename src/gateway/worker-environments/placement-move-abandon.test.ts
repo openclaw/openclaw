@@ -418,6 +418,69 @@ describe("offline device placement abandonment", () => {
     expect(beforeMoveBegin).toHaveBeenCalledOnce();
   });
 
+  it("forces an offline paired device having an existing pending cloud workspace result onto the Gateway", async () => {
+    const harness = createHarness(database, placements);
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    const claim = placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "offline-device-pending-claim",
+      runId: "offline-device-pending-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    placements.markWorkspaceResultPending(claim);
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+
+    await expect(harness.service.move(requestFor(active, true))).resolves.toMatchObject({
+      state: "local",
+      turnClaim: null,
+    });
+
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(placements.validateTurnClaim(claim)).toBe(false);
+    expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+  });
+
+  it("refuses an ordinary non-abandoning move for an offline paired device with an existing pending cloud workspace result", async () => {
+    const harness = createHarness(database, placements);
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    const claim = placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "offline-device-preserve-claim",
+      runId: "offline-device-preserve-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placements.markWorkspaceResultPending(claim);
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+
+    await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
+      `Cannot drain session ${active.sessionId} with a pending cloud workspace result`,
+    );
+
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(placements.get(active.sessionId)).toMatchObject({
+      state: "active",
+      generation: active.generation,
+    });
+  });
+
   it("forces an offline remote-exec device onto the Gateway without waiting for its local claim", async () => {
     const harness = createHarness(database, placements);
     const active = await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
@@ -696,6 +759,43 @@ describe("offline device placement abandonment", () => {
     await restarted.service.reconcile();
 
     expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
+    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(restarted.log).not.toContain("workspace:reconcile");
+  });
+
+  it("recovers a crash after durable drain when a pending cloud workspace result exists", async () => {
+    const harness = createHarness(database, placements, { failMoveAfterBegin: true });
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+
+    const claim = placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "crash-pending-claim",
+      runId: "crash-pending-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    placements.markWorkspaceResultPending(claim);
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+
+    await expect(harness.service.move(requestFor(active))).rejects.toThrow(
+      "move barrier interrupted",
+    );
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restarted = createHarness(database, restartedStore);
+    restarted.markEnvironmentNodeDeviceId("device-1");
+    await restarted.service.reconcile();
+
+    expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
+    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(restartedStore.validateTurnClaim(claim)).toBe(false);
     expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
     expect(restarted.log).not.toContain("workspace:reconcile");
   });
