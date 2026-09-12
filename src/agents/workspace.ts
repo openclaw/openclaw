@@ -1345,14 +1345,9 @@ function resolveBootstrapSessionContext(
   return typeof session === "string" ? { sessionKey: session } : (session ?? {});
 }
 
-const NON_PRIVATE_ROOT_PROFILE_FILENAMES = new Set([
-  DEFAULT_USER_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
-]);
-
 const ROOT_MEMORY_ONLY = new Set([DEFAULT_MEMORY_FILENAME]);
 
-function filterRootMemoryOnlyBootstrapFiles(
+function filterRootMemoryBootstrapFiles(
   files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
 ): WorkspaceBootstrapFile[] {
@@ -1380,34 +1375,6 @@ function filterRootMemoryOnlyBootstrapFiles(
   });
 }
 
-function filterNonPrivateRootProfileBootstrapFiles(
-  files: WorkspaceBootstrapFile[],
-  workspaceRoot?: string,
-): WorkspaceBootstrapFile[] {
-  if (!workspaceRoot) {
-    return files.filter((file) => !NON_PRIVATE_ROOT_PROFILE_FILENAMES.has(file.name));
-  }
-  const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
-  const rootProfilePaths = new Set(
-    [...NON_PRIVATE_ROOT_PROFILE_FILENAMES].map((name) => path.join(resolvedWorkspaceRoot, name)),
-  );
-  return files.filter((file) => {
-    if (typeof file.path !== "string") {
-      return true;
-    }
-    const filePath = file.path.trim();
-    if (!filePath) {
-      return true;
-    }
-    const resolvedPath = path.isAbsolute(filePath)
-      ? path.resolve(filePath)
-      : filePath.startsWith("~")
-        ? resolveUserPath(filePath)
-        : path.resolve(resolvedWorkspaceRoot, filePath);
-    return !rootProfilePaths.has(resolvedPath);
-  });
-}
-
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
@@ -1418,11 +1385,9 @@ export function filterBootstrapFilesForSession(
   const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
   const isSharedContext = effectiveChatType === "group" || effectiveChatType === "channel";
   const isNonPrivate = isSubagent || isCron || isSharedContext;
-  const privacyFilteredFiles = isSharedContext
-    ? filterNonPrivateRootProfileBootstrapFiles(files, workspaceDir)
-    : isNonPrivate
-      ? filterRootMemoryOnlyBootstrapFiles(files, workspaceDir)
-      : files;
+  const privacyFilteredFiles = isNonPrivate
+    ? filterRootMemoryBootstrapFiles(files, workspaceDir)
+    : files;
   if (isSubagent) {
     return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
