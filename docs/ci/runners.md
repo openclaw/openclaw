@@ -66,9 +66,18 @@ its 12-GiB heap: overlap requires at least two available CPUs and 25.5 GiB of
 observed remaining capacity, including 768 MiB of native headroom per compiler.
 An unknown finite-cgroup usage value or insufficient capacity keeps compilation
 serial. The requested label does not establish those facts. Browser workers,
-test inventory, build-before-test ordering, deadlines, hosted fallbacks, and job
+test inventory, build-before-test ordering, hosted fallbacks, and job
 count are unchanged; this placement adds no runner registrations. Compiler-only
 measurements do not establish CI timing; exact-head CI must measure the complete job.
+
+The real-Gateway job has a 40-minute budget when its existing routing selects
+`ubuntu-24.04`, and 20 minutes on Blacksmith. In [run 34707873095, attempt 2](https://github.com/openclaw/openclaw/actions/runs/34707873095/attempts/2),
+7m42s elapsed before the browser suite began; the 20-minute job limit then
+canceled a progressing suite before its widget cases. The hosted budget covers
+the complete setup, private artifact build, and test workload. Individual test
+and subprocess deadlines, test inventory, workers, routing, and concurrency
+limits apply unchanged on both routes. This adds no jobs or runner registrations
+and makes no claim that execution is faster.
 
 The full CLI compact bin requests the 16-class after packing, retaining its two
 Vitest workers and serial companion groups. In a controlled 2026-09-10 Linux

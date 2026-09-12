@@ -6186,6 +6186,7 @@ setImmediate(() => {
     const expectedHostedTimeouts = {
       android: 35,
       "build-artifacts": 35,
+      "checks-ui-e2e-real-gateway": 40,
     } as const;
     const routeDependentTimeoutJobs = Object.entries(jobs)
       .filter(([, job]) => {
@@ -6272,6 +6273,31 @@ setImmediate(() => {
             evaluateTimeout("android", { ...context, matrix: { task, lint } }),
             `${label}: ${task}, lint=${lint}`,
           ).toBe(extendedBudget ? 35 : 20);
+        }
+      }
+    }
+
+    const realGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
+    for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
+      for (const repository of ["openclaw/openclaw", "contributor/openclaw"]) {
+        for (const authorAssociation of ["CONTRIBUTOR", "NONE"]) {
+          for (const runnerBackend of ["", "blacksmith", "github", "hybrid"] as const) {
+            for (const runAttempt of [1, 2]) {
+              const context = {
+                ...canonicalPullRequest,
+                eventName,
+                repository,
+                authorAssociation,
+                runnerBackend,
+                runAttempt,
+              };
+              const runner = evaluateWorkflowExpression(realGateway["runs-on"], context);
+              expect(
+                evaluateTimeout("checks-ui-e2e-real-gateway", context),
+                JSON.stringify(context),
+              ).toBe(runner === "ubuntu-24.04" ? 40 : 20);
+            }
+          }
         }
       }
     }
@@ -13855,7 +13881,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
     expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
     expect(uiE2eRealGateway.if).toBe(uiE2e.if);
-    expect(uiE2eRealGateway["timeout-minutes"]).toBe(20);
     expect(uiE2eRealGateway.env).toBeUndefined();
 
     const uiE2eSetup = expectDefined(

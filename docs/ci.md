@@ -15,6 +15,8 @@ For the published-upgrade regression gate, see [selection and routing](/ci/scope
 
 Docs-only `main` pushes skip CI. Every canonical `main` push admitted by the CI workflow selects the published-upgrade regression gate.
 
+Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
+
 | Page                                                           | Read it when                                                                                                        |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | [CI pipeline jobs](/ci/pipeline)                               | The job table, the fail-fast order, and the Control UI size budgets.                                                |
