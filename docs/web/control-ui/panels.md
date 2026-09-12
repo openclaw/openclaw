@@ -77,6 +77,8 @@ Eligibility is per session and per host. Gateway-local sessions start the provid
 
 Standalone operator sessions, including the main terminal page and terminal focus presentation, are connection-owned. Leaving the main terminal route does not close its PTY; returning to its terminal session URL reattaches it. The main page and the dock keep separate terminal tabs. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
+Closing a connecting tab cancels that opening or attachment request. Other tabs and queued requests remain available, and a late response does not reopen the cancelled tab or display its error.
+
 Conversation-owned sessions opened from a Chat session's Terminal panel are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing an established viewer tab detaches only that browser. Conversation-owned PTYs remain until the exact-session agent closes them, their shell exits, the session is archived, policy disables them, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned.
 
 All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
