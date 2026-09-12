@@ -64,7 +64,7 @@ In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `u
 </Note>
 
 <Note>
-Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
+Bundled plugins ship with OpenClaw. A little over half are enabled by default — mostly model and speech providers, plus a few others such as the bundled browser plugin. The rest require `plugins enable`. Enabled is not the same as active: a provider plugin that is on by default still does nothing until you configure its credentials, so `plugins list` showing a plugin as enabled does not mean it is doing any work yet.
 
 Native OpenClaw plugins ship `openclaw.plugin.json` with an inline JSON Schema (`configSchema`, even if empty). Compatible bundles use their own bundle manifests instead.
 
