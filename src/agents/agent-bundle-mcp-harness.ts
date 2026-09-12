@@ -414,28 +414,24 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
 
     const filteredTools = applyHarnessToolPolicy(tools, params);
     const filteredAdvertised = applyHarnessToolPolicy(advertisedTools, params);
-    // Requester-scoped tools run as dynamic tools, so prompt-required MCP calls must
-    // pass the same per-call approval gate as the configured path before the bridge
-    // dispatches them. Gated-out tools drop from the advertised surface too so both
-    // lists stay aligned by name for fingerprint stability.
-    const gatedExecutable = applyConfiguredMcpApproval(filteredTools, {
-      fullPermission: params.autoApproveCodexAppServerApprovals === true,
-      ...(params.requestInteractiveCodexApproval
-        ? { requestApproval: params.requestInteractiveCodexApproval }
-        : {}),
-      onOmitted: (message) => params.warn?.(message),
-    });
-    const gatedExecutableNames = new Set(gatedExecutable.map((tool) => tool.name));
-    const gatedAdvertised = filteredAdvertised.filter((tool) =>
-      gatedExecutableNames.has(tool.name),
-    );
-    const allowedNames = new Set(gatedAdvertised.map((tool) => tool.name));
-    const executableTools = gatedExecutable.filter((tool) => allowedNames.has(tool.name));
+    // Requester-scoped tools run as dynamic tools, so every prompt-required MCP
+    // call passes the same per-call approval gate as the configured path before
+    // the bridge dispatches it — whenever the caller provides an approval
+    // channel. OpenClaw's own requester turns always provide one. Callers that
+    // pass no approval callback keep their pre-gate behavior: tools stay
+    // registered on both surfaces and dispatch ungated, so a caller's tool
+    // surface never silently loses availability across upgrades.
+    const executableTools = params.requestInteractiveCodexApproval
+      ? applyConfiguredMcpApproval(filteredTools, {
+          fullPermission: params.autoApproveCodexAppServerApprovals === true,
+          requestApproval: params.requestInteractiveCodexApproval,
+        })
+      : filteredTools;
 
     let disposed = false;
     return {
       tools: executableTools,
-      advertisedTools: gatedAdvertised,
+      advertisedTools: filteredAdvertised,
       dispose: async () => {
         if (disposed) {
           return;

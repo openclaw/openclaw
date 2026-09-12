@@ -875,25 +875,31 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     await result!.dispose();
   });
 
-  it("omits prompt-required requester tools from both surfaces when no callback is available", async () => {
-    const runtime = makeRuntime({ sessionId: "session-failclosed", requesterSenderId: "authed" });
+  it("dispatches prompt-required requester tools ungated when no callback is available", async () => {
+    const runtime = makeRuntime({ sessionId: "session-failopen", requesterSenderId: "authed" });
     runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "prompt";
     const callTool = vi.spyOn(runtime, "callTool");
     mocks.setResolveImpl(async () => runtime);
-    const warnings: string[] = [];
 
     const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
-      sessionId: "session-failclosed",
+      sessionId: "session-failopen",
       workspaceDir: "/workspace",
       requesterSenderId: "authed",
-      warn: (message) => warnings.push(message),
     });
 
     expect(result).toBeDefined();
-    expect(result!.tools).toEqual([]);
-    expect(result!.advertisedTools).toEqual([]);
-    expect(callTool).not.toHaveBeenCalled();
-    expect(warnings.join(" ")).toContain("requires interactive Codex approval");
+    // Fail open by explicit caller-compatibility decision: callers that pass no
+    // approval callback keep their pre-gate behavior — the tool stays exposed
+    // and dispatches ungated, so a caller's tool surface never loses
+    // availability across upgrades. OpenClaw's own requester turns always pass
+    // an approval callback, so this branch is foreign-SDK-caller only.
+    expect(result!.tools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
+    expect(result!.advertisedTools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
+
+    await expect(result!.tools[0]!.execute("ungated", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "live:inbox:authed" }],
+    });
+    expect(callTool).toHaveBeenCalledOnce();
     await result!.dispose();
   });
 
@@ -938,15 +944,25 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     const callTool = vi.spyOn(runtime, "callTool");
     mocks.setResolveImpl(async () => runtime);
 
-    // No callback: prompt-required tools drop from both surfaces; only the trusted
-    // bootstrap survives.
+    // No callback: fail open by explicit caller-compatibility decision — all
+    // tools stay exposed on both surfaces and dispatch ungated. The trusted
+    // bootstrap exemption still matters when a callback IS provided (gated
+    // below), where only the bootstrap reaches the server without approval.
     const failClosed = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-connect-provenance",
       workspaceDir: "/workspace",
       requesterSenderId: "authed",
     });
-    expect(failClosed!.tools.map((tool) => tool.name)).toEqual(["auth-hub__connect"]);
-    expect(failClosed!.advertisedTools.map((tool) => tool.name)).toEqual(["auth-hub__connect"]);
+    expect(failClosed!.tools.map((tool) => tool.name)).toEqual([
+      "auth-hub__connect",
+      "drive__connect",
+      "user-mail__inbox",
+    ]);
+    expect(failClosed!.advertisedTools.map((tool) => tool.name)).toEqual([
+      "auth-hub__connect",
+      "drive__connect",
+      "user-mail__inbox",
+    ]);
     await failClosed!.dispose();
 
     // With a callback: the real server capability named connect is gated like any
