@@ -21,7 +21,7 @@ import {
   persistFollowupQueues,
   restoreFollowupQueues,
 } from "./queue/persist.js";
-import { FOLLOWUP_QUEUES, getFollowupQueue } from "./queue/state.js";
+import { FOLLOWUP_QUEUES, getFollowupQueue, retireFollowupQueueForRestart } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -753,6 +753,51 @@ describe("followup queue drain restart persistence", () => {
     } finally {
       replaceSpy.mockRestore();
       FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+    }
+  });
+
+  it("keeps the durable row when an orderly restart retires the queue", () => {
+    const tmpDir = tempDirs.make("openclaw-queue-restart-retire-");
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-restart-retire-${Date.now()}`;
+    const prompt = "queued before restart";
+
+    try {
+      const queue = getFollowupQueue(key, { mode: "followup", debounceMs: 0, cap: 50 });
+      queue.items.push(createRun({ prompt }));
+      persistFollowupQueues();
+      expect(followupQueueEntryContainsPrompt(key, prompt)).toBe(true);
+
+      // Restart retirement drops process-local authority only. Deleting the row
+      // here would strand the follow-up: startup recovery is what replays it.
+      retireFollowupQueueForRestart(key);
+      expect(FOLLOWUP_QUEUES.get(key)).toBeUndefined();
+      expect(followupQueueEntryContainsPrompt(key, prompt)).toBe(true);
+
+      // A later snapshot driven by an unrelated key must not delete it either.
+      const otherKey = `${key}-other`;
+      const other = getFollowupQueue(otherKey, { mode: "followup", debounceMs: 0, cap: 50 });
+      other.items.push(createRun({ prompt: "unrelated" }));
+      persistFollowupQueues();
+      expect(followupQueueEntryContainsPrompt(key, prompt)).toBe(true);
+
+      FOLLOWUP_QUEUES.delete(otherKey);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+      expect(FOLLOWUP_QUEUES.get(key)?.items[0]?.prompt).toBe(prompt);
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      FOLLOWUP_QUEUES.delete(`${key}-other`);
       clearRestoredPendingDrainKeysForTest();
       clearFollowupQueuesRestoredFlagForTest();
       if (originalStateDir === undefined) {
