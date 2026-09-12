@@ -564,43 +564,76 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // media blocking apply regardless of which stream was chosen.
   const privacyCfg = attempt.config?.privacy;
   if (privacyCfg?.enabled) {
-    const selectedStreamFn = session.agent.streamFn;
-    session.agent.streamFn = wrapStreamFnWithMessageTransform(selectedStreamFn, (messages) => {
-      if (privacyCfg.pii?.enabled !== false && privacyCfg.pii?.userMessages === true) {
-        return messages.map((msg) => {
-          if (msg.role !== "user") {
-            return msg;
-          }
-          if (typeof msg.content === "string") {
-            const redacted = redactPiiText(msg.content, privacyCfg);
-            return redacted !== msg.content ? { ...msg, content: redacted } : msg;
-          }
+    const redactUserMessages =
+      privacyCfg.pii?.enabled !== false && privacyCfg.pii?.userMessages === true;
+    const blockMedia = privacyCfg.media?.blockAttachments === true;
+    if (redactUserMessages || blockMedia) {
+      const mediaFactsSymbol = Symbol.for("openclaw.runtimePromptMediaFacts");
+      const selectedStreamFn = session.agent.streamFn;
+      session.agent.streamFn = wrapStreamFnWithMessageTransform(selectedStreamFn, (messages) =>
+        messages.map((msg) => {
+          let result = msg;
           const content = (msg as { content?: unknown }).content;
-          if (Array.isArray(content)) {
-            let changed = false;
-            const redactedContent = content.map((block: unknown) => {
-              if (
-                block &&
-                typeof block === "object" &&
-                (block as { type?: string }).type === "text" &&
-                typeof (block as { text?: unknown }).text === "string"
-              ) {
-                const text = (block as { text: string }).text;
-                const redacted = redactPiiText(text, privacyCfg);
-                if (redacted !== text) {
-                  changed = true;
-                  return { ...block, text: redacted };
-                }
-              }
-              return block;
-            }) as typeof content;
-            return changed ? ({ ...msg, content: redactedContent } as typeof msg) : msg;
+
+          // Media blocking: strip image blocks from all messages.
+          if (blockMedia && Array.isArray(content)) {
+            const filtered = content.filter(
+              (block: unknown) =>
+                !(
+                  block &&
+                  typeof block === "object" &&
+                  (block as { type?: string }).type === "image"
+                ),
+            );
+            if (filtered.length !== content.length) {
+              result = { ...result, content: filtered } as typeof msg;
+            }
           }
-          return msg;
-        });
-      }
-      return messages;
-    });
+
+          // PII redaction: redact user message text.
+          if (redactUserMessages && result.role === "user") {
+            const userContent = (result as { content?: unknown }).content;
+            if (typeof userContent === "string") {
+              const redacted = redactPiiText(userContent, privacyCfg);
+              if (redacted !== userContent) {
+                result = { ...result, content: redacted } as typeof msg;
+              }
+            } else if (Array.isArray(userContent)) {
+              let changed = false;
+              const redactedContent = userContent.map((block: unknown) => {
+                if (
+                  block &&
+                  typeof block === "object" &&
+                  (block as { type?: string }).type === "text" &&
+                  typeof (block as { text?: unknown }).text === "string"
+                ) {
+                  const text = (block as { text: string }).text;
+                  const redacted = redactPiiText(text, privacyCfg);
+                  if (redacted !== text) {
+                    changed = true;
+                    return { ...block, text: redacted };
+                  }
+                }
+                return block;
+              }) as typeof userContent;
+              if (changed) {
+                result = { ...result, content: redactedContent } as typeof msg;
+              }
+            }
+          }
+
+          // Preserve non-enumerable runtime media facts symbol on cloned messages.
+          if (result !== msg && mediaFactsSymbol in msg) {
+            Object.defineProperty(result, mediaFactsSymbol, {
+              configurable: true,
+              value: (msg as Record<PropertyKey, unknown>)[mediaFactsSymbol],
+            });
+          }
+
+          return result;
+        }),
+      );
+    }
   }
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
