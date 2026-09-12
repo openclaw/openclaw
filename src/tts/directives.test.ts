@@ -401,4 +401,20 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
     expect(cleaner.push("See [[note")).toBe("See ");
     expect(cleaner.flush()).toBe("[[note");
   });
+
+  it("hides markup when a chunk split lands between the two opening brackets", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("Intro [")).toBe("Intro ");
+    expect(cleaner.push("[tts:text]]hidden speech[[/tts:text]] visible")).toBe(" visible");
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it("hides markup when a chunk split lands between the two closing brackets", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+
+    expect(cleaner.push("Intro [[tts:text]]hidden speech[")).toBe("Intro ");
+    expect(cleaner.push("[/tts:text]] visible")).toBe(" visible");
+    expect(cleaner.flush()).toBe("");
+  });
 });

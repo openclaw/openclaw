@@ -144,9 +144,13 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
       while (index < input.length) {
         const tagStart = input.indexOf("[[", index);
         if (tagStart === -1) {
+          // A chunk can end on a single "["; hold it so the next chunk can
+          // complete "[[" instead of leaking markup or swallowing the rest.
+          const tail = input.endsWith("[") ? input.length - 1 : input.length;
           if (!insideHiddenTextBlock) {
-            output += input.slice(index);
+            output += input.slice(index, tail);
           }
+          pending = input.slice(tail);
           break;
         }
 
