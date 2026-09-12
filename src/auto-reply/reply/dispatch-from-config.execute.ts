@@ -151,6 +151,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       // delivery even when this dispatch has already returned.
                       try {
                         await waitForPendingDirectBlockReplyDelivery();
+                        if (
+                          dispatcher.getFailedCounts().block > 0 &&
+                          state.turnLedger.canAttemptFallback()
+                        ) {
+                          await dispatcher.waitForIdle();
+                        }
                       } catch (error) {
                         try {
                           await params.replyOptions?.onQueuedFollowupSettled?.();
