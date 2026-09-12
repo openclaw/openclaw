@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
@@ -164,12 +165,8 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
 
 function lastLogLine(tail: string | null | undefined): string | null {
   // Redact before clipping: a truncated URL can lose its credential delimiter.
-  const lines = formatUiExternalText(tail)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const last = lines.at(-1);
-  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+  const last = formatUiExternalText(tail).trim().split("\n").at(-1)?.trim();
+  return last ? truncateUtf16Safe(last, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
 /**

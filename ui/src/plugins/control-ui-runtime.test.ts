@@ -49,8 +49,18 @@ describe("native plugin asset admission", () => {
       resourceBasePath: "/console",
       error: null,
     },
+    {
+      scenario: "activation error at a Unicode boundary",
+      native: true,
+      remote: false,
+      requiresAuth: false,
+      loads: true,
+      activationError: `${"x".repeat(511)}😀tail`,
+      error: `${"x".repeat(511)}😀tail`,
+      reportedError: "x".repeat(511),
+    },
   ])(
-    "settles $scenario without loading protected modules",
+    "settles $scenario without leaving runtime state pending",
     async ({
       native,
       remote,
@@ -60,9 +70,14 @@ describe("native plugin asset admission", () => {
       requiresAuth = true,
       loads = false,
       resourceBasePath = "",
+      activationError,
+      reportedError = error,
     }) => {
       vi.stubGlobal("isSecureContext", secure);
-      vi.mocked(initializeControlUiPlugin).mockClear();
+      vi.mocked(initializeControlUiPlugin).mockReset();
+      if (activationError) {
+        vi.mocked(initializeControlUiPlugin).mockRejectedValue(new Error(activationError));
+      }
       const request = vi.fn(async (method: string) =>
         method === "plugins.controlUi.list"
           ? {
@@ -127,7 +142,12 @@ describe("native plugin asset admission", () => {
             ? [
                 [
                   "plugins.controlUi.report",
-                  { pluginId: "review", revision: "one", status: "failed", error },
+                  {
+                    pluginId: "review",
+                    revision: "one",
+                    status: "failed",
+                    error: reportedError,
+                  },
                 ],
               ]
             : [],

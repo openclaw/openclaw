@@ -502,6 +502,26 @@ describe("update status localization", () => {
     },
   );
 
+  it("keeps a shortened recorded cause on a Unicode boundary", () => {
+    installTranslations();
+    const projected = projectUpdateSentinel({
+      kind: "update",
+      status: "error",
+      ts: 1_000,
+      stats: {
+        reason: "build-failed",
+        steps: [
+          {
+            name: "build",
+            log: { exitCode: 1, stderrTail: `${"x".repeat(179)}😀tail` },
+          },
+        ],
+      },
+    });
+
+    expect(projected?.attempt?.failure?.detail).toBe("x".repeat(179));
+  });
+
   it("preserves unknown status details inside localized fallback guidance", () => {
     const translate = installTranslations();
 

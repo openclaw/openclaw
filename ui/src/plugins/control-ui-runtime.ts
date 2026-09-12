@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   PluginControlUiDiagnostic,
   PluginControlUiModule,
@@ -403,7 +404,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         status,
         ...(error === undefined
           ? {}
-          : { error: formatUiError(error, "Plugin UI activation failed.").slice(0, 512) }),
+          : {
+              error: truncateUtf16Safe(formatUiError(error, "Plugin UI activation failed."), 512),
+            }),
       });
     } catch (failure) {
       if (current()) {
