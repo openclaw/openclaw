@@ -541,23 +541,6 @@ export function listActiveCronRunReceiptJobIdsInDatabase(
   return new Set(activeRow(database, cronStoreKey(storePath)).map((row) => row.job_id));
 }
 
-export function inspectActiveCronRunReceipt(params: {
-  storePath: string;
-  jobId: string;
-  env?: NodeJS.ProcessEnv;
-}): CronRunReceiptRecoveryCandidate | undefined {
-  return withReceiptWrite(
-    "cron.run-receipt.recovery-inspect",
-    params.env ? { env: params.env } : {},
-    (database) =>
-      findActiveCronRunReceiptInDatabase({
-        database,
-        storePath: params.storePath,
-        jobId: params.jobId,
-      }),
-  );
-}
-
 export function isCronRunReceiptOwnerStale(
   candidate: CronRunReceiptRecoveryCandidate,
   nowMs = Date.now(),

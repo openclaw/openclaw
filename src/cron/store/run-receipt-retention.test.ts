@@ -12,9 +12,9 @@ import { cronStoreKey } from "./key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  inspectActiveCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "./run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "./run-receipt-store.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pending-retention-" });
 

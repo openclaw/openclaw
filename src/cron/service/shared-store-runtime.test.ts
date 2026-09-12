@@ -9,7 +9,7 @@ import {
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronJob } from "../types.js";
 

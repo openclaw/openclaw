@@ -13,7 +13,7 @@ import { createCronServiceState, type CronServiceDeps } from "./service/state.js
 import { findCronTaskRunRecoveryInDatabase } from "./service/task-runs.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-identity-" });
