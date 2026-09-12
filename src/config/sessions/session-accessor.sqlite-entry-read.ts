@@ -5,8 +5,12 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import type { SqliteSessionOwnerRow } from "./session-accessor.sqlite-owner-projection.js";
-import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
+import {
+  projectSqliteSessionParticipants,
+  projectSqliteSessionParticipantsBatch,
+} from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   parseSessionEntryJson as parseSessionEntryRow,
@@ -30,21 +34,14 @@ export type ResolvedSessionEntryRow = {
     SqliteSessionOwnerRow;
 };
 
-/** Decodes a fresh owned entry, including its nested JSON, owner and participant values. */
-export function parseReadableSqliteSessionEntryRow(
+function parseReadableSessionEntryData(
   database: Pick<OpenClawAgentDatabase, "db">,
   row: ResolvedSessionEntryRow["row"],
-  projection: "full" | "list" = "full",
+  projection: "full" | "list",
 ): SessionEntry | null {
   const parsed = parseSessionEntryRow(row, projection);
   if (parsed) {
-    const entry = projectSqliteSessionParticipants(database.db, row.session_key, parsed);
-    if (resolveDeliveryProvenCanonicalSessionKey(row.session_key, entry) !== row.session_key) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `non-canonical persisted row resolves to session key ${row.session_key}`,
-      );
-    }
-    return entry;
+    return parsed;
   }
   const retainedWindow =
     row.entry_json === "{}"
@@ -62,6 +59,57 @@ export function parseReadableSqliteSessionEntryRow(
   }
   throw canonicalSessionKeyMigrationRequiredError(
     `invalid persisted session row requires repair for ${row.session_key}`,
+  );
+}
+
+function validateDeliveryCanonicalSessionEntry(
+  sessionKey: string,
+  entry: SessionEntry,
+): SessionEntry {
+  if (resolveDeliveryProvenCanonicalSessionKey(sessionKey, entry) !== sessionKey) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${sessionKey}`,
+    );
+  }
+  return entry;
+}
+
+/** Decodes a fresh owned entry, including its nested JSON, owner and participant values. */
+export function parseReadableSqliteSessionEntryRow(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  row: ResolvedSessionEntryRow["row"],
+  projection: "full" | "list" = "full",
+): SessionEntry | null {
+  const parsed = parseReadableSessionEntryData(database, row, projection);
+  return parsed
+    ? validateDeliveryCanonicalSessionEntry(
+        row.session_key,
+        projectSqliteSessionParticipants(database.db, row.session_key, parsed),
+      )
+    : null;
+}
+
+/** Projects one selected row set without repeating participant reads for each entry. */
+export function parseReadableSqliteSessionEntryRows(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  rows: readonly ResolvedSessionEntryRow["row"][],
+  projection: "full" | "list" = "full",
+): SessionEntrySummary[] {
+  const parsedEntries = new Map<string, SessionEntry>();
+  for (const row of rows) {
+    const entry = parseReadableSessionEntryData(database, row, projection);
+    if (entry) {
+      parsedEntries.set(row.session_key, entry);
+    }
+  }
+  if (parsedEntries.size === 0) {
+    return [];
+  }
+  return [...projectSqliteSessionParticipantsBatch(database.db, parsedEntries)].map(
+    ([sessionKey, entry]) => ({
+      sessionKey,
+      entry: validateDeliveryCanonicalSessionEntry(sessionKey, entry),
+    }),
   );
 }
 
