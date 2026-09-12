@@ -33,10 +33,10 @@ export function registerSlackChannelEvents(params: {
     eventId: string;
     eventScope?: SlackEventScope;
   }) => {
-    const ctx = await params.ctx.readRuntimeContext();
+    const runtimeContext = await params.ctx.readRuntimeContext();
     if (
-      !ctx.isChannelAllowed({
-        teamId: paramsLocal.eventScope?.teamId ?? ctx.teamId,
+      !runtimeContext.isChannelAllowed({
+        teamId: paramsLocal.eventScope?.teamId ?? runtimeContext.teamId,
         channelId: paramsLocal.channelId,
         channelName: paramsLocal.channelName,
         channelType: "channel",
@@ -49,7 +49,7 @@ export function registerSlackChannelEvents(params: {
       channelId: paramsLocal.channelId,
       channelName: paramsLocal.channelName,
     });
-    const route = ctx.resolveSlackSystemEventRoute({
+    const route = runtimeContext.resolveSlackSystemEventRoute({
       channelId: paramsLocal.channelId,
       channelType: "channel",
       eventScope: paramsLocal.eventScope,

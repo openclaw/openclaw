@@ -407,11 +407,11 @@ export function createSlackCommandHandler(params: {
   trackEvent?: () => void;
   supportsExternalArgMenus?: () => boolean;
 }) {
-  const { ctx, account, trackEvent } = params;
-  const runtime = ctx.runtime;
-  const supportsInteractiveArgMenus = typeof ctx.app.action === "function";
+  const { ctx: monitor, account: startupAccount, trackEvent } = params;
+  const runtime = monitor.runtime;
+  const supportsInteractiveArgMenus = typeof monitor.app.action === "function";
   const slashCommand = resolveSlackSlashCommandConfig(
-    ctx.slashCommand ?? account.config.slashCommand,
+    monitor.slashCommand ?? startupAccount.config.slashCommand,
   );
 
   return async (p: {
@@ -455,10 +455,9 @@ export function createSlackCommandHandler(params: {
           }
         : createSlackResponseUrlBudget(respondWithoutBudget);
     const respond = responseBudget.respond;
-    const commandContext = ctx;
-    let cfg = ctx.cfg;
+    let cfg = monitor.cfg;
     try {
-      if (commandContext.shouldDropMismatchedSlackEvent?.(body)) {
+      if (monitor.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
         runtime.log?.(
           `slack: drop slash command from user=${command.user_id ?? "unknown"} channel=${command.channel_id ?? "unknown"} (mismatched app/team)`,
@@ -474,7 +473,7 @@ export function createSlackCommandHandler(params: {
         return false;
       }
       await ack();
-      const ctx = await commandContext.readRuntimeContext();
+      const ctx = await monitor.readRuntimeContext();
       cfg = ctx.cfg;
       const account = resolveSlackAccount({ cfg, accountId: params.account.accountId });
 

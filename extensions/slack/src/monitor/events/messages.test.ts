@@ -898,7 +898,16 @@ describe("registerSlackMessageEvents", () => {
     } as unknown as App;
     const ctx = createInboundSlackTestContext({
       app,
-      cfg: { channels: { slack: { enabled: true } } },
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            allowFrom: ["*"],
+            dm: { groupEnabled: true },
+          },
+        },
+      },
       defaultRequireMention: false,
     });
     const handleSlackMessage = vi.fn(async () => {});

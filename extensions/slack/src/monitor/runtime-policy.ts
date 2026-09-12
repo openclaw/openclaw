@@ -27,7 +27,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./config.runtime.js";
-import type { SlackMonitorContext } from "./context.js";
+import type { SlackMonitorContext } from "./context-types.js";
 import { assertEnterpriseSlackPolicyConfig } from "./enterprise-install.js";
 import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-support.js";
 import { formatUnknownError } from "./reconnect-policy.js";

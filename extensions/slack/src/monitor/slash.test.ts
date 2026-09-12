@@ -850,9 +850,7 @@ describe("Slack native command argument menus", () => {
     const testHarness = createArgMenusHarness();
     const runtimeLog = vi.fn();
     const runtimeError = vi.fn();
-    (
-      testHarness.ctx as { runtime: { log: typeof runtimeLog; error: typeof runtimeError } }
-    ).runtime = { log: runtimeLog, error: runtimeError };
+    testHarness.ctx.runtime = { log: runtimeLog, error: runtimeError };
 
     await registerCommands(testHarness.ctx, testHarness.account);
 
@@ -1032,7 +1030,7 @@ describe("Slack native command argument menus", () => {
   it("falls back to static menus when app.options() throws during registration", async () => {
     const testHarness = createArgMenusHarness();
     const runtimeLog = vi.fn();
-    (testHarness.ctx as { runtime: { log: typeof runtimeLog } }).runtime = { log: runtimeLog };
+    testHarness.ctx.runtime = { log: runtimeLog };
     testHarness.app.options = () => {
       throw new Error("Cannot read properties of undefined (reading 'listeners')");
     };
@@ -1945,13 +1943,18 @@ describe("slack slash command session metadata", () => {
       channelName: "directmessage",
       resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
     });
-    const { createSlackRuntimeContextReader } = await import("./runtime-policy.js");
-    const ctx = harness.ctx as import("./context.js").SlackMonitorContext;
-    ctx.cfg = { ...ctx.cfg, channels: { slack: { dmPolicy: "open", allowFrom: ["*"] } } };
-    ctx.accountId = "acct";
-    const sourceCfg = ctx.cfg;
+    const { createInboundSlackTestContext } =
+      await import("./message-handler/prepare.test-helpers.js");
+    const sourceCfg: OpenClawConfig = {
+      ...harness.ctx.cfg,
+      channels: { slack: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
     setRuntimeConfigSnapshot(sourceCfg, sourceCfg);
-    ctx.readRuntimeContext = createSlackRuntimeContextReader(ctx, "synthetic-lookup");
+    const ctx = createInboundSlackTestContext({ cfg: sourceCfg, accountId: "acct" });
+    Object.assign(ctx.app, harness.ctx.app);
+    ctx.resolveChannelName = async () => ({ name: "directmessage", type: "im" });
+    ctx.resolveUserName = harness.ctx.resolveUserName;
+    ctx.slashCommand = harness.ctx.slashCommand;
     const runtimeCfg = {
       ...sourceCfg,
       session: { dmScope: "per-channel-peer" },
@@ -1964,7 +1967,7 @@ describe("slack slash command session metadata", () => {
           ? "agent:main:slack:direct:U1"
           : "agent:main:main",
     }));
-    await registerCommands(harness.ctx, harness.account);
+    await registerCommands(ctx, harness.account);
 
     await runSlashHandler({
       commands: harness.commands,
