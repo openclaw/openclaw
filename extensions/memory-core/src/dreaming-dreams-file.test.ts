@@ -7,10 +7,9 @@ import {
   dedupeDreamDiaryEntries,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
-  updateDeepDreamsFile,
-  updateDreamsFile,
   writeBackfillDiaryEntries,
-} from "./dreaming-dreams-file.js";
+} from "./dreaming-diary-file.js";
+import { updateDeepDreamsFile, updateDreamsFile } from "./dreaming-dreams-file.js";
 import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
