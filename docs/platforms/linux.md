@@ -141,12 +141,26 @@ the Gateway; remote Gateway routes are left untouched. If logind or the system
 bus is unavailable, the sleep hook disables itself and the app continues
 normally.
 
-Stable releases built from `main` or their matching `release/YYYY.M.PATCH` branch
-ship `.deb` and AppImage bundles as assets on the
-[GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
+### Download
+
+Start with the
+[latest published Linux companion](https://github.com/openclaw/openclaw/releases/tag/linux-stable).
+The `linux-stable` channel links to versioned Linux bundles; it does not imply
+that the latest core release has a Linux build.
+
+When Linux bundles are published for a stable tag, the `.deb` and AppImage are
+attached to its [GitHub release](https://github.com/openclaw/openclaw/releases),
 named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
-with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
-`.deb` and install it with `sudo apt install ./OpenClaw-<version>-amd64.deb`,
+with a `SHA256SUMS.linux-app.txt` checksum file next to them. Linux publication
+runs through `Linux App Release Request` and `Linux App Release` independently
+of core releases. The tag must be reachable from `main` or its matching
+`release/YYYY.M.PATCH` branch.
+
+The Linux updater uses the channel's `latest.json`, independently of core
+release timing. Older installed versions retain their legacy feed until a
+signed upgrade changes it; see [Linux publication policy](/reference/RELEASING#linux-companion-publication).
+
+Download the `.deb` and install it with `sudo apt install ./OpenClaw-<version>-amd64.deb`,
 or mark the AppImage executable and run it directly. The AppImage runtime
 needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
 without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.

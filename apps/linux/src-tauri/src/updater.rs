@@ -14,6 +14,9 @@ pub(crate) const PROGRESS_EVENT: &str = "updater://progress";
 pub(crate) const READY_EVENT: &str = "updater://ready";
 pub(crate) const ERROR_EVENT: &str = "updater://error";
 
+#[cfg(target_os = "linux")]
+const RELEASE_URL: &str = "https://github.com/openclaw/openclaw/releases/tag/linux-stable";
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const RELEASE_URL: &str = "https://github.com/openclaw/openclaw/releases/latest";
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 // Test desktop builds need a channel that Linux-only releases never replace.

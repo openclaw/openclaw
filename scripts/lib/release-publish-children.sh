@@ -536,7 +536,7 @@ guard_existing_public_release() {
   release_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
   printf '%s' "${release_body}" > "${release_body_file}"
   has_canonical_body="false"
-  if canonical_release_body_matches "${release_body_file}"; then
+  if canonical_release_body_matches "${release_body_file}" true; then
     has_canonical_body="true"
   fi
 
@@ -700,14 +700,14 @@ render_github_release_notes() {
   local metadata_file="${3:-}"
   local changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
   local -a render_args=(
-    node --import tsx scripts/render-github-release-notes.mts
+    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
     --changelog "${changelog_file}"
     --tag "${RELEASE_TAG}"
     --repository "${GITHUB_REPOSITORY}"
     --output "${output_file}"
   )
 
-  git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
+  git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}" || return 1
   if [[ -n "${verification_file}" ]]; then
     render_args+=(--verification-file "${verification_file}")
   fi
@@ -739,32 +739,20 @@ verify_release_tag_target() {
 
 canonical_release_body_matches() {
   local body_file="$1"
+  local allow_previous_canonical="${2:-false}"
   local changelog_file="${RUNNER_TEMP}/release-body-changelog.md"
-  git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
-  RELEASE_BODY_FILE="${body_file}" \
-    RELEASE_CHANGELOG_FILE="${changelog_file}" \
-    RELEASE_REPOSITORY="${GITHUB_REPOSITORY}" \
-    RELEASE_TAG="${RELEASE_TAG}" \
-    node --import tsx --input-type=module <<'NODE'
-import { readFileSync } from "node:fs";
-import {
-  releaseNotesVersionForTag,
-  verifyGithubReleaseNotes,
-} from "./scripts/render-github-release-notes.mts";
-
-const body = readFileSync(process.env.RELEASE_BODY_FILE, "utf8");
-const changelog = readFileSync(process.env.RELEASE_CHANGELOG_FILE, "utf8");
-const result = verifyGithubReleaseNotes({
-  body,
-  changelog,
-  version: releaseNotesVersionForTag(process.env.RELEASE_TAG),
-  tag: process.env.RELEASE_TAG,
-  repository: process.env.RELEASE_REPOSITORY,
-});
-if (!result.matches) {
-  process.exitCode = 1;
-}
-NODE
+  local -a verify_args=(
+    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
+    --changelog "${changelog_file}"
+    --tag "${RELEASE_TAG}"
+    --repository "${GITHUB_REPOSITORY}"
+    --verify-body "${body_file}"
+  )
+  git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}" || return 1
+  if [[ "${allow_previous_canonical}" == "true" ]]; then
+    verify_args+=(--allow-previous-canonical)
+  fi
+  "${verify_args[@]}"
 }
 
 create_or_update_github_release() {
@@ -783,16 +771,17 @@ create_or_update_github_release() {
 
   if existing_state="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,body 2>/dev/null)"; then
     # A public page only reaches this call after
-    # guard_existing_public_release accepted it as canonical; leave
-    # it untouched so a failed resume cannot strip its verification
-    # proof before the proof append re-runs.
+    # guard_existing_public_release accepted it as current or previous canonical
+    # notes. Preserve its proof until proof append also writes the Linux link.
     if [[ "$(printf '%s' "${existing_state}" | jq -r '.isDraft')" != "true" ]]; then
       existing_body_file="${RUNNER_TEMP}/existing-public-release-notes.md"
       printf '%s' "$(printf '%s' "${existing_state}" | jq -r '.body')" > "${existing_body_file}"
-      if canonical_release_body_matches "${existing_body_file}"; then
+      if canonical_release_body_matches "${existing_body_file}" true; then
         echo "- GitHub release: existing public page left untouched until proof append" >> "$GITHUB_STEP_SUMMARY"
         return 0
       fi
+      echo "Public release notes are no longer canonical; refusing to overwrite them." >&2
+      return 1
     fi
     # Latest promotion is invalid while this existing release remains a draft.
     gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \

@@ -131,6 +131,70 @@ describe("GitHub release-note rendering", () => {
     );
   });
 
+  it.each([
+    { releaseTag: "v2026.7.1", linked: true },
+    { releaseTag: "v2026.7.1-2", linked: true },
+    { releaseTag: "v2026.7.1-alpha.1", linked: false },
+    { releaseTag: "v2026.7.1-beta.3", linked: false },
+    { releaseTag: "v2026.7.33", linked: false },
+    { releaseTag: "v2026.7.33-1", linked: false },
+  ])("scopes the Linux companion link for $releaseTag", ({ releaseTag, linked }) => {
+    const releaseVersion = releaseNotesVersionForTag(releaseTag);
+    const changelog = `## ${releaseVersion}\n\n- Core release notes.`;
+    const rendered = renderGithubReleaseNotes({
+      changelog,
+      version: releaseVersion,
+      tag: releaseTag,
+      repository,
+    });
+
+    expect(
+      rendered.body.includes(
+        "[latest published Linux companion](https://github.com/openclaw/openclaw/releases/tag/linux-stable)",
+      ),
+    ).toBe(linked);
+    expect(
+      verifyGithubReleaseNotes({
+        body: rendered.body,
+        changelog,
+        version: releaseVersion,
+        tag: releaseTag,
+        repository,
+      }).matches,
+    ).toBe(true);
+  });
+
+  it("counts the mandatory Linux link before choosing full or compact notes", () => {
+    const releaseTag = `v${version}`;
+    const seed = renderGithubReleaseNotes({
+      changelog: changelogFor("x"),
+      version,
+      tag: releaseTag,
+      repository,
+    });
+    const exactRecordLength = GITHUB_RELEASE_BODY_MAX_BYTES - seed.size.bytes + 1;
+    const render = (recordLength: number) =>
+      renderGithubReleaseNotes({
+        changelog: changelogFor("x".repeat(recordLength)),
+        version,
+        tag: releaseTag,
+        repository,
+        verification: "### Release verification\n\n- Proof.",
+      });
+    const exact = render(exactRecordLength);
+    const over = render(exactRecordLength + 1);
+
+    expect(exact.mode).toBe("full");
+    expect(exact.size.bytes).toBe(GITHUB_RELEASE_BODY_MAX_BYTES);
+    expect(exact.verificationOmitted).toBe(true);
+    expect(over.mode).toBe("compact");
+    expect(over.verificationIncluded).toBe(true);
+    for (const rendered of [exact, over]) {
+      expect(rendered.body.includes("/releases/tag/linux-stable")).toBe(true);
+      expect(rendered.size.bytes).toBeLessThanOrEqual(GITHUB_RELEASE_BODY_MAX_BYTES);
+    }
+  });
+
   it("replaces an oversized contribution record with a tag-pinned link", () => {
     const oversizedRecord = `- **PR #123** ${"record-only-detail ".repeat(9_000)}`;
     const rendered = renderGithubReleaseNotes({

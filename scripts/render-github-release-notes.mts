@@ -8,6 +8,7 @@ import {
   validateReleaseNotesRepository as validateRepository,
   validateReleaseNotesTag as validateTag,
 } from "./lib/release-notes-compaction.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 type ShippedBaselineExclusion = {
   ref: string;
@@ -302,13 +303,16 @@ export function releaseNotesSectionForTag(changelog: unknown, version: unknown, 
   }
 }
 
-export function renderGithubReleaseNotes({
-  changelog,
-  version,
-  tag,
-  repository,
-  verification = "",
-}: ReleaseNotesTarget & { verification?: string }) {
+function renderReleaseNotes(
+  {
+    changelog,
+    version,
+    tag,
+    repository,
+    verification = "",
+  }: ReleaseNotesTarget & { verification?: string },
+  includeLinuxLink: boolean,
+) {
   assertString(repository, "repository");
   assertString(tag, "tag");
   assertString(version, "version");
@@ -318,14 +322,20 @@ export function renderGithubReleaseNotes({
   if (tagVersion !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);
   }
+  const parsedVersion = parseReleaseVersion(tag.slice(1));
+  const linuxLink =
+    includeLinuxLink && parsedVersion && classifyReleaseTrain(parsedVersion) === "stable"
+      ? `### Linux companion\n\nDownload the [latest published Linux companion](https://github.com/${repository}/releases/tag/linux-stable).`
+      : "";
   const section = releaseNotesSectionForTag(changelog, version, tag);
-  const mode = fitsGithubReleaseBody(section) ? "full" : "compact";
-  const baseBody = mode === "full" ? section : compactReleaseNotes(section, repository, tag)?.body;
-  if (baseBody === undefined) {
+  const mode = fitsGithubReleaseBody(joinBody(section, linuxLink)) ? "full" : "compact";
+  const notes = mode === "full" ? section : compactReleaseNotes(section, repository, tag)?.body;
+  if (notes === undefined) {
     fail(
       "release notes exceed GitHub's body limit and cannot be compacted without a complete contribution record",
     );
   }
+  const baseBody = joinBody(notes, linuxLink);
   if (!fitsGithubReleaseBody(baseBody)) {
     const size = githubReleaseBodySize(baseBody);
     fail(
@@ -346,21 +356,17 @@ export function renderGithubReleaseNotes({
   };
 }
 
-export function verifyGithubReleaseNotes({
-  body,
-  changelog,
-  version,
-  tag,
-  repository,
-}: ReleaseNotesTarget & { body: unknown }) {
+export function renderGithubReleaseNotes(options: ReleaseNotesTarget & { verification?: string }) {
+  return renderReleaseNotes(options, true);
+}
+
+function verifyReleaseNotes(
+  { body, changelog, version, tag, repository }: ReleaseNotesTarget & { body: unknown },
+  includeLinuxLink: boolean,
+) {
   assertString(body, "release body");
   const normalizedBody = body.trimEnd();
-  const base = renderGithubReleaseNotes({
-    changelog,
-    version,
-    tag,
-    repository,
-  });
+  const base = renderReleaseNotes({ changelog, version, tag, repository }, includeLinuxLink);
   if (normalizedBody === base.body) {
     return {
       ...base,
@@ -373,13 +379,7 @@ export function verifyGithubReleaseNotes({
     ? normalizedBody.slice(base.body.length + 2)
     : "";
   const expected = verification
-    ? renderGithubReleaseNotes({
-        changelog,
-        version,
-        tag,
-        repository,
-        verification,
-      })
+    ? renderReleaseNotes({ changelog, version, tag, repository, verification }, includeLinuxLink)
     : base;
   return {
     ...expected,
@@ -388,12 +388,30 @@ export function verifyGithubReleaseNotes({
   };
 }
 
+export function verifyGithubReleaseNotes({
+  allowPreviousCanonical = false,
+  ...options
+}: ReleaseNotesTarget & { body: unknown; allowPreviousCanonical?: boolean }) {
+  const current = verifyReleaseNotes(options, true);
+  if (!current.matches && allowPreviousCanonical) {
+    // Only the regular-release Linux link differs. Re-render the old form so
+    // its original compaction and proof-tail limits remain part of admission.
+    const previous = verifyReleaseNotes(options, false);
+    if (previous.matches) {
+      return { ...previous, previousCanonical: true };
+    }
+  }
+  return { ...current, previousCanonical: false };
+}
+
 function usage() {
   return `Usage:
   node --import tsx scripts/render-github-release-notes.mts \\
     --changelog <path> --tag <tag> --repository <owner/repo> \\
     [--version <version>] [--verification-file <path>] [--output <path>] \\
     [--metadata-output <path>]
+  Verification uses the same target arguments:
+    --verify-body <path> [--allow-previous-canonical]
 `;
 }
 
@@ -406,13 +424,21 @@ function parseArgs(argv: string[]) {
     ["--verification-file", "verificationFile"],
     ["--output", "output"],
     ["--metadata-output", "metadataOutput"],
+    ["--verify-body", "verifyBody"],
   ] as const satisfies ReadonlyArray<readonly [string, string]>;
   type ValueOption = (typeof valueOptions)[number][1];
-  const options: Partial<Record<ValueOption, string>> & { help?: true } = {};
+  const options: Partial<Record<ValueOption, string>> & {
+    help?: true;
+    allowPreviousCanonical?: true;
+  } = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       options.help = true;
+      continue;
+    }
+    if (arg === "--allow-previous-canonical") {
+      options.allowPreviousCanonical = true;
       continue;
     }
     const option = valueOptions.find(([flag]) => flag === arg);
@@ -436,6 +462,15 @@ function parseArgs(argv: string[]) {
     if (options.metadataOutput && !options.output) {
       fail("--metadata-output requires --output");
     }
+    if (options.allowPreviousCanonical && !options.verifyBody) {
+      fail("--allow-previous-canonical requires --verify-body");
+    }
+    if (
+      options.verifyBody &&
+      (options.output || options.metadataOutput || options.verificationFile)
+    ) {
+      fail("--verify-body cannot be combined with rendering output or verification-file options");
+    }
   }
   return options;
 }
@@ -451,14 +486,33 @@ function main() {
     fail("release notes arguments were not validated");
   }
   const changelog = readFileSync(changelogPath, "utf8");
-  const verification = options.verificationFile
-    ? readFileSync(options.verificationFile, "utf8")
-    : "";
-  const rendered = renderGithubReleaseNotes({
+  const target = {
     changelog,
     version: options.version ?? releaseNotesVersionForTag(tag),
     tag,
     repository,
+  };
+  if (options.verifyBody) {
+    const result = verifyGithubReleaseNotes({
+      ...target,
+      body: readFileSync(options.verifyBody, "utf8"),
+      allowPreviousCanonical: options.allowPreviousCanonical === true,
+    });
+    if (!result.matches) {
+      fail("Release body does not match canonical release notes.");
+    }
+    if (result.previousCanonical) {
+      process.stderr.write(
+        "release-notes: previous canonical body; Linux link pending proof append\n",
+      );
+    }
+    return;
+  }
+  const verification = options.verificationFile
+    ? readFileSync(options.verificationFile, "utf8")
+    : "";
+  const rendered = renderGithubReleaseNotes({
+    ...target,
     verification,
   });
   if (options.output) {

@@ -1422,7 +1422,7 @@ jobs:
           changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
           notes_file="${RUNNER_TEMP}/release-notes.md"
           git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
-          node --import tsx scripts/render-github-release-notes.mts \
+          node --import tsx .release-harness/scripts/render-github-release-notes.mts \
             --changelog "${changelog_file}" \
             --tag "${RELEASE_TAG}" \
             --repository "${GITHUB_REPOSITORY}" \
@@ -1930,30 +1930,110 @@ jobs:
   finalize_github_release:
     name: Finalize GitHub release
     # Apps attach independently after npm and Gateway Docker evidence is complete.
-    needs: [publish, publish_docker]
+    needs: [resolve_release_target, publish, publish_docker]
     if: ${{ always() && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
     runs-on: ubuntu-latest
     environment: npm-release
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - name: Checkout trusted core finalization tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/linux-app-channel.mjs
+            scripts/lib/release-version.mjs
+          sparse-checkout-cone-mode: false
+
       - name: Publish the verified draft release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          expected_prerelease=false
-          if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-            expected_prerelease=true
+          make_latest=false
+          if [[ "$RELEASE_NPM_DIST_TAG" == "latest" ]]; then
+            make_latest=true
           fi
-          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
-          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease)"
-          if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] || \
-            [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
-            echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
-            exit 1
-          fi
+          node scripts/linux-app-channel.mjs finalize-core \
+            --tag "$RELEASE_TAG" --source-sha "$TARGET_SHA" --latest "$make_latest" |
+            tee "$RUNNER_TEMP/core-finalization.json"
+
+      - name: Retain core finalization result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: core-finalization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-finalization.json
+          if-no-files-found: warn
+
+  dispatch_linux_mirror:
+    name: Dispatch legacy Linux mirror after publication
+    needs: [resolve_release_target, finalize_github_release]
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag == 'latest' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+    # Never wait for the shared Linux metadata queue inside this workflow's
+    # release-train concurrency group. Dispatch acceptance is not mirror success.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout trusted Linux dispatch tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Dispatch detached Linux mirror
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          source scripts/lib/release-publish-children.sh
+          jq -n --arg tag "$RELEASE_TAG" --arg sha "$TARGET_SHA" \
+            '{tag: $tag, sourceSha: $sha, state: "dispatch-failed"}' \
+            > "$RUNNER_TEMP/linux-mirror-dispatch.json"
+          verify_release_tag_target
+          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "${GITHUB_REF}")"
+          linux_mirror_run_id="$(dispatch_workflow_at_ref "$CHILD_WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" \
+            linux-app-release.yml \
+            -f release_tag="$RELEASE_TAG" -f source_sha="$TARGET_SHA" \
+            -f tooling_sha="$PARENT_WORKFLOW_SHA" \
+            -f release_publish_run_id="$GITHUB_RUN_ID" \
+            -f release_publish_run_attempt="$GITHUB_RUN_ATTEMPT")"
+          jq --arg runId "$linux_mirror_run_id" \
+            '. + {state: "dispatched", childRunId: $runId, mirrorVerified: false}' \
+            "$RUNNER_TEMP/linux-mirror-dispatch.json" > "$RUNNER_TEMP/linux-mirror-dispatch.next.json"
+          mv "$RUNNER_TEMP/linux-mirror-dispatch.next.json" "$RUNNER_TEMP/linux-mirror-dispatch.json"
+          echo "- Legacy Linux bridge: dispatched, not yet verified. Follow the child run; cancellation, queue overflow, timeout, or failed readback requires reconciliation." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record failed Linux mirror dispatch
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Legacy Linux mirror dispatch failed; npm and GitHub publication remain complete. Reconcile the Linux App Release mirror-only route."
+          echo "- Legacy Linux bridge: degraded; inspect dispatch evidence before recovery." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain Linux mirror dispatch evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-mirror-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-mirror-dispatch.json
+          if-no-files-found: warn
 
   publish_windows:
     name: Dispatch Windows assets after publication

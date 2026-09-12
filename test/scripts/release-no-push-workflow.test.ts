@@ -1959,6 +1959,7 @@ describe("release validation no-push transport", () => {
       ).run,
     ).toContain("Full release validation target SHA mismatch");
     expect(job(releasePublish, "finalize_github_release").needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
     ]);
@@ -2031,6 +2032,75 @@ describe("release validation no-push transport", () => {
       expect(evaluate("publish_docker"), JSON.stringify(scenario)).toBe(scenario.publishDocker);
       expect(evaluate("finalize_github_release"), JSON.stringify(scenario)).toBe(scenario.finalize);
     }
+  });
+
+  it("detaches the Linux compatibility mirror without holding core finalization on its queue", () => {
+    const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+    const dispatch = job(workflow, "dispatch_linux_mirror");
+    expect(dispatch.needs).toEqual(["resolve_release_target", "finalize_github_release"]);
+    expect(dispatch).toMatchObject({
+      "continue-on-error": true,
+      "timeout-minutes": 5,
+      permissions: { actions: "write", contents: "read" },
+    });
+    expect(dispatch).not.toHaveProperty("concurrency");
+    expect(JSON.stringify(workflow)).not.toContain("linux-app-release-publish");
+    const finalizer = job(workflow, "finalize_github_release");
+    expect(finalizer.needs).toEqual(["resolve_release_target", "publish", "publish_docker"]);
+    expect(finalizer).not.toHaveProperty("concurrency");
+    expect(step(finalizer, "Checkout trusted core finalization tooling").with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts/linux-app-channel.mjs\nscripts/lib/release-version.mjs\n",
+    });
+    const finalize = step(finalizer, "Publish the verified draft release");
+    expect(finalize.env).toMatchObject({
+      TARGET_SHA: "${{ needs.resolve_release_target.outputs.sha }}",
+      RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
+    });
+    expect(finalize.run).toContain("node scripts/linux-app-channel.mjs finalize-core");
+    expect(finalize.run).toContain('--source-sha "$TARGET_SHA" --latest "$make_latest"');
+    expect(finalize.run).not.toContain("gh release edit");
+    for (const [tag, distTag, finalized, cancelled, expected] of [
+      ["v2026.9.3", "latest", "success", false, true],
+      ["v2026.9.3-1", "latest", "success", false, true],
+      ["v2026.9.3-beta.1", "beta", "success", false, false],
+      ["v2026.9.3-alpha.1", "alpha", "success", false, false],
+      ["v2026.9.33", "extended-stable", "success", false, false],
+      ["v2026.9.3", "latest", "failure", false, false],
+      ["v2026.9.3", "latest", "success", true, false],
+    ] as const) {
+      expect(
+        runInNewContext(dispatch.if!.slice(3, -2), {
+          cancelled: () => cancelled,
+          contains: (value: string, search: string) => value.includes(search),
+          inputs: { tag, npm_dist_tag: distTag },
+          needs: { finalize_github_release: { result: finalized } },
+        }),
+        tag,
+      ).toBe(expected);
+    }
+    expect(step(dispatch, "Checkout trusted Linux dispatch tooling").with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      "persist-credentials": false,
+    });
+    const command = step(dispatch, "Dispatch detached Linux mirror");
+    expect(command).toMatchObject({ "timeout-minutes": 3 });
+    expect(command.run).toContain('resolve_child_workflow_ref "${GITHUB_REF}"');
+    expect(command.run).toContain(
+      'dispatch_workflow_at_ref "$CHILD_WORKFLOW_REF" "$PARENT_WORKFLOW_SHA"',
+    );
+    expect(command.run).toContain("linux-app-release.yml");
+    expect(command.run).toContain('-f source_sha="$TARGET_SHA"');
+    expect(command.run).toContain('-f release_publish_run_attempt="$GITHUB_RUN_ATTEMPT"');
+    expect(command.run).toContain('state: "dispatched"');
+    expect(command.run).toContain("mirrorVerified: false");
+    expect(command.run).not.toMatch(/gh run watch|wait_for|linux-app-channel\.mjs/u);
+    const notes = step(job(workflow, "publish"), "Prepare GitHub release notes");
+    expect(notes.run).toContain('git show "${TARGET_SHA}:CHANGELOG.md"');
+    expect(notes.run).toContain(
+      "node --import tsx .release-harness/scripts/render-github-release-notes.mts",
+    );
   });
 
   it("fails a missing required local live image before any registry pull", () => {

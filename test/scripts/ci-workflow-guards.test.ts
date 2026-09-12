@@ -17938,13 +17938,18 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(Object.keys(request.on.workflow_dispatch.inputs)).toEqual(["tag", "desktop-test-bundles"]);
   expect(request.jobs.validate_request.permissions).toBeUndefined();
   expect(JSON.stringify(request)).not.toContain("${{ secrets.");
-  expect(linux.on).toEqual({
-    workflow_run: {
-      workflows: ["Linux App Release Request"],
-      branches: ["main"],
-      types: ["completed"],
-    },
+  expect(linux.on.workflow_run).toEqual({
+    workflows: ["Linux App Release Request"],
+    branches: ["main"],
+    types: ["completed"],
   });
+  expect(Object.keys(linux.on.workflow_dispatch.inputs)).toEqual([
+    "release_tag",
+    "source_sha",
+    "tooling_sha",
+    "release_publish_run_id",
+    "release_publish_run_attempt",
+  ]);
   const releaseDocs = expectDefined(
     readFileSync("apps/linux/README.md", "utf8").split("## Releases\n")[1],
     "Linux release documentation",
@@ -17953,8 +17958,8 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(releaseDocs).toContain("stable release tag in `tag`");
   expect(releaseDocs).toMatch(/optional\s+`desktop-test-bundles` input/u);
   expect(releaseDocs).toMatch(/successful request automatically triggers `Linux App Release`/u);
-  expect(releaseDocs).not.toContain("release-publish/");
   expect(linux.permissions).toEqual({});
+  expect(linux.jobs.validate_release.if).toContain("github.event_name == 'workflow_run'");
   expect(linux.jobs.validate_release.if).toContain(
     "github.event.workflow_run.repository.full_name == 'openclaw/openclaw'",
   );
@@ -17998,8 +18003,9 @@ it("pins simple release admission owners before selected checkout and preserves 
           (job as { permissions?: { contents?: string } }).permissions?.contents === "write",
       )
       .map(([name]) => name),
-  ).toEqual(["publish"]);
+  ).toEqual(["publish", "mirror_legacy"]);
   expect(linux.jobs.publish.permissions).toEqual({ contents: "write" });
+  expect(linux.jobs.mirror_legacy.permissions).toEqual({ actions: "read", contents: "write" });
   expect(
     Object.entries(linux.jobs)
       .filter(([, job]) => JSON.stringify(job).includes("${{ secrets.TAURI_SIGNING_PRIVATE_KEY"))
@@ -18476,19 +18482,74 @@ it("pins simple release admission owners before selected checkout and preserves 
   });
   const publishLinuxBundles = expectDefined(
     (linux.jobs.publish.steps as WorkflowStep[]).find(
-      ({ name }) => name === "Assemble release assets and updater manifest",
+      ({ name }) =>
+        name === "Publish immutable bundles, canonical Linux channel, and legacy mirror",
     ),
     "Linux release publication step",
   );
+  expect(publishLinuxBundles.env).toMatchObject({
+    RELEASE_TAG: "${{ needs.validate_release.outputs.release_tag }}",
+    TAG_SHA: "${{ needs.validate_release.outputs.tag_sha }}",
+    WORKFLOW_SHA: "${{ github.workflow_sha }}",
+  });
+  expect(publishLinuxBundles.run).toContain("node scripts/linux-app-channel.mjs publish");
   expect(publishLinuxBundles.run).toContain(
-    'linux_signature=$(cat "dist/input/linux/signatures/OpenClaw-${version}-amd64.AppImage.sig")',
+    '--signature "dist/input/linux/signatures/OpenClaw-${RELEASE_TAG#v}-amd64.AppImage.sig"',
   );
   expect(publishLinuxBundles.run).toContain(
-    '--arg linux_url "${url_base}/OpenClaw-${version}-amd64.AppImage"',
+    "--public-key-config apps/linux/src-tauri/tauri.conf.json",
   );
-  expect(publishLinuxBundles.run).toContain(
-    '"linux-x86_64": {signature: $linux_signature, url: $linux_url}',
+  expect(publishLinuxBundles.run).not.toContain("--clobber");
+  for (const [jobName, checkoutName] of [
+    ["publish", "Checkout trusted Linux publication tooling"],
+    ["mirror_legacy", "Checkout trusted Linux mirror tooling"],
+  ] as const) {
+    const writer = linux.jobs[jobName];
+    expect(writer.concurrency).toEqual({
+      group: "linux-app-release-publish",
+      queue: "max",
+      "cancel-in-progress": false,
+    });
+    expect(writer["timeout-minutes"]).toBe(10);
+    const checkout = expectDefined(
+      (writer.steps as WorkflowStep[]).find(({ name }) => name === checkoutName),
+      `${jobName} trusted checkout`,
+    );
+    expect(checkout.with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      "persist-credentials": false,
+      "sparse-checkout-cone-mode": false,
+    });
+    expect(String(checkout.with?.["sparse-checkout"]).trim().split("\n")).toEqual([
+      "apps/linux/src-tauri/tauri.conf.json",
+      "scripts/linux-app-channel.mjs",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/record-shared.mjs",
+      "scripts/release-tooling-identity.mjs",
+    ]);
+  }
+  const mirrorSteps = linux.jobs.mirror_legacy.steps as WorkflowStep[];
+  const mirrorIdentity = expectDefined(
+    mirrorSteps.find(({ name }) => name === "Verify detached mirror dispatch identity"),
+    "detached mirror identity",
   );
+  expect(mirrorIdentity.run).toContain('"$EXPECTED_TOOLING_SHA" == "$WORKFLOW_SHA"');
+  expect(mirrorIdentity.run).toContain("refs/tags/release-publish/");
+  expect(mirrorIdentity.run).toContain('--release-publish-run-id "$PARENT_RUN_ID"');
+  expect(mirrorIdentity.run).toContain('--release-publish-run-attempt "$PARENT_RUN_ATTEMPT"');
+  expect(mirrorIdentity.run).toContain("--release-publish-parent-state-policy active-or-success");
+  expect(mirrorIdentity.run).not.toContain("--allow-prevalidated-ref");
+  const mirrorWrite = expectDefined(
+    mirrorSteps.find(
+      ({ name }) => name === "Mirror verified canonical bytes to the actual core latest",
+    ),
+    "detached mirror command",
+  );
+  expect(mirrorSteps.indexOf(mirrorIdentity)).toBeLessThan(mirrorSteps.indexOf(mirrorWrite));
+  expect(mirrorWrite.run).toContain("node scripts/linux-app-channel.mjs mirror");
+  expect(mirrorWrite.run).toContain('--tag "$RELEASE_TAG" --source-sha "$TAG_SHA"');
+  expect(linux.jobs.mirror_legacy.if).toContain("github.event_name == 'workflow_dispatch'");
+  expect(linux.jobs.mirror_legacy).not.toHaveProperty("needs");
   const appImageToolsPath = "apps/linux/scripts/tauri-appimage-tools.sh";
   const appImageTools = readFileSync(appImageToolsPath, "utf8");
   const appImageToolsManifest = readFileSync(

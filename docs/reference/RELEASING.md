@@ -46,6 +46,54 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - If a beta tag has been pushed or published and needs a fix, maintainers cut the next `-beta.N` tag instead of deleting or recreating the old one
 - Detailed release procedure, approvals, credentials, and recovery notes are maintainer-only
 
+## Linux companion publication
+
+Linux bundles publish independently through `Linux App Release Request` and
+`Linux App Release`. Core release completion does not guarantee Linux assets.
+The [latest published Linux companion](https://github.com/openclaw/openclaw/releases/tag/linux-stable)
+links to immutable versioned bundles. `linux-stable` is a fixed control tag with
+a prerelease, non-latest release, not an application version; do not move its
+tag when promoting the channel.
+
+The canonical Linux updater endpoint is
+`https://github.com/openclaw/openclaw/releases/download/linux-stable/latest.json`.
+Linux publication verifies signed, publicly available assets, preserves the
+immutable `OpenClaw-<version>-linux.json` manifest, then forward-promotes the
+channel and mirrors its exact bytes. Reuse successful manifest bytes, including
+`pub_date`, on retry. Conflicting versioned assets or same-version manifest
+bytes must stop publication rather than be overwritten.
+
+If canonical replacement is interrupted after deletion, normal publication and
+mirroring stop; `mirror` does not recreate a missing canonical manifest. The
+release owner must reconcile the last verified canonical state and all
+intervening publication evidence, establish the version floor, and coordinate
+one bounded recovery window excluding concurrent writers. Restore only approved
+immutable manifest bytes after fresh channel release-ID, tag-SHA, and inventory
+checks, then verify public canonical readback before mirroring and checking the
+legacy endpoint. Ambiguous history remains stopped. Neither the newest release
+nor a supplied version/hash authorizes a reset.
+
+Older clients use `/releases/latest/download/latest.json`. After regular core
+GitHub release finalization, core makes only a bounded detached mirror-only
+dispatch to the existing Linux release workflow. The mirror job must not wait
+inside the core parent's top-level concurrency; core does not wait for mirror
+completion. The mirror binds the core tag/SHA and rechecks the actual latest
+selector around writes. Keep this maintenance until explicit retirement.
+Dispatch acceptance is not mirror success. Dispatch or mirror failures must
+be visibly reported as degraded and reconciled without
+blocking npm, Docker, GitHub finalization, or main closeout. A successful core
+release with a degraded mirror is not a successful Linux update-feed repair.
+
+Keep source repair, public feed restoration, and installed-client migration
+separate. Initializing the control release, activating mirroring, publishing
+assets, and selecting a migration version require publication approval. A
+legacy-client migration needs a separately approved greater-base release,
+signed public assets, and an isolated original-AppImage upgrade and relaunch
+through its actual legacy endpoint and signing key. A source endpoint change
+or metadata-only restoration does not prove that migration. Package-managed
+installs retain their package-manager/download path; opt-in macOS and Windows
+Tauri test bundles retain their separate channel.
+
 ## Monthly Gateway extended-stable publication
 
 For completed month `YYYY.M`, create `extended-stable/YYYY.M.33` and publish

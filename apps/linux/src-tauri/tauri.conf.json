@@ -15,7 +15,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDODJFMzU1QTQ0MUMwNkYKUldSdndFR2tWZU9DVE9RYnlIcHFoNG1xUlQzUlloa0plQmZjY0dPbHpjWlEzWFozdmt0cHBlY2gK",
       "endpoints": [
-        "https://github.com/openclaw/openclaw/releases/latest/download/latest.json"
+        "https://github.com/openclaw/openclaw/releases/download/linux-stable/latest.json"
       ]
     }
   },

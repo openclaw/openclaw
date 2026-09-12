@@ -143,7 +143,19 @@ the additional sign-in options.
 
 ## Updates
 
-The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
+The Linux updater targets
+`https://github.com/openclaw/openclaw/releases/download/linux-stable/latest.json`
+shortly after launch and from **Check for Updates** in the tray menu. This
+channel follows the latest published Linux companion independently of core
+releases. AppImage installs download and verify the signed update in place,
+then wait for **Restart to update**.
+
+Package-managed installs such as `.deb` stay owned by the system package manager
+and link to the [Linux download page](https://github.com/openclaw/openclaw/releases/tag/linux-stable)
+instead of replacing installed files. The macOS and Windows test builds use a
+separate opt-in desktop-test update channel; macOS self-updates like the
+AppImage build, while Windows downloads the update first and runs its installer
+only after **Restart to update**.
 
 ## Quick Chat widgets
 
@@ -219,6 +231,11 @@ validation does not publish a release.
 
 ## Releases
 
+Linux bundle publication is independent of core releases. A stable core tag
+does not by itself guarantee Linux release assets. The
+[latest published Linux companion](https://github.com/openclaw/openclaw/releases/tag/linux-stable)
+links to the bundles on their versioned release.
+
 Manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver
 suffix breaks Debian upgrade ordering. Enable the optional
@@ -230,3 +247,20 @@ the validated release tag SHA and attaches the bundles to that tag's GitHub
 release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit must be
 reachable from `main` or its matching `release/YYYY.M.PATCH` branch; numeric
 correction tags use the base version's release branch.
+
+Publication verifies signed, publicly available assets and preserves the exact
+`OpenClaw-<version>-linux.json` manifest bytes, including source, tooling, and
+channel SHAs and asset identities. The `linux-stable` control release advances
+the canonical `latest.json` without moving versioned bundles or relabeling old
+binaries as a new core release.
+
+Older installed companions use `/releases/latest/download/latest.json`.
+Maintain an exact-byte compatibility mirror on the actual latest core release
+until explicit retirement. After core GitHub finalization, core makes a bounded
+detached mirror-only dispatch to the existing Linux release workflow; dispatch
+acceptance is not mirror success. Dispatch or mirror failures are visibly
+degraded and need reconciliation, but do not block core publication. Restoring
+metadata does not migrate an installed binary to the new endpoint; that requires a separately
+approved signed upgrade. See the
+[Linux publication policy](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication)
+for rollout and verification requirements.

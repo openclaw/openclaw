@@ -1,6 +1,28 @@
 name: Linux App Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Published core tag to reconcile (mirror only; no native build)"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact published core source SHA"
+        required: true
+        type: string
+      tooling_sha:
+        description: "Exact protected parent workflow SHA"
+        required: true
+        type: string
+      release_publish_run_id:
+        description: "Core publication run that dispatched this mirror"
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: "Exact core publication attempt"
+        required: true
+        type: string
   workflow_run: # zizmor: ignore[dangerous-triggers] main-only release builder; exact successful request/main identity is validated before selected-tag execution, while signing and publication stay in fresh jobs
     workflows: ["Linux App Release Request"]
     branches: [main]
@@ -9,7 +31,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: linux-app-release-${{ github.event.workflow_run.id }}
+  group: linux-app-release-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -25,6 +47,7 @@ jobs:
   validate_release:
     name: Validate release tag
     if: >-
+      github.event_name == 'workflow_run' &&
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.repository.full_name == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
@@ -780,15 +803,57 @@ jobs:
       - build_macos
       - build_windows
       - sign_desktop
-    # One shared desktop-test channel asset must not race across release tags.
+    # All Linux channel writers share this queue, including detached core mirrors.
     concurrency:
       group: linux-app-release-publish
+      queue: max
       cancel-in-progress: false
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - name: Checkout trusted Linux publication tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            apps/linux/src-tauri/tauri.conf.json
+            scripts/linux-app-channel.mjs
+            scripts/lib/release-version.mjs
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Verify trusted publication tooling identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA"
+
+      - name: Install pinned public signature verifier
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/minisign.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/minisign"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 10 --max-time 120 "$MINISIGN_URL" -o "$archive"
+          printf '%s  %s\n' "$MINISIGN_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+          tar -xzf "$archive" -C "${RUNNER_TEMP}/minisign" --strip-components=2 minisign-linux/x86_64/minisign
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/minisign/minisign" | sha256sum --check -
+          chmod 0555 "${RUNNER_TEMP}/minisign/minisign"
+          echo "${RUNNER_TEMP}/minisign" >> "$GITHUB_PATH"
+
       - name: Download Debian bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -830,30 +895,15 @@ jobs:
             cp dist/input/windows/release/* dist/release/
           fi
 
-          # Generate this before latest.json so it covers only downloadable bundles.
+          # Checksums cover only the immutable downloadable bundles.
           (cd dist/release && sha256sum ./* > SHA256SUMS.linux-app.txt)
           cat dist/release/SHA256SUMS.linux-app.txt
 
-          linux_signature=$(cat "dist/input/linux/signatures/OpenClaw-${version}-amd64.AppImage.sig")
           url_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
-          pub_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          # Capture the full body (no early-closing pipe under pipefail), then
-          # truncate to 2000 Unicode chars inside jq so we never split a
-          # multibyte character or SIGPIPE the release-view command.
-          notes=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body // ""')
-          # latest.json is always the stable Linux channel. Desktop test builds
-          # use a separate manifest that Linux-only releases leave untouched.
-          jq -n \
-            --arg version "${version}" \
-            --arg notes "${notes}" \
-            --arg pub_date "${pub_date}" \
-            --arg linux_signature "${linux_signature}" \
-            --arg linux_url "${url_base}/OpenClaw-${version}-amd64.AppImage" \
-            '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"linux-x86_64": {signature: $linux_signature, url: $linux_url}}}' \
-            > dist/release/latest.json
-          cat dist/release/latest.json
-
           if [[ "${DESKTOP_TEST_BUNDLES}" == "true" ]]; then
+            release_json=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body,publishedAt)
+            pub_date=$(jq -er '.publishedAt' <<< "$release_json")
+            notes=$(jq -r '.body // ""' <<< "$release_json")
             macos_signature=$(cat "dist/input/macos/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig")
             windows_signature=$(cat "dist/input/windows/signatures/OpenClaw-${version}-windows-x86_64.exe.sig")
             jq -n \
@@ -869,16 +919,22 @@ jobs:
             cat dist/release/latest-desktop-test.json
           fi
 
-      - name: Attach bundles to the release
+      - name: Publish immutable bundles, canonical Linux channel, and legacy mirror
         env:
+          DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          gh release upload "${RELEASE_TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --clobber \
-            dist/release/*
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/minisign/minisign" | sha256sum --check -
+          node scripts/linux-app-channel.mjs publish \
+            --tag "$RELEASE_TAG" --source-sha "$TAG_SHA" --tooling-sha "$WORKFLOW_SHA" \
+            --assets dist/release \
+            --signature "dist/input/linux/signatures/OpenClaw-${RELEASE_TAG#v}-amd64.AppImage.sig" \
+            --public-key-config apps/linux/src-tauri/tauri.conf.json \
+            --desktop-test "$DESKTOP_TEST_BUNDLES" | tee "$RUNNER_TEMP/linux-publication.json"
 
       - name: Publish desktop test update channel
         if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
@@ -922,3 +978,91 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --clobber \
             dist/release/latest-desktop-test.json
+
+      - name: Record incomplete Linux publication
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Linux publication is incomplete. Inspect canonical and legacy readbacks before retry; immutable bundle conflicts must not be overwritten."
+          echo "- Linux channel: incomplete; reconcile this run. Core publication remains independent." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain Linux publication result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-publication.json
+          if-no-files-found: warn
+
+  mirror_legacy:
+    name: Reconcile legacy Linux updater metadata
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw' }}
+    # The core parent dispatches and exits. Waiting here cannot hold its release train.
+    concurrency:
+      group: linux-app-release-publish
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout trusted Linux mirror tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            apps/linux/src-tauri/tauri.conf.json
+            scripts/linux-app-channel.mjs
+            scripts/lib/release-version.mjs
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Verify detached mirror dispatch identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_TOOLING_SHA: ${{ inputs.tooling_sha }}
+          PARENT_RUN_ID: ${{ inputs.release_publish_run_id }}
+          PARENT_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_FULL_REF" == refs/tags/release-publish/* && "$EXPECTED_TOOLING_SHA" == "$WORKFLOW_SHA" ]]
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --release-publish-run-id "$PARENT_RUN_ID" \
+            --release-publish-run-attempt "$PARENT_RUN_ATTEMPT" \
+            --release-publish-ref "$WORKFLOW_REF" --release-publish-full-ref "$WORKFLOW_FULL_REF" \
+            --release-publish-parent-state-policy active-or-success
+
+      - name: Mirror verified canonical bytes to the actual core latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TAG_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          node scripts/linux-app-channel.mjs mirror \
+            --tag "$RELEASE_TAG" --source-sha "$TAG_SHA" \
+            --public-key-config apps/linux/src-tauri/tauri.conf.json | tee "$RUNNER_TEMP/linux-mirror.json"
+
+      - name: Record degraded legacy Linux bridge
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Legacy Linux update delivery is degraded; core publication remains complete. Reconcile canonical/latest identity and rerun this mirror-only dispatch."
+          echo "- Legacy Linux bridge: incomplete. Dispatch acceptance was not mirror success; inspect this run before recovery." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain Linux mirror result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-mirror-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-mirror.json
+          if-no-files-found: warn
