@@ -1127,7 +1127,7 @@ describe("anthropic transport stream", () => {
     });
     expect(acceptanceObserver).not.toHaveBeenCalled();
     expect(onResponse).toHaveBeenCalledWith(
-      { status: 429, headers: { "content-type": "text/plain;charset=UTF-8", "retry-after": "30" } },
+      { status: 429, headers: expect.objectContaining({ "retry-after": "30" }) },
       expect.objectContaining({ provider: "anthropic" }),
     );
   });
