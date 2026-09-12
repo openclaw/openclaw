@@ -28,11 +28,7 @@ function isUsableStoredConversationReference(value: unknown): value is StoredCon
   }
   // Sending prefers any present agent object over the legacy bot object, so
   // migration must validate that same effective identity before retention.
-  const identity = isRecord(value.agent)
-    ? value.agent
-    : isRecord(value.bot)
-      ? value.bot
-      : null;
+  const identity = isRecord(value.agent) ? value.agent : isRecord(value.bot) ? value.bot : null;
   const user = isRecord(value.user) ? value.user : null;
   // Proactive sends require a Connector endpoint plus user and bot identities. Drop
   // unusable archive rows before retention so they cannot crowd out valid references.
@@ -117,7 +113,7 @@ export function resolveLegacyConversationId(
   const storedConversationId =
     typeof embeddedConversationId === "string" && embeddedConversationId.trim()
       ? normalizeStoredConversationId(embeddedConversationId)
-    : "";
+      : "";
   return storedConversationId || normalizeStoredConversationId(rawConversationId);
 }
 
