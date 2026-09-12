@@ -1,6 +1,7 @@
 /** Deadline- and custody-bound effective command queries for the systemd reader. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
+import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
 import { bindSystemdManagerOwner, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 
 export async function createSystemdCommandQuery(
@@ -23,6 +24,7 @@ export async function createSystemdCommandQuery(
     throw unavailable();
   }
   let remainingCalls = inspection ? 6 : 3;
+  let legacyOutput = false;
   // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
   const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
     const assertCurrent =
@@ -40,13 +42,47 @@ export async function createSystemdCommandQuery(
       }
       return values;
     }
-    const result = await execBusctlUser(
+    const callTimeout = Math.max(
+      1,
+      Math.floor((deadlineAt - performance.now()) / remainingCalls--),
+    );
+    const callDeadline = Math.min(deadlineAt, performance.now() + callTimeout);
+    let result = await execBusctlUser(
       env,
-      ["--json=short", ...(opts?.requireLoaded ? ["--auto-start=no"] : []), ...args],
-      Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
+      [
+        ...(legacyOutput ? [] : ["--json=short"]),
+        ...(opts?.requireLoaded ? ["--auto-start=no"] : []),
+        ...args,
+      ],
+      callTimeout,
       assertCurrent,
     );
     assertCurrent?.();
+    if (
+      !legacyOutput &&
+      result.termination === "exit" &&
+      result.code === 1 &&
+      result.stdout === "" &&
+      result.stderr.trim() === "busctl: unrecognized option '--json=short'"
+    ) {
+      // Option parsing failed before a manager call. Reuse this call's remaining
+      // budget; neither the retry nor later legacy calls earn a new deadline.
+      const remaining = Math.floor(callDeadline - performance.now());
+      if (remaining <= 0) {
+        throw unavailable();
+      }
+      legacyOutput = true;
+      result = await execBusctlUser(
+        env,
+        [...(opts?.requireLoaded ? ["--auto-start=no"] : []), ...args],
+        remaining,
+        assertCurrent,
+      );
+      assertCurrent?.();
+    }
+    if (legacyOutput && (result.termination !== "exit" || performance.now() >= callDeadline)) {
+      throw systemdInspectionError(result, unavailable().message);
+    }
     if (inspection && (result.termination !== "exit" || performance.now() >= deadlineAt)) {
       throw systemdInspectionError(result, unavailable().message);
     }
@@ -65,6 +101,9 @@ export async function createSystemdCommandQuery(
         return null;
       }
       throw systemdInspectionError(result, unavailable().message);
+    }
+    if (legacyOutput) {
+      return decodeLegacyBusctlOutput(result.stdout, signatures, args[0] === "call");
     }
     const properties = result.stdout
       .trim()
