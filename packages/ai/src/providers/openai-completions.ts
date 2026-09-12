@@ -164,6 +164,7 @@ export const streamOpenAICompletions: StreamFunction<
           },
           provisionalCommentaryTags,
           signal: options?.signal,
+          bodyPreview: options?.bodyPreview,
           emitReasoning: shouldEmitReasoning,
           strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),

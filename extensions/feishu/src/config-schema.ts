@@ -137,6 +137,7 @@ const BlockStreamingCoalesceSchema = z
 const FeishuStreamingSchema = z
   .object({
     mode: z.enum(["off", "partial"]).optional(),
+    bodyPreview: z.boolean().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     block: z
       .object({

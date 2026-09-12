@@ -755,6 +755,178 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it.each([
+    { mode: "partial", bodyPreview: undefined, hooks: false, expected: false },
+    { mode: "partial", bodyPreview: false, hooks: false, expected: false },
+    { mode: "off", bodyPreview: true, hooks: false, expected: false },
+    { mode: "partial", bodyPreview: true, hooks: true, expected: false },
+    { mode: "partial", bodyPreview: true, hooks: false, expected: true },
+  ] as const)(
+    "gates body previews by editable surface and hooks: %j",
+    ({ mode, bodyPreview, hooks, expected }) => {
+      const account = createReplyAccount("card", mode, "feishu");
+      resolveFeishuAccountMock.mockReturnValue({
+        ...account,
+        config: { ...account.config, streaming: { mode, bodyPreview } },
+      });
+      if (hooks) {
+        getGlobalHookRunnerMock.mockReturnValue({ hasHooks: () => true });
+      }
+      const { result } = createDispatcherHarness();
+      expect(result.replyOptions.bodyPreview).toBe(expected);
+    },
+  );
+
+  it("clears an uncommitted body preview at idle instead of promoting it", async () => {
+    const account = createReplyAccount("card", "partial", "feishu");
+    resolveFeishuAccountMock.mockReturnValue({
+      ...account,
+      config: { ...account.config, streaming: { mode: "partial", bodyPreview: true } },
+    });
+    const { result, options } = createDispatcherHarness();
+    result.replyOptions.onPartialReply?.({
+      text: "Interim only",
+      previewId: "unfinished",
+      revision: 1,
+      reset: false,
+    });
+    await vi.waitFor(() => expect(requireStreamingInstance(0).update).toHaveBeenCalled());
+    await options.onIdle?.();
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith("", expect.anything());
+  });
+
+  it.each(["Canonical block.", "Interim only"])(
+    "preserves a canonical block after a body preview at idle: %s",
+    async (text) => {
+      const account = createReplyAccount("card", "partial", "feishu");
+      resolveFeishuAccountMock.mockReturnValue({
+        ...account,
+        config: { ...account.config, streaming: { mode: "partial", bodyPreview: true } },
+      });
+      const { result, options } = createDispatcherHarness();
+      result.replyOptions.onPartialReply?.({
+        text: "Interim only",
+        previewId: "draft",
+        revision: 1,
+        reset: false,
+      });
+      const delivery = await options.deliver({ text }, { kind: "block" });
+      result.replyOptions.onPartialReply?.({
+        text: "Stale draft",
+        previewId: "draft",
+        revision: 2,
+        reset: false,
+      });
+      await options.onIdle?.();
+      await delivery?.finalization;
+      expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(
+        text,
+        expect.anything(),
+      );
+      expect(requireStreamingInstance(0).update).not.toHaveBeenCalledWith("Stale draft");
+    },
+  );
+
+  it("retains earlier canonical blocks when a later body preview is cleared", async () => {
+    const account = createReplyAccount("card", "partial", "feishu");
+    resolveFeishuAccountMock.mockReturnValue({
+      ...account,
+      config: { ...account.config, streaming: { mode: "partial", bodyPreview: true } },
+    });
+    const { result, options } = createDispatcherHarness();
+    await options.deliver({ text: "First. " }, { kind: "block" });
+    result.replyOptions.onPartialReply?.({
+      text: "Temporary explanation",
+      previewId: "next",
+      revision: 1,
+      reset: false,
+    });
+    await options.deliver({ text: "Second." }, { kind: "block" });
+    await options.onIdle?.();
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(
+      "First. Second.",
+      expect.anything(),
+    );
+  });
+
+  it("resumes a body preview after ordinary partial text in the same response", async () => {
+    const account = createReplyAccount("card", "partial", "feishu");
+    resolveFeishuAccountMock.mockReturnValue({
+      ...account,
+      config: { ...account.config, streaming: { mode: "partial", bodyPreview: true } },
+    });
+    const { result, options } = createDispatcherHarness();
+    result.replyOptions.onPartialReply?.({
+      text: "First.",
+      previewId: "mixed",
+      revision: 1,
+      reset: false,
+    });
+    result.replyOptions.onPartialReply?.({ text: "First." });
+    result.replyOptions.onPartialReply?.({
+      text: "",
+      previewId: "mixed",
+      revision: 2,
+      reset: true,
+    });
+    result.replyOptions.onPartialReply?.({
+      text: "Resumed body.",
+      previewId: "mixed",
+      revision: 3,
+      reset: false,
+    });
+    await vi.waitFor(() =>
+      expect(requireStreamingInstance(0).update).toHaveBeenLastCalledWith("Resumed body."),
+    );
+    await options.deliver({ text: "Final." }, { kind: "final" });
+    await options.onIdle?.();
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(
+      "Final.",
+      expect.anything(),
+    );
+  });
+
+  it("replaces body previews across reset and final, refusing late resurrection", async () => {
+    const account = createReplyAccount("card", "partial", "feishu");
+    resolveFeishuAccountMock.mockReturnValue({
+      ...account,
+      config: { ...account.config, streaming: { mode: "partial", bodyPreview: true } },
+    });
+    const { result, options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
+    expect(result.replyOptions.bodyPreview).toBe(true);
+    const preview = (text: string, revision: number, previewId = "preview-1", reset = false) =>
+      result.replyOptions.onPartialReply?.({ text, previewId, revision, reset });
+    preview("A long interim preview that must be replaced.", 1);
+    await vi.waitFor(() => expect(requireStreamingInstance(0).update).toHaveBeenCalled());
+    preview("", 2, "preview-1", true);
+    await vi.waitFor(() =>
+      expect(requireStreamingInstance(0).update).toHaveBeenLastCalledWith("[Generating...]"),
+    );
+    preview("New.", 1, "preview-2");
+    await vi.waitFor(() =>
+      expect(requireStreamingInstance(0).update).toHaveBeenLastCalledWith("New."),
+    );
+    preview("STALE", 3, "preview-1");
+    const delivery = await options.deliver({ text: "Canonical final." }, { kind: "final" });
+    await options.onIdle?.();
+    await delivery?.finalization;
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledTimes(1);
+    expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(
+      expect.stringContaining("Canonical final."),
+      expect.anything(),
+    );
+    expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalledWith(
+      expect.stringContaining("interim"),
+      expect.anything(),
+    );
+    const count = streamingInstances.length;
+    preview("LATE", 100, "preview-3");
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    expect(streamingInstances).toHaveLength(count);
+  });
+
   it("keeps auto mode plain tool text on the message path when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "tool summary" }, { kind: "tool" });

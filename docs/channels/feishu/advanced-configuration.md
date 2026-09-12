@@ -78,6 +78,38 @@ Set `streaming.mode: "off"` to send the completed reply without streaming update
 
 Replies with controls use native cards for command buttons and HTTP(S) links, including when streaming is off. The card carries the reply text; attachments remain separate messages. Unsupported controls and cards that exceed Feishu's size limits keep their full labels in a readable fallback. That fallback remains a separate message when a later reply streams. A final controls reply replaces an active streaming preview without sending the preview text again; error controls after a completed answer remain separate. If Feishu cannot delete or clear a replaced preview, delivery reports a failure and retains the original message receipt.
 
+#### Replaceable body previews
+
+To see provisional public prose while the model is still deciding its final
+answer, enable `channels.feishu.streaming.bodyPreview`:
+
+```json5
+{
+  channels: {
+    feishu: {
+      streaming: { mode: "partial", bodyPreview: true },
+    },
+  },
+}
+```
+
+The default is `false`. This option requires streaming cards and initially
+supports the built-in OpenAI-compatible Completions transport. Other transports
+keep their existing behavior. Account-level streaming settings can override the
+channel setting.
+
+The card can show public prose before a tool call or before final text
+classification. That prose may later change or disappear; enable this only when
+readers accept seeing drafts that might not belong to the final answer. Native
+reasoning fields, reasoning-tag spans, and tool arguments are excluded. This
+setting does not enable reasoning display.
+
+Previews do not become conversation history or completed reply blocks. Successful
+final delivery replaces them with the canonical answer. Cancellation, failure,
+or a new message can clear a draft; a platform edit failure still follows normal
+delivery error and receipt handling. Finalization and message-send hooks that
+defer visible output continue to suppress previews.
+
 ### Quota optimization
 
 Reduce the number of Feishu/Lark API calls with two optional flags:

@@ -18,10 +18,7 @@ import { buildGuardedModelFetch } from "./host-policy.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
-import {
-  processCompletionsStream,
-  shouldEmitOpenAICompletionsReasoning,
-} from "./openai-completions-stream.js";
+import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -34,6 +31,7 @@ import {
 import {
   createOpenAIProviderAcceptanceHook,
   resolveOpenAIClientBaseUrl,
+  shouldEmitOpenAICompletionsReasoning,
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
@@ -304,6 +302,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         });
         await processCompletionsStream(hookedResponseStream, output, model, stream, {
           signal: options?.signal,
+          bodyPreview: options?.bodyPreview,
           emitReasoning,
           strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),

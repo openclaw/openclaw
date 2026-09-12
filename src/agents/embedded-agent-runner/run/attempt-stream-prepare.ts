@@ -132,10 +132,9 @@ export function prepareEmbeddedAttemptStream(input: {
     typeof createEmbeddedAttemptDeferredLifecycleOwner
   >[0]["trajectoryRecorder"];
 }) {
-  const attempt = input.attempt;
+  const { attempt, hookRunner } = input;
   const activityScope = randomUUID();
   let nestedStartOrder = 0;
-  const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let acceptingSteerMessages = true;
@@ -319,6 +318,7 @@ export function prepareEmbeddedAttemptStream(input: {
     blockReplyBreak: attempt.blockReplyBreak,
     blockReplyChunking: attempt.blockReplyChunking,
     onPartialReply: attempt.onPartialReply,
+    bodyPreview: attempt.bodyPreview,
     onAssistantMessageStart: attempt.onAssistantMessageStart,
     onExecutionPhase: attempt.onExecutionPhase,
     onAgentEvent: attempt.onAgentEvent,

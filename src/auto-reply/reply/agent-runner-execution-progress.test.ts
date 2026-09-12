@@ -533,6 +533,30 @@ describe("executeAgentTurn: lifecycle progress", () => {
     expect(sanitizerState.sanitizeUserFacingText).toHaveBeenCalledTimes(partials.length);
   });
 
+  it("preserves replaceable preview ownership and empty resets through partial delivery", async () => {
+    const delivered: PartialReplyPayload[] = [];
+    const previews: PartialReplyPayload[] = [
+      { text: "First draft", replace: true, previewId: "first", revision: 1, reset: false },
+      { text: "", replace: true, previewId: "first", revision: 2, reset: true },
+      { text: "New", replace: true, previewId: "second", revision: 1, reset: false },
+    ];
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      for (const preview of previews) {
+        await params.onPartialReply?.(preview);
+      }
+      return { payloads: [], meta: {} };
+    });
+    await executeTestTurn({
+      opts: {
+        bodyPreview: true,
+        onPartialReply: (payload) => {
+          delivered.push(structuredClone(payload));
+        },
+      },
+    });
+    expect(delivered).toEqual(previews);
+  });
+
   it("keeps lazy partial text enumerable and memoized across serialization", async () => {
     let captured: PartialReplyPayload | undefined;
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

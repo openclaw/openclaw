@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PartialReplyPayload } from "../../auto-reply/get-reply-options.types.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -530,6 +531,83 @@ describe("plugin runtime refresh admission", () => {
 });
 
 describe("plugin runtime refresh streaming delivery", () => {
+  it.each([false, true])(
+    "preserves preview resets after refresh with tool-only source %s",
+    async (toolOnly) => {
+      const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+      const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+      state = await createOpenClawTestState({ label: "plugin-refresh-preview" });
+      const sentText = "The original generation already delivered this detailed status report.";
+      const partials: PartialReplyPayload[] = [];
+      const onBlockReply = vi.fn();
+      const preview = (text: string, revision: number, reset = false): PartialReplyPayload => ({
+        text,
+        previewId: "refreshed-preview",
+        revision,
+        replace: true,
+        reset,
+      });
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+        params.registerPluginRuntimeRefreshConsumer?.(() => true);
+        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+        return makeAttemptResult({
+          assistantTexts: [],
+          didSendViaMessagingTool: true,
+          didDeliverSourceReplyViaMessageTool: toolOnly,
+          messagingToolSentTexts: [sentText],
+          messagingToolSentTargets: [
+            { tool: "message", provider: "feishu", to: "user:test", text: sentText },
+          ],
+        });
+      });
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+        expect(params.bodyPreview).toBe(true);
+        await params.onPartialReply?.(preview("Checking new evidence.", 1));
+        await params.onPartialReply?.(preview("", 2, true));
+        await params.onPartialReply?.(preview("Another provisional explanation.", 3));
+        // Suppressing a replacement must also remove the prior visible draft.
+        await params.onPartialReply?.(preview(sentText.slice(0, 45), 4));
+        expect(partials).toEqual(
+          toolOnly
+            ? []
+            : [
+                preview("Checking new evidence.", 1),
+                preview("", 2, true),
+                preview("Another provisional explanation.", 3),
+                preview("", 4, true),
+              ],
+        );
+        expect(onBlockReply).not.toHaveBeenCalled();
+        return makeAttemptResult({ assistantTexts: ["Final verification complete."] });
+      });
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Final verification complete." }]);
+      try {
+        const result = await runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          agentHarnessId: "openclaw",
+          provider: "fixture-provider",
+          model: "fixture-model",
+          sessionKey: undefined,
+          messageChannel: "feishu",
+          messageProvider: "feishu",
+          messageTo: "user:test",
+          currentChannelId: "user:test",
+          currentMessagingTarget: "user:test",
+          sourceReplyDeliveryMode: toolOnly ? "message_tool_only" : "automatic",
+          bodyPreview: true,
+          onPartialReply: (payload) => {
+            partials.push(payload);
+          },
+          onBlockReply,
+        });
+        expect(result.meta.error).toBeUndefined();
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      } finally {
+        mockedRunEmbeddedAttempt.mockReset();
+      }
+    },
+  );
+
   it.each([
     { name: "same source", otherRoute: false, toolOnly: false, mirror: false, ownedMedia: false },
     { name: "another target", otherRoute: true, toolOnly: false, mirror: false, ownedMedia: false },

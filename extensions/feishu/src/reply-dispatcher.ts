@@ -307,6 +307,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastSnapshotTextLength = 0;
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
+  let bodyPreviewId: string | undefined;
+  let bodyPreviewRevision = -1;
+  // Provisional text never owns the canonical buffer used to close the card.
+  let bodyPreviewText: string | undefined;
+  const retiredBodyPreviews = new Set<string>();
   const deliveredFinalTexts = new Set<string>();
   type StreamingDisposition = "closed" | "discarded";
   type StreamingCloseOutcome = {
@@ -411,7 +416,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (!nextText) {
       return;
     }
+    const hadBodyPreview = bodyPreviewText !== undefined;
+    bodyPreviewText = undefined;
+    if (options?.mode === "delta" && bodyPreviewId) {
+      retiredBodyPreviews.add(bodyPreviewId);
+    }
     if (options?.dedupeWithLastPartial && nextText === lastPartial) {
+      if (hadBodyPreview) {
+        flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+      }
       return;
     }
     if (options?.dedupeWithLastPartial) {
@@ -444,7 +457,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return;
     }
     reasoningText = nextThinking;
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, bodyPreviewText ?? streamText));
   };
 
   const startStreaming = () => {
@@ -508,6 +521,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const resetStreamingState = () => {
+    bodyPreviewText = undefined;
+    if (bodyPreviewId) {
+      retiredBodyPreviews.add(bodyPreviewId);
+      bodyPreviewId = undefined;
+      bodyPreviewRevision = -1;
+    }
     streaming = null;
     streamingStartPromise = null;
     activeStreamingGeneration = undefined;
@@ -735,7 +754,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return false;
     }
     startStreaming();
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, bodyPreviewText ?? streamText));
     return false;
   };
 
@@ -1549,6 +1568,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               // notices. Preserve both when the latter arrives after an answer.
               streamText = text;
               hasStreamingFinalText = true;
+              bodyPreviewText = undefined;
               snapshotBaseText = "";
               lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
@@ -1646,10 +1666,50 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     delivery,
     replyOptions: {
       onModelSelected,
+      bodyPreview: previewStreamingEnabled && account.config.streaming?.bodyPreview === true,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
       onPartialReply: previewStreamingEnabled
-        ? (payload: ReplyPayload) => {
+        ? (
+            payload: Parameters<
+              NonNullable<NonNullable<ChannelInboundTurnPlan["replyOptions"]>["onPartialReply"]>
+            >[0],
+          ) => {
+            if (payload.previewId !== undefined) {
+              if (
+                account.config.streaming?.bodyPreview !== true ||
+                hasStreamingFinalText ||
+                idleRequestedForReply ||
+                replyOutcome?.kind === "failed" ||
+                retiredBodyPreviews.has(payload.previewId) ||
+                typeof payload.revision !== "number" ||
+                !Number.isSafeInteger(payload.revision) ||
+                payload.revision < 0 ||
+                (bodyPreviewId === payload.previewId && payload.revision <= bodyPreviewRevision)
+              ) {
+                return false;
+              }
+              if (bodyPreviewId && bodyPreviewId !== payload.previewId) {
+                retiredBodyPreviews.add(bodyPreviewId);
+              }
+              bodyPreviewId = payload.previewId;
+              bodyPreviewRevision = payload.revision;
+              const cleaned = payload.reset
+                ? ""
+                : stripReasoningTagsFromText(payload.text ?? "", {
+                    mode: "strict",
+                    trim: "both",
+                  });
+              if (!cleaned && !streaming && !streamingStartPromise) {
+                return false;
+              }
+              startStreaming();
+              bodyPreviewText = cleaned;
+              flushStreamingCardUpdate(
+                buildCombinedStreamText(reasoningText, bodyPreviewText) || "[Generating...]",
+              );
+              return false;
+            }
             if (!payload.text) {
               return false;
             }

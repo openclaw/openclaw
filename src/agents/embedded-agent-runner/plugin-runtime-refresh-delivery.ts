@@ -72,6 +72,19 @@ export function createInheritedDeliveryCallbacks(
           if (toolOnlySourceDelivered) {
             return false;
           }
+          const preview = payload.previewId !== undefined;
+          const clearPreview = () =>
+            callbacks.onPartialReply?.({
+              text: "",
+              replace: true,
+              previewId: payload.previewId,
+              revision: payload.revision,
+              reset: true,
+            });
+          if (preview && payload.reset) {
+            partial.currentSourceMessagingToolHeldPartial = undefined;
+            return clearPreview();
+          }
           const text = payload.text ?? payload.delta ?? "";
           const held = partial.currentSourceMessagingToolHeldPartial;
           const resolved = resolveCurrentSourceMessagingToolPartial(partial, {
@@ -80,7 +93,7 @@ export function createInheritedDeliveryCallbacks(
             visibleDelta: payload.delta ?? "",
           });
           if (resolved.hold && !payload.mediaUrls?.length) {
-            return false;
+            return preview ? clearPreview() : false;
           }
           // A withheld prefix never reached the receiver; divergence releases a full snapshot.
           const next = {
@@ -96,7 +109,9 @@ export function createInheritedDeliveryCallbacks(
           })[0];
           return filtered && hasReplyPayloadContent(filtered)
             ? callbacks.onPartialReply?.(filtered)
-            : false;
+            : preview
+              ? clearPreview()
+              : false;
         }
       : undefined,
     onBlockReply: callbacks.onBlockReply

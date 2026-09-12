@@ -261,11 +261,27 @@ export async function runEmbeddedFallbackCandidate(
         },
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
+        bodyPreview: turn.opts?.bodyPreview,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
         onPartialReply: async (payload) => {
+          const preview = payload.previewId !== undefined;
+          if (preview && turn.opts?.bodyPreview !== true) {
+            return false;
+          }
+          const resetPreview = () =>
+            turn.opts?.onPartialReply?.({
+              text: "",
+              replace: true,
+              previewId: payload.previewId,
+              revision: payload.revision,
+              reset: true,
+            });
+          if (preview && payload.reset) {
+            return await resetPreview();
+          }
           const classified = params.presentation.classifyStreamingPartial(payload);
           if (classified.skip || !classified.text) {
-            return false;
+            return preview ? await resetPreview() : false;
           }
           const textForTyping = classified.text;
           let didMaterialize = false;
@@ -280,6 +296,14 @@ export async function runEmbeddedFallbackCandidate(
               return materializedText;
             },
             mediaUrls: payload.mediaUrls,
+            ...(preview
+              ? {
+                  replace: true as const,
+                  previewId: payload.previewId,
+                  revision: payload.revision,
+                  reset: payload.reset,
+                }
+              : {}),
           };
           const onPartialReply = turn.opts?.onPartialReply;
           return await params.presentation.presentWithTyping(

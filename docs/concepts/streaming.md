@@ -12,8 +12,16 @@ token-delta streaming** to channel messages:
 
 - **Block streaming (channels):** emit completed **blocks** as the assistant
   writes. These are normal channel messages, not token deltas.
-- **Preview streaming (Telegram/Discord/Slack/Matrix/Mattermost/MS Teams):**
+- **Preview streaming (Telegram/Discord/Feishu/Slack/Matrix/Mattermost/MS Teams):**
   update a temporary **preview message** while generating (send + edits/appends).
+
+Some reasoning-enabled responses defer public text until its final classification
+is known. Feishu can opt into [replaceable body
+previews](/channels/feishu/advanced-configuration#replaceable-body-previews) for
+supported Completions transports. These are provisional card edits, including
+public prose that may later be removed, rather than committed answers or native
+reasoning. The option is off by default and leaves terminal delivery and history
+unchanged.
 
 ## Control UI startup status
 

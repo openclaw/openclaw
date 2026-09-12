@@ -11,7 +11,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import type { BaseOpenAIStreamOptions, OpenAICompletionsOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
@@ -534,4 +534,24 @@ function readOpenAICompletionsContentPartDeltas(content: unknown): OpenAIComplet
     return [{ kind: "text", text }];
   }
   return [];
+}
+
+export function hasOpenAICompletionsReasoningUsageActivity(
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+) {
+  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  return (
+    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
+  );
+}
+
+export function shouldEmitOpenAICompletionsReasoning(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+) {
+  if (!model.reasoning) {
+    return false;
+  }
+  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
+  return effort.length > 0 && isOpenAICompletionsThinkingEnabled(effort);
 }

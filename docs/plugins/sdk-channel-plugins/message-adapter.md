@@ -65,6 +65,26 @@ and `verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
 progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
 silently.
 
+### Replaceable public-body previews
+
+An editable preview consumer can opt in per reply with `GetReplyOptions.bodyPreview`.
+It must implement the `onPartialReply` snapshot contract: payloads with
+`previewId`, increasing `revision`, and `replace: true` replace the current draft;
+`reset: true` clears it even when `text` is empty. Ignore stale revisions and
+retired owners, and stop accepting previews once finalization owns the reply.
+Ordinary partial payloads keep their existing behavior.
+
+Only enable this capability when the operator has explicitly accepted provisional
+public prose and the destination can replace or discard it. A preview can contain
+public text later classified as commentary. It is never a committed block,
+transcript entry, or final-answer checkpoint. Existing silence, approval,
+message-tool-only, and finalization suppression still applies. Native reasoning
+is not part of this contract.
+
+The built-in Completions transport is the initial producer and Feishu is the
+initial consumer. Other transports and channels do not acquire this capability
+merely by supporting ordinary partial replies.
+
 ### Progress visibility acceptance
 
 Progress callbacks report what the operator can see, not merely what a plugin queued. Return

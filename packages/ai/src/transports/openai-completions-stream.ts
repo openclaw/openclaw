@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   createOpenAICompletionsToolCallDeltaNormalizer,
   createOpenAIEncryptedToolCallReasoningTracker,
@@ -25,6 +24,7 @@ import {
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
+import { createBodyPreview } from "./body-preview.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   createDsmlRecoverer,
@@ -33,7 +33,7 @@ import {
 import { getCompat } from "./openai-transport-params.js";
 import {
   createModelStreamCooperativeScheduler,
-  isOpenAICompletionsThinkingEnabled,
+  hasOpenAICompletionsReasoningUsageActivity,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
@@ -58,6 +58,7 @@ type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> 
 type CompletionsStreamOptions = {
   signal?: AbortSignal;
   emitReasoning?: boolean;
+  bodyPreview?: boolean;
   strictReasoningTags?: boolean;
   firstEventTimeoutMs?: number;
   abortFirstEventStream?: (reason: Error) => void;
@@ -155,6 +156,10 @@ export async function processCompletionsStream(
     chunkPushedEvent = true;
     stream.push(event);
   };
+  const bodyPreview = options?.bodyPreview
+    ? createBodyPreview(compat.thinkingFormat === "deepseek", pushStreamEvent)
+    : undefined;
+  let completed = false;
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
     const nextBytes = measureUtf8Bytes(next.text);
     if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
@@ -461,272 +466,263 @@ export async function processCompletionsStream(
     onTimeout: options?.onFirstEventTimeout,
     hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
   });
-  for await (const rawChunk of guardedStream) {
-    throwIfModelStreamAborted(options?.signal);
-    chunkPushedEvent = false;
-    if (!rawChunk || typeof rawChunk !== "object") {
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
+  try {
+    for await (const rawChunk of guardedStream) {
+      throwIfModelStreamAborted(options?.signal);
+      chunkPushedEvent = false;
+      if (!rawChunk || typeof rawChunk !== "object") {
+        if (cooperativeScheduler) {
+          await cooperativeScheduler.afterEvent();
+        }
+        continue;
       }
-      continue;
-    }
-    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
-    notifyLlmRequestActivity(options?.signal);
-    const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
-    output.responseId ||= chunk.id;
-    // Retain the provider-returned model when it differs from the requested id so
-    // routed/alias responses are not misattributed, matching the direct provider
-    // stream and the anthropic/responses managed transports.
-    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
-      output.responseModel ||= chunk.model;
-    }
-    let hasReasoningUsageActivity = false;
-    if (chunk.usage) {
-      output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
-        includeReasoningTokens: !directMode,
-      });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
-    }
-    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-    if (!choice) {
-      emitReasoningUsageActivity(hasReasoningUsageActivity);
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
+      // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
+      notifyLlmRequestActivity(options?.signal);
+      const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
+      output.responseId ||= chunk.id;
+      // Retain the provider-returned model when it differs from the requested id so
+      // routed/alias responses are not misattributed, matching the direct provider
+      // stream and the anthropic/responses managed transports.
+      if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+        output.responseModel ||= chunk.model;
       }
-      continue;
-    }
-    const choiceUsage = choice.usage;
-    if (!chunk.usage && choiceUsage) {
-      output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
-        includeReasoningTokens: !directMode,
-      });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
-    }
-    if (choice.finish_reason) {
-      const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
-        allowSingularToolCall: true,
-      });
-      output.stopReason = finishReasonResult.stopReason;
-      finishReason = finishReasonResult.stopReason;
-      if (finishReasonResult.errorMessage) {
-        output.errorMessage = finishReasonResult.errorMessage;
+      let hasReasoningUsageActivity = false;
+      if (chunk.usage) {
+        output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
+          includeReasoningTokens: !directMode,
+        });
+        hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
       }
-    }
-    const rawChoiceDelta = choice.delta ?? choice.message;
-    if (!rawChoiceDelta) {
-      emitReasoningUsageActivity(hasReasoningUsageActivity);
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
+      const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+      if (!choice) {
+        emitReasoningUsageActivity(hasReasoningUsageActivity);
+        if (cooperativeScheduler) {
+          await cooperativeScheduler.afterEvent();
+        }
+        continue;
       }
-      continue;
-    }
-    for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
-      const choiceDelta = normalizedDelta.delta;
-      const deltaFields = choiceDelta as Record<string, unknown>;
-      const reasoningBatch = readOpenAICompletionsReasoningBatch(
-        deltaFields,
-        visibleReasoningDetailTypes,
-      );
-      const reasoningDeltas = reasoningBatch.deltas;
-      const hasReasoningThinking = reasoningBatch.hasThinking;
-      // Share the content/refusal owner to avoid duplicate mirrored refusals.
-      const contentDeltas = readOpenAICompletionsContentDeltas(
-        choiceDelta.content,
-        choiceDelta.refusal,
-        reasoningBatch.mirroredThinking,
-      );
-      const lastVisibleTextIndex = contentDeltas.findLastIndex((delta) => delta.kind === "text");
-      const hasSameChunkVisibleText = reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
-      if (hasReasoningThinking) {
-        beginReasoning(hasSameChunkVisibleText, true);
-        appendReasoningDeltas(reasoningDeltas);
+      const choiceUsage = choice.usage;
+      if (!chunk.usage && choiceUsage) {
+        output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
+          includeReasoningTokens: !directMode,
+        });
+        hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
       }
-      for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
-        if (contentDelta.kind === "text") {
-          const routedDeltas = hasReasoningThinking
-            ? reasoningTagTextPartitioner.push(contentDelta.text)
-            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
-          for (const routedDelta of routedDeltas) {
-            appendPartitionedVisibleDelta(routedDelta);
-          }
-        } else {
-          const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
-          beginReasoning(hasLaterVisibleText);
-          appendRoutedContentDelta(contentDelta);
+      if (choice.finish_reason) {
+        const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
+          allowSingularToolCall: true,
+        });
+        output.stopReason = finishReasonResult.stopReason;
+        finishReason = finishReasonResult.stopReason;
+        if (finishReasonResult.errorMessage) {
+          output.errorMessage = finishReasonResult.errorMessage;
         }
       }
-      if (!hasReasoningThinking) {
-        appendReasoningDeltas(reasoningDeltas);
+      const rawChoiceDelta = choice.delta ?? choice.message;
+      if (!rawChoiceDelta) {
+        emitReasoningUsageActivity(hasReasoningUsageActivity);
+        if (cooperativeScheduler) {
+          await cooperativeScheduler.afterEvent();
+        }
+        continue;
       }
-      const toolCallDeltas = normalizedDelta.toolCalls;
-      if (toolCallDeltas.length > 0) {
-        sawNativeToolCallDelta = true;
-        flushReasoningTagTextPartitioner();
-        rememberPendingCommentaryTags(
-          provisionalCommentaryTags,
-          tagPendingCommentaryText(output.content),
+      for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
+        const choiceDelta = normalizedDelta.delta;
+        const deltaFields = choiceDelta as Record<string, unknown>;
+        const reasoningBatch = readOpenAICompletionsReasoningBatch(
+          deltaFields,
+          visibleReasoningDetailTypes,
         );
-        for (const toolCall of toolCallDeltas) {
-          const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
-          let block =
-            streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
-          if (!block && toolCall.id) {
-            block = toolCallBlocksById.get(toolCall.id);
-          }
-          if (!block) {
-            const switchingToolCall = currentBlock?.type === "toolCall";
-            if (switchingToolCall) {
-              currentBlock = null;
-              flushPendingPostToolCallDeltas();
+        const reasoningDeltas = reasoningBatch.deltas;
+        const hasReasoningThinking = reasoningBatch.hasThinking;
+        // Share the content/refusal owner to avoid duplicate mirrored refusals.
+        const contentDeltas = readOpenAICompletionsContentDeltas(
+          choiceDelta.content,
+          choiceDelta.refusal,
+          reasoningBatch.mirroredThinking,
+        );
+        const lastVisibleTextIndex = contentDeltas.findLastIndex((delta) => delta.kind === "text");
+        const hasSameChunkVisibleText =
+          reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
+        bodyPreview?.deltas(
+          contentDeltas,
+          hasReasoningThinking,
+          normalizedDelta.toolCalls.length > 0,
+        );
+        if (hasReasoningThinking) {
+          beginReasoning(hasSameChunkVisibleText, true);
+          appendReasoningDeltas(reasoningDeltas);
+        }
+        for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
+          if (contentDelta.kind === "text") {
+            const routedDeltas = hasReasoningThinking
+              ? reasoningTagTextPartitioner.push(contentDelta.text)
+              : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
+            for (const routedDelta of routedDeltas) {
+              appendPartitionedVisibleDelta(routedDelta);
             }
-            const initialSig = directMode ? undefined : extractToolCallThoughtSignature(toolCall);
-            options?.beforeContentBlock?.("toolCall");
-            if (directMode) {
-              directThinkingBlock = null;
-            }
-            block = {
-              type: "toolCall",
-              id: toolCall.id || "",
-              name: toolCall.function?.name || "",
-              arguments: {},
-              partialArgs: "",
-              ...(initialSig ? { thoughtSignature: initialSig } : {}),
-            };
-            encryptedReasoning?.rememberToolCall(block.id, block);
-            toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
-            output.content.push(block);
-            toolCallBlockIndices.set(block, output.content.length - 1);
-            pushStreamEvent({
-              type: "toolcall_start",
-              contentIndex: toolCallBlockIndices.get(block) ?? -1,
-              partial: output,
-            });
-          }
-          if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
-            toolCallBlocksByIndex.set(streamIndex, block);
-          }
-          if (toolCall.id) {
-            if (!directMode || !block.id) {
-              block.id = toolCall.id;
-            }
-            toolCallBlocksById.set(toolCall.id, block);
-            if (block.id === toolCall.id) {
-              encryptedReasoning?.rememberToolCall(toolCall.id, block);
-            }
-          }
-          currentBlock = block;
-          // Mirror the pinned OpenAI SDK and the managed transport: a nonempty
-          // function-name snapshot replaces the stored name so fragmented or
-          // corrected streamed names cannot freeze on the first fragment. In
-          // direct mode the first tool identity is authoritative, so only a
-          // continuation whose id explicitly conflicts with the established
-          // block keeps the first name; an absent id is treated as a
-          // continuation (the block was already resolved by index or id above),
-          // matching how the pinned SDK accumulates a later name-only frame.
-          const conflictingId = directMode && block.id && toolCall.id && block.id !== toolCall.id;
-          if (toolCall.function?.name && !conflictingId) {
-            block.name = toolCall.function.name;
-          }
-          const deltaSig = directMode ? undefined : extractToolCallThoughtSignature(toolCall);
-          if (deltaSig) {
-            block.thoughtSignature = deltaSig;
-          }
-          const toolArgumentsDelta = toolCall.function?.arguments;
-          if (toolArgumentsDelta) {
-            block.partialArgs += toolArgumentsDelta;
-            // Preview refresh is scheduled geometrically; the terminal
-            // finalize re-parses the full buffer authoritatively either way.
-            if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
-              block.arguments = parseStreamingJson(block.partialArgs);
-            }
-          }
-          if (toolArgumentsDelta || directMode) {
-            pushStreamEvent({
-              type: "toolcall_delta",
-              contentIndex: toolCallBlockIndices.get(block) ?? -1,
-              delta: toolArgumentsDelta ?? "",
-              partial: output,
-            });
+          } else {
+            const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
+            beginReasoning(hasLaterVisibleText);
+            appendRoutedContentDelta(contentDelta);
           }
         }
+        if (!hasReasoningThinking) {
+          appendReasoningDeltas(reasoningDeltas);
+        }
+        const toolCallDeltas = normalizedDelta.toolCalls;
+        if (toolCallDeltas.length > 0) {
+          sawNativeToolCallDelta = true;
+          flushReasoningTagTextPartitioner();
+          rememberPendingCommentaryTags(
+            provisionalCommentaryTags,
+            tagPendingCommentaryText(output.content),
+          );
+          for (const toolCall of toolCallDeltas) {
+            const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+            let block =
+              streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
+            if (!block && toolCall.id) {
+              block = toolCallBlocksById.get(toolCall.id);
+            }
+            if (!block) {
+              const switchingToolCall = currentBlock?.type === "toolCall";
+              if (switchingToolCall) {
+                currentBlock = null;
+                flushPendingPostToolCallDeltas();
+              }
+              const initialSig = directMode ? undefined : extractToolCallThoughtSignature(toolCall);
+              options?.beforeContentBlock?.("toolCall");
+              if (directMode) {
+                directThinkingBlock = null;
+              }
+              block = {
+                type: "toolCall",
+                id: toolCall.id || "",
+                name: toolCall.function?.name || "",
+                arguments: {},
+                partialArgs: "",
+                ...(initialSig ? { thoughtSignature: initialSig } : {}),
+              };
+              encryptedReasoning?.rememberToolCall(block.id, block);
+              toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
+              output.content.push(block);
+              toolCallBlockIndices.set(block, output.content.length - 1);
+              pushStreamEvent({
+                type: "toolcall_start",
+                contentIndex: toolCallBlockIndices.get(block) ?? -1,
+                partial: output,
+              });
+            }
+            if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
+              toolCallBlocksByIndex.set(streamIndex, block);
+            }
+            if (toolCall.id) {
+              if (!directMode || !block.id) {
+                block.id = toolCall.id;
+              }
+              toolCallBlocksById.set(toolCall.id, block);
+              if (block.id === toolCall.id) {
+                encryptedReasoning?.rememberToolCall(toolCall.id, block);
+              }
+            }
+            currentBlock = block;
+            // Mirror the pinned OpenAI SDK and the managed transport: a nonempty
+            // function-name snapshot replaces the stored name so fragmented or
+            // corrected streamed names cannot freeze on the first fragment. In
+            // direct mode the first tool identity is authoritative, so only a
+            // continuation whose id explicitly conflicts with the established
+            // block keeps the first name; an absent id is treated as a
+            // continuation (the block was already resolved by index or id above),
+            // matching how the pinned SDK accumulates a later name-only frame.
+            const conflictingId = directMode && block.id && toolCall.id && block.id !== toolCall.id;
+            if (toolCall.function?.name && !conflictingId) {
+              block.name = toolCall.function.name;
+            }
+            const deltaSig = directMode ? undefined : extractToolCallThoughtSignature(toolCall);
+            if (deltaSig) {
+              block.thoughtSignature = deltaSig;
+            }
+            const toolArgumentsDelta = toolCall.function?.arguments;
+            if (toolArgumentsDelta) {
+              block.partialArgs += toolArgumentsDelta;
+              // Preview refresh is scheduled geometrically; the terminal
+              // finalize re-parses the full buffer authoritatively either way.
+              if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
+                block.arguments = parseStreamingJson(block.partialArgs);
+              }
+            }
+            if (toolArgumentsDelta || directMode) {
+              pushStreamEvent({
+                type: "toolcall_delta",
+                contentIndex: toolCallBlockIndices.get(block) ?? -1,
+                delta: toolArgumentsDelta ?? "",
+                partial: output,
+              });
+            }
+          }
+        }
+        encryptedReasoning?.consumeDetails(deltaFields.reasoning_details);
       }
-      encryptedReasoning?.consumeDetails(deltaFields.reasoning_details);
+      flushPendingPostToolCallDeltas();
+      emitReasoningUsageActivity(hasReasoningUsageActivity);
+      if (cooperativeScheduler) {
+        await cooperativeScheduler.afterEvent();
+      }
     }
+    // The SDK can end an aborted SSE iterator normally; cancellation must win
+    // before buffered terminal markers can promote provisional tool calls.
+    throwIfModelStreamAborted(options?.signal);
+    if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
+      throw new Error("Stream ended without finish_reason");
+    }
+    flushReasoningTagTextPartitioner();
+    flushDeepSeekToolCallRecovererAtEnd();
+    flushDeepSeekTextFilterAtEnd();
+    currentBlock = null;
     flushPendingPostToolCallDeltas();
-    emitReasoningUsageActivity(hasReasoningUsageActivity);
-    if (cooperativeScheduler) {
-      await cooperativeScheduler.afterEvent();
+    // Only an explicit stop or observed SSE terminal may authorize silent tool calls.
+    finalizeOpenAICompletionsToolCalls(output, {
+      allowSilentToolCallPromotion:
+        finishReason === "stop" ||
+        (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
+      onConfirmedToolCall(block, contentIndex) {
+        if (directMode || block.type !== "toolCall") {
+          return;
+        }
+        pushStreamEvent({
+          type: "toolcall_end",
+          contentIndex,
+          toolCall: block,
+          partial: output,
+        });
+      },
+    });
+    if (
+      confirmedInterruptedTextBlock &&
+      output.stopReason !== "toolUse" &&
+      output.stopReason !== "error" &&
+      output.stopReason !== "aborted"
+    ) {
+      tagInterruptedTextPhases(
+        output.content,
+        confirmedInterruptedTextBlock,
+        explicitVisibleTextBlocks,
+      );
+    }
+    if (output.stopReason !== "toolUse") {
+      clearPendingCommentaryText(provisionalCommentaryTags);
+    }
+    if (output.stopReason === "error" || output.stopReason === "aborted") {
+      tagUnresolvedTextAsCommentary(output);
+    }
+    if (output.stopReason === "toolUse") {
+      tagPendingCommentaryText(output.content);
+    }
+    completed = output.stopReason === "stop" || output.stopReason === "length";
+  } finally {
+    if (!completed) {
+      bodyPreview?.stop();
     }
   }
-  // The SDK can end an aborted SSE iterator normally; cancellation must win
-  // before buffered terminal markers can promote provisional tool calls.
-  throwIfModelStreamAborted(options?.signal);
-  if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
-    throw new Error("Stream ended without finish_reason");
-  }
-  flushReasoningTagTextPartitioner();
-  flushDeepSeekToolCallRecovererAtEnd();
-  flushDeepSeekTextFilterAtEnd();
-  currentBlock = null;
-  flushPendingPostToolCallDeltas();
-  // Only an explicit stop or observed SSE terminal may authorize silent tool calls.
-  finalizeOpenAICompletionsToolCalls(output, {
-    allowSilentToolCallPromotion:
-      finishReason === "stop" || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
-    onConfirmedToolCall(block, contentIndex) {
-      if (directMode || block.type !== "toolCall") {
-        return;
-      }
-      pushStreamEvent({
-        type: "toolcall_end",
-        contentIndex,
-        toolCall: block,
-        partial: output,
-      });
-    },
-  });
-  if (
-    confirmedInterruptedTextBlock &&
-    output.stopReason !== "toolUse" &&
-    output.stopReason !== "error" &&
-    output.stopReason !== "aborted"
-  ) {
-    tagInterruptedTextPhases(
-      output.content,
-      confirmedInterruptedTextBlock,
-      explicitVisibleTextBlocks,
-    );
-  }
-  if (output.stopReason !== "toolUse") {
-    clearPendingCommentaryText(provisionalCommentaryTags);
-  }
-  if (output.stopReason === "error" || output.stopReason === "aborted") {
-    tagUnresolvedTextAsCommentary(output);
-  }
-  if (output.stopReason === "toolUse") {
-    tagPendingCommentaryText(output.content);
-  }
-}
-
-export function shouldEmitOpenAICompletionsReasoning(
-  model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
-) {
-  if (!model.reasoning) {
-    return false;
-  }
-  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
-    return false;
-  }
-  return true;
-}
-
-function hasOpenAICompletionsReasoningUsageActivity(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
-) {
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  return (
-    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
-  );
 }

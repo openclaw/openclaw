@@ -8,6 +8,7 @@ import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js"
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
+import { handleBodyPreview } from "./embedded-agent-subscribe.body-preview.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   mergeReplyDirectiveResults,
@@ -65,6 +66,10 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  if (evtType === "text_preview" && assistantRecord) {
+    handleBodyPreview(ctx, assistantRecord);
+    return undefined;
+  }
   if (evtType !== "text_delta") {
     ctx.flushAssistantStream();
   }

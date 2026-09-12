@@ -639,3 +639,29 @@ describe("FeishuConfigSchema defaultAccount", () => {
     }
   });
 });
+
+describe("replaceable body preview configuration", () => {
+  it("leaves body previews disabled unless explicitly configured", () => {
+    expect(FeishuConfigSchema.parse({}).streaming?.bodyPreview).toBeUndefined();
+  });
+  it.each([true, false])("accepts bodyPreview=%s at root and account scope", (bodyPreview) => {
+    const value = {
+      streaming: { bodyPreview },
+      accounts: { work: { streaming: { bodyPreview } } },
+    };
+    expect(FeishuConfigSchema.parse(value)).toMatchObject(value);
+    expect(
+      validateJsonSchemaValue({
+        schema: FeishuChannelConfigSchema.schema,
+        cacheKey: "feishu-body-preview",
+        value,
+        applyDefaults: true,
+      }).ok,
+    ).toBe(true);
+  });
+  it("rejects a non-boolean opt-in", () => {
+    expect(FeishuConfigSchema.safeParse({ streaming: { bodyPreview: "true" } }).success).toBe(
+      false,
+    );
+  });
+});

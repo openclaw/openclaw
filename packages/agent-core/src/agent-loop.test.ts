@@ -70,6 +70,57 @@ const failingStreamFn: StreamFn = async () => {
   throw new Error("provider exploded");
 };
 
+it("forwards body previews without persisting provisional text", async () => {
+  const events: AgentEvent[] = [];
+  const streamFn: StreamFn = async () => {
+    const stream = createAssistantMessageEventStream();
+    const partial: AssistantMessage = {
+      role: "assistant",
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: TEST_USAGE,
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    stream.push({ type: "start", partial });
+    stream.push({
+      type: "text_preview",
+      previewId: "preview-test",
+      revision: 1,
+      text: "PROVISIONAL",
+      reset: false,
+    });
+    stream.push({
+      type: "done",
+      reason: "stop",
+      message: { ...partial, content: [{ type: "text", text: "Canonical." }] },
+    });
+    stream.end();
+    return stream;
+  };
+  const messages = await runAgentLoop(
+    [{ role: "user", content: "hello", timestamp: 0 }],
+    { systemPrompt: "", messages: [], tools: [] },
+    config,
+    (e) => {
+      events.push(structuredClone(e));
+    },
+    undefined,
+    streamFn,
+  );
+  const previews = events.filter(
+    (e) => e.type === "message_update" && e.assistantMessageEvent.type === "text_preview",
+  );
+  expect(previews).toHaveLength(1);
+  expect(JSON.stringify(messages)).not.toContain("PROVISIONAL");
+  expect(JSON.stringify(events.filter((e) => e.type === "message_end"))).not.toContain(
+    "PROVISIONAL",
+  );
+  expect(messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "Canonical." }] });
+});
+
 async function collectEvents(stream: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
   for await (const event of stream) {

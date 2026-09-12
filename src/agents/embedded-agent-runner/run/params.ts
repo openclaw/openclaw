@@ -425,6 +425,8 @@ export type RunEmbeddedAgentParams = {
   silentExpected?: boolean;
   /** Skip per-chunk live visible-text parsing when no live stream consumer exists (e.g. subagents). */
   suppressLiveStreamOutput?: boolean;
+  /** Allow ephemeral public-body snapshots for an explicitly opted-in preview consumer. */
+  bodyPreview?: boolean;
   /**
    * Treat a clean empty assistant stop as an intentional silent reply.
    * Only set when the caller's prompt policy already allows an exact NO_REPLY

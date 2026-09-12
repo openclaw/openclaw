@@ -280,6 +280,17 @@ export async function streamAgentResponse(
               break;
             }
 
+            case "text_preview":
+              if (partialMessage) {
+                // Previews must not enter updatePartial, persisted content or tool ownership.
+                await emit({
+                  type: "message_update",
+                  assistantMessageEvent: event,
+                  message: { ...partialMessage },
+                });
+              }
+              break;
+
             case "text_start":
             case "text_delta":
             case "text_end":

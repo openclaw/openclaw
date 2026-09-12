@@ -89,6 +89,12 @@ export interface StreamOptions {
    * `stop_sequences`.
    */
   stop?: string[];
+  /**
+   * Opt in to ephemeral, replaceable public-body snapshots. Consumers must
+   * support clearing/replacing previews; canonical messages remain unchanged.
+   * Currently implemented by the OpenAI-compatible completions transport.
+   */
+  bodyPreview?: boolean;
   signal?: AbortSignal;
   apiKey?: string;
   /**
@@ -477,6 +483,8 @@ export interface Context {
  */
 export type AssistantMessageEvent =
   | { type: "start"; partial: AssistantMessage }
+  /** Replaceable public-content preview. Never a transcript or final-answer checkpoint. */
+  | { type: "text_preview"; previewId: string; revision: number; text: string; reset: boolean }
   | { type: "text_start"; contentIndex: number; partial: AssistantMessage }
   /**
    * Plain text deltas may omit `partial` to avoid retaining one full assistant

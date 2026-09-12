@@ -117,6 +117,10 @@ export type PartialReplyPayload = {
   mediaUrls?: ReplyPayload["mediaUrls"];
   delta?: string;
   replace?: true;
+  /** Ephemeral snapshot ownership, never committed transcript content. */
+  previewId?: string;
+  revision?: number;
+  reset?: boolean;
 };
 
 type ReasoningStreamPayload = Pick<
@@ -229,6 +233,8 @@ export type GetReplyOptions = {
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Preserve source-event callback start order for stateful channel progress renderers. */
   preserveProgressCallbackStartOrder?: boolean;
+  /** Opt in to replaceable public-body previews on a compatible editable surface. */
+  bodyPreview?: boolean;
   onPartialReply?: (
     payload: PartialReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;

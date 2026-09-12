@@ -511,7 +511,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
   });
+  // The destination opts into provisional presentation per attempt. Keep this
+  // outside persisted model params so another destination cannot inherit it.
   session.agent.streamFn = streamFn;
+  if (attempt.bodyPreview === true && attempt.onPartialReply) {
+    session.agent.streamFn = (model, context, options) =>
+      streamFn(model, context, { ...options, bodyPreview: true });
+  }
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({

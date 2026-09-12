@@ -9,9 +9,9 @@ import {
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
-import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
+import { shouldEmitOpenAICompletionsReasoning } from "./openai-transport-shared.js";
 
 describe("openai completions stream", () => {
   afterAll(() => {

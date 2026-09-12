@@ -484,6 +484,27 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
   });
 
+  it("binds body previews to the opted-in destination for each attempt", async () => {
+    const { input, streamFn } = createTransportFixture({
+      compaction: false,
+      pruning: false,
+      apiKey: "test-api-key",
+    });
+    streamFn.mockImplementation(() => createAssistantMessageEventStream());
+    registerProviderStreamForModel.mockReturnValue(streamFn);
+    for (const [enabled, consumer, expected] of [
+      [true, true, true],
+      [false, true, false],
+      [true, false, false],
+    ]) {
+      input.attempt.bodyPreview = enabled;
+      input.attempt.onPartialReply = consumer ? vi.fn() : undefined;
+      await prepareEmbeddedAttemptTransport(input);
+      await input.session.agent.streamFn?.(input.attempt.model, { messages: [] }, {});
+      expect(streamFn.mock.calls.at(-1)?.[2]?.bodyPreview === true).toBe(expected);
+    }
+  });
+
   describe.each([false, true])("with code mode enabled: %s", (codeModeControlsEnabled) => {
     it.each([
       { label: "foreground", toolExecutionAllow: undefined, expectedSearch: true },
