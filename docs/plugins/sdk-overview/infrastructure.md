@@ -100,6 +100,14 @@ For stateless computation, `sharedCompute: true` also shares an aggregate
 pools in the same isolate. Dedicated ordered pools retain their own execution
 capacity and still enforce their individual admission limits.
 
+For a plugin-owned worker, pass `package: { name, distWorkerPath }` to
+`resolveRuntimeWorkerUrl` from the same SDK subpath. Use the plugin's
+`package.json` name and a worker path relative to its `dist` directory. The
+descriptor then supports bundled and standalone installations, including renamed
+installation directories. Declare the worker's source entry in
+[`openclaw.build.workerEntries`](/plugins/dependency-resolution#native-imports-from-a-standalone-source-build)
+so package builds emit it.
+
 ### SQLite worker stores
 
 Use `openSqliteWorkerStore<Operations>` from
