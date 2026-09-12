@@ -122,12 +122,38 @@ export async function listCronJobsFromGateway(
       }
 
       if (page.offset !== undefined && page.offset !== offset) {
-        throw new Error("cron.list returned an invalid inventory page");
+        // The Gateway clamps a requested offset above the filtered total down to
+        // `total` and returns an empty terminal page (hasMore=false). Accept that
+        // contract-defined terminal clamp; any other offset mismatch is invalid.
+        const isTerminalClamp =
+          page.hasMore === false &&
+          page.total !== undefined &&
+          page.offset === page.total;
+        if (!isTerminalClamp) {
+          throw new Error("cron.list returned an invalid inventory page");
+        }
       }
 
       if (singlePage) {
         // Single-page mode returns the one validated page without walking the
-        // rest of the snapshot. Preserve the page's own metadata only when the
+        // rest of the snapshot. Apply the same continuation and terminal
+        // invariants the multi-page path enforces, so an advertised cursor or
+        // terminal state cannot be internally inconsistent:
+        // - a continuation page must carry an advancing, exact nextOffset;
+        // - a terminal page must not advertise a nextOffset.
+        if (page.hasMore === true) {
+          if (
+            typeof page.nextOffset !== "number" ||
+            !Number.isSafeInteger(page.nextOffset) ||
+            page.nextOffset <= offset ||
+            (page.total !== undefined && page.nextOffset !== offset + page.jobs.length)
+          ) {
+            throw new Error("cron.list pagination did not advance while looking up automation");
+          }
+        } else if (page.nextOffset !== undefined && page.nextOffset !== null) {
+          throw new Error("cron.list returned an inconsistent terminal inventory page");
+        }
+        // Preserve the page's own metadata only when the
         // Gateway actually supplied it: a legacy page has no `total`, so we must
         // not fabricate one from the row count or fabricated totals would mislead
         // scripts that compute completion from the advertised inventory size.
