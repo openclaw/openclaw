@@ -12,7 +12,7 @@ import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
-import { finishFailedGatewayHttpResponse } from "../http-common.js";
+import { finishFailedGatewayHttpResponse, sendGatewayAuthFailure } from "../http-common.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import {
@@ -160,6 +160,8 @@ export type PluginRouteDispatchContext = {
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
   gatewayRequestClientIp?: string;
+  /** Re-check node capability fallback immediately before plugin dispatch. */
+  gatewayRequestNodeCapabilityRevalidate?: () => boolean;
 };
 
 export type PluginHttpRequestHandler = (
@@ -275,7 +277,16 @@ export function createGatewayPluginRequestHandler(params: {
               gatewayRequestOperatorScopes,
               gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
             }),
-            async () => runPluginRouteValue(route.handler, () => route.handler(req, res)),
+            async () => {
+              if (
+                dispatchContext?.gatewayRequestNodeCapabilityRevalidate &&
+                !dispatchContext.gatewayRequestNodeCapabilityRevalidate()
+              ) {
+                sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" });
+                return true;
+              }
+              return runPluginRouteValue(route.handler, () => route.handler(req, res));
+            },
           )) !== false;
         // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
@@ -356,6 +367,13 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
               }),
               async () => {
+                if (
+                  dispatchContext?.gatewayRequestNodeCapabilityRevalidate &&
+                  !dispatchContext.gatewayRequestNodeCapabilityRevalidate()
+                ) {
+                  rejectWebSocketUpgrade(socket, { status: 401 });
+                  return true;
+                }
                 const handleUpgrade = route.handleUpgrade!;
                 return runPluginRouteValue(handleUpgrade, () => handleUpgrade(req, socket, head));
               },
