@@ -1,7 +1,7 @@
 // Line plugin module implements channel shared behavior.
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { hasLineCredentials } from "./account-helpers.js";
+import { hasLineCredentials, hasUsableLineCredentials } from "./account-helpers.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { LineChannelConfigSchema } from "./config-schema.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -34,7 +34,7 @@ export const lineChannelPluginCommon = {
   configSchema: LineChannelConfigSchema,
   config: {
     ...lineConfigAdapter,
-    isConfigured: (account: ResolvedLineAccount) => hasLineCredentials(account),
+    isConfigured: (account: ResolvedLineAccount) => hasUsableLineCredentials(account),
     describeAccount: (account: ResolvedLineAccount) =>
       describeWebhookAccountSnapshot({
         account,
