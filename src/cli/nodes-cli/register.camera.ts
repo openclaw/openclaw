@@ -128,19 +128,19 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const facingOpt = normalizeLowercaseStringOrEmpty(
-            normalizeOptionalString(opts.facing) ?? "",
-          );
-          const facing =
-            facingOpt === ""
-              ? undefined
-              : facingOpt === "both" || facingOpt === "front" || facingOpt === "back"
-                ? facingOpt
-                : (() => {
-                    throw new Error(
-                      `invalid facing: ${String(opts.facing)} (expected front|back|both)`,
-                    );
-                  })();
+          // Distinguish omitted --facing from an explicit blank value. normalizeOptionalString
+          // collapses "" to undefined, so check opts.facing presence before coercing.
+          let facing: "front" | "back" | "both" | undefined;
+          if (opts.facing !== undefined) {
+            const facingOpt = normalizeLowercaseStringOrEmpty(
+              normalizeOptionalString(opts.facing) ?? "",
+            );
+            if (facingOpt === "both" || facingOpt === "front" || facingOpt === "back") {
+              facing = facingOpt;
+            } else {
+              throw new Error(`invalid facing: ${opts.facing} (expected front|back|both)`);
+            }
+          }
 
           const maxWidth = parseOptionalNodePositiveInteger(opts.maxWidth, "--max-width");
           const quality = parseOptionalNodeFiniteNumber(opts.quality, "--quality", {
