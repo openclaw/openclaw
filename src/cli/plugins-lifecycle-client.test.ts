@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn() 
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.call }));
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
-const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+const { resolvePluginLifecycleGateway, resolvePluginBatchReload } =
+  await import("./plugins-lifecycle-client.js");
 
 describe("plugin lifecycle CLI transport", () => {
   beforeEach(() => {
@@ -50,6 +51,26 @@ describe("plugin lifecycle CLI transport", () => {
     expect(await resolvePluginLifecycleGateway()).toBeNull();
     expect(mocks.call).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "requires an actual batch application receipt (present=%s)",
+    async (present) => {
+      const runtime = { operationId: "batch", generation: 2, pluginIds: ["demo"] };
+      const targets = [{ pluginId: "demo", installHash: "a".repeat(64) }];
+      const warnings = ["Previous plugin cleanup did not finish."];
+      mocks.call.mockResolvedValue(present ? { runtime, warnings } : {});
+      const reload = await resolvePluginBatchReload();
+      expect(reload).toBeDefined();
+      if (present) {
+        await expect(reload!(targets)).resolves.toEqual({ ...runtime, warnings });
+      } else {
+        await expect(reload!(targets)).rejects.toThrow("did not confirm");
+      }
+      expect(mocks.call).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ method: "plugins.reload", params: { plugins: targets } }),
+      );
+    },
+  );
 
   it("propagates a lost reply without retrying a possibly committed mutation", async () => {
     const failure = new Error("connection lost");

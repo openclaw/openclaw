@@ -20,15 +20,12 @@ export type RunPluginInstallCommandParams = {
     acceptCapabilities?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
-    expectedIntegrity?: string;
-    expectedPluginId?: string;
     force?: boolean;
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
   };
   invalidateRuntimeCache?: boolean;
-  clawManaged?: boolean;
   runtime?: RuntimeEnv;
   /** Synchronous authority guard at the final plugin/config mutation. */
   beforePersistentApply?: () => void;

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPluginSnapshotReportMock,
   clearPluginRegistryLoadCacheMock,
@@ -49,6 +49,54 @@ describe("persistPluginInstall", () => {
     clearPluginMetadataLifecycleCaches();
     resetPluginsCliTestState();
   });
+
+  it.each([false, true])(
+    "hands durable batch facts to the coordinator before later output failure=%s",
+    async (outputFails) => {
+      const { persistPluginInstall } = await import("./install-persistence.js");
+      const record = vi.fn();
+      const deferRuntime = { record, deferCleanup: vi.fn() };
+      const commit = vi.fn(async () => undefined);
+      const rollback = vi.fn(async () => undefined);
+      const failure = new Error("terminal output unavailable");
+      const options = {
+        snapshot: { config: {}, baseHash: "config-1", writeOptions: installWriteOptions },
+        pluginId: "alpha",
+        install: { source: "archive" as const, installPath: "/tmp/alpha" },
+        enable: false,
+        deferRuntime,
+        transaction: { commit, rollback },
+        runtime: {
+          log: () => {
+            if (outputFails) {
+              throw failure;
+            }
+          },
+        },
+      };
+      const pending = persistPluginInstall(options);
+      if (outputFails) {
+        await expect(pending).rejects.toMatchObject({ pluginId: "alpha", cause: failure });
+      } else {
+        await pending;
+      }
+      expect(record).toHaveBeenCalledOnce();
+      expect(record.mock.calls[0]?.[0]).toMatchObject({
+        pluginId: "alpha",
+        operation: "install",
+        sourceDigests: {},
+      });
+      expect(replaceConfigFileMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            afterWrite: expect.objectContaining({ mode: "none" }),
+          }),
+        }),
+      );
+      expect(commit).toHaveBeenCalledOnce();
+      expect(rollback).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["before index", "at config publication"])(
     "rejects an expired owner %s and restores tentative state",

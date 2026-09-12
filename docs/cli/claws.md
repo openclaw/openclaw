@@ -375,6 +375,21 @@ instructions, writes declared workspace assets, realizes workspace skills, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
 and retries fail closed when owned content drifted.
 
+With a local Gateway running, Claw add and update apply their plugin requirements
+before continuing to the agent, workspace, MCP, and cron phases. One bounded
+handoff reloads the affected packages after the package leases have been released;
+it does not restart the Gateway or reload unrelated plugins. A live requirement
+batch supports at most 64 plugin packages. Normal package, capability, and trust
+confirmation still apply.
+
+If installation was saved but runtime activation was not confirmed, the command
+reports that distinction and stops before later phases. Inspect the reported
+error and preview again before retrying. An exact retry reuses the saved package
+and retries activation. Successfully realized shared requirements remain installed
+if a later Claw phase fails. Disabled or metadata-only entries remain unevaluated;
+their source has not been verified by runtime execution. With no local Gateway,
+installation retains the existing restart requirement.
+
 ## Inspect installed state
 
 ```bash

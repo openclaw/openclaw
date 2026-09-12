@@ -11,6 +11,7 @@ import {
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "../cli/plugins-cli-test-helpers.js";
+import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
 const snapshot = {
@@ -28,6 +29,40 @@ const install = {
 describe("plugin install persistence warning audiences", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+  });
+
+  it("delivers deferred source cleanup warnings to the live batch consumer", async () => {
+    const { persistPluginInstall } = await import("./install-persistence.js");
+    const cleanups: Parameters<PluginInstallRuntimeDeferral["deferCleanup"]>[0][] = [];
+    const lateWarning = vi.fn();
+    const warning = "Previous plugin source could not be removed";
+    setInstalledPluginIndexInstallRecords({
+      workboard: { source: "clawhub", installPath: "/private/previous-source/workboard" },
+    });
+    planPluginUninstallMock.mockReturnValueOnce({
+      ok: true,
+      config: {},
+      pluginId: "workboard",
+      actions: {},
+      directoryRemoval: { target: "/private/previous-source/workboard" },
+    });
+    applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
+      directoryRemoved: false,
+      warnings: [warning],
+    });
+    await persistPluginInstall({
+      snapshot,
+      pluginId: "workboard",
+      install,
+      enable: false,
+      runtime: { log: () => {} },
+      persistenceLogger: { warn: () => {} },
+      deferRuntime: { record: () => {}, deferCleanup: (cleanup) => cleanups.push(cleanup) },
+    });
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
+    expect(cleanups).toHaveLength(1);
+    await cleanups[0]!(() => {}, lateWarning);
+    expect(lateWarning).toHaveBeenCalledExactlyOnceWith(warning);
   });
 
   it("reports missing required configuration without forwarding informational logs", async () => {

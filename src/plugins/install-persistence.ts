@@ -14,6 +14,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { enablePluginInConfig, prepareConfigForDisabledInstall } from "./enable.js";
 import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
+import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import type { PluginInstallTransaction } from "./install-transaction.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import {
@@ -34,6 +35,7 @@ import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
+import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
@@ -201,6 +203,7 @@ export async function persistPluginInstall(params: {
   persistenceLogger?: PluginInstallLogger;
   transaction?: PluginInstallTransaction;
   applyRuntime?: PluginLifecycleRuntimeApply;
+  deferRuntime?: PluginInstallRuntimeDeferral;
   beforePersistentApply?: () => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<OpenClawConfig> {
@@ -354,6 +357,18 @@ export async function persistPluginInstall(params: {
         slotWarnings.push(...slotResult.warnings);
       }
       next = withoutPluginInstallRecords(next);
+      const enabled = new Set(enabledPluginIds);
+      const source = params.deferRuntime
+        ? inspectPluginGenerationSources(
+            manifests
+              .filter((manifest) => enabled.has(manifest.id) && manifest.origin !== "bundled")
+              .map((manifest) => ({
+                pluginId: manifest.id,
+                rootDir: manifest.rootDir,
+                entryFile: manifest.manifestPath === manifest.source ? manifest.source : undefined,
+              })),
+          )
+        : undefined;
       const receipt = await tracePluginLifecyclePhaseAsync(
         "config mutation",
         () =>
@@ -365,9 +380,10 @@ export async function persistPluginInstall(params: {
             beforePersistentEffect: params.beforePersistentEffect,
             writeOptions: {
               ...params.snapshot.writeOptions,
-              afterWrite: params.applyRuntime
-                ? { mode: "none", reason: "plugin lifecycle applies runtime" }
-                : { mode: "restart", reason: "plugin source changed" },
+              afterWrite:
+                params.applyRuntime || params.deferRuntime
+                  ? { mode: "none", reason: "plugin lifecycle applies runtime" }
+                  : { mode: "restart", reason: "plugin source changed" },
               ...(params.beforePersistentApply
                 ? {
                     assertConfigPathForWrite: () => {
@@ -382,6 +398,15 @@ export async function persistPluginInstall(params: {
       );
       // Publish the durable install before activation can fail; keep running metadata unchanged.
       committed = true;
+      params.deferRuntime?.record(
+        {
+          operation: "install",
+          pluginId: params.pluginId,
+          sourceDigests: source?.sourceDigests ?? {},
+          write: receipt,
+        },
+        source?.assertSourceCurrent,
+      );
       refreshManagedPluginMetadata({ config: next });
       // Publish and drain the previous generation before removing its source files.
       await params.applyRuntime?.({
@@ -392,27 +417,34 @@ export async function persistPluginInstall(params: {
         assertInvokerOwned: params.beforePersistentApply,
       });
       if (replacedInstallRemoval) {
-        const removalResult = await tracePluginLifecyclePhaseAsync(
-          "replaced install cleanup",
-          () =>
-            applyPluginUninstallDirectoryRemoval(
-              replacedInstallRemoval,
-              params.beforePersistentApply,
+        const cleanup = async (
+          assertOwned?: () => void,
+          reportWarning = (message: string) =>
+            warn(
+              message,
+              "A previous plugin installation could not be fully cleaned up. Run `openclaw plugins doctor`.",
             ),
-          { command: "install", pluginId: params.pluginId },
-        );
-        for (const warning of removalResult.warnings) {
-          warn(
-            warning,
-            "A previous plugin installation could not be fully cleaned up. Run `openclaw plugins doctor`.",
+        ) => {
+          const removalResult = await tracePluginLifecyclePhaseAsync(
+            "replaced install cleanup",
+            () => applyPluginUninstallDirectoryRemoval(replacedInstallRemoval, assertOwned),
+            { command: "install", pluginId: params.pluginId },
           );
-        }
-        if (removalResult.directoryRemoved) {
-          runtime.log(
-            theme.muted(
-              `Removed previous plugin install directory: ${shortenHomePath(replacedInstallRemoval.target)}`,
-            ),
-          );
+          for (const warning of removalResult.warnings) {
+            reportWarning(warning);
+          }
+          if (removalResult.directoryRemoved) {
+            runtime.log(
+              theme.muted(
+                `Removed previous plugin install directory: ${shortenHomePath(replacedInstallRemoval.target)}`,
+              ),
+            );
+          }
+        };
+        if (params.deferRuntime) {
+          params.deferRuntime.deferCleanup(cleanup, replacedInstallRemoval.target);
+        } else {
+          await cleanup(params.beforePersistentApply);
         }
       }
       await refreshPluginRegistryAfterConfigMutation({
@@ -460,7 +492,7 @@ export async function persistPluginInstall(params: {
         install: params.install,
         warn,
       });
-      if (!params.applyRuntime) {
+      if (!params.applyRuntime && !params.deferRuntime) {
         runtime.log(
           "Plugin source changes take effect on the next Gateway start. Installs performed by the running Gateway request an automatic restart when config reload is enabled; installs from a separate shell, or with config reload off, require a manual Gateway restart. Configuration reload can restart connected channels before that Gateway restart.",
         );

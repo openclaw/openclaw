@@ -180,6 +180,7 @@ export async function installManagedPlugin(
         : undefined;
       const installed = await installManagedPluginSource({
         applyRuntime: captured?.applyRuntime,
+        deferRuntime: params.deferRuntime,
         beforePersistentApply,
         request,
         snapshot,

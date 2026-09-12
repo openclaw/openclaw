@@ -32,6 +32,7 @@ import {
 import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { persistPluginInstall } from "./install-persistence.js";
+import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import {
@@ -231,6 +232,7 @@ type ManagedPluginSourceInstallParams = {
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   applyRuntime?: PluginLifecycleRuntimeApply;
+  deferRuntime?: PluginInstallRuntimeDeferral;
   beforePersistentApply?: () => void;
   /** Revalidate the initiating owner after artifact review and before durable activation. */
   beforePersistentEffect?: () => void | Promise<void>;

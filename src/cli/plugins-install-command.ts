@@ -61,8 +61,8 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       }
       throw error;
     });
-    // A Claw batch owns a lease across multiple packages; a guarded in-process
-    // operation owns a callback that cannot be serialized into another process.
+    // An enclosing lifecycle lease or in-process authority guard cannot cross
+    // the Gateway RPC boundary.
     const gateway =
       params.applyRuntime || params.beforePersistentApply || hasPluginLifecycleLease()
         ? null
@@ -77,17 +77,9 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       runtime.log(theme.warn(sourcePlan.warning));
     }
     result = await installPluginWithHookFallback({
-      request:
-        request.source === "clawhub"
-          ? {
-              ...request,
-              ...(opts.expectedPluginId ? { expectedPluginId: opts.expectedPluginId } : {}),
-              ...(opts.expectedIntegrity ? { expectedIntegrity: opts.expectedIntegrity } : {}),
-            }
-          : request,
+      request,
       snapshot,
       runtime,
-      clawManaged: params.clawManaged,
       applyRuntime: params.applyRuntime,
       beforePersistentApply: params.beforePersistentApply,
       invalidateRuntimeCache: params.invalidateRuntimeCache ?? true,
