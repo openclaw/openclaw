@@ -16,7 +16,7 @@ import {
   type AgentProvenance,
 } from "../state/agent-provenance.js";
 import { shortenHomePath } from "../utils.js";
-import { describeBinding } from "./agents.bindings.js";
+import { describeBinding } from "./agents.binding-format.js";
 import type { AgentSummary } from "./agents.config.js";
 import { buildAgentSummaries } from "./agents.config.js";
 import {
@@ -155,35 +155,35 @@ export async function agentsListCommand(
       }
     }
   }
-  const bindingMap = new Map<string, AgentRouteBinding[]>();
-  for (const binding of listRouteBindings(cfg)) {
-    const agentId = normalizeAgentId(binding.agentId);
-    const list = bindingMap.get(agentId) ?? [];
-    list.push(binding);
-    bindingMap.set(agentId, list);
-  }
-
-  if (opts.bindings) {
-    for (const summary of summaries) {
-      const bindings = bindingMap.get(summary.id) ?? [];
-      if (bindings.length > 0) {
-        summary.bindingDetails = bindings.map((binding) => describeBinding(binding));
-      }
-    }
-  }
-
   // Provider details are only used for human text output
   // (`summary.providers` is rendered in the text formatter). JSON callers
   // (dashboards, monitors, IDE plugins) poll the config/state-derived fields, so
   // skip the provider detail pass unless they explicitly ask for enrichment.
   // This keeps JSON and tree output off the bundled plugin runtime path.
   const includeProviderDetails = (!opts.json && !opts.tree) || opts.bindings === true;
-  const providerStatus = includeProviderDetails ? await buildProviderStatusIndex(cfg) : null;
-  const providerMetadata = includeProviderDetails ? buildProviderSummaryMetadataIndex(cfg) : null;
+  if (includeProviderDetails) {
+    const bindingMap = new Map<string, AgentRouteBinding[]>();
+    for (const binding of listRouteBindings(cfg)) {
+      const agentId = normalizeAgentId(binding.agentId);
+      const list = bindingMap.get(agentId) ?? [];
+      list.push(binding);
+      bindingMap.set(agentId, list);
+    }
 
-  for (const summary of summaries) {
-    const bindings = bindingMap.get(summary.id) ?? [];
-    if (includeProviderDetails && providerStatus && providerMetadata) {
+    if (opts.bindings) {
+      for (const summary of summaries) {
+        const bindings = bindingMap.get(summary.id) ?? [];
+        if (bindings.length > 0) {
+          summary.bindingDetails = bindings.map((binding) => describeBinding(binding));
+        }
+      }
+    }
+
+    const providerStatus = await buildProviderStatusIndex(cfg);
+    const providerMetadata = buildProviderSummaryMetadataIndex(cfg);
+
+    for (const summary of summaries) {
+      const bindings = bindingMap.get(summary.id) ?? [];
       const routes = summarizeBindings(cfg, bindings, providerMetadata);
       if (routes.length > 0) {
         summary.routes = routes;
