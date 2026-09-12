@@ -8584,8 +8584,9 @@ describe("update-cli", () => {
       unattendedRepair.mockImplementationOnce(async (repair) => {
         events.push("repair");
         expectNoSideEffects(serviceStop, serviceStart, serviceRestart, runRestartScript);
-        expect(repair.target.installRoot).toBe(pkgRoot);
-        expect(repair.target.candidateRoot).toBe(candidateRoot);
+        // Rehearsal state belongs to the candidate, so the candidate hosts repair.
+        expect(repair.target.installRoot).toBe(candidateRoot);
+        expect(repair.target.installRoot).not.toBe(pkgRoot);
         expect(repair.target.stateDir).not.toBe(resolveStateDir());
         rehearsalStateDir = repair.target.stateDir;
         expect(repair.target.environment).toMatchObject({
