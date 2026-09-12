@@ -9,11 +9,16 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
+import {
+  assertOpenClawDatabasesReady,
+  preflightOpenClawDatabaseSchemas,
+} from "./openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -70,6 +75,23 @@ describe("agent database admission", () => {
         database.close();
       }
       const copyBytes = fs.readFileSync(target);
+      const admission = await preflightOpenClawDatabaseSchemas({
+        env,
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+        configuredAgentDatabaseTargets: [{ agentId, path: target }],
+        agentAdmissionConfig: config,
+      });
+      expect(admission.agentRefusals).toContainEqual(
+        expect.objectContaining({
+          agentId,
+          embeddedOwnerId: "main",
+          code: "agent-database-ownership-mismatch",
+        }),
+      );
+      expect(fs.readFileSync(target)).toEqual(copyBytes);
       const startup = () =>
         assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config });
       if (!isolate) {

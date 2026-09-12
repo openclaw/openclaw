@@ -23,10 +23,7 @@ import {
   inspectSqliteSchemaHeader,
   prepareSqliteReadOnlyLocation,
 } from "../infra/sqlite-snapshot-source.js";
-import {
-  readSqliteUserVersion,
-  SqliteSchemaVersionError,
-} from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion, SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { isValidAgentId } from "../routing/session-key.js";
 import {
