@@ -1,5 +1,6 @@
 // Nostr profile HTTP operations for the channels page: gateway REST calls for
 // publishing and importing the relay profile, plus validation-error parsing.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NostrProfile } from "../../api/types.ts";
 import { fetchWithControlUiAuth, readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -12,7 +13,7 @@ type NostrProfileRequest = {
   isCurrent: () => boolean;
 };
 
-async function requestNostrProfile<T>(
+async function requestNostrProfile(
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
   auth: NostrProfileRequest,
@@ -32,7 +33,7 @@ async function requestNostrProfile<T>(
       auth.authCandidates,
       auth.isCurrent,
     );
-    return await readControlUiJsonResponse<T>(response, controller.signal);
+    return await readControlUiJsonResponse(response, controller.signal);
   } finally {
     clearTimeout(timeout);
   }
@@ -69,11 +70,7 @@ export async function putNostrProfile(
     values: NostrProfile;
   },
 ) {
-  return await requestNostrProfile<{
-    ok?: boolean;
-    details?: unknown;
-    persisted?: boolean;
-  }>(
+  return await requestNostrProfile(
     buildNostrProfileUrl(params.accountId),
     {
       method: "PUT",
@@ -86,13 +83,18 @@ export async function putNostrProfile(
   );
 }
 
+function isNostrProfile(value: unknown): value is NostrProfile {
+  return (
+    isRecord(value) &&
+    ["name", "displayName", "about", "picture", "banner", "website", "nip05", "lud16"].every(
+      (field) =>
+        value[field] === undefined || value[field] === null || typeof value[field] === "string",
+    )
+  );
+}
+
 export async function importNostrProfile(params: NostrProfileRequest) {
-  return await requestNostrProfile<{
-    ok?: boolean;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
-  }>(
+  const result = await requestNostrProfile(
     buildNostrProfileUrl(params.accountId, "/import"),
     {
       method: "POST",
@@ -103,4 +105,14 @@ export async function importNostrProfile(params: NostrProfileRequest) {
     },
     params,
   );
+  return {
+    ...result,
+    data: result.data && {
+      ...result.data,
+      ok: result.data.ok,
+      saved: result.data.saved,
+      imported: isNostrProfile(result.data.imported) ? result.data.imported : undefined,
+      merged: isNostrProfile(result.data.merged) ? result.data.merged : undefined,
+    },
+  };
 }

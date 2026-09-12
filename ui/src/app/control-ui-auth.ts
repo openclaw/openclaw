@@ -1,11 +1,12 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { formatUiExternalText } from "../lib/format-error.ts";
 
 /** Decode a Gateway JSON response once, preserving validation details and HTTP status. */
-export async function readControlUiJsonResponse<T>(response: Response, signal: AbortSignal) {
-  let data: (T & { ok?: boolean; error?: unknown }) | null = null;
+export async function readControlUiJsonResponse(response: Response, signal: AbortSignal) {
+  let data: Record<string, unknown> | null = null;
   try {
-    data = await response.json();
+    data = asNullableRecord(await response.json());
   } catch {
     signal.throwIfAborted();
   }

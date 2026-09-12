@@ -188,6 +188,31 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
+  it.each(["Imported name", null])(
+    "openclaw-channels-page Import from Relays preserves profile name %s with extra fields",
+    async (name) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({
+            ok: true,
+            saved: true,
+            merged: { name, displayName: "Imported display", extra: { value: true } },
+          }),
+        ),
+      );
+      const { source, page } = await mountNostrProfile();
+      profileButton(page, "Import from Relays").click();
+      await vi.waitFor(() => expect(page.textContent).toContain("Profile imported"));
+      expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe(name ?? "");
+      expect(page.querySelector<HTMLInputElement>("#nostr-profile-displayName")?.value).toBe(
+        "Imported display",
+      );
+      source.runtimeConfig.dispose();
+      source.channels.dispose();
+    },
+  );
+
   it("openclaw-channels-page Save & Publish preserves HTTP validation details", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
