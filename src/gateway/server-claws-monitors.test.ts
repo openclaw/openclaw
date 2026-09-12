@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -581,14 +582,14 @@ describe("Claw serving monitor cleanup", () => {
           BEFORE DELETE ON cron_jobs WHEN OLD.agent_id = 'worker'
           BEGIN SELECT RAISE(ABORT, 'synthetic monitor persistence failure'); END`);
       }
-      const rename = fs.rename.bind(fs);
+      const renameSync = fsNode.renameSync.bind(fsNode);
       const writeFailure =
         failure === "config-write"
-          ? vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          ? vi.spyOn(fsNode, "renameSync").mockImplementation((...args) => {
               if (args[1] === current.state.configPath) {
                 throw new Error("synthetic config persistence failure");
               }
-              await rename(...args);
+              renameSync(...args);
             })
           : undefined;
       let result: Awaited<ReturnType<typeof current.apply>>;

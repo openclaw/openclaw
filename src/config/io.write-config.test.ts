@@ -3910,8 +3910,11 @@ describe("config io write", () => {
     "executor-explicit",
     "executor-ambient",
   ] as const;
-  for (const { publication, layout } of copyFallbackPublications.flatMap((publication) =>
-    (["plain", "include"] as const).map((layout) => ({ publication, layout })),
+  for (const { publication, layout } of copyFallbackPublications.flatMap((publicationKind) =>
+    (["plain", "include"] as const).map((configLayout) => ({
+      publication: publicationKind,
+      layout: configLayout,
+    })),
   )) {
     itWithHome(
       `preserves copy fallback for ${publication} publication with ${layout} config`,
