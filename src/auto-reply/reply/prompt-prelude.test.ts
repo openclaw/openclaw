@@ -177,7 +177,7 @@ describe("buildReplyPromptEnvelope", () => {
           "#35674 Other: I wish I could enjoy 5.5",
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Treat this message as observed room activity, not a request. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. Do not mention or reference your tagging or mention status when you do respond. To respond visibly, use message(action=send); your final text here stays private either way.",
         "Thread note",
         "System event",
       ].join("\n\n"),
@@ -196,7 +196,7 @@ describe("buildReplyPromptEnvelope", () => {
           JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
           "```",
         ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Treat this message as observed room activity, not a request. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. Do not mention or reference your tagging or mention status when you do respond. To respond visibly, use message(action=send); your final text here stays private either way.",
         "Thread note",
         "System event",
       ].join("\n\n"),
@@ -269,13 +269,18 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
     expect(envelope.queuedBody).toBe("#2002 Bob: current note");
     expect(envelope.currentInboundContext?.text).toContain(
-      "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
+      "Treat this message as observed room activity, not a request. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. Do not mention or reference your tagging or mention status when you do respond.",
     );
     expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");
     expect(envelope.currentInboundContext?.text).not.toContain(
       "your final text here stays private",
     );
     expect(envelope.queuedBody).not.toContain("[Chat history]");
+    // Stating tagging status seeds unwanted meta-commentary ("you didn't tag
+    // me, but...") when the model does choose to respond.
+    expect(envelope.currentInboundContext?.text).not.toContain(
+      "You were not explicitly tagged or mentioned",
+    );
   });
 
   it("keeps completed audio transcripts in room-event bodies", () => {
