@@ -328,7 +328,7 @@ export async function resolveTelegramInboundBody(params: {
       (richText ? hasBotMentionInText(richText, botUsername) : false)
     : false;
   const computedWasMentioned = matchesMentionWithExplicit({
-    text: messageTextParts.text || richText || "",
+    text: getTelegramTextParts({ ...msg, contact: undefined }).text || richText || "",
     mentionRegexes,
     explicit: {
       hasAnyMention,
