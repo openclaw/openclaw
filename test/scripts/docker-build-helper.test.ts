@@ -7649,11 +7649,10 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d',
     );
     expect(packageRunner).not.toMatch(/(^|\n)docker run -d/u);
-    for (const runner of [composeRunner, packageRunner]) {
-      expect(runner).toContain(
-        'node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts"',
-      );
-    }
+    expect(composeRunner).toContain(
+      'node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts"',
+    );
+    expect(packageRunner).toContain('bash "$ROOT_DIR/scripts/e2e/lib/docker-package-identity.sh"');
   });
 
   it("copies the complete bun harness closure into the package-install lane", () => {
@@ -7718,7 +7717,6 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       'corepack prepare "$1" --activate',
       "pnpm list --global --json",
       'test -f "$package_root/package.json"',
-      'test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"',
       "pnpm add --global openclaw@file:/tmp/openclaw-current.tgz",
       'pnpm approve-builds --global "$artifact_build"',
       "bun@1.4.0",
@@ -7728,9 +7726,9 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       'PACKAGE_HARNESS_DIR="$(mktemp -d',
       "chmod -R a+rX",
       '-v "$PACKAGE_HARNESS_DIR:/repo:ro"',
-      '--container "npm=$NPM_PROOF_CONTAINER"',
-      '--container "pnpm=$PNPM_PROOF_CONTAINER"',
-      '--container "bun=$BUN_PROOF_CONTAINER"',
+      '"$PACKAGE_TGZ" \\',
+      '"$IDENTITY_PATH" \\',
+      '"$MUSL_PROOF_CONTAINER"',
     ]);
     expect(packageRunner).not.toContain('-v "$ROOT_DIR:/repo:ro"');
     expectTextToIncludeAll(installerRunner, [
