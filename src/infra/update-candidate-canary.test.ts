@@ -557,6 +557,73 @@ describe("update candidate canary", () => {
     await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("cancels the ready probe body without decoding it", async () => {
+    const readyResponse = Response.json({ ready: true });
+    const decodeReadyBody = vi.spyOn(readyResponse, "json");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("startupz") ? Response.json({ status: "started" }) : readyResponse,
+      ),
+    );
+
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+
+    expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+    expect(decodeReadyBody).not.toHaveBeenCalled();
+    expect(readyResponse.bodyUsed).toBe(true);
+  });
+
+  it("rejects an oversized streamed startup payload before advancing to readiness", async () => {
+    const encoded = new TextEncoder().encode(
+      JSON.stringify({ status: "started", padding: "x".repeat(128 * 1024) }),
+    );
+    let offset = 0;
+    let cancelled = false;
+    const startupResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (offset >= encoded.length) {
+            controller.close();
+            return;
+          }
+          const next = encoded.subarray(offset, offset + 8 * 1024);
+          offset += next.length;
+          controller.enqueue(next);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const gateway = [...children.values()].at(-1)!;
+        queueMicrotask(() => gateway.emit("close", 1));
+        return startupResponse;
+      }),
+    );
+
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+
+    expect(result).toMatchObject({ status: "error", phase: "startup" });
+    expect(cancelled).toBe(true);
+    expect(offset).toBeLessThan(encoded.length);
+  });
+
   it("reuses caller-owned rehearsal changes across validations until the caller disposes them", async () => {
     const config: OpenClawConfig = { logging: { level: "info" } };
     const observed: Array<{ configPath: string; level: string | undefined }> = [];

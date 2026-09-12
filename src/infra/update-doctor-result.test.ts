@@ -241,4 +241,17 @@ describe("post-install doctor result IPC", () => {
     await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toBeNull();
     await expect(fs.access(resultPath)).rejects.toThrow();
   });
+
+  it("rejects and removes an oversized result without materializing the whole file", async () => {
+    const resultPath = createUpdatePostInstallDoctorResultPath();
+    resultPaths.push(resultPath);
+    await fs.writeFile(
+      resultPath,
+      JSON.stringify({ status: "ok", padding: "x".repeat(1024 * 1024) }),
+      { encoding: "utf8", mode: 0o600, flag: "wx" },
+    );
+
+    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toBeNull();
+    await expect(fs.access(resultPath)).rejects.toThrow();
+  });
 });
