@@ -5,7 +5,7 @@ import {
   createRuntimeEnv,
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { hasUsableOAuthCredential, type OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { withProxyFixture } from "openclaw/plugin-sdk/test-env";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
@@ -557,45 +557,108 @@ describe("xAI OAuth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("does not coerce partial xAI expires_in values", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        access_token: "access-2",
-        expires_in: "120s",
-      }),
-    );
-    const credential = createXaiOAuthCredential();
-
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
-
-    expect(refreshed.expires).toBe(100);
-  });
-
-  it("preserves the cached xAI expiry when token lifetimes overflow safe milliseconds", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
+  it.each([
+    {
+      label: "does not coerce partial xAI expires_in values",
+      body: { access_token: "access-2", expires_in: "120s" },
+    },
+    {
+      label: "rejects xAI token lifetimes that overflow safe milliseconds",
+      body: {
         access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
         expires_in: Number.MAX_SAFE_INTEGER,
-      }),
-    );
+      },
+    },
+    {
+      label: "rejects unsafe JWT expiry fallbacks from xAI access tokens",
+      body: { access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }) },
+    },
+    {
+      label: "rejects xAI token responses that omit any expiry",
+      body: { access_token: "access-2" },
+    },
+  ])("$label instead of retaining the previous expiry", async ({ body }) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(body));
     const credential = createXaiOAuthCredential();
 
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
-
-    expect(refreshed.expires).toBe(100);
+    await expect(
+      refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 }),
+    ).rejects.toThrow("missing a usable access-token lifetime");
   });
 
-  it("ignores unsafe JWT expiry fallbacks from xAI access tokens", async () => {
+  it("publishes a refreshed xAI credential that is usable at response time", async () => {
+    const now = 1_000;
     const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
-      }),
+      jsonResponse({ access_token: "access-2", expires_in: 3_600 }),
     );
     const credential = createXaiOAuthCredential();
 
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => now });
 
-    expect(refreshed.expires).toBe(100);
+    expect(refreshed.access).toBe("access-2");
+    expect(refreshed.expires).not.toBe(credential.expires);
+    expect(hasUsableOAuthCredential(refreshed, { now })).toBe(true);
+  });
+
+  it("derives the refreshed xAI expiry from the access-token exp claim", async () => {
+    const now = 1_000;
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ access_token: createJwt({ exp: 7_200 }) }),
+    );
+    const credential = createXaiOAuthCredential();
+
+    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => now });
+
+    expect(refreshed.expires).toBe(7_200_000);
+    expect(hasUsableOAuthCredential(refreshed, { now })).toBe(true);
+  });
+
+  it("rejects a device-code login whose token response has no usable lifetime", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+          device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          device_code: "device-code-1",
+          user_code: "ABCD-1234",
+          verification_uri: "https://accounts.x.ai/oauth2/device",
+          expires_in: 900,
+          interval: 5,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          access_token: "access-token",
+          refresh_token: "refresh-1",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchImpl);
+    const ctx: ProviderAuthContext = {
+      config: {},
+      isRemote: false,
+      assertCurrent: vi.fn(),
+      openUrl: vi.fn(async () => {}),
+      prompter: createTestWizardPrompter({
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        deviceCode: vi.fn(async () => {}),
+      }),
+      runtime: { ...createRuntimeEnv(), log: vi.fn() },
+      oauth: {
+        createVpsAwareHandlers: () => {
+          throw new Error("unexpected VPS OAuth handler request");
+        },
+      },
+    } as unknown as ProviderAuthContext;
+
+    await expect(createXaiOAuthAuthMethod().run(ctx)).rejects.toThrow(
+      "missing a usable access-token lifetime",
+    );
   });
 
   it.each(["fresh", "subscription", "api", "credential-only"] as const)(
