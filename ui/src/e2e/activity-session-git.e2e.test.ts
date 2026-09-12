@@ -89,12 +89,14 @@ suite.define(() => {
         );
         const now = Date.now();
         const sessions = chatSessionListResponse(
-          ([
-            [keys.frontend, "Activity feed improvements", "Alex Morgan", "main"],
-            [keys.review, "Review Gateway reconnection", "Casey Brooks", "reviewer"],
-            [keys.branch, "Polish responsive navigation", "Sam Rivera", "main"],
-            [keys.notes, "Release planning notes", "Alex Morgan", "main"],
-          ] as const).map(([key, label, owner, agentId], index) => ({
+          (
+            [
+              [keys.frontend, "Activity feed improvements", "Alex Morgan", "main"],
+              [keys.review, "Review Gateway reconnection", "Casey Brooks", "reviewer"],
+              [keys.branch, "Polish responsive navigation", "Sam Rivera", "main"],
+              [keys.notes, "Release planning notes", "Alex Morgan", "main"],
+            ] as const
+          ).map(([key, label, owner, agentId], index) => ({
             key,
             label,
             agentId,
