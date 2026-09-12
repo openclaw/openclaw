@@ -2,8 +2,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   installModelsConfigTestHooks,
   MODELS_CONFIG_IMPLICIT_ENV_VARS,

@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   findComposerButton as button,
@@ -38,9 +39,53 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
+  it.each([true, false])("keeps submission gated while history is pending: %s", (pending) => {
+    const onSend = vi.fn();
+    const reason = pending ? "Loading chat" : "History failed. Retry to load the conversation.";
+    const { container } = renderComposer({
+      draft: "Keep this draft",
+      submitDisabledReason: reason,
+      submitPending: pending,
+      onSend,
+    });
+    const send = primaryButton(container);
+    expect(send.disabled).toBe(true);
+    expect(send.getAttribute("aria-label")).toBe(reason);
+    expect(send.getAttribute("aria-busy")).toBe(String(pending));
+    expect(send.querySelector(".btn__spinner") !== null).toBe(pending);
+    send.click();
+    pressComposerEnter(container);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
+  });
+
+  it.each(
+    ["/stop", "/approve approval-123 allow-once", "ordinary draft"].flatMap((draft) =>
+      ["keyboard", "button"].map((submission) => ({ draft, submission })),
+    ),
+  )(
+    "preserves control dispatch while history loads: $draft via $submission",
+    ({ draft, submission }) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        draft,
+        submitDisabledReason: "Loading history",
+        onSend,
+      });
+      if (submission === "keyboard") {
+        pressComposerEnter(container);
+      } else {
+        primaryButton(container).click();
+      }
+      expect(onSend).toHaveBeenCalledTimes(draft === "ordinary draft" ? 0 : 1);
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    },
+  );
+
   function renderActiveDictationActions(overrides: {
     finishActive: ReturnType<typeof vi.fn>;
     onSend?: ChatRunControlsProps["onSend"];
+    submitDisabledReason?: string;
   }) {
     const container = document.createElement("div");
     const cancelActive = vi.fn();
@@ -65,6 +110,7 @@ describe("renderChatComposer controls", () => {
         sending: false,
         dictation,
         onSend,
+        submitDisabledReason: overrides.submitDisabledReason,
       }),
       container,
     );
@@ -108,6 +154,24 @@ describe("renderChatComposer controls", () => {
     expect(order).toEqual(["commit", "send"]);
     expect(cancelActive).not.toHaveBeenCalled();
     expect(handleClick).not.toHaveBeenCalled();
+  });
+
+  it("does not begin dictation submission while initial history is loading", () => {
+    const finishActive = vi.fn().mockResolvedValue(true);
+    const { container, onSend } = renderActiveDictationActions({
+      finishActive,
+      submitDisabledReason: t("chat.thread.loading"),
+    });
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+    send?.click();
+    expect(finishActive).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(send?.disabled).toBe(true);
+    expect(send?.getAttribute("aria-label")).toBe(t("chat.thread.loading"));
+
+    button(container, t("chat.composer.dictationStopAndKeep")).click();
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("keeps Stop and Send visually stable while dictation finalizes", () => {
@@ -266,6 +330,32 @@ describe("renderChatComposer controls", () => {
     ).toBe(true);
   });
 
+  it.each([true, false])(
+    "holds Talk during initial history while preserving draft input (hold-to-record=%s)",
+    async (composerHoldToRecord) => {
+      const request = vi.fn().mockResolvedValue({
+        realtime: { ready: true },
+        transcription: { ready: true },
+      });
+      const onToggleRealtimeTalk = vi.fn();
+      const { container } = renderComposer({
+        composerHoldToRecord,
+        gatewayClient: { request } as unknown as GatewayBrowserClient,
+        onToggleRealtimeTalk,
+        submitDisabledReason: t("chat.thread.loading"),
+      });
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      const microphone = button(container, t("chat.composer.startVoiceInput"));
+      const talk = button(container, t("chat.composer.realtimeTalkCapability"));
+      microphone.click();
+      talk.click();
+      expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+      expect(talk.disabled).toBe(true);
+      expect(microphone.disabled).toBe(!composerHoldToRecord);
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    },
+  );
+
   it("queues ordinary drafts offline but disables live voice", () => {
     const onSend = vi.fn();
     let view = renderComposer({ connected: false, draft: "queue this", onSend });
@@ -341,11 +431,14 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("does not steer from Enter while offline, matching the hidden Steer chip", () => {
+  it.each([
+    { connected: false, submitDisabledReason: null },
+    { connected: true, submitDisabledReason: "Loading history" },
+  ])("does not steer from Enter while admission is held: %j", (availability) => {
     const onQueueSteer = vi.fn();
     const { container } = renderComposer({
       canAbort: true,
-      connected: false,
+      ...availability,
       onAbort: vi.fn(),
       onQueueSteer,
       queue: [{ id: "queued", text: "queued", createdAt: 1, sessionKey: "main" }],
@@ -357,6 +450,7 @@ describe("renderChatComposer controls", () => {
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
     expect(onQueueSteer).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-queue__action")).toBeNull();
   });
 
   it("keeps empty Enter inert when no queued message can be steered", () => {

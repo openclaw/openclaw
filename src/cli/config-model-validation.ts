@@ -439,7 +439,7 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     const [modelRuntime, preparedRuntime] = await loadModelModules();
 
     // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
-    const lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
+    await using lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
       {
         agentId: targetAgentId,
         agentDir,
@@ -458,27 +458,23 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
         },
       },
     );
-    try {
-      if (!resolvedRef) {
-        return `Unknown model: ${ref.value}`;
-      }
-      const { provider, model } = resolvedRef;
-      const stores = lease.snapshot.createStores();
-      const resolution = await modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
-        ...stores,
-        modelIdSource: "selected",
-        agentId: targetAgentId,
-        allowBundledStaticCatalogFallback: true,
-        ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
-        preparedModelRuntime: lease.snapshot,
-        workspaceDir,
-      });
-      return resolution.model
-        ? undefined
-        : (resolution.error ?? `Unknown model: ${provider}/${model}`);
-    } finally {
-      lease.release();
+    if (!resolvedRef) {
+      return `Unknown model: ${ref.value}`;
     }
+    const { provider, model } = resolvedRef;
+    const stores = lease.snapshot.createStores();
+    const resolution = await modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
+      ...stores,
+      modelIdSource: "selected",
+      agentId: targetAgentId,
+      allowBundledStaticCatalogFallback: true,
+      ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
+      preparedModelRuntime: lease.snapshot,
+      workspaceDir,
+    });
+    return resolution.model
+      ? undefined
+      : (resolution.error ?? `Unknown model: ${provider}/${model}`);
   };
 }
 

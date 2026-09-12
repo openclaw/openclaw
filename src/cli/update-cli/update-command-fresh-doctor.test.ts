@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../../config/io.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -6,6 +13,11 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
@@ -67,6 +79,7 @@ const updateOptions = {
 };
 
 const validConfigSnapshot = {
+  exists: true,
   valid: true as const,
   parsed: {},
   config: {},
@@ -76,6 +89,13 @@ const validConfigSnapshot = {
   issues: [],
   legacyIssues: [],
 };
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+});
 
 describe("post-plugin update readiness", () => {
   beforeEach(() => {
@@ -147,6 +167,60 @@ describe("post-plugin update readiness", () => {
       ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
       ["/opt/openclaw/dist/index.js", "doctor", "--lint", "--json", "--severity-min", "error"],
     ]);
+  });
+
+  it.each([false, true])(
+    "preserves an unconfigured install through finalization (Doctor: %s)",
+    async (freshDoctorRequired) => {
+      await withTempHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const io = createConfigIO({ configPath, observe: false });
+        mocks.readConfig.mockImplementation(() => io.readConfigFileSnapshot());
+        const runNormally = mocks.runExec.getMockImplementation()!;
+        mocks.runExec.mockImplementation(async (command, args: string[], options) => {
+          if (args.includes("validate")) {
+            throw new Error("Config file not found");
+          }
+          return await runNormally(command, args, options);
+        });
+
+        const result = await completePostCorePluginUpdate({
+          ...updateOptions,
+          freshDoctorRequired,
+        });
+
+        expect(result.pluginUpdate.status).toBe("ok");
+        expect(result.configSnapshot).toMatchObject({ exists: false, valid: true });
+        expect(mocks.runExec.mock.calls.some(([, args]) => args.includes("--lint"))).toBe(true);
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
+
+  it("validates a config created during fresh Doctor before allowing restart", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({ configPath, observe: false });
+      mocks.readConfig.mockImplementation(() => io.readConfigFileSnapshot());
+      mocks.runExec.mockImplementation(async (_command, args: string[]) => {
+        if (args.includes("--repair")) {
+          await fs.mkdir(path.dirname(configPath), { recursive: true });
+          await fs.writeFile(configPath, '{"gateway":{"mode":"invalid"}}');
+        }
+        if (args.includes("validate")) {
+          throw new Error("Config invalid");
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      const result = await completePostCorePluginUpdate(updateOptions);
+
+      expect(result.configSnapshot).toMatchObject({ exists: true, valid: false });
+      expect(result.pluginUpdate).toMatchObject({
+        status: "error",
+        reason: "post-plugin-doctor-invalid-config",
+      });
+    });
   });
 
   it("consumes nonfatal Doctor warnings before reporting successful convergence", async () => {
@@ -225,6 +299,42 @@ describe("post-plugin update readiness", () => {
     ]);
   });
 
+  it("preserves the older target database when reading post-update config context", async () => {
+    const stateDir = tempDirs.make("openclaw-post-update-target-schema-");
+    const configPath = path.join(stateDir, "openclaw.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    const filename = openOpenClawStateDatabase({ env: process.env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const db = new DatabaseSync(filename);
+    try {
+      removePreparedWorkerOwnershipColumns(db);
+      db.exec(
+        "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
+      );
+      const beforeSchema = db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all();
+      const beforeMeta = db.prepare("SELECT * FROM schema_meta").all();
+      const configOwner =
+        await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+      mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
+
+      const result = await completePostCorePluginUpdate({
+        ...updateOptions,
+        pluginUpdate: { ...pluginUpdate, changed: false },
+        freshDoctorRequired: false,
+      });
+
+      expect(result.pluginUpdate.status).toBe("ok");
+      expect(result.configSnapshot.config.gateway?.mode).toBe("local");
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+      expect(db.prepare("SELECT * FROM schema_meta").all()).toEqual(beforeMeta);
+      expect(db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all()).toEqual(beforeSchema);
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not start Doctor when the lifecycle owner refuses maintenance", async () => {
     const beforeDoctor = vi.fn(async () => {
       throw new Error("Gateway owner changed");
@@ -243,7 +353,8 @@ describe("post-plugin update readiness", () => {
     });
   });
 
-  it("returns the owner-provided remediation and refuses restart when readiness fails", async () => {
+  it.each([true, false])("preserves readiness failures (config exists: %s)", async (exists) => {
+    mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, exists });
     mocks.runExec.mockImplementation(async (_command, args: string[]) => {
       if (args.includes("--lint")) {
         throw Object.assign(new Error("readiness failed"), {

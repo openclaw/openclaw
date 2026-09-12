@@ -7,6 +7,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
@@ -18,7 +19,6 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   resolveOAuthApiKeyMarker,
-  resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import { resolveDirectProviderCredentialMode } from "./model-auth-runtime-shared.js";
 import {

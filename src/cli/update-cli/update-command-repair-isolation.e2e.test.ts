@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { tryListenOnPort } from "../../infra/ports-probe.js";
+import { createManagedUpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -14,15 +15,6 @@ import {
   writeRepairCandidate,
 } from "./update-command-repair-isolation.test-support.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
-
-// Native loading exercises actual agent exec; Vitest's transformed runtime
-// cannot complete that command's dynamically loaded provider graph.
-vi.mock("../../infra/update-repair-agent.runtime.js", async () => {
-  const { createRequire } = await import("node:module");
-  return createRequire(import.meta.url)(
-    "../../../dist/update-repair-agent.runtime.js",
-  ) as typeof import("../../infra/update-repair-agent.runtime.js");
-});
 
 // Keep source orchestration while using the built snapshot worker as packaged updates do.
 vi.mock("../../infra/runtime-worker-url.js", async (importOriginal) => {
@@ -57,11 +49,21 @@ describe("staged CLI repair isolation", () => {
     {
       name: "discards config and doctor repairs without changing serving files",
       configChange: true,
+      revokeRequester: false,
     },
-    { name: "keeps candidate-root repairs eligible for activation", configChange: false },
+    {
+      name: "keeps candidate-root repairs eligible for activation",
+      configChange: false,
+      revokeRequester: false,
+    },
+    {
+      name: "honors live requester revocation before a copied-state repair tool runs",
+      configChange: false,
+      revokeRequester: true,
+    },
   ])(
     "$name",
-    async ({ configChange }) => {
+    async ({ configChange, revokeRequester }) => {
       await withOpenClawTestState(
         {
           prefix: "repair-isolation-",
@@ -73,10 +75,27 @@ describe("staged CLI repair isolation", () => {
           },
         },
         async (state) => {
-          const provider = repairIsolationProvider();
+          let requesterRevoked = false;
+          const provider = repairIsolationProvider(async () => {
+            if (revokeRequester) {
+              const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+              config.commands.ownerAllowFrom = [];
+              await fs.writeFile(state.configPath, JSON.stringify(config));
+              requesterRevoked = true;
+            }
+          });
           await withServer(provider.handle, async (baseUrl) => {
             const gatewayPort = await tryListenOnPort({ port: 0, host: "127.0.0.1" });
-            await state.writeConfig(repairIsolationConfig(baseUrl, gatewayPort));
+            await state.writeConfig({
+              ...repairIsolationConfig(baseUrl, gatewayPort),
+              commands: { ownerAllowFrom: ["${HOME}"] },
+            });
+            const requester = { channel: "synthetic", senderId: state.env.HOME };
+            const requesterAuthority = await createManagedUpdateRequesterAuthority(
+              requester,
+              state.env,
+            );
+            expect(requesterAuthority.isCurrent()).toBe(true);
             const candidate = state.path("candidate");
             await writeRepairCandidate(candidate, configChange);
             // Seed the real schema, then keep committed evidence in an open WAL.
@@ -97,7 +116,10 @@ describe("staged CLI repair isolation", () => {
                 `${databasePath}-shm`,
               ];
               const ledgerEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("ledger") };
-              const run = createUpdateRun({ trigger: "cli" }, { env: ledgerEnv });
+              const run = createUpdateRun(
+                { trigger: "chat", origin: { requester } },
+                { env: ledgerEnv },
+              );
               const before = await Promise.all(
                 liveFiles.map(async (file) => ({ file, identity: await fileIdentity(file) })),
               );
@@ -112,7 +134,7 @@ describe("staged CLI repair isolation", () => {
                 root: state.path("serving-package"),
                 candidateRoot: candidate,
                 env: state.env,
-                run: { runId: run.runId, env: ledgerEnv },
+                run: { runId: run.runId, env: ledgerEnv, requesterAuthority },
                 phase: "validating",
                 result: {
                   status: "error",
@@ -123,6 +145,11 @@ describe("staged CLI repair isolation", () => {
                 },
                 validate: async (_signal, assertCurrent, rehearsal) => {
                   assertCurrent();
+                  // The first oracle follows worker startup and requester registry
+                  // preparation. Neither may migrate or touch serving artifacts.
+                  for (const { file, identity } of before) {
+                    expect(await fileIdentity(file)).toEqual(identity);
+                  }
                   if (rehearsal) {
                     oracleTargets.push({
                       stateDir: rehearsal.stateDir,
@@ -162,6 +189,22 @@ describe("staged CLI repair isolation", () => {
               });
 
               expect(provider.errors).toEqual([]);
+              if (revokeRequester) {
+                expect(requesterRevoked).toBe(true);
+                expect(result).toMatchObject({ status: "aborted", reason: "requester-revoked" });
+                expect(oracleTargets).toHaveLength(1);
+                await expect(
+                  fs.access(path.join(candidate, "repair-proof.json")),
+                ).rejects.toMatchObject({
+                  code: "ENOENT",
+                });
+                for (const { file, identity } of before.filter(
+                  ({ file: liveFile }) => liveFile !== state.configPath,
+                )) {
+                  expect(await fileIdentity(file)).toEqual(identity);
+                }
+                return;
+              }
               expect(proof, JSON.stringify(result)).toMatchObject({
                 cwd: candidate,
                 before: "live-uncheckpointed",

@@ -18,6 +18,7 @@ const RETAINED_STEP_NAMES = [
   "notice:verifying",
   "previous generation restoration",
   "post-update verification",
+  "task-delivery-recovery",
   "driver:adopted",
   "driver:identity-unavailable",
   "reconcile:abandoned",
@@ -72,10 +73,11 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
-        // Reserved identities and timestamps fit; discard optional diagnostics
-        // before losing phase history, notice custody, or restoration proof.
+        // Recovery details are the durable backup receipt, not optional diagnostics.
         const compacted = value.map((item) =>
-          isRecord(item) ? { ...item, detail: undefined } : item,
+          isRecord(item) && item.step !== "task-delivery-recovery"
+            ? { ...item, detail: undefined }
+            : item,
         );
         if (JSON.stringify(compacted) === json) {
           throw new Error("Update run retained step metadata exceeds its byte limit");

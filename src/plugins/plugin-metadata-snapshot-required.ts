@@ -6,7 +6,7 @@ import {
   type CurrentSnapshotModule,
   type SnapshotLoaderModule,
 } from "./plugin-metadata-snapshot-readers.js";
-import { getCachedPluginSourceModuleLoader } from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 
 const require = createRequire(import.meta.url);
 
@@ -21,7 +21,9 @@ function loadRequiredSnapshotReaders(): typeof import("./plugin-metadata-readers
     ),
   );
   const loaded: unknown = source
-    ? getCachedPluginSourceModuleLoader({ modulePath, importerUrl: import.meta.url })(modulePath)
+    ? getCachedPluginModuleLoader({ modulePath, importerUrl: import.meta.url, tryNative: false })(
+        modulePath,
+      )
     : require(modulePath);
   // SAFETY: Both fixed targets expose the typed metadata owner exports through the same entry.
   return loaded as typeof import("./plugin-metadata-readers.runtime.js");

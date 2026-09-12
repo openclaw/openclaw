@@ -10,6 +10,10 @@ import {
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
+import {
+  formatServiceInspectionReason,
+  ServiceInspectionError,
+} from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
@@ -55,6 +59,9 @@ const JSON_MODE_SERVICE_STDOUT = new Writable({
 });
 
 function serviceInspectionBlockMessage(state: GatewayServiceState): string {
+  if (state.inspectionReason) {
+    return formatServiceInspectionReason(state.inspectionReason);
+  }
   const timeoutMs = state.runtime?.inspectionFailure?.timeoutMs;
   return timeoutMs === undefined
     ? GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE
@@ -332,6 +339,7 @@ type ManagedServiceStopParams = {
     PreManagedServiceStop,
     "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
   >;
+  allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 };
@@ -431,13 +439,19 @@ async function stopManagedServiceBeforeMutableUpdate(
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE);
+    return markInspectionUnavailable(
+      uninspected,
+      err instanceof ServiceInspectionError
+        ? err.message
+        : GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
+    );
   }
   assertCurrent();
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,
     state: serviceState,
     preManagedServiceStop: params.expectedService,
+    allowInstallRootChange: params.allowInstallRootChange,
   });
   assertCurrent();
   if (params.phase) {
@@ -573,18 +587,13 @@ async function stopManagedServiceBeforeMutableUpdate(
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
-    await revalidateManagedGatewayServiceAfterUpdate({
+    const currentVerdict = await revalidateManagedGatewayServiceAfterUpdate({
       state: currentState,
       root: params.root,
-      preManagedServiceStop: {
-        serviceManagerUid: inspected.serviceManagerUid,
-        serviceEnv: serviceState.env,
-        serviceUpdateVerdict:
-          serviceUpdateVerdict.kind === "owned"
-            ? { ...serviceUpdateVerdict, refreshDefinition: false }
-            : serviceUpdateVerdict,
-      },
+      preManagedServiceStop: inspected,
+      allowInstallRootChange: params.allowInstallRootChange,
     });
+    assertGatewayServiceAdmissionUnchanged(inspected, currentVerdict);
     assertCurrent();
     const currentBlockMessage = await resolveAncestryBlock(currentState);
     if (currentBlockMessage) {

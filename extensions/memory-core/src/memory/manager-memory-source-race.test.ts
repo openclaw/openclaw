@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -131,4 +132,65 @@ describe("memory source changes during indexing", () => {
       }
     },
   );
+
+  it("revalidates the file after a real SQLite BEGIN collision before replacing its index", async () => {
+    const memoryPath = path.join(fixture.paths.memory, "contended.md");
+    await fs.writeFile(memoryPath, "Original indexed source.");
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
+      "cli",
+    );
+    await manager.sync({ reason: "baseline", force: true });
+    await fs.writeFile(memoryPath, "Obsolete source waiting for the writer.");
+    Reflect.set(manager, "dirty", true);
+    const databasePath = manager.status().dbPath;
+    if (!databasePath) {
+      throw new Error("Expected a memory index database path");
+    }
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const peer = new DatabaseSync(databasePath);
+    const collision = createDeferred<void>();
+    let collisionObserved = false;
+    const exec = db.exec.bind(db);
+    const execSpy = vi.spyOn(db, "exec").mockImplementation((sql) => {
+      try {
+        exec(sql);
+      } catch (error) {
+        if (sql === "BEGIN IMMEDIATE") {
+          collisionObserved = true;
+          collision.resolve();
+        }
+        throw error;
+      }
+    });
+    peer.exec("BEGIN IMMEDIATE");
+    const sync = manager.sync({ reason: "watch" });
+    try {
+      await Promise.race([collision.promise, sync]);
+      expect(collisionObserved).toBe(true);
+      expect(peer.isTransaction).toBe(true);
+      await fs.writeFile(memoryPath, "Current source after the writer collision.");
+      peer.exec("ROLLBACK");
+      await sync;
+      expect(
+        db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path = ?")
+          .all("memory/contended.md"),
+      ).toEqual([{ text: "Original indexed source." }]);
+      expect(manager.status().dirty).toBe(true);
+      await manager.sync({ reason: "retry-current-source" });
+      expect(
+        db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path = ?")
+          .all("memory/contended.md"),
+      ).toEqual([{ text: "Current source after the writer collision." }]);
+    } finally {
+      if (peer.isTransaction) {
+        peer.exec("ROLLBACK");
+      }
+      await sync.catch(() => undefined);
+      execSpy.mockRestore();
+      peer.close();
+    }
+  });
 });

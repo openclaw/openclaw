@@ -64,6 +64,7 @@ type SessionHistoryDiskBudgetParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   mode: ResolvedSessionMaintenanceConfig["mode"];
+  reclamationMode?: "worker" | "in-process";
   storePath: string;
   maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes"> &
     Partial<Pick<ResolvedSessionMaintenanceConfig, "preserveRecentMs">>;
@@ -209,7 +210,7 @@ function collectCandidateAdditionalProtection(params: {
 
 /** Session ids owned by in-flight work admissions, without live-reference protection. */
 export function collectAdmissionProtectedSessionIds(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   storePath: string;
 }): Set<string> {
   const protectedSessionIds = new Set<string>();
@@ -593,7 +594,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
           }
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
-            forceInProcess: false,
+            forceInProcess: params.reclamationMode === "in-process",
             plan: reclamationPlan,
           });
           if (reclaimed.kind !== reclamationPlan.kind) {

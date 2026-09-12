@@ -142,6 +142,13 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
+`timeoutSeconds` limits the sending tool's wait, not the receiver's execution
+budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.
+The low-level Gateway `sessions.send` RPC has a different contract: its JSON
+`timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
+to keep the receiver's configured budget; bound the CLI wait separately with
+[`gateway call --timeout`](/cli/gateway/query#gateway-call-method).
+
 An accepted result keeps target admission separate from announcement delivery.
 `targetDisposition` is `queued` for a new turn or `steered` for an active turn;
 `delivery.status` describes only the later announcement as `pending` or `skipped`.

@@ -4,6 +4,10 @@
  */
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  NON_ENV_SECRETREF_MARKER,
+  resolveNonEnvSecretRefApiKeyMarker,
+} from "../secrets/provider-credential-values.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 
 const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
@@ -33,7 +37,6 @@ function cleanPluginManifestEnv(): Record<
 let listKnownProviderEnvApiKeyNames: typeof import("./model-auth-env-vars.js").listKnownProviderEnvApiKeyNames;
 let CODEX_APP_SERVER_AUTH_MARKER: typeof import("./model-auth-markers.js").CODEX_APP_SERVER_AUTH_MARKER;
 let GCP_VERTEX_CREDENTIALS_MARKER: typeof import("./model-auth-markers.js").GCP_VERTEX_CREDENTIALS_MARKER;
-let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let isKnownEnvApiKeyMarker: typeof import("./model-auth-markers.js").isKnownEnvApiKeyMarker;
 let isNonSecretApiKeyMarker: typeof import("./model-auth-markers.js").isNonSecretApiKeyMarker;
 let resolveOAuthApiKeyMarker: typeof import("./model-auth-markers.js").resolveOAuthApiKeyMarker;
@@ -50,7 +53,6 @@ async function loadMarkerModules() {
   listKnownProviderEnvApiKeyNames = envVarsModule.listKnownProviderEnvApiKeyNames;
   CODEX_APP_SERVER_AUTH_MARKER = markersModule.CODEX_APP_SERVER_AUTH_MARKER;
   GCP_VERTEX_CREDENTIALS_MARKER = markersModule.GCP_VERTEX_CREDENTIALS_MARKER;
-  NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
   isKnownEnvApiKeyMarker = markersModule.isKnownEnvApiKeyMarker;
   isNonSecretApiKeyMarker = markersModule.isNonSecretApiKeyMarker;
   resolveOAuthApiKeyMarker = markersModule.resolveOAuthApiKeyMarker;
@@ -61,6 +63,13 @@ beforeAll(async () => {
 });
 
 describe("model auth markers", () => {
+  it.each(["file", "exec", "store"] as const)(
+    "keeps the persisted %s SecretRef marker stable",
+    (source) => {
+      expect(resolveNonEnvSecretRefApiKeyMarker(source)).toBe("secretref-managed");
+    },
+  );
+
   it("recognizes explicit non-secret markers", () => {
     withEnv(cleanPluginManifestEnv(), () => {
       expect(isNonSecretApiKeyMarker(NON_ENV_SECRETREF_MARKER)).toBe(true);

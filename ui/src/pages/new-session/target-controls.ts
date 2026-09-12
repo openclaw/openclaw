@@ -142,9 +142,13 @@ export function renderNewSessionPlaceControls({
           isAdmin: place.isAdmin(),
           ...browser.popoverCallbacks("where"),
           onSelectDevice: (deviceId) => place.selectDevice(deviceId),
-          onToggleAutoDevice: (enabled) =>
-            place.selectDevice("", enabled, { keepPickerOpen: true }),
-          onSelectCloudProfile: (profileId) => place.selectCloudProfile(profileId),
+          onSelectAutoDevice: () => place.selectDevice("", true),
+          onSelectCloudProfile: (profileId, useDefaults) => {
+            if (useDefaults) {
+              place.cloudMachines.applyPending(profileId);
+            }
+            place.selectCloudProfile(profileId);
+          },
           onSelectCloudOs: (osId) =>
             place.cloudMachines.selectOs(
               place.cloudProfileId,
@@ -162,6 +166,10 @@ export function renderNewSessionPlaceControls({
               requestUpdate,
             ),
           onConnectMachine,
+          onManageCloudWorkers: () => {
+            browser.close();
+            context?.navigate("cloud-workers");
+          },
         })
   }${
     nativeTerminal && place.terminalOnNode

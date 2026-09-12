@@ -1,9 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
   isRetryableStartupUnavailable,
   resolveStartupRetryDelayMs,
@@ -29,7 +31,7 @@ import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
-export const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
+const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
 const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
 // Back-scroll pages are larger than the startup tail: session open stays cheap
@@ -37,13 +39,14 @@ const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 // The gateway independently bounds each response (entry cap + byte budget).
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 
-export const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
+const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   observation?: ChatHistoryObservation;
 };
 
 type SharedChatHistoryRequest = {
+  controller: AbortController;
   consumers: Set<SharedChatHistoryConsumer>;
   promise: Promise<SharedChatHistoryResponse>;
 };
@@ -86,7 +89,7 @@ function updateChatHistoryOwnerRequestCount(
   counts.set(requestKey, nextCount);
 }
 
-export async function requestChatHistory<T extends ChatHistoryResponse>(
+async function requestChatHistory<T extends ChatHistoryResponse>(
   method: "chat.history" | "chat.startup",
   attempt: () => Promise<T>,
   shouldContinue: () => boolean,
@@ -177,6 +180,7 @@ export function requestSharedHistory(
       ...budget,
       ...(inputRunIds.length ? { inputRunIds } : {}),
     };
+    const controller = new AbortController();
     const consumers = new Set([consumer]);
     const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
     // A pane joining older shared work still owns a full retry window. Otherwise
@@ -189,7 +193,9 @@ export function requestSharedHistory(
         const observation = sessions
           ? { owner: sessions, reconcile: sessions.captureReconcile() }
           : undefined;
-        const response = await client.request<ChatHistoryResponse>(method, params);
+        const response = await client.request<ChatHistoryResponse>(method, params, {
+          signal: controller.signal,
+        });
         return observation ? { ...response, observation } : response;
       },
       shouldContinue,
@@ -199,7 +205,7 @@ export function requestSharedHistory(
         requests.delete(requestKey);
       }
     });
-    shared = { consumers, promise };
+    shared = { controller, consumers, promise };
     requests.set(requestKey, shared);
   } else {
     shared.consumers.add(consumer);
@@ -208,10 +214,28 @@ export function requestSharedHistory(
   // The client owns this bounded in-flight map, while every pane remains responsible
   // for applying the shared payload under its own session/version ownership checks.
   // Owner counts outlive displaced map entries so overlapping refreshes never reuse stale work.
-  return shared.promise.finally(() => {
-    shared?.consumers.delete(consumer);
-    updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, -1);
-  });
+  const deadline = new AbortController();
+  const timeout = setTimeout(
+    () => {
+      deadline.abort(new Error(t("chat.historyRequestTimedOut")));
+    },
+    Math.max(0, consumer.retryDeadlineMs - Date.now()),
+  );
+  // A shared producer can outlive its first reader, but each reader's loading
+  // state has its own deadline. The final departing reader cancels transport.
+  const pending = shared;
+  return subscribeToSharedRequest(
+    { controller: pending.controller, promise: pending.promise, subscribers: pending.consumers },
+    consumer,
+    deadline.signal,
+    () => {
+      clearTimeout(timeout);
+      updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, -1);
+      if (pending.consumers.size === 0 && requests.get(requestKey) === pending) {
+        requests.delete(requestKey);
+      }
+    },
+  );
 }
 
 type ChatSessionSnapshotRequestResult =

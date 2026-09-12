@@ -92,11 +92,12 @@ export function classifyControlUiRequest(params: {
     if (classifyNodeWorkspaceTransferPath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
-    // Marketplace documents own the root and canonical generated catalog IDs.
+    // Marketplace documents own the catalogue root and canonical generated catalog IDs.
     // Other descendants and non-document requests remain plugin HTTP routes.
     if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
       const marketplaceDocument =
         pathname === "/plugins" ||
+        pathname === "/plugins/" ||
         resolvePluginDiscoveryIdentity(pathname.slice("/plugins/".length)) !== undefined;
       if (!marketplaceDocument || !isReadHttpMethod(method) || !spaFallback) {
         return { kind: "not-control-ui" };

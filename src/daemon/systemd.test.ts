@@ -596,9 +596,9 @@ describe("isSystemdServiceEnabled", () => {
       err.code = "EACCES";
       cb(err, "", "");
     });
-    await expect(readManagedServiceEnabled()).rejects.toThrow(
-      "systemctl is-enabled unavailable: spawn systemctl EACCES",
-    );
+    await expect(readManagedServiceEnabled()).rejects.toMatchObject({
+      reason: "service-manager-access-denied",
+    });
   });
 
   it("returns false without calling systemctl when the managed unit file is missing", async () => {
@@ -673,7 +673,7 @@ describe("isSystemdServiceEnabled", () => {
 
     await expect(
       readManagedServiceEnabled({ HOME: TEST_MANAGED_HOME, USER: "", LOGNAME: "" }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: Failed to connect to bus");
+    ).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
   });
 
   it("returns false when both direct and machine-scope is-enabled checks report bus unavailability", async () => {
@@ -707,7 +707,7 @@ describe("isSystemdServiceEnabled", () => {
 
     await expect(
       readManagedServiceEnabled({ HOME: TEST_MANAGED_HOME, USER: "debian" }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: Failed to connect to user scope bus");
+    ).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
   });
 
   it("throws when generic wrapper errors report infrastructure failures", async () => {
@@ -4502,7 +4502,7 @@ describe("systemd service control", () => {
         stdout: createWritableStreamMock().stdout,
         env: { USER: "", LOGNAME: "" },
       }),
-    ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");
+    ).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
   });
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {

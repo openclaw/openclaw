@@ -105,7 +105,9 @@ final class AppState {
                 isEnabling: self.launchAtLogin,
                 bundleLocationAllowsPersistentIntegration: self.bundleLocationAllowsPersistentIntegration)
             else { return }
-            self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } }
+            self.ifNotPreview {
+                LaunchAgentManager.shared.set(enabled: self.launchAtLogin, bundlePath: Bundle.main.bundlePath)
+            }
         }
     }
 
@@ -288,6 +290,9 @@ final class AppState {
             syncGatewayConfigIfNeeded()
         }
     }
+
+    private(set) var hostsLocalGatewayWithRemotePrimary: Bool
+    private(set) var localGatewayHostingNotice: String?
 
     var remoteTransport: RemoteTransport {
         didSet {
@@ -545,6 +550,8 @@ final class AppState {
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
+        self.hostsLocalGatewayWithRemotePrimary = AppDefaults.standard
+            .bool(forKey: hostsLocalGatewayWithRemotePrimaryKey)
 
         let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
@@ -583,9 +590,8 @@ final class AppState {
         self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
             AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
         if !self.isPreview, !AppProfile.current.isActive {
-            Task.detached(priority: .utility) { [weak self] in
-                let current = await LaunchAgentManager.status()
-                await MainActor.run { [weak self] in self?.hydrateLaunchAtLogin(current) }
+            LaunchAgentManager.shared.loadStatus { [weak self] current in
+                self?.hydrateLaunchAtLogin(current)
             }
         } else if !self.isPreview, AppProfile.current.isActive {
             Self.logger.info("login-agent status skipped (unavailable under app profile)")
@@ -1325,12 +1331,64 @@ extension AppState {
         guard self.conflictedGatewayConfigFields.isEmpty else {
             throw PrimaryGatewayControlError.conflictingEdits
         }
-        let effectiveLocalPort = GatewayEnvironment.resolvedGatewayPort(
-            environment: ProcessInfo.processInfo.environment,
-            configPort: configuration.requestedLocalPort ?? OpenClawConfigFile.gatewayPort(root: currentRoot),
-            storedPort: GatewayEnvironment.gatewayPort(),
-            profile: .current)
-        let replacement = try configuration.replacingRoot(currentRoot, effectiveLocalPort: effectiveLocalPort)
+        let replacement = try configuration.replacingRoot(
+            currentRoot,
+            effectiveLocalPort: RemotePortTunnel.localPort(root: currentRoot))
+        try self.persistGatewayReplacement(replacement, currentRoot: currentRoot, previousSyncState: previousSyncState)
+    }
+
+    func setHostsLocalGatewayWithRemotePrimary(_ enabled: Bool) throws {
+        guard enabled != self.hostsLocalGatewayWithRemotePrimary else { return }
+        self.localGatewayHostingNotice = nil
+        if enabled {
+            guard self.connectionMode == .remote,
+                  self.gatewayConfigSyncIsEnabled, !self.isInitializing
+            else { throw PrimaryGatewayControlError.unavailable }
+            guard self.syncGatewayConfigNow() else { throw PrimaryGatewayControlError.conflictingEdits }
+            let currentRoot = OpenClawConfigFile.loadDict()
+            let replacement = try PrimaryGatewayControlConfiguration.separatingLocalGatewayPort(
+                currentRoot,
+                preferredLocalPort: AppProfile.current.defaultGatewayPort,
+                legacyPort: GatewayEnvironment.gatewayPort(root: currentRoot),
+                sshHost: CommandResolver.parseSSHTarget(self.remoteTarget)?.host)
+            let repairsConfig = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
+            let repairsLegacyPort = GatewayRemoteConfig.resolveTransport(root: currentRoot) == .ssh &&
+                AppDefaults.standard.integer(forKey: "gatewayPort") == RemotePortTunnel.localPort(root: currentRoot)
+            let repairedLocalPort = repairsConfig || repairsLegacyPort
+            if repairedLocalPort {
+                try self.persistGatewayReplacement(
+                    replacement, currentRoot: currentRoot, previousSyncState: self.gatewayConfigSyncState)
+                if repairsLegacyPort {
+                    self.ifNotPreview { AppDefaults.standard.removeObject(forKey: "gatewayPort") }
+                }
+            }
+            guard !GatewayEnvironment.gatewayPortRequiresRestart else {
+                throw PrimaryGatewayControlError.localHostingRequiresRestart
+            }
+            _ = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
+            if repairedLocalPort {
+                let port = GatewayEnvironment.gatewayPort()
+                Self.logger.info("Separated local port settings for hosting; local port=\(port)")
+                self.localGatewayHostingNotice = String(
+                    format: String(
+                        localized: """
+                        Separated the old shared port setting. This Mac now uses port %lld; the SSH tunnel is unchanged.
+                        """),
+                    port)
+            }
+        }
+        self.hostsLocalGatewayWithRemotePrimary = enabled
+        self.ifNotPreview {
+            AppDefaults.standard.set(enabled, forKey: hostsLocalGatewayWithRemotePrimaryKey)
+            Task { await DashboardManager.shared.refreshGatewaySnapshots() }
+        }
+    }
+
+    private func persistGatewayReplacement(
+        _ replacement: PrimaryGatewayControlConfiguration.Replacement,
+        currentRoot: [String: Any],
+        previousSyncState: GatewayConfigSyncState) throws
+    {
         let changed = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
         self.gatewayConfigSyncTask?.cancel()
         self.setGatewayConfigSyncState(.pending)
@@ -1627,12 +1685,6 @@ extension AppState {
 @MainActor
 enum AppStateStore {
     static let shared = AppState(preview: ProcessInfo.processInfo.isPreview)
-
-    static func updateLaunchAtLogin(enabled: Bool) {
-        Task.detached(priority: .utility) {
-            await LaunchAgentManager.set(enabled: enabled, bundlePath: Bundle.main.bundlePath)
-        }
-    }
 }
 
 @MainActor

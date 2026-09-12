@@ -1,11 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
+import { resolveConfigPath } from "../../config/paths.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
@@ -61,6 +66,7 @@ import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-
 import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
   withMutableUpdateSignals,
@@ -72,6 +78,7 @@ import {
 } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
+  assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
   isGatewayServiceManagementAllowedForUpdate,
   resolveManagedServicePackageUpdatePlan,
@@ -84,7 +91,7 @@ const previewAdmissions = new WeakMap<
   { record: UpdateRunRecord; env: NodeJS.ProcessEnv }
 >();
 
-async function resolveUpdateCommandAdmissionEnv(params: {
+export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
@@ -97,19 +104,20 @@ async function resolveUpdateCommandAdmissionEnv(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
-    // Admission must not load native units or turn unavailable ownership into
-    // an absent service and a write to the caller's unrelated profile.
-    const command = await resolveGatewayService()
-      .readCommand(env, {
-        requireEffective: true,
-        requireLoaded: true,
-      })
-      .catch((cause: unknown) => {
-        throw new GatewayServiceUpdateOwnershipError(
-          "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
-          cause,
-        );
-      });
+    // Admission needs only the command owner. Leave runtime/status inspection to
+    // the safety preflight, after persisted service selectors have been validated.
+    const service = resolveGatewayService();
+    const absent = await service.isAbsent?.({ env }).catch(() => false);
+    const command = absent
+      ? null
+      : await service
+          .readCommand(env, { requireEffective: true, requireLoaded: true })
+          .catch((cause: unknown) => {
+            throw new GatewayServiceUpdateOwnershipError(
+              "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
+              cause,
+            );
+          });
     if (command) {
       const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
       if (usesRoot === null) {
@@ -125,6 +133,10 @@ async function resolveUpdateCommandAdmissionEnv(params: {
           serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
           invocationCwd: params.invocationCwd,
         });
+        // Contradictory native identity must refuse before database or target selection.
+        if (resolveGatewayNativeServiceIdentityConflict(env)) {
+          assertGatewayServiceManagementAllowedForUpdate(env);
+        }
       }
     }
   }
@@ -158,6 +170,16 @@ export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
+  initialization?: {
+    env: NodeJS.ProcessEnv;
+    runId: string;
+    databasePath: string;
+    configPath: string;
+    target: {
+      configSnapshot: ConfigFileSnapshot;
+      legacyConfigPlan?: LegacyConfigUpdatePlan;
+    };
+  };
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root);
   const env = await resolveUpdateCommandAdmissionEnv(params);
@@ -170,11 +192,34 @@ export async function admitUpdateCommandRun(params: {
     env,
     recoverOrphanedSidecars: false,
   });
+  if (params.initialization) {
+    const initialized = params.initialization;
+    if (
+      resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) !==
+        initialized.databasePath ||
+      resolvePathViaExistingAncestorSync(resolveConfigPath(env)) !== initialized.configPath
+    ) {
+      throw new GatewayServiceUpdateOwnershipError(
+        "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
+        undefined,
+      );
+    }
+    await revalidateUpdateDatabaseContext({
+      env,
+      readEnv: env,
+      config: initialized.target.configSnapshot.sourceConfig,
+      configSnapshot: initialized.target.configSnapshot,
+      ...(initialized.target.legacyConfigPlan
+        ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
+        : {}),
+    });
+  }
   const driver = readUpdateRunDriver();
   const created = createUpdateRun(
     {
-      runId: env[UPDATE_RUN_ID_ENV]?.trim() || undefined,
+      runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
       trigger: "cli",
+      preview: params.opts.dryRun === true,
       origin: { driver },
       supersedeStaleIdentityless:
         !env[UPDATE_RUN_ID_ENV]?.trim() && env[POST_CORE_UPDATE_ENV] !== "1",
@@ -337,7 +382,7 @@ export function createUpdateRunProgress(
 export function completeUpdateCommandRun(
   result: UpdateRunResult,
   run: UpdateCommandOptions["run"],
-  downtimeMs?: number,
+  completion: { rolledBack?: boolean; downtimeMs?: number } = {},
 ): UpdateRunResult {
   if (!run) {
     return result;
@@ -402,15 +447,16 @@ export function completeUpdateCommandRun(
     finishUpdateRun(
       run.runId,
       {
-        status:
-          normalized.status === "ok"
+        status: completion.rolledBack
+          ? "rolled-back"
+          : normalized.status === "ok"
             ? "succeeded"
             : normalized.status === "error"
               ? "failed"
               : "skipped",
         reason: normalized.reason,
         after: normalized.after,
-        downtimeMs,
+        downtimeMs: completion.downtimeMs,
       },
       recordOptions,
     );

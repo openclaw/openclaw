@@ -247,6 +247,10 @@ throw createChannelPartialDeliveryError(cause, {
 });
 ```
 
+Errors created by this helper retain the original failure in `cause`. After
+`isChannelPartialDeliveryError(error)`, `error.cause` is `unknown`; structural
+envelopes may omit it.
+
 Core emits a failed terminal observation with that provider-visible content and
 identity, then keeps the delivery failed so callers do not mistake partial
 success for a clean send. Do not report `visibleReplySent: false` after any

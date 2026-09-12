@@ -599,6 +599,105 @@ describe("CI changed Node test plan", () => {
     }
   });
 
+  it.each(
+    [[], ["extensions/matrix/src/matrix/actions/verification.test.ts"]].map((companions) => ({
+      companions,
+    })),
+  )(
+    "credits max-lines baseline only with its dedicated guard beside $companions",
+    ({ companions }) => {
+      const paths = ["config/max-lines-baseline.txt", ...companions];
+      for (const options of [{}, { dedicatedMaxLinesRatchet: false }]) {
+        const uncredited = createChangedNodeTestShards(paths, options);
+        expect(uncredited).not.toBeNull();
+        const groups = fallbackGroups(uncredited ?? []);
+        const targets = groups.flatMap((group) => group.includePatterns ?? []);
+        expect(
+          groups
+            .filter((group) => group.configs.includes("test/vitest/vitest.tooling.config.ts"))
+            .flatMap((group) => group.includePatterns ?? [])
+            .toSorted(),
+        ).toEqual([
+          "test/scripts/check-max-lines-ratchet.test.ts",
+          "test/scripts/ci-changed-node-test-plan.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ]);
+        expect(targets).toEqual(expect.arrayContaining(companions));
+      }
+      const shards = createChangedNodeTestShards(paths, { dedicatedMaxLinesRatchet: true });
+      expect(shards).not.toBeNull();
+      const groups = fallbackGroups(shards ?? []);
+      const targets = groups.flatMap((group) => group.includePatterns ?? []);
+      const configs = groups.flatMap((group) => group.configs);
+      expect(configs).not.toContain("test/vitest/vitest.tooling.config.ts");
+      if (companions.length) {
+        expect(shards).toEqual(createChangedNodeTestShards(companions));
+        expect(targets).toContain("extensions/matrix/src/matrix/actions/verification.test.ts");
+      } else {
+        expect(groups.map((group) => group.configs)).toEqual([
+          ["test/vitest/vitest.boundary.config.ts"],
+        ]);
+      }
+    },
+  );
+
+  it.each([
+    {
+      owner: "scripts/check-max-lines-ratchet.mts",
+      tests: ["test/scripts/check-max-lines-ratchet.test.ts"],
+    },
+    { owner: "scripts/lib/shrink-ratchet.mts", tests: ["test/scripts/shrink-ratchet.test.ts"] },
+    {
+      owner: ".github/workflows/ci.yml",
+      tests: [
+        "test/scripts/check-workflows.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/ci-changed-node-test-plan.test.ts",
+      ],
+    },
+  ])("retains owner coverage for max-lines baseline mixed with $owner", ({ owner, tests }) => {
+    const shards = createChangedNodeTestShards(["config/max-lines-baseline.txt", owner], {
+      dedicatedMaxLinesRatchet: true,
+    });
+    expect(shards).not.toBeNull();
+    const groups = fallbackGroups(shards ?? []);
+    const targets = groups.flatMap((group) => group.includePatterns ?? []);
+    const configs = groups.flatMap((group) => group.configs);
+    expect(targets).toEqual(expect.arrayContaining(tests));
+    expect(configs).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.boundary.config.ts",
+        "test/vitest/vitest.tui-pty.config.ts",
+      ]),
+    );
+  });
+
+  it("retains fallback for max-lines baseline mixed with its planner", () => {
+    expect(
+      createChangedNodeTestShards(
+        ["config/max-lines-baseline.txt", "scripts/lib/ci-changed-node-test-plan.mts"],
+        { dedicatedMaxLinesRatchet: true },
+      ),
+    ).toBeNull();
+  });
+
+  it("does not credit other config data or a missing max-lines baseline", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ratchet-routing-"));
+    try {
+      mkdirSync(path.join(cwd, "config"));
+      const baseline = "config/max-lines-baseline.txt";
+      const unknown = "config/max-lines-baseline-other.txt";
+      writeFileSync(path.join(cwd, baseline), "");
+      writeFileSync(path.join(cwd, unknown), "");
+      const options = { cwd, dedicatedMaxLinesRatchet: true };
+      expect(createChangedNodeTestShards([baseline, unknown], options)).toBeNull();
+      rmSync(path.join(cwd, baseline));
+      expect(createChangedNodeTestShards([baseline], options)).toBeNull();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("keeps boundary coverage on test-only diffs without the build-artifacts lane", () => {
     // Test-only diffs skip build-artifacts (which hosts the full boundary
     // gate), so the plan carries its own nondist boundary shard instead.
@@ -1157,6 +1256,9 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each([
+    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+    "src/plugins/plugin-module-generation.sdk.test.ts",
+    "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
     "src/gateway/server-sidecar-retention.test.ts",
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/cli/update-cli/update-command-migrated.test.ts",

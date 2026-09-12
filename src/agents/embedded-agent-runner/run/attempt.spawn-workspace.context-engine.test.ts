@@ -1905,7 +1905,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
-  it("submits runtime-only context through system prompt without visible prompt", async () => {
+  it("submits runtime-only context through the tail carrier without visible prompt", async () => {
     hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     let seenPrompt: string | undefined;
     let seenModelMessages: unknown[] | undefined;
@@ -1963,7 +1963,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(contextCompiled?.data?.prompt).toContain("dynamic hook context");
     expect(contextCompiled?.data?.prompt).toContain("internal heartbeat event");
     expect(contextCompiled?.data?.prompt).toContain("dynamic hook tail");
-    expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("dynamic hook context");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("dynamic hook tail");
   });
@@ -2061,7 +2061,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
-    expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
+    expect(contextCompiled?.data?.prompt).toContain("runtime bare mention event");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("runtime bare mention event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).not.toContain(
       "Reply target of current user message:",

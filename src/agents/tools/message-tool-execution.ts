@@ -510,10 +510,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const gatewayResolved = resolveGatewayOptions(gatewayOpts);
-      const { token: gatewayToken } = gatewayResolved;
+      const { target: gatewayTarget, ...gatewayConnection } = resolveGatewayOptions(gatewayOpts);
       const callerOwnsTerminalReceipt =
-        gatewayResolved.target === "remote" ||
+        gatewayTarget === "remote" ||
         normalizeOptionalString(gatewayOpts.gatewayUrl) !== undefined ||
         normalizeOptionalString(gatewayOpts.gatewayToken) !== undefined;
       // Direct tool invocations already execute inside the authenticated
@@ -524,9 +523,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.conversationReadOrigin === "direct-operator"
           ? undefined
           : {
-              url: gatewayResolved.url,
-              token: gatewayToken,
-              timeoutMs: gatewayResolved.timeoutMs,
+              ...gatewayConnection,
               clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
               clientDisplayName: "agent",
               mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -536,7 +533,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               resolveAgentRuntimeIdentityToken: (context) =>
                 resolveMessageActionAgentRuntimeIdentityToken({
                   opts: gatewayOpts,
-                  target: gatewayResolved.target,
+                  target: gatewayTarget,
                   turnCapability: options?.messageActionTurnCapability,
                   turnCapabilitySessionKey: options?.agentSessionKey,
                   runId: options?.runId,

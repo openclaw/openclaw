@@ -18,6 +18,7 @@ import {
   resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -27,6 +28,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import type { TelegramPendingInboundTarget } from "./bot-handlers.types.js";
 import {
   dispatchTelegramBuiltinTurn,
   prepareTelegramCommandDispatch,
@@ -248,12 +250,11 @@ function formatTelegramCommandArgMenuTitle(params: {
 }
 
 export async function executeTelegramBuiltinCommand(
-  params: TelegramCommandExecutorParams & { commandName: string },
+  params: TelegramCommandExecutorParams & {
+    commandName: string;
+    cancelPendingInbound: (target: TelegramPendingInboundTarget) => void;
+  },
 ): Promise<boolean> {
-  const dispatch = await prepareTelegramCommandDispatch({ ...params, requireAuth: true });
-  if (!dispatch) {
-    return false;
-  }
   // Loaded-registry lookup only: Telegram defines no resolveNativeCommandName
   // hook, and the bundled fallback would jiti-load the plugin source in dev/test.
   const commandDefinition = findCommandByNativeName(params.commandName, "telegram", {
@@ -269,6 +270,13 @@ export async function executeTelegramBuiltinCommand(
     : params.rawText
       ? `/${params.commandName} ${params.rawText}`
       : `/${params.commandName}`;
+  const dispatch = await prepareTelegramCommandDispatch(
+    { ...params, requireAuth: true },
+    isAbortRequestText(prompt) ? params.cancelPendingInbound : undefined,
+  );
+  if (!dispatch) {
+    return false;
+  }
   if (commandDefinition?.key === "login") {
     const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
     const currentProvider =
@@ -334,7 +342,7 @@ export async function executeTelegramBuiltinCommand(
         cfg: dispatch.runtimeCfg,
         session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
         ...menuModelContext,
-        ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+        catalog: menuModelCatalog,
       })
     : null;
   if (menu && commandDefinition) {

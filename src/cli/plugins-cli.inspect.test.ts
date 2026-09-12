@@ -20,6 +20,7 @@ import {
   pluginCliConfigMock,
   pluginsCliRuntimeLogs,
   resetPluginsCliTestState,
+  retirePluginDiagnosticsMock,
   runPluginsCommand,
   runtimeErrors,
   setInstalledPluginIndexInstallRecords,
@@ -297,6 +298,56 @@ describe("plugins cli inspect", () => {
     await runPluginsCommand(["plugins", ...args]);
 
     expect(readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format)).toBe("loaded");
+  });
+
+  it.each([false, true].flatMap((all) => [false, true].map((json) => ({ all, json }))))(
+    "renders live metadata before retirement and prints after cleanup: all=$all, json=$json",
+    async ({ all, json }) => {
+      const plugin = createPluginRecord({ id: "scoped-plugin" });
+      buildPluginSnapshotReportMock.mockReturnValue({ plugins: [plugin], diagnostics: [] });
+      let retired = false;
+      const inspect = createInspectReport({
+        plugin: {
+          ...plugin,
+          get name() {
+            if (retired) {
+              throw new Error("plugin metadata is retired");
+            }
+            return "Scoped";
+          },
+        },
+      });
+      buildPluginInspectReportMock.mockReturnValue(inspect);
+      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+      retirePluginDiagnosticsMock.mockImplementation(async () => {
+        await Promise.resolve();
+        expect(pluginsCliRuntimeLogs).toEqual([]);
+        retired = true;
+      });
+
+      await runPluginsCommand([
+        "plugins",
+        "inspect",
+        all ? "--all" : plugin.id,
+        "--runtime",
+        ...(json ? ["--json"] : []),
+      ]);
+
+      expect(retired).toBe(true);
+      expect(pluginsCliRuntimeLogs).toHaveLength(1);
+      expect(pluginsCliRuntimeLogs[0]).toContain("Scoped");
+    },
+  );
+
+  it("does not publish runtime inspection output when retirement fails", async () => {
+    buildAllPluginInspectReportsMock.mockReturnValue([]);
+    retirePluginDiagnosticsMock.mockRejectedValue(new Error("diagnostics cleanup failed"));
+
+    await expect(
+      runPluginsCommand(["plugins", "inspect", "--all", "--runtime", "--json"]),
+    ).rejects.toThrow("diagnostics cleanup failed");
+
+    expect(pluginsCliRuntimeLogs).toEqual([]);
   });
 
   it.each(

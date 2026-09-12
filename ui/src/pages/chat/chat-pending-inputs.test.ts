@@ -18,18 +18,21 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
+import {
+  input,
+  makeChatPageHost,
+  page,
+  sessionId,
+  sessionKey,
+} from "./chat-pending-inputs.test-support.ts";
 import {
   applyChatPendingInputs,
   buildPendingInputItems,
   getChatPendingInputs,
-  loadChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession, readChatQueueForScope } from "./chat-queue.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
 import { listStoredChatOutboxes, loadChatComposerSnapshot } from "./composer-persistence.ts";
@@ -46,22 +49,6 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "./user-message-content.ts";
-
-const sessionKey = "agent:main:accepted-inputs";
-const sessionId = "accepted-input-session";
-const input: ChatPendingInputsPage["items"][number] = {
-  id: "input-1",
-  runId: "run-queued",
-  acceptedAt: 100,
-  state: "interrupted",
-  message: {
-    role: "user",
-    content: "Keep my accepted input",
-    timestamp: 100,
-    __openclaw: { id: "pending:input-1" },
-  },
-};
-const page: ChatPendingInputsPage = { items: [input], total: 2, nextBefore: 2 };
 
 async function retainDeliveredUserTurn(
   host: Parameters<typeof retireDeliveredQueuedUserTurn>[0],
@@ -81,21 +68,6 @@ async function retainDeliveredUserTurn(
   );
   expect(await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)).toBe("retired");
   return outbox;
-}
-
-function makeChatPageHost({
-  requestHandlers,
-  ...overrides
-}: Partial<ChatPageHost> & { requestHandlers: Record<string, unknown> }) {
-  const { client, hello, request, sessions } = makeChatHost({ requestHandlers });
-  const context = { ...createInitializationContext(), sessions };
-  const host = createPageState(
-    context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    { dispatchEvent: () => true, querySelector: () => null },
-  );
-  Object.assign(host, { client, hello, connected: true }, overrides);
-  return Object.assign(host, { request });
 }
 
 beforeEach(() => {
@@ -124,7 +96,7 @@ describe("server-owned pending input display", () => {
   });
 
   it.each([
-    { state: "queued", runId: undefined, notice: undefined },
+    { state: "queued", runId: undefined, notice: "Queued · waiting for the agent" },
     {
       state: "interrupted",
       runId: "run-queued",
@@ -315,12 +287,14 @@ describe("server-owned pending input display", () => {
           (_, index) => `source-${String(index).padStart(2, "0")}`,
         ),
       }),
+      { signal: expect.any(AbortSignal) },
     );
     await loadChatHistory(host);
     expect(host.chatMessages).toEqual([]);
     expect(host.request).toHaveBeenLastCalledWith(
       "chat.history",
       expect.objectContaining({ inputRunIds: ["source-50"] }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -384,6 +358,7 @@ describe("server-owned pending input display", () => {
         expect.objectContaining({
           inputRunIds: ["consumed-source", "unrelated-source"],
         }),
+        { signal: expect.any(AbortSignal) },
       );
       expect(getChatPendingInputs(host)?.page.items).toEqual([]);
       expect(host.chatRunId).toBe("aggregate-run");
@@ -867,32 +842,6 @@ describe("server-owned pending input display", () => {
     },
   );
 
-  it("pages custody without replacing transcript or applying a stale physical-session response", async () => {
-    let resolve!: (value: unknown) => void;
-    const response = new Promise((done) => {
-      resolve = done;
-    });
-    const host = makeChatHost({
-      sessionKey,
-      currentSessionId: sessionId,
-      requestHandlers: { "chat.history": () => response },
-    });
-    const history = [{ role: "user", content: "Canonical history" }];
-    host.chatMessages = history;
-    applyChatPendingInputs(host, page);
-    const loading = loadChatPendingInputs(host, 2);
-    expect(host.request).toHaveBeenCalledWith(
-      "chat.history",
-      expect.objectContaining({ pendingBefore: 2 }),
-    );
-    host.currentSessionId = "replacement-session";
-    resolve({ sessionId, pendingInputs: { items: [], total: 2 } });
-    await loading;
-    expect(host.chatMessages).toBe(history);
-    expect(getChatPendingInputs(host)).toBeUndefined();
-    expect(host.request).toHaveBeenCalledTimes(1);
-  });
-
   it("replaces a server pending bubble with canonical persistence exactly once", () => {
     const promoted = {
       role: "user",
@@ -919,14 +868,14 @@ describe("server-owned pending input display", () => {
     });
   });
 
-  it("places accepted input at its acceptance time instead of after newer history", () => {
+  it("labels unconsumed input as queued between its acceptance time and later output", () => {
     const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
     const later = { role: "assistant", content: "Later reply", timestamp: 150 };
     const items = buildChatItems({
       paneId: "chronological-pending-pane",
       sessionKey,
       messages: [earlier, later],
-      pendingInputs: page.items,
+      pendingInputs: [{ ...input, state: "queued" }],
       queue: [],
       toolMessages: [],
       streamSegments: [],
@@ -942,7 +891,11 @@ describe("server-owned pending input display", () => {
         role: "user",
         messages: [{ message: { content: "Keep my accepted input" } }],
       },
-      { kind: "notice", timestamp: input.acceptedAt },
+      {
+        kind: "notice",
+        timestamp: input.acceptedAt,
+        text: "Queued · waiting for the agent",
+      },
       { kind: "group", role: "assistant", messages: [{ message: later }] },
     ]);
   });

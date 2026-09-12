@@ -68,18 +68,22 @@ export function createLegacyStateMigrationStepReceipt(
     ...step,
     outcome: refused
       ? "refused"
-      : result.warnings.length > 0
-        ? "warning"
-        : result.changes.length > 0
-          ? "completed"
-          : "skipped",
+      : result.outcome === "skipped"
+        ? "skipped"
+        : result.warnings.length > 0
+          ? "warning"
+          : result.changes.length > 0
+            ? "completed"
+            : "skipped",
     changes: result.changes,
     warnings: result.warnings,
     ...(result.notices?.length ? { notices: result.notices } : {}),
     ...(refused
       ? {
           refusal: step.refusal ?? {
-            code: "step-refused",
+            code: result.refusedAgentDatabasePaths?.length
+              ? "agent-database-ownership-mismatch"
+              : "step-refused",
             message: result.warnings.join("\n"),
           },
         }
@@ -91,8 +95,18 @@ export class DoctorStateMigrationRefusalError extends Error {
   readonly stepReceipts: readonly LegacyStateMigrationStepReceipt[];
 
   constructor(stepReceipts: readonly LegacyStateMigrationStepReceipt[]) {
+    const refused = stepReceipts.filter((receipt) => receipt.outcome === "refused");
+    const onlyAgentOwnershipRefusals =
+      refused.length > 0 &&
+      refused.every(
+        (receipt) =>
+          receipt.refusal?.code === "agent-database-ownership-mismatch" ||
+          receipt.refusal?.code === "blocked-by-agent-database-refusal",
+      );
     super(
-      "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
+      onlyAgentOwnershipRefusals
+        ? "Doctor stopped because an agent database ownership mismatch remains. Independent state repairs were run; repairs requiring the refused database were skipped. Resolve the reported ownership mismatch before retrying."
+        : "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
     );
     this.name = "DoctorStateMigrationRefusalError";
     this.stepReceipts = [...stepReceipts];

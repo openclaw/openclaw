@@ -235,11 +235,8 @@ export type {
   OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
   OpenClawPluginCliRootCommandDescriptor,
-  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHostedMediaResolver,
-  OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteMatch,
-  OpenClawPluginHttpRouteUpgradeHandler,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
 } from "./plugin-registration.types.js";

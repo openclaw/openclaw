@@ -267,7 +267,7 @@ async function materializeMemoryHostEventExport(params: {
   return memoryHostEventExportQueue.enqueue(owner.queueKey, async () => {
     const absolutePath = path.join(workspaceKey, ...owner.relativePath.split("/"));
     return await withFileLock(owner.lockTarget, MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS, async () => {
-      const storedEvents = listStoredMemoryHostEvents({
+      const storedEvents = await listStoredMemoryHostEvents({
         workspaceDir: workspaceKey,
         limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
       });

@@ -20,6 +20,7 @@ import {
 } from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
+import * as terminalStart from "./terminal-start.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -31,6 +32,39 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it("replaces the native draft route with the started terminal session", async () => {
+    const { context, flow } = createDraftFixture({
+      scopes: ["operator.admin"],
+      methods: ["sessions.catalog.startTerminal", "terminal.open"],
+      data: {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId: "codex",
+        catalogLabel: "Codex",
+        model: "",
+        startTerminal: true,
+        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
+      },
+    });
+    Object.assign(context, { basePath: "/openclaw", replace: vi.fn() });
+    vi.spyOn(terminalStart, "startNewSessionInTerminal").mockResolvedValue({
+      sessionId: "terminal-created",
+      cwd: "/workspace",
+      shell: "codex",
+      agentId: "main",
+      confined: false,
+    });
+    flow.setMessage("Start this task");
+    await flow.submit();
+
+    expect(context.replace).toHaveBeenCalledWith("terminal", {
+      pathname: "/openclaw/terminal/terminal-created",
+      search: "",
+      hash: "",
+    });
+    expect(flow.message).toBe("");
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+  });
   it("starts a cloud repository with its selected ref without cloning on the Gateway", async () => {
     const { context, flow, gateway, place, request } = createDraftFixture({
       methods: ["sessions.create", "sessions.dispatch"],

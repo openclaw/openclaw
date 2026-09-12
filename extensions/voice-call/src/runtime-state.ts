@@ -7,11 +7,7 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 export type VoiceCallStateRuntime = {
   state: Pick<
     PluginRuntime["state"],
-    | "resolveStateDir"
-    | "openKeyedStore"
-    | "openSyncKeyedStore"
-    | "openChannelIngressQueue"
-    | "openChannelIngressDrain"
+    "resolveStateDir" | "openKeyedStore" | "openChannelIngressQueue" | "openChannelIngressDrain"
   >;
 };
 

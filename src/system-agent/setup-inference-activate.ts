@@ -13,6 +13,7 @@ import {
   GEMINI_CLI_DEFAULT_MODEL_REF,
   OPENAI_API_DEFAULT_MODEL_REF,
 } from "../commands/onboard-inference.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import {
@@ -25,6 +26,7 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
+import { createPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -446,10 +448,12 @@ async function verifyAndActivateCandidate(
   const candidate = buildCandidate(cfg);
   const sourceCandidate = buildCandidate(source);
   const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
+  await using cache = createPluginCache();
   const generation =
     staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
       ? await withPluginLifecycleLease({ signal: params.signal }, async () =>
           loadSetupInferencePluginGeneration({
+            cache,
             config: candidate,
             workspaceDir: ctx.workspace,
             selection: {
@@ -471,8 +475,14 @@ async function verifyAndActivateCandidate(
     loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
   };
   const requestedAgentId = params.agentId ? routeAgentId : undefined;
+  // Saved model rows stay sparse; compare the same runtime defaults before and after writing.
   const project = (config: OpenClawConfig, sourceConfig: OpenClawConfig) =>
-    projectInferenceRoute(config, requestedAgentId, routeDeps, sourceConfig);
+    projectInferenceRoute(
+      materializeRuntimeConfig(config, { manifestRegistry: { plugins: [...metadata.plugins] } }),
+      requestedAgentId,
+      routeDeps,
+      sourceConfig,
+    );
   const resolveRoute = (config: OpenClawConfig, currentSnapshot = snapshot) =>
     resolveSystemAgentConfiguredRouteFromConfig(
       config,
@@ -532,12 +542,12 @@ async function verifyAndActivateCandidate(
   const savedCredential = staged.authProfileId
     ? loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir).profiles[staged.authProfileId]
     : undefined;
-  if (savedCredential?.setup?.replacement) {
+  if (savedCredential?.setup?.replacement && !params.activationConfirmed) {
     if (
       !params.prompter ||
       !(await params.prompter.confirm({
         message: "Connection verified. Activate this saved sign-in?",
-        initialValue: false,
+        initialValue: true,
       }))
     ) {
       return failure({

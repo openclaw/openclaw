@@ -469,6 +469,83 @@ describe("session delivery queue runtime", () => {
     });
   });
 
+  it.each([
+    { mode: "lookup", failure: false },
+    { mode: "lookup", failure: true },
+    { mode: "scan", failure: false },
+    { mode: "scan", failure: true },
+  ])("joins a retired owner's delayed $mode (failure: $failure)", async ({ mode, failure }) => {
+    vi.useFakeTimers();
+    await withRuntime(async (startRuntime) => {
+      const id = await enqueueSessionDelivery({
+        kind: "systemEvent",
+        sessionKey: "agent:main:main",
+        text: "delivery awaiting queue lookup",
+      });
+      const oldRead = createDeferredCore();
+      const newRead = createDeferredCore();
+      const deliver = vi.fn(async () => {});
+      const waitForOldRead = async () => {
+        await oldRead.promise;
+        if (failure) {
+          throw new Error("delayed database read failure");
+        }
+      };
+      const stopOld = startRuntime({
+        deliver,
+        log: logger,
+        reloadPending: async (entryId) => {
+          await waitForOldRead();
+          return loadPendingSessionDelivery(entryId);
+        },
+        listPending: async () => {
+          await waitForOldRead();
+          return loadPendingSessionDeliveries();
+        },
+      });
+      const scheduling =
+        mode === "lookup" ? scheduleSessionDelivery(id) : schedulePendingSessionDeliveries();
+      let stopNew: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
+      let newScheduling: Promise<void> | undefined;
+      try {
+        let stopped = false;
+        const stopping = stopOld().then(() => {
+          stopped = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(false);
+        await expect(scheduleSessionDelivery(id)).resolves.toBe(false);
+
+        stopNew = startRuntime({
+          deliver,
+          log: logger,
+          listPending: async () => {
+            await newRead.promise;
+            return loadPendingSessionDeliveries();
+          },
+        });
+        newScheduling = schedulePendingSessionDeliveries();
+        oldRead.resolve();
+        await scheduling;
+        await stopping;
+        expect(logger.error).toHaveBeenCalledTimes(failure ? 1 : 0);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(deliver).not.toHaveBeenCalled();
+        expect(await loadPendingSessionDelivery(id)).not.toBeNull();
+
+        newRead.resolve();
+        await newScheduling;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+      } finally {
+        oldRead.resolve();
+        newRead.resolve();
+        await Promise.all([scheduling, newScheduling, stopOld(), stopNew?.()]);
+      }
+    });
+  });
+
   it("retries a transient startup pending-entry scan failure", async () => {
     vi.useFakeTimers();
     await withRuntime(async (startRuntime) => {

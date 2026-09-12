@@ -25,6 +25,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case computerControlProvider = "capabilities.computerControlProvider"
     case peekabooBridgeEnabled = "capabilities.peekabooBridgeEnabled"
     case activeComputerPresenceEnabled = "capabilities.activeComputerPresenceEnabled"
+    case unattendedDesktopEnabled = "capabilities.unattendedDesktopEnabled"
     case cookieSyncEnabled = "browser.cookieSync.enabled"
     case cookieSyncDomains = "browser.cookieSync.domains"
     case cookieSyncTargetProfile = "browser.cookieSync.targetProfile"
@@ -168,6 +169,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     public let device: Device
     public let app: App?
     public let capabilities: Capabilities?
+    public let desktopAvailability: DesktopAvailability?
     public let browser: Browser?
     public let permissions: Permissions
     public let voice: Voice
@@ -177,6 +179,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         device: Device,
         app: App? = nil,
         capabilities: Capabilities? = nil,
+        desktopAvailability: DesktopAvailability? = nil,
         browser: Browser? = nil,
         permissions: Permissions,
         voice: Voice,
@@ -185,6 +188,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         self.device = device
         self.app = app
         self.capabilities = capabilities
+        self.desktopAvailability = desktopAvailability
         self.browser = browser
         self.permissions = permissions
         self.voice = voice
@@ -304,6 +308,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let cuaDriverBundled: Bool?
         public let peekabooBridgeEnabled: Bool?
         public let activeComputerPresenceEnabled: Bool?
+        public let unattendedDesktopEnabled: Bool?
         public let keepAwakeEnabled: Bool?
         public let healthSummaryAvailable: Bool?
         public let healthSummaryEnabled: Bool?
@@ -316,6 +321,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             cuaDriverBundled: Bool? = nil,
             peekabooBridgeEnabled: Bool? = nil,
             activeComputerPresenceEnabled: Bool? = nil,
+            unattendedDesktopEnabled: Bool? = nil,
             keepAwakeEnabled: Bool? = nil,
             healthSummaryAvailable: Bool? = nil,
             healthSummaryEnabled: Bool? = nil)
@@ -327,9 +333,20 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.cuaDriverBundled = cuaDriverBundled
             self.peekabooBridgeEnabled = peekabooBridgeEnabled
             self.activeComputerPresenceEnabled = activeComputerPresenceEnabled
+            self.unattendedDesktopEnabled = unattendedDesktopEnabled
             self.keepAwakeEnabled = keepAwakeEnabled
             self.healthSummaryAvailable = healthSummaryAvailable
             self.healthSummaryEnabled = healthSummaryEnabled
+        }
+    }
+
+    public struct DesktopAvailability: Encodable, Sendable {
+        public enum State: String, Encodable, Sendable { case locked, unlocked, unknown }
+
+        public let state: State
+
+        public init(state: State) {
+            self.state = state
         }
     }
 

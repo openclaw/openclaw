@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawConfig,
@@ -31,7 +33,7 @@ const config: OpenClawConfig = {
   plugins: { entries: { "team-reports": { enabled: true, config: pluginConfig } } },
 };
 
-function captureReports() {
+function captureReports(runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url))) {
   const services: OpenClawPluginService[] = [];
   const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
   const methods: Array<Parameters<OpenClawPluginApi["registerGatewayMethod"]>> = [];
@@ -42,6 +44,7 @@ function captureReports() {
     register(api) {
       plugin.register({
         ...api,
+        runtimeSource,
         pluginConfig: api.config.plugins?.entries?.["team-reports"]?.config,
         registerService(service) {
           services.push(service);
@@ -65,11 +68,48 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
 describe("Team Reports registration", () => {
+  it.each([
+    ["source", "extensions/team-reports/index.ts", "extensions/team-reports/src/store.worker.ts"],
+    [
+      "standalone",
+      "plugins/team-reports/dist/index.js",
+      "plugins/team-reports/dist/src/store.worker.js",
+    ],
+    [
+      "bundled",
+      "dist/extensions/team-reports/index.js",
+      "dist/extensions/team-reports/src/store.worker.js",
+    ],
+  ] as const)(
+    "locates its %s worker from the selected runtime entry",
+    async (_layout, entry, worker) => {
+      const runtimeSource = path.resolve(entry);
+      const { services } = captureReports(runtimeSource);
+      const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
+      vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
+        github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
+        people: [],
+      });
+      const stopBeforeOpening = new Error("worker location captured");
+      vi.mocked(createTeamReportsStore).mockRejectedValueOnce(stopBeforeOpening);
+      await expect(
+        services[0]!.start({ config, stateDir: "/unused", logger: console }),
+      ).rejects.toBe(stopBeforeOpening);
+      expect(createTeamReportsStore).toHaveBeenCalledWith({
+        stateDir: "/unused",
+        workerModuleUrl: pathToFileURL(path.resolve(worker)),
+      });
+    },
+  );
+
   it("drains storage that opens after retirement without publishing the service", async () => {
     const directory = tempDirs.make("team-reports-retired-open-");
     const { createTeamReportsStore: openStore } =
       await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
-    const store = await openStore({ stateDir: directory });
+    const store = await openStore({
+      stateDir: directory,
+      workerModuleUrl: new URL("./src/store.worker.ts", import.meta.url),
+    });
     const opened = createDeferred<void>();
     const releaseOpen = createDeferred<void>();
     const releaseClose = createDeferred<void>();

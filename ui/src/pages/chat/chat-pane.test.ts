@@ -699,6 +699,7 @@ describe("chat pane initialization", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 

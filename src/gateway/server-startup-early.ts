@@ -18,6 +18,7 @@ const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtim
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   minimalTestGateway: boolean;
+  updateCanary?: boolean;
   cfgAtStart: OpenClawConfig;
   port: number;
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
@@ -107,14 +108,16 @@ export async function startGatewayEarlyRuntime(params: {
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
-    // Task registry maintenance is authoritative in the Gateway process so
-    // restart-blocker counts reflect the same live cron runtime.
-    taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      runtimeAuthoritative: true,
-    });
-    taskRegistryMaintenance.startTaskRegistryMaintenance();
-    getActiveTaskCount = () =>
-      taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
+    // Canary task rows belong to the source Gateway; never reconcile or resume them.
+    if (!params.updateCanary) {
+      // Restart-blocker counts must reflect the same live cron runtime.
+      taskRegistryMaintenance.configureTaskRegistryMaintenance({
+        runtimeAuthoritative: true,
+      });
+      taskRegistryMaintenance.startTaskRegistryMaintenance();
+      getActiveTaskCount = () =>
+        taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
+    }
   }
 
   const skillsChangeUnsub = params.minimalTestGateway

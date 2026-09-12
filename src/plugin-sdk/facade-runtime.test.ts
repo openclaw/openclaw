@@ -183,6 +183,7 @@ describe("plugin-sdk facade runtime", () => {
     const first = testing.resolveFacadeModuleLocation(params);
     expect(first).toEqual({
       modulePath: path.join(dir, "demo", "api.js"),
+      origin: "bundled",
       boundaryRoot: dir,
     });
 
@@ -203,6 +204,7 @@ describe("plugin-sdk facade runtime", () => {
     });
     expect(fromA).toEqual({
       modulePath: path.join(overrideA, "demo", "api.js"),
+      origin: "bundled",
       boundaryRoot: overrideA,
     });
 
@@ -213,6 +215,7 @@ describe("plugin-sdk facade runtime", () => {
     });
     expect(fromB).toEqual({
       modulePath: path.join(overrideB, "demo", "api.js"),
+      origin: "bundled",
       boundaryRoot: overrideB,
     });
   });
@@ -257,6 +260,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(testing.resolveFacadeModuleLocation(params)).toEqual({
       modulePath: path.join(dir, "demo", "api.js"),
+      origin: "bundled",
       boundaryRoot: dir,
     });
 
@@ -348,6 +352,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(testing.resolveFacadeModuleLocation(params)).toEqual({
       modulePath: path.join(pluginDir, "api.js"),
+      origin: "bundled",
       boundaryRoot: dir,
     });
   });
@@ -373,6 +378,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(testing.resolveFacadeModuleLocation(params)).toEqual({
       modulePath: path.join(dir, "demo", "api.ts"),
+      origin: "bundled",
       boundaryRoot: dir,
     });
   });

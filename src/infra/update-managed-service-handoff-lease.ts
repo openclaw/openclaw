@@ -29,6 +29,10 @@ import {
   type ManagedHandoffLeaseAction,
   type ManagedHandoffLeasePayload,
 } from "./update-managed-service-handoff-schema.js";
+import {
+  hasManagedHandoffSchemaObject,
+  isManagedHandoffSchemaEmpty,
+} from "./update-managed-service-handoff-source-inspection.js";
 
 const text = z.string().min(1).max(4096);
 export const triageFailureSchema = z.strictObject({
@@ -246,6 +250,9 @@ export function createManagedHandoffLeaseStore(
         return { kind: "absent" };
       }
       return withDatabase(false, (db) => {
+        if (!options.existingIdentity && isManagedHandoffSchemaEmpty(db)) {
+          return { kind: "absent" };
+        }
         const value = row(db, root);
         return value ? { kind: "current", lease: handle(root, value) } : { kind: "absent" };
       });
@@ -627,22 +634,29 @@ export function createManagedHandoffLeaseStore(
       }
       throw error;
     }
-    return withDatabase(false, (db) =>
-      executeSqliteQuerySync(
+    return withDatabase(false, (db) => {
+      // Only ordinary inspection may accept an uninitialized store.
+      if (!options.existingIdentity && !hasManagedHandoffSchemaObject(db)) {
+        return [];
+      }
+      return executeSqliteQuerySync(
         db,
         leaseQueries(db)
           .selectFrom("managed_update_handoffs")
           .select(["install_root", "owner", "payload_json", "updated_at"]),
       ).rows.flatMap((entry) =>
         // A retired record decodes exactly, so unlike unreadable data it proves
-        // the row predates native custody and cannot borrow any source. Every
-        // other undecodable row still refuses.
+        // the row predates native custody and cannot borrow any source. A record
+        // this build cannot decode may still name a source it holds, so it is
+        // never discarded here: releasing that source is the hazard this refusal
+        // exists for. Store-level damage recovers in the database owner instead.
         isRetiredManagedHandoffLeasePayload(entry.payload_json)
           ? []
           : [handle(entry.install_root, entry)],
-      ),
-    );
+      );
+    });
   }
+
   function assertSourceUnborrowed(resource: string) {
     assertNoRetainedSourceBorrower(resource, readRetainedSources());
   }

@@ -45,7 +45,7 @@ describe("Doctor workspace move ordering", () => {
     const raw = JSON.stringify(milestones);
     const sourceName = "openclaw-workspace-state.json";
     fs.writeFileSync(path.join(context.workspaceDir, sourceName), raw);
-    const source = detect(configured).sources.find((entry) => entry.kind === "setup")!;
+    const source = (await detect(configured)).sources.find((entry) => entry.kind === "setup")!;
     expect((await migrate(configured)).warnings).toEqual([]);
     expect(readReceipt(source, context.env)?.removedSource).toBe(true);
 

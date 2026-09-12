@@ -4,6 +4,7 @@ import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { isChatControlCommand } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
@@ -23,6 +24,8 @@ import {
 export type ChatRunControlsProps = {
   canAbort: boolean;
   canSend: boolean;
+  submitDisabledReason?: string | null;
+  submitPending?: boolean;
   connected: boolean;
   draft: string;
   hasAttachments?: boolean;
@@ -307,6 +310,7 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
 type ComposerVoiceButtonProps = {
   connected: boolean;
   sending: boolean;
+  submitDisabledReason?: string | null;
   isBusy: boolean;
   dictation?: ComposerDictationController;
   microphonePicker?: TemplateResult | typeof nothing;
@@ -333,8 +337,12 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
     : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip =
     props.dictation && !startsDictationDirectly && !(active || finalizing)
-      ? t("chat.composer.voiceGestureHint")
-      : label;
+      ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
+          .filter(Boolean)
+          .join(" · ")
+      : active
+        ? label
+        : (props.submitDisabledReason ?? label);
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return html`
@@ -369,7 +377,13 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
             }
           }}
           @contextmenu=${(event: MouseEvent) => props.dictation?.handleContextMenu(event)}
-          ?disabled=${!active && (!props.connected || props.sending || props.isBusy)}
+          ?disabled=${
+            !active &&
+            (!props.connected ||
+              props.sending ||
+              props.isBusy ||
+              (!props.dictation && Boolean(props.submitDisabledReason)))
+          }
           aria-disabled=${String(finalizing)}
           aria-label=${label}
         >
@@ -547,14 +561,14 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       ? html`
           <openclaw-tooltip
             class="chat-mobile-talk-action"
-            .content=${t("chat.composer.realtimeTalkCapability")}
+            .content=${props.submitDisabledReason ?? t("chat.composer.realtimeTalkCapability")}
           >
             <button
               class="chat-send-btn chat-send-btn--talk-mode"
               type="button"
               @pointerdown=${props.onPrimaryActionPointerDown}
               @click=${props.onToggleVoice}
-              ?disabled=${!props.connected || props.sending || props.isBusy}
+              ?disabled=${!props.connected || props.sending || props.isBusy || Boolean(props.submitDisabledReason)}
               aria-label=${t("chat.composer.realtimeTalkCapability")}
             >
               ${icons.audioLines}
@@ -565,49 +579,42 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           </openclaw-tooltip>
         `
       : nothing;
+  const sendDisabledReason =
+    props.canSend && isChatControlCommand(props.draft) ? null : props.submitDisabledReason;
+  const sendBusy = props.sending || Boolean(sendDisabledReason && props.submitPending);
+  const sendStatus =
+    sendDisabledReason ??
+    (props.sending
+      ? t("chat.composer.sendingMessage")
+      : hasComposedContent
+        ? null
+        : t("chat.composer.emptyHint"));
   // Send holds the trailing edge whatever the draft is. During an active run the
   // same slot shows stop while empty, then becomes the follow-up action as soon
   // as the operator composes content; two competing primary buttons never render.
   const sendAction = html`
-    <openclaw-tooltip
-      .content=${
-        props.sending
-          ? t("chat.composer.sendingMessage")
-          : hasComposedContent
-            ? activeRunActionTooltip
-            : t("chat.composer.emptyHint")
-      }
-    >
+    <openclaw-tooltip .content=${sendStatus ?? activeRunActionTooltip}>
       <button
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
         @click=${send}
-        ?disabled=${!props.canSend || props.sending || !hasComposedContent}
-        aria-label=${
-          props.sending
-            ? t("chat.composer.sendingMessage")
-            : hasComposedContent
-              ? activeRunActionDescription
-              : t("chat.composer.emptyHint")
-        }
-        aria-busy=${props.sending ? "true" : "false"}
+        ?disabled=${!props.canSend || props.sending || Boolean(sendDisabledReason) || !hasComposedContent}
+        aria-label=${sendStatus ?? activeRunActionDescription}
+        aria-busy=${sendBusy ? "true" : "false"}
       >
-        ${
-          props.sending
-            ? html`<span class="btn__spinner" aria-hidden="true"></span>`
-            : icons.arrowUp
-        }
+        ${sendBusy ? html`<span class="btn__spinner" aria-hidden="true"></span>` : icons.arrowUp}
         <span class="agent-chat__control-label">${activeRunActionLabel}</span>
       </button>
     </openclaw-tooltip>
   `;
-  const dictationSendAction = props.dictation
-    ? renderComposerDictationSendAction(
-        props.dictation,
-        () => props.onSend(),
-        props.onPrimaryActionPointerDown,
-      )
-    : nothing;
+  const dictationSendAction =
+    props.dictation && !props.submitDisabledReason
+      ? renderComposerDictationSendAction(
+          props.dictation,
+          () => props.onSend(),
+          props.onPrimaryActionPointerDown,
+        )
+      : sendAction;
   const desktopPrimaryAction = props.dictation?.active
     ? dictationSendAction
     : props.canAbort

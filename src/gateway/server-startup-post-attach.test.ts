@@ -19,6 +19,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "../plugins/types.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -1668,6 +1669,68 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it.each([true, false])(
+    "admits update canary readiness only for attributed plugin failures (attributed=%s)",
+    async (attributed) => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.plugins.push(
+        createPluginRecord({
+          id: "startup-fixture",
+          source: testState.path("startup-fixture", "index.js"),
+          status: "error",
+          error: "synthetic registration failure",
+        }),
+      );
+      pluginRegistry.diagnostics.push({
+        level: "error",
+        message: "synthetic registration failure",
+        ...(attributed ? { pluginId: "startup-fixture" } : {}),
+      });
+      const onStartupPluginsLoaded =
+        vi.fn<NonNullable<PostAttachParams["onStartupPluginsLoaded"]>>();
+      const onSidecarsReady = vi.fn();
+      const params = createPostAttachParams({
+        updateCanary: true,
+        pluginRegistry: createEmptyPluginRegistry(),
+        loadStartupPlugins: async () => ({ pluginRegistry, gatewayMethods: ["ping"] }),
+        onStartupPluginsLoaded,
+        onSidecarsReady,
+      });
+      const runtimeDeps = createPostAttachRuntimeDeps();
+      const startup = startGatewayPostAttachRuntime(params, runtimeDeps);
+
+      if (attributed) {
+        await expect(startup).resolves.toMatchObject({ pluginServices: null });
+        expect(onSidecarsReady).toHaveBeenCalledOnce();
+        expect(params.unlockStartupMethods).toHaveBeenCalledOnce();
+      } else {
+        await expect(startup).rejects.toThrow(
+          "Candidate plugin registry reported an unattributed error",
+        );
+        expect(onSidecarsReady).not.toHaveBeenCalled();
+        expect(params.unlockStartupMethods).not.toHaveBeenCalled();
+      }
+      const published = onStartupPluginsLoaded.mock.lastCall?.[0].pluginRegistry;
+      expect(published?.plugins).toEqual([
+        expect.objectContaining({
+          id: "startup-fixture",
+          status: "error",
+          activated: true,
+          error: "synthetic registration failure",
+        }),
+      ]);
+      expect(published?.diagnostics).toEqual([
+        {
+          level: "error",
+          message: "synthetic registration failure",
+          ...(attributed ? { pluginId: "startup-fixture" } : {}),
+        },
+      ]);
+      expect(runtimeDeps.startGatewaySidecars).not.toHaveBeenCalled();
+      expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();
+    },
+  );
+
   it("waits for startup plugin attachment before channel sidecars", async () => {
     const events: string[] = [];
     let finishAttachment: (() => void) | undefined;
@@ -2199,7 +2262,7 @@ describe("startGatewayPostAttachRuntime", () => {
         logChannels: base.logChannels,
       });
       let reservation: ReturnType<typeof generation.reserve> | undefined;
-      let stopping: Promise<void> | undefined;
+      let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
       try {
         await siblingStarted.promise;
         const owner = generation.currentServices();
@@ -2354,7 +2417,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("publishes plugin cleanup ownership before lazy service loading", async () => {
     let shouldStartPluginServices = true;
-    let stopping: Promise<void> | undefined;
+    let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
     const onPluginServices = vi.fn((handle: PluginServicesHandle | null) => {
       if (!handle) {
         return;
@@ -2385,11 +2448,12 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(onPluginServices).toHaveBeenCalledOnce();
   });
 
-  it.each(["settles", "times out"] as const)(
-    "forwards strict replacement cleanup through the deferred plugin service owner when it %s",
+  it.each(["settles", "times out", "has no deadline"] as const)(
+    "forwards strict cleanup through the deferred plugin service owner when it %s",
     async (strictOutcome) => {
       vi.useFakeTimers();
-      const cleanup = createDeferred();
+      const callbackFailure = { errors: [new Error("synthetic callback cleanup failure")] };
+      const cleanup = createDeferred<typeof callbackFailure>();
       const strictCleanup = createDeferred();
       const serviceStop = vi.fn<PluginServicesHandle["stop"]>((options) => {
         if (options?.strict) {
@@ -2422,10 +2486,22 @@ describe("startGatewayPostAttachRuntime", () => {
       if (!owner) {
         throw new Error("deferred plugin service owner was not published");
       }
-      const replacement = { strict: true, deadlineAtMs: Date.now() + 5_000 } as const;
+      const replacement = {
+        strict: true,
+        ...(strictOutcome === "has no deadline" ? {} : { deadlineAtMs: Date.now() + 5_000 }),
+      } as const;
       const replacing = owner.stop(replacement);
-      const replacementResult = replacing.catch((error: unknown) => error);
-      let stopping: Promise<void> | undefined;
+      let replacementSettled = false;
+      const replacementResult = replacing.then(
+        () => {
+          replacementSettled = true;
+        },
+        (error: unknown) => {
+          replacementSettled = true;
+          return error;
+        },
+      );
+      let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
 
       try {
         if (strictOutcome === "settles") {
@@ -2435,6 +2511,13 @@ describe("startGatewayPostAttachRuntime", () => {
         }
 
         await vi.advanceTimersByTimeAsync(5_000);
+        if (strictOutcome === "has no deadline") {
+          expect(replacementSettled).toBe(false);
+          expect(serviceStop).toHaveBeenCalledWith(replacement);
+          strictCleanup.resolve();
+          await expect(replacing).resolves.toBeUndefined();
+          return;
+        }
         expect(await replacementResult).toBeInstanceOf(AggregateError);
         strictCleanup.reject(new Error("strict service cleanup timed out"));
         await vi.advanceTimersByTimeAsync(0);
@@ -2456,11 +2539,11 @@ describe("startGatewayPostAttachRuntime", () => {
           replacement,
           undefined,
         ]);
-        cleanup.resolve();
-        await expect(stopping).resolves.toBeUndefined();
+        cleanup.resolve(callbackFailure);
+        await expect(stopping).resolves.toBe(callbackFailure);
       } finally {
         strictCleanup.resolve();
-        cleanup.resolve();
+        cleanup.resolve(callbackFailure);
         await Promise.allSettled([replacing, stopping]);
       }
     },
@@ -2500,7 +2583,7 @@ describe("startGatewayPostAttachRuntime", () => {
       return await actualServices.startPluginServices(params);
     });
     const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
-    let stopping: Promise<void> | undefined;
+    let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
     let sidecars: ReturnType<typeof startGatewaySidecars> | undefined;
 
     try {

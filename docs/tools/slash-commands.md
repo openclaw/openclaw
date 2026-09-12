@@ -163,6 +163,13 @@ the channel's allowlists and pairing state. Access-group entries referenced by
 channel allowlists are resolved automatically. There is no command-level
 access-group toggle.
 
+For Gateway users with verified login identity, both command allowlists can
+match the user's profile ID. A shared owner profile used only for attribution
+does not grant this access. Internal synthetic callers cannot borrow a human's
+profile. Non-UI Gateway clients also retain application-ID matches such as
+`cli`; operator UI clients do not receive application-ID matches. Existing
+operator scopes and command enablement still apply.
+
 Session commands `/new` and `/reset` (including `/reset soft`) remain available
 to channel-authorized senders on channels that do not enforce owner-only
 commands, even when those senders are not in `commands.ownerAllowFrom`.
@@ -332,8 +339,15 @@ user skill directly.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
-    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw and restart; receive a completion or failure notice in the same chat |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat |
     | `/send on\|off\|inherit` | owner | Set send policy |
+
+    A direct "update OpenClaw" request offers an **Update now** button where
+    supported, or the `/update` command to send. The button runs `/update` as
+    the clicking user; the update starts only after that owner action. Chat
+    access alone does not grant permission to update. See
+    [Updating from chat](/install/updating#from-chat).
+
   </Accordion>
 
   <Accordion title="Voice, TTS, channel control">

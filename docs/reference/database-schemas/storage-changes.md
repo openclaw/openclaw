@@ -38,6 +38,27 @@ admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
+Board operations, board inventory reads, and widget document reads expose asynchronous
+contracts. Gateway callers await persistence before publishing board changes or replies.
+Writes carry the caller's current-authority assertion into the synchronous SQLite
+transaction. HTML widget capability actions and protected publication run in the store's immediate
+continuation after its authoritative read and current ticket, session, and grant checks.
+Database ownership is released before awaiting external work; no Promise handoff separates
+the final authorization from its use. SQLite execution remains synchronous inside the
+store, with existing revision, grant, and transaction semantics.
+
+MCP App pinning retains its existing source-interaction checks. A delayed adapter must
+revalidate that source authority at its actual write admission; checking view registration
+alone cannot replace the supported asynchronous interaction policy.
+
+Backup outcome recording and freshness reads expose asynchronous operations from
+the shared-state owner. Archive, SQLite snapshot, and Git backup commands await
+recording before reporting completion; a recording failure remains a warning and
+does not change the backup result. Status and Doctor await freshness before
+formatting it. These operations still execute synchronous SQLite internally;
+they retain the existing insertion-and-pruning transaction, 200-row limit, and
+non-creating freshness reads.
+
 Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
 eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
 existing asynchronous admission owner runs the full integrity and foreign-key
@@ -109,6 +130,15 @@ phase on the admitted connection. Archive-row and unpublished-name reads follow
 validation. After removing a derived archive file, pruning reacquires before the
 canonical row-deletion transaction; an acquisition failure propagates without
 deleting that recovery row.
+
+Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
+agent-database admission. A cold mutation waits for the existing integrity worker;
+its compare-and-set transaction remains synchronous on the admitted connection.
+Refresh completion and cleanup await persistence. Operations capture their resolved
+database path before admission, and refresh-lock release retains that path and its
+original environment when the caller's directory or environment changes. Doctor reports rejected
+pruning operations before continuing to the next agent. Read-only cache snapshots
+retain their existing synchronous owner and do not create missing databases.
 
 ### Preserve the data and concurrency contracts
 

@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 
 const taskTracking = vi.hoisted(() => ({
@@ -18,9 +20,37 @@ import {
 } from "./tools/gateway-caller-context.js";
 
 describe("exec background task wiring", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
     taskTracking.createBackgroundExecTask.mockReset();
     taskTracking.finalizeBackgroundExecTask.mockReset();
+  });
+
+  it("launches a provider transport from its owner cwd", async () => {
+    const providerCwd = await fs.realpath(tempDirs.make("sandbox-provider-cwd-"));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "provider",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        buildExecSpec: async () => ({
+          argv: [process.execPath, "-e", "process.stdout.write(process.cwd())"],
+          env: process.env,
+          cwd: providerCwd,
+          stdinMode: "pipe-closed",
+        }),
+      },
+    });
+    const result = await tool.execute("provider-cwd", { command: "pwd" });
+    expect(result.details.status).toBe("completed");
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "text", text: expect.stringContaining(providerCwd) }),
+      ]),
+    );
   });
 
   it("does not spawn when the turn closes during asynchronous process preparation", async () => {

@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { PluginLruCache, createConfigScopedPromiseLoader } from "./plugin-cache-primitives.js";
+import { createConfigScopedPromiseLoader } from "./plugin-cache-primitives.js";
+import { PluginLruCache } from "./plugin-lru-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 describe("PluginLruCache", () => {

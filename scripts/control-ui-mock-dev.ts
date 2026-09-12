@@ -1567,6 +1567,7 @@ async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
 ): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const pickerInventory = process.env.MOCK_PICKER_INVENTORY === "1";
   const selfProfile: UserProfile = {
     id: "presence-riley",
     displayName: "Riley",
@@ -2024,6 +2025,28 @@ async function createChatPickerScenario(
       owner: { actor: { type: "human", id: "presence-riley", label: "Riley" } },
       status: "failed",
       lastRunError: "Model access expired: openai/gpt-5-mini",
+    }),
+    // Running rows with participants exercise the paired run trace in the lead slot.
+    sessionRow("agent:main:release-prep", "Release 2026.9.4 preparation", baseTime - 82_000, {
+      createdActor: MOCK_ACTOR_PETER,
+      execCwd: "/Users/demo/Work/openclaw",
+      hasActiveRun: true,
+      owner: { actor: MOCK_ACTOR_PETER },
+      participantCount: 1,
+      participants: [{ identity: { type: "profile", id: "profile-mira" }, label: "Mira" }],
+      status: "running",
+    }),
+    sessionRow("agent:main:release-notes", "Release notes review", baseTime - 83_000, {
+      createdActor: MOCK_ACTOR_MIRA,
+      execCwd: "/Users/demo/Work/openclaw",
+      hasActiveRun: true,
+      owner: { actor: MOCK_ACTOR_MIRA },
+      participantCount: 2,
+      participants: [
+        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+      ],
+      status: "running",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
       createdActor: MOCK_ACTOR_PETER,
@@ -2748,9 +2771,50 @@ async function createChatPickerScenario(
             label: "Mac Studio",
             status: "available",
             desktop: true,
+            ...(pickerInventory
+              ? {
+                  platform: "darwin",
+                  sessionHost: true,
+                  workerSlots: { total: 4, available: 3 },
+                }
+              : {}),
           },
+          ...(pickerInventory
+            ? [
+                {
+                  id: "node:mock-macbook-offline",
+                  type: "node",
+                  label: "MacBook Pro",
+                  platform: "darwin",
+                  status: "unavailable",
+                  sessionHost: true,
+                  lastConnectedAtMs: baseTime - 5 * 86_400_000,
+                  lastDisconnectedAtMs: baseTime - (4 * 24 + 13) * 3_600_000,
+                },
+              ]
+            : []),
         ],
-        profiles: [{ id: "aws", providerId: "aws" }],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "aws",
+            ...(pickerInventory ? { executionModes: ["worker-turn", "remote-exec"] } : {}),
+          },
+          ...(pickerInventory
+            ? [
+                {
+                  id: "crabbox",
+                  providerId: "crabbox",
+                  executionModes: ["worker-turn", "remote-exec"],
+                },
+                {
+                  id: "test-cloud",
+                  providerId: "test-cloud",
+                  executionModes: ["worker-turn", "remote-exec"],
+                },
+              ]
+            : []),
+        ],
       },
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.

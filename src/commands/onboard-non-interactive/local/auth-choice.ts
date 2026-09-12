@@ -6,6 +6,7 @@
  */
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
+import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -278,7 +279,7 @@ export async function applyNonInteractiveAuthChoice(params: {
           const { prepareCustomSetupCredentials } =
             await import("../../../system-agent/setup-inference-custom.js");
           const prepared = prepareCustomSetupCredentials(result);
-          await saveSetupCredential({
+          const saved = await saveSetupCredential({
             profile: prepared.profiles[0]!,
             config: prepared.config,
             baseConfig,
@@ -288,7 +289,7 @@ export async function applyNonInteractiveAuthChoice(params: {
           rejectOnboardingOption(
             opts,
             runtime,
-            "Replacement credential saved but inactive. Your connection is unchanged. Open Model Setup to test and activate the saved sign-in.",
+            `Replacement credential saved but inactive. Your connection is unchanged. Test and activate it with:\n${formatCliCommand(`openclaw models auth activate ${quoteCliArg(saved.profile.profileId)} --agent ${quoteCliArg(params.target.agentId)}`)}`,
           );
           return null;
         }

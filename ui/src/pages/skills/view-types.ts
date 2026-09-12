@@ -42,6 +42,7 @@ export type SkillsProps = {
   skillCardErrors: Record<string, string>;
   clawhubQuery: string;
   clawhubResults: ClawHubSearchResult[] | null;
+  clawhubIconUrls?: Record<string, string>;
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;

@@ -7,7 +7,7 @@ import {
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
 import type { GatewayServiceEnv, GatewayServiceUnitInspection } from "./service-types.js";
-import { execBusctlUser } from "./systemd-exec.js";
+import { execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 const MANAGER = "org.freedesktop.systemd1";
@@ -53,7 +53,7 @@ export async function readLoadedSystemdServiceRuntime(
     );
     assertCurrent?.();
     if (result.code !== 0 || result.termination !== "exit" || performance.now() >= deadline) {
-      throw unavailable();
+      throw systemdInspectionError(result, unavailable().message);
     }
     const values = result.stdout
       .trim()

@@ -74,6 +74,41 @@ export function findUnsupportedSchemaKeywords(
   return violations;
 }
 
+function normalizeToolSchemasIfChanged(
+  ctx: ProviderNormalizeToolSchemasContext,
+  normalizeSchema: (schema: unknown) => unknown,
+): AnyAgentTool[] {
+  return ctx.tools.map((tool) => {
+    if (!tool.parameters || typeof tool.parameters !== "object") {
+      return tool;
+    }
+    const parameters = normalizeSchema(tool.parameters);
+    return parameters === tool.parameters
+      ? tool
+      : {
+          ...tool,
+          parameters: parameters as TSchema,
+        };
+  });
+}
+
+function inspectUnsupportedToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+  unsupportedKeywords: ReadonlySet<string>,
+): ProviderToolSchemaDiagnostic[] {
+  return ctx.tools.flatMap((tool, toolIndex) => {
+    const violations = findUnsupportedSchemaKeywords(
+      tool.parameters,
+      `${tool.name}.parameters`,
+      unsupportedKeywords,
+    );
+    if (violations.length === 0) {
+      return [];
+    }
+    return [{ toolName: tool.name, toolIndex, violations }];
+  });
+}
+
 /**
  * Rewrites tool schemas into Gemini-compatible JSON schema before provider dispatch.
  */
@@ -99,35 +134,14 @@ export function inspectGeminiToolSchemas(
   /** Provider tool-schema inspection context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
-  });
+  return inspectUnsupportedToolSchemas(ctx, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS);
 }
 
 /** Rewrites tool schemas into the JSON Schema subset accepted by llama.cpp GBNF. */
 export function normalizeLlamacppGbnfToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
-    }
-    const parameters = cleanSchemaForLlamacppGbnf(tool.parameters);
-    return parameters === tool.parameters
-      ? tool
-      : {
-          ...tool,
-          parameters: parameters as TSchema,
-        };
-  });
+  return normalizeToolSchemasIfChanged(ctx, cleanSchemaForLlamacppGbnf);
 }
 
 /** Reports tool-schema constraints that llama.cpp GBNF cannot compile. */
@@ -541,18 +555,7 @@ export function normalizeDeepSeekToolSchemas(
   /** Provider tool-schema normalization context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
-    }
-    const parameters = normalizeDeepSeekSchema(tool.parameters);
-    return parameters === tool.parameters
-      ? tool
-      : {
-          ...tool,
-          parameters: parameters as TSchema,
-        };
-  });
+  return normalizeToolSchemasIfChanged(ctx, normalizeDeepSeekSchema);
 }
 
 /**
@@ -562,17 +565,7 @@ export function inspectDeepSeekToolSchemas(
   /** Provider tool-schema inspection context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
-  });
+  return inspectUnsupportedToolSchemas(ctx, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS);
 }
 
 /**

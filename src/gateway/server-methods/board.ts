@@ -30,6 +30,7 @@ import {
 import {
   boardDataBindingCapability,
   captureBoardCapabilityAuthority,
+  assertBoardCapabilityParamsSize,
   captureBoardRequestAuthority,
   readBoardDataBinding,
   respondBoardError,
@@ -44,7 +45,7 @@ import {
   createBoardViewTicket,
 } from "../board-view-ticket.js";
 import { resolveBoardWidgetApproval } from "../board-widget-approval.js";
-import { resolveAuthorizedBoardWidgetView } from "../board-widget-view.js";
+import { withAuthorizedBoardWidgetView } from "../board-widget-view.js";
 import {
   requireMcpAppInteraction,
   resolveMcpAppActiveView,
@@ -64,20 +65,7 @@ type McpAppDependencies = {
   resolveAllowedToolNames: typeof resolveMcpAppAllowedToolNames;
   mintFromTranscript: typeof mintMcpAppViewFromTranscript;
 };
-type BoardDataReader = typeof readBoardDataBinding;
-type BoardActionVerbRunner = typeof runBoardActionVerb;
-type BoardCronTrigger = typeof triggerBoardCronJob;
-type BoardHandlerDependencies = Partial<McpAppDependencies> & {
-  readDataBinding?: BoardDataReader;
-  runActionVerb?: BoardActionVerbRunner;
-  triggerCronJob?: BoardCronTrigger;
-};
-
-const defaultMcpAppDependencies: McpAppDependencies = {
-  resolveActiveView: resolveMcpAppActiveView,
-  resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
-  mintFromTranscript: mintMcpAppViewFromTranscript,
-};
+type BoardHandlerDependencies = Partial<McpAppDependencies>;
 
 function resolveBoardSession(
   params: { sessionKey: string; agentId?: string | undefined },
@@ -103,34 +91,16 @@ function projectBoardSnapshot<T extends BoardSnapshot>(snapshot: T, agentId: str
   return { ...snapshot, sessionKey: sessionObserverScopeKey(snapshot.sessionKey, agentId) };
 }
 
-function assertCapabilityParamsSize(
-  params: Record<string, unknown>,
-  capability: "action" | "data binding",
-): void {
-  if (Buffer.byteLength(JSON.stringify(params), "utf8") > 8 * 1024) {
-    throw new BoardValidationError(
-      "invalid_operation",
-      `board widget ${capability} params exceed 8192 UTF-8 bytes`,
-    );
-  }
-}
-
 export function createBoardHandlers(
   store: BoardStore,
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
   dependencies: BoardHandlerDependencies = {},
 ): GatewayRequestHandlers {
   const mcpApp: McpAppDependencies = {
-    resolveActiveView:
-      dependencies.resolveActiveView ?? defaultMcpAppDependencies.resolveActiveView,
-    resolveAllowedToolNames:
-      dependencies.resolveAllowedToolNames ?? defaultMcpAppDependencies.resolveAllowedToolNames,
-    mintFromTranscript:
-      dependencies.mintFromTranscript ?? defaultMcpAppDependencies.mintFromTranscript,
+    resolveActiveView: dependencies.resolveActiveView ?? resolveMcpAppActiveView,
+    resolveAllowedToolNames: dependencies.resolveAllowedToolNames ?? resolveMcpAppAllowedToolNames,
+    mintFromTranscript: dependencies.mintFromTranscript ?? mintMcpAppViewFromTranscript,
   };
-  const readDataBinding = dependencies.readDataBinding ?? readBoardDataBinding;
-  const runActionVerb = dependencies.runActionVerb ?? runBoardActionVerb;
-  const triggerCronJob = dependencies.triggerCronJob ?? triggerBoardCronJob;
   return {
     "board.get": defineValidatedGatewayMethod(
       "board.get",
@@ -144,7 +114,8 @@ export function createBoardHandlers(
             return;
           }
           const { snapshot, htmlViewMetadata } =
-            store.getSnapshotWithHtmlViewMetadata(boardSession);
+            await store.getSnapshotWithHtmlViewMetadata(boardSession);
+          authority.assertActive();
           let sandboxPort = context.getMcpAppSandboxPort?.();
           let sandboxOrigin: string | undefined;
           let sandboxOriginResolved = false;
@@ -236,7 +207,7 @@ export function createBoardHandlers(
     "board.update": defineValidatedGatewayMethod(
       "board.update",
       validateBoardUpdateParams,
-      (invocation) => {
+      async (invocation) => {
         const { params: boardParams, respond, context } = invocation;
         try {
           const authority = captureBoardRequestAuthority(invocation);
@@ -246,9 +217,12 @@ export function createBoardHandlers(
           }
           authority.assertActive();
           const snapshot = projectBoardSnapshot(
-            store.applyOps(boardSession, boardParams.ops),
+            await store.applyOps(boardSession, boardParams.ops, {
+              assertCurrent: authority.assertActive,
+            }),
             boardSession.agentId,
           );
+          authority.assertActive();
           if (boardParams.ops.length > 0) {
             emitSessionsChanged(context, {
               sessionKey: boardSession.sessionKey,
@@ -407,27 +381,49 @@ export function createBoardHandlers(
             content: materializedContent,
             ...(declared ? { declared } : {}),
           };
+          let identity:
+            | Awaited<
+                ReturnType<typeof import("../github-actions-read.js").prepareBoardGitHubIdentity>
+              >
+            | undefined;
           if (
             (content.kind === "html" || content.kind === "registered") &&
             declared?.tools?.some((tool) => tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX))
           ) {
             const { prepareBoardGitHubIdentity } = await import("../github-actions-read.js");
-            const identity = await prepareBoardGitHubIdentity(context, {
+            identity = await prepareBoardGitHubIdentity(context, {
               ...authority,
               boardSession,
             });
-            identity.assertSelected();
-            // Credential selection alone cannot detect a retired agent or changed board routing.
-            const currentSession = resolveBoardSession(boardSession, context, respond);
-            if (!currentSession) {
-              return;
-            }
-            if (currentSession.sessionKey !== boardSession.sessionKey) {
-              throw new BoardValidationError("invalid_operation", "board session changed; retry");
-            }
           }
+          const putWidget = () =>
+            store.putWidget(boardParams, {
+              assertCurrent: () => {
+                authority.assertActive();
+                identity?.assertSelected();
+                const cfg = context.getRuntimeConfig();
+                const current = resolveRequestedSessionAgentId(
+                  cfg,
+                  boardSession.sessionKey,
+                  boardSession.agentId,
+                );
+                if (
+                  !current.ok ||
+                  resolveSessionStoreKey({
+                    cfg,
+                    sessionKey: boardSession.sessionKey,
+                    storeAgentId: current.agentId,
+                  }) !== boardSession.sessionKey
+                ) {
+                  throw new BoardValidationError(
+                    "invalid_operation",
+                    "board session changed; retry",
+                  );
+                }
+              },
+            });
+          let snapshot = identity ? await identity.start(putWidget) : await putWidget();
           authority.assertActive();
-          let snapshot = store.putWidget(boardParams);
           const widget = snapshot.widgets.find(
             (candidate) => candidate.name === snapshot.resolvedWidgetName,
           );
@@ -441,17 +437,19 @@ export function createBoardHandlers(
             authority.assertActive();
             if (decision) {
               snapshot = {
-                ...store.grant(
+                ...(await store.grant(
                   boardSession,
                   snapshot.resolvedWidgetName,
                   decision,
                   widget.revision,
                   widget.instanceId,
-                ),
+                  { assertCurrent: authority.assertActive },
+                )),
                 resolvedWidgetName: snapshot.resolvedWidgetName,
               };
             }
           }
+          authority.assertActive();
           snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
           emitSessionsChanged(context, {
             sessionKey: boardSession.sessionKey,
@@ -476,7 +474,7 @@ export function createBoardHandlers(
     "board.widget.grant": defineValidatedGatewayMethod(
       "board.widget.grant",
       validateBoardWidgetGrantParams,
-      (invocation) => {
+      async (invocation) => {
         const { params: boardParams, respond, context } = invocation;
         try {
           const authority = captureBoardRequestAuthority(invocation);
@@ -486,15 +484,17 @@ export function createBoardHandlers(
           }
           authority.assertActive();
           const snapshot = projectBoardSnapshot(
-            store.grant(
+            await store.grant(
               boardSession,
               boardParams.name,
               boardParams.decision,
               boardParams.revision,
               boardParams.instanceId,
+              { assertCurrent: authority.assertActive },
             ),
             boardSession.agentId,
           );
+          authority.assertActive();
           context.broadcast(
             "board.changed",
             {
@@ -512,15 +512,18 @@ export function createBoardHandlers(
     "board.widget.appView": defineValidatedGatewayMethod(
       "board.widget.appView",
       validateBoardWidgetAppViewParams,
-      async ({ params: boardParams, respond, context }) => {
+      async (invocation) => {
+        const { params: boardParams, respond, context } = invocation;
         try {
+          const authority = captureBoardRequestAuthority(invocation);
           const boardSession = resolveBoardSession(boardParams, context, respond);
           if (!boardSession) {
             return;
           }
-          const snapshot = store.getSnapshot(boardSession);
+          const snapshot = await store.getSnapshot(boardSession);
           const widget = snapshot.widgets.find((candidate) => candidate.name === boardParams.name);
-          const document = store.readWidgetMcpApp(boardSession, boardParams.name);
+          const document = await store.readWidgetMcpApp(boardSession, boardParams.name);
+          authority.assertActive();
           if (
             !widget ||
             widget.contentKind !== "mcp-app" ||
@@ -537,8 +540,8 @@ export function createBoardHandlers(
           }
           const interactive = document.interactive && document.grantState === "granted";
           const authorizeAppInteraction = interactive
-            ? () => {
-                const current = store.readWidgetMcpApp(boardSession, boardParams.name);
+            ? async () => {
+                const current = await store.readWidgetMcpApp(boardSession, boardParams.name);
                 return (
                   current?.interactive === true &&
                   current.grantState === "granted" &&
@@ -555,6 +558,7 @@ export function createBoardHandlers(
             ...(authorizeAppInteraction ? { authorizeAppInteraction } : {}),
             readOnly: !interactive,
           });
+          authority.assertActive();
           if (!minted) {
             throw new Error("Pinned MCP App source is no longer available");
           }
@@ -570,43 +574,39 @@ export function createBoardHandlers(
     "board.event": defineValidatedGatewayMethod(
       "board.event",
       validateBoardEventParams,
-      (invocation) => {
+      async (invocation) => {
         const { params: boardParams, respond, context } = invocation;
         try {
           const authority = captureBoardRequestAuthority(invocation);
-          const identity =
-            "ticket" in boardParams
-              ? resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
-                  gatewayContext: context,
-                })
-              : (() => {
-                  const boardSession = resolveBoardSession(boardParams, context, respond);
-                  if (!boardSession) {
-                    return undefined;
-                  }
-                  const snapshot = store.getSnapshot(boardSession);
-                  const widget = snapshot.widgets.some(
-                    (candidate) => candidate.name === boardParams.widget,
-                  );
-                  if (!widget) {
-                    throw new BoardValidationError(
-                      "not_found",
-                      `board widget not found: ${boardParams.widget}`,
-                    );
-                  }
-                  return { ...boardSession, name: boardParams.widget };
-                })();
-          if (!identity) {
-            return;
+          const publish = (identity: BoardSessionTarget & { name: string }) => {
+            authority.assertActive();
+            const appended = appendBoardEventNotice({
+              sessionKey: identity.sessionKey,
+              agentId: identity.agentId,
+              widget: identity.name,
+              payload: boardParams.payload,
+            });
+            respond(true, { ok: true, appended });
+          };
+          if ("ticket" in boardParams) {
+            await withAuthorizedBoardWidgetView(store, boardParams.ticket, publish, {
+              gatewayContext: context,
+            });
+          } else {
+            const boardSession = resolveBoardSession(boardParams, context, respond);
+            if (!boardSession) {
+              return;
+            }
+            await store.useSnapshot(boardSession, (snapshot) => {
+              if (!snapshot.widgets.some((candidate) => candidate.name === boardParams.widget)) {
+                throw new BoardValidationError(
+                  "not_found",
+                  `board widget not found: ${boardParams.widget}`,
+                );
+              }
+              publish({ ...boardSession, name: boardParams.widget });
+            });
           }
-          authority.assertActive();
-          const appended = appendBoardEventNotice({
-            sessionKey: identity.sessionKey,
-            agentId: identity.agentId,
-            widget: identity.name,
-            payload: boardParams.payload,
-          });
-          respond(true, { ok: true, appended });
         } catch (error) {
           respondBoardError(error, respond);
         }
@@ -615,21 +615,25 @@ export function createBoardHandlers(
     "board.prompt.authorize": defineValidatedGatewayMethod(
       "board.prompt.authorize",
       validateBoardPromptAuthorizeParams,
-      (invocation) => {
+      async (invocation) => {
         const { params: boardParams, respond, context } = invocation;
         try {
           const authority = captureBoardRequestAuthority(invocation);
-          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
-            gatewayContext: context,
-          });
-          authority.assertActive();
-          respond(true, {
-            confirmationRequired: !boardWidgetHasGrantedTool(
-              document.declared,
-              document.grantState,
-              "prompt",
-            ),
-          });
+          await withAuthorizedBoardWidgetView(
+            store,
+            boardParams.ticket,
+            ({ document }) => {
+              authority.assertActive();
+              respond(true, {
+                confirmationRequired: !boardWidgetHasGrantedTool(
+                  document.declared,
+                  document.grantState,
+                  "prompt",
+                ),
+              });
+            },
+            { gatewayContext: context },
+          );
         } catch (error) {
           respondBoardError(error, respond);
         }
@@ -642,21 +646,20 @@ export function createBoardHandlers(
         const { params: boardParams, respond } = invocation;
         try {
           const bindingParams = boardParams.params ?? {};
-          assertCapabilityParamsSize(bindingParams, "data binding");
+          assertBoardCapabilityParamsSize(bindingParams, "data binding");
           const authority = captureBoardCapabilityAuthority(
             store,
             boardParams.ticket,
             invocation,
             boardDataBindingCapability(boardParams.bindingId, bindingParams),
           );
-          const result = await readDataBinding(
+          await readBoardDataBinding(
             boardParams.bindingId,
             bindingParams,
             invocation,
             authority,
+            respond,
           );
-          authority.assertActive();
-          respond(true, result);
         } catch (error) {
           respondBoardError(error, respond);
         }
@@ -677,21 +680,18 @@ export function createBoardHandlers(
             capability,
           );
           if ("jobId" in boardParams) {
-            const result = await triggerCronJob(boardParams.jobId, invocation, authority);
-            authority.assertActive();
-            respond(true, result);
+            await triggerBoardCronJob(boardParams.jobId, invocation, authority, respond);
             return;
           }
           const actionParams = boardParams.params ?? {};
-          assertCapabilityParamsSize(actionParams, "action");
-          const result = await runActionVerb(
+          assertBoardCapabilityParamsSize(actionParams, "action");
+          await runBoardActionVerb(
             boardParams.action,
             actionParams,
             invocation,
             authority,
+            respond,
           );
-          authority.assertActive();
-          respond(true, result);
         } catch (error) {
           respondBoardError(error, respond);
         }

@@ -604,7 +604,7 @@ describe("canonical session message recovery", () => {
         { role: "assistant", text },
       ]);
       expect(state.chatRunId).toBe(runId);
-      expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
 
       // Replayed cumulative deltas must not revive the retired projection.
       delta(text, text.slice(partial.length));
@@ -1544,11 +1544,15 @@ describe("canonical session message recovery", () => {
         { role: "user", text: "Finish the dashboard task" },
       ]);
       await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("chat.history", {
-          sessionKey: state.sessionKey,
-          limit: 80,
-          maxBytes: 256 * 1024,
-        }),
+        expect(request).toHaveBeenCalledWith(
+          "chat.history",
+          {
+            sessionKey: state.sessionKey,
+            limit: 80,
+            maxBytes: 256 * 1024,
+          },
+          { signal: expect.any(AbortSignal) },
+        ),
       );
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
       expect(request).toHaveBeenCalledTimes(1);
@@ -1818,6 +1822,7 @@ describe("canonical session message recovery", () => {
       expect(request).toHaveBeenLastCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: "global", agentId: "main" }),
+        { signal: expect.any(AbortSignal) },
       );
       state.assistantAgentId = "work";
       state.agentsSelectedId = "work";
@@ -2842,11 +2847,15 @@ describe("canonical session message recovery", () => {
     });
 
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("chat.history", {
-        sessionKey: state.sessionKey,
-        limit: 80,
-        maxBytes: 256 * 1024,
-      });
+      expect(request).toHaveBeenCalledWith(
+        "chat.history",
+        {
+          sessionKey: state.sessionKey,
+          limit: 80,
+          maxBytes: 256 * 1024,
+        },
+        { signal: expect.any(AbortSignal) },
+      );
     });
     expect(state.chatRunId).toBe("active-run");
   });
@@ -4487,15 +4496,15 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
-    expect(state.chatModelCatalogError).toBe(
-      "Some models could not be refreshed. Open Models to try again.",
-    );
+    expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBe(true);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
     expect(state.chatModelCatalogError).toBe("catalog transport failed");
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([]);
     expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBeUndefined();
   });
 
   it("keeps fallback slash commands when chat metadata omits commands", async () => {

@@ -210,7 +210,7 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
         metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
         createStores: () => ({ authStorage: {}, modelRegistry: {} }),
       },
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     };
   },
 );

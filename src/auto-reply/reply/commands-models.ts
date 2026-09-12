@@ -11,6 +11,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import {
@@ -48,6 +49,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProviderChannelLoginChoice } from "../../plugins/provider-login-options.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -58,6 +60,10 @@ const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+const CUSTOM_MODEL_SETUP_GUIDANCE =
+  "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers";
+export const MODEL_PICKER_CHANGED_MESSAGE =
+  "Available models changed. Open /models and choose again.";
 
 type ModelsCommandSessionEntry = Partial<
   Pick<
@@ -77,10 +83,18 @@ export type ModelsProviderData = {
   providers: string[];
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
+  modelMenu?: {
+    modelNames: ReadonlyMap<string, string>;
+    byProvider: ReadonlyMap<string, ModelsProviderMenu>;
+  };
+  refreshWarning?: string;
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
   runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
   isCurrent?: () => boolean;
 };
+
+type ModelsProviderMenu = { available: number; notice: string };
+type ModelReadiness = Pick<ModelAuthAvailabilityEvaluation, "availability" | "unavailableReason">;
 
 type PreparedModelsProviderData = ModelsProviderData & {
   modelCatalog: ModelCatalogEntry[];
@@ -125,12 +139,7 @@ function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   return normalized;
 }
 
-function buildRuntimeChoice(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  runtime: string;
-  cli?: boolean;
-}): ModelsRuntimeChoice {
+function buildRuntimeChoice(params: { cfg: OpenClawConfig; runtime: string }): ModelsRuntimeChoice {
   const id = normalizeRuntimeChoiceId(params.runtime);
   const label = resolveAgentRuntimeLabel({ config: params.cfg, resolvedHarness: id });
   return {
@@ -138,10 +147,8 @@ function buildRuntimeChoice(params: {
     label,
     description:
       id === "openclaw"
-        ? "Use the built-in OpenClaw runtime."
-        : params.cli
-          ? `Run ${params.provider} models through ${label}.`
-          : `Use the ${label} runtime selected by the effective harness policy.`,
+        ? "Use OpenClaw's built-in agent and tools."
+        : `Use ${label} to run this model.`,
   };
 }
 
@@ -246,6 +253,7 @@ async function projectPreparedModelsProviderData(
   // Configured/default rows may remain visible without auth, but must not
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
+  const modelAvailability = new Map<string, ModelReadiness>();
   const hasAuth: ModelCatalogAuthChecker =
     options.view === "all"
       ? async () => true
@@ -275,6 +283,10 @@ async function projectPreparedModelsProviderData(
         entry,
         await decisions.evaluateEntry(entry, routeVariants),
       );
+      modelAvailability.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, {
+        availability: evaluation.availability,
+        unavailableReason: evaluation.unavailableReason,
+      });
       if (evaluation.routeResolution?.kind === "incompatible") {
         incompatibleModelKeys.add(resolveModelCatalogIdentityKey(entry));
       }
@@ -414,6 +426,16 @@ async function projectPreparedModelsProviderData(
   addModelConfigEntries();
 
   const providers = [...byProvider.keys()].toSorted();
+  const loginProviders = new Set(
+    providers.filter(
+      (provider) =>
+        resolveProviderChannelLoginChoice(provider, {
+          config: cfg,
+          workspaceDir,
+          metadataSnapshot: owner.metadataSnapshot,
+        }).status !== "unsupported",
+    ),
+  );
 
   const modelNames = new Map<string, string>();
   for (const entry of [...catalog, ...visibleCatalog]) {
@@ -430,19 +452,28 @@ async function projectPreparedModelsProviderData(
       const entry = [...visibleCatalog, ...catalog].find(
         (row) => normalizeProviderId(row.provider) === provider && row.id === model,
       );
+      const authEntry = entry ?? { provider, id: model, name: model };
+      const variants = snapshot.routeVariants.filter(
+        (row) => resolveModelCatalogIdentityKey(row) === resolveModelCatalogIdentityKey(authEntry),
+      );
+      if (!modelAvailability.has(`${provider}/${model}`)) {
+        const evaluation = decisions.evaluateNative(
+          authEntry,
+          await decisions.evaluateEntry(authEntry, variants.length ? variants : [authEntry]),
+        );
+        modelAvailability.set(`${provider}/${model}`, {
+          availability: evaluation.availability,
+          unavailableReason: evaluation.unavailableReason,
+        });
+      }
       if (!entry) {
         continue;
       }
-      const variants = snapshot.routeVariants.filter(
-        (row) => resolveModelCatalogIdentityKey(row) === resolveModelCatalogIdentityKey(entry),
-      );
       const runtimes = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
       if (!runtimes) {
         continue;
       }
-      const choices = runtimes.map((runtime) =>
-        buildRuntimeChoice({ cfg, provider, runtime, cli: cliRuntimeProviders.has(runtime) }),
-      );
+      const choices = runtimes.map((runtime) => buildRuntimeChoice({ cfg, runtime }));
       runtimeChoicesByModel.set(`${provider}/${model}`, choices);
       for (const choice of choices) {
         providerChoices.set(choice.id, choice);
@@ -461,6 +492,10 @@ async function projectPreparedModelsProviderData(
     providers,
     resolvedDefault,
     modelNames,
+    modelMenu: buildModelsMenu({ byProvider, modelNames, modelAvailability, loginProviders }),
+    refreshWarning: snapshot.refreshFailed
+      ? "Some models could not be refreshed. You can still choose from the available models."
+      : undefined,
     // Selection needs the prepared capabilities, with selected physical routes
     // ahead of other inventory rows for the same logical model.
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
@@ -575,6 +610,59 @@ function resolveProviderLabel(params: {
   return `${params.provider} · 🔑 ${authLabel}`;
 }
 
+function buildModelsMenu(data: {
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  modelNames: ReadonlyMap<string, string>;
+  modelAvailability: ReadonlyMap<string, ModelReadiness>;
+  loginProviders: ReadonlySet<string>;
+}): NonNullable<ModelsProviderData["modelMenu"]> {
+  const modelNames = new Map(data.modelNames);
+  const byProvider = new Map<string, ModelsProviderMenu>();
+  for (const [id, models] of data.byProvider) {
+    const notices = new Set<string>();
+    let available = 0;
+    const loginSupported = data.loginProviders.has(id);
+    for (const model of models) {
+      const key = `${id}/${model}`;
+      const state = data.modelAvailability.get(key)!;
+      if (state.availability === true) {
+        available += 1;
+        continue;
+      }
+      let label: string;
+      let recovery: string;
+      switch (state.unavailableReason) {
+        case "missing-auth":
+          label = "Sign-in needed";
+          recovery = loginSupported ? `Connect with /login ${id}.` : CUSTOM_MODEL_SETUP_GUIDANCE;
+          break;
+        case "auth-failed":
+          label = "Sign-in failed";
+          recovery = loginSupported
+            ? `Sign in again with /login ${id}.`
+            : CUSTOM_MODEL_SETUP_GUIDANCE;
+          break;
+        case "cooldown":
+          label = "Temporarily unavailable";
+          recovery = "Try again later or choose another model.";
+          break;
+        default:
+          label = state.availability === false ? "Unavailable" : "Connection not confirmed";
+          recovery =
+            state.availability === false
+              ? "Run /models again or choose another model."
+              : loginSupported
+                ? `Connect with /login ${id}, or choose another model.`
+                : CUSTOM_MODEL_SETUP_GUIDANCE;
+      }
+      modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
+      notices.add(`${id}: ${label}. ${recovery}`);
+    }
+    byProvider.set(id, { available, notice: [...notices].join("\n") });
+  }
+  return { modelNames, byProvider };
+}
+
 export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;
@@ -583,6 +671,7 @@ export function formatModelsAvailableHeader(params: {
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
+  availability?: ModelsProviderMenu;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
@@ -592,7 +681,13 @@ export function formatModelsAvailableHeader(params: {
     workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
   });
-  return `Models (${providerLabel}) — ${params.total} available`;
+  const count =
+    params.availability && params.availability.available !== params.total
+      ? `${params.availability.available} of ${params.total}`
+      : String(params.total);
+  return [`Models (${providerLabel}) — ${count} available`, params.availability?.notice]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function buildModelsMenuText(params: {
@@ -623,7 +718,7 @@ function buildProviderInfos(params: {
   }));
 }
 
-export async function resolveModelsCommandReply(params: {
+type ModelsCommandReplyParams = {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
   surface?: string;
@@ -632,7 +727,11 @@ export async function resolveModelsCommandReply(params: {
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
-}): Promise<ReplyPayload | null> {
+};
+
+export async function resolveModelsCommandReply(
+  params: ModelsCommandReplyParams,
+): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) {
     return null;
@@ -660,11 +759,33 @@ export async function resolveModelsCommandReply(params: {
       };
     }
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-      return { text: "Model catalog changed. Run /models again." };
+      return { text: MODEL_PICKER_CHANGED_MESSAGE };
     }
     throw error;
   }
-  const { byProvider, providers, modelNames } = data;
+  const reply = buildModelsCommandReply(params, parsed, data);
+  return { ...reply, text: [data.refreshWarning, reply.text].filter(Boolean).join("\n\n") };
+}
+
+function buildModelsCommandReply(
+  params: ModelsCommandReplyParams,
+  parsed: ParsedModelsCommand,
+  data: PreparedModelsProviderData,
+): ReplyPayload & { text: string } {
+  const { byProvider, providers } = data;
+  const availability =
+    parsed.action === "list" && parsed.provider
+      ? data.modelMenu?.byProvider.get(parsed.provider)
+      : undefined;
+  const modelNames = data.modelMenu?.modelNames ?? data.modelNames;
+  const notice =
+    parsed.action === "list" && parsed.provider
+      ? availability?.notice
+      : [...(data.modelMenu?.byProvider.values() ?? [])]
+          .map((provider) => provider.notice)
+          .filter(Boolean)
+          .join("\n");
+  const withAvailability = (text: string) => [text, notice].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
 
@@ -678,12 +799,12 @@ export async function resolveModelsCommandReply(params: {
       });
     if (channelData) {
       return {
-        text: "Select a provider:",
+        text: withAvailability("Select a provider:"),
         channelData,
       };
     }
     return {
-      text: buildModelsMenuText({ providers, byProvider }),
+      text: withAvailability(buildModelsMenuText({ providers, byProvider })),
     };
   }
 
@@ -699,12 +820,12 @@ export async function resolveModelsCommandReply(params: {
     });
     if (channelData) {
       return {
-        text: "Select a provider:",
+        text: withAvailability("Select a provider:"),
         channelData,
       };
     }
     return {
-      text: buildModelsMenuText({ providers, byProvider }),
+      text: withAvailability(buildModelsMenuText({ providers, byProvider })),
     };
   }
 
@@ -765,6 +886,7 @@ export async function resolveModelsCommandReply(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         sessionEntry: params.sessionEntry,
+        availability,
       }),
       channelData: interactiveChannelData,
     };
@@ -800,7 +922,9 @@ export async function resolveModelsCommandReply(params: {
     `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
   ];
   for (const id of pageModels) {
-    lines.push(`- ${provider}/${id}`);
+    const key = `${provider}/${id}`;
+    const label = modelNames.get(key);
+    lines.push(`- ${key}${label && label !== data.modelNames.get(key) ? ` (${label})` : ""}`);
   }
   lines.push("", "Switch: /model <provider/model>");
   if (!all && safePage < pageCount) {
@@ -809,7 +933,7 @@ export async function resolveModelsCommandReply(params: {
   if (!all) {
     lines.push(`All: /models list ${provider} all`);
   }
-  return { text: lines.join("\n") };
+  return { text: withAvailability(lines.join("\n")) };
 }
 
 export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {

@@ -385,6 +385,9 @@ export function resolveBuildAllEnvironment(
   // Updates need runtime artifacts; explicit declaration/package builds still win.
   if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
     buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
+    // Published updaters can still pass the serving checkout's source root.
+    // Rebind before plugin asset hooks resolve SDK aliases in this candidate.
+    buildEnv.OPENCLAW_DEV_SOURCE_ROOT = process.cwd();
   }
   return buildEnv;
 }

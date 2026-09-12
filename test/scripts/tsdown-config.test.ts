@@ -93,6 +93,104 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it.each([
+    "extensions/openai/setup-api",
+    "extensions/openai/capability-catalog",
+    "extensions/anthropic/provider-discovery",
+  ])(
+    "keeps %s inventory chunks local and shares the host SDK across lazy imports",
+    async (entryName) => {
+      const selected = configs.find((config) =>
+        hasWorkerEntry(config, entryName, `${entryName}.ts`),
+      );
+      expect(selected).toBeDefined();
+      const root = fs.realpathSync(createTempDir("openclaw-tsdown-setup-"));
+      const sdkSpecifier = "openclaw/plugin-sdk/ssrf-runtime-internal";
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+      for (const [name, exports, source] of [
+        [
+          "openclaw",
+          { "./plugin-sdk/ssrf-runtime-internal": "./index.js" },
+          "export const identity = Symbol();",
+        ],
+        [
+          "setup-private-dependency",
+          { ".": "./index.js" },
+          'export const value = "bundled plugin dependency";',
+        ],
+      ] as const) {
+        const packageRoot = path.join(root, "node_modules", name);
+        fs.mkdirSync(packageRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name, type: "module", exports }),
+        );
+        fs.writeFileSync(path.join(packageRoot, "index.js"), source);
+      }
+      const entry = path.join(root, "setup-api.ts");
+      fs.writeFileSync(
+        entry,
+        [
+          `import { identity } from ${JSON.stringify(sdkSpecifier)};`,
+          'export async function probe() { const lazy = await import("./provider.ts"); return [identity, lazy.identity, lazy.value]; }',
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(root, "provider.ts"),
+        [
+          `export { identity } from ${JSON.stringify(sdkSpecifier)};`,
+          'export { value } from "setup-private-dependency";',
+        ].join("\n"),
+      );
+      const bundles = await build({
+        ...selected,
+        config: false,
+        cwd: root,
+        entry: { [entryName]: entry },
+        outDir: path.join(root, "dist"),
+        tsconfig: false,
+        dts: false,
+        logLevel: "silent",
+      });
+      try {
+        const chunks = bundles.flatMap((bundle) =>
+          bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+        );
+        expect(chunks.flatMap((chunk) => chunk.imports)).toContain(sdkSpecifier);
+        const privateChunks = chunks.filter((chunk) => !chunk.isEntry);
+        expect(privateChunks.length).toBeGreaterThan(0);
+        expect(
+          privateChunks.every((chunk) =>
+            chunk.fileName.startsWith(`${path.dirname(entryName)}/.setup/`),
+          ),
+        ).toBe(true);
+        fs.rmSync(path.join(root, "node_modules/setup-private-dependency"), { recursive: true });
+        const script = `
+        import assert from "node:assert/strict";
+        import { identity } from ${JSON.stringify(sdkSpecifier)};
+        import { probe } from "./dist/${entryName}.js";
+        const [direct, lazy, value] = await probe();
+        assert.equal(direct, identity);
+        assert.equal(lazy, identity);
+        assert.equal(value, "bundled plugin dependency");
+      `;
+        const result = await new Promise<{ error: Error | null; stderr: string }>((resolve) => {
+          execFile(
+            process.execPath,
+            ["--input-type=module", "-e", script],
+            { cwd: root, timeout: 30_000 },
+            (error, _stdout, stderr) => resolve({ error, stderr }),
+          );
+        });
+        expect(result.error, result.stderr).toBeNull();
+      } finally {
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
+      }
+    },
+  );
+
   it.each([false, true])(
     "runs the Docker-selected memory store with only production dependencies (verbose=%s)",
     async (verbose) => {
@@ -627,7 +725,16 @@ describe("tsdown config", () => {
     expect(unifiedRuntimeConfig?.dts).toBe(false);
     expect(standaloneRuntimeConfig?.dts).toBe(false);
     expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
-    const runtimeEntryNames = Object.keys(unifiedRuntimeConfig?.entry ?? {});
+    const runtimeEntries = configs
+      .filter(
+        (entry) =>
+          entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
+          entry !== standaloneRuntimeConfig &&
+          !isWorkerBuildConfig(entry) &&
+          !entry.outDir,
+      )
+      .flatMap((entry) => Object.entries(entry.entry ?? {}));
+    const runtimeEntryNames = runtimeEntries.map(([name]) => name);
     expect(runtimeEntryNames).toContain("native-hook-relay/entry");
     const declarationEntryNames = runtimeEntryNames.filter(
       (name) => name !== "native-hook-relay/entry",
@@ -635,18 +742,18 @@ describe("tsdown config", () => {
     const standaloneEntries = Object.entries(standaloneRuntimeConfig?.entry ?? {});
     const standaloneNames = new Set(standaloneEntries.map(([name]) => name));
     const declarationInputs = Object.fromEntries([
-      ...Object.entries(unifiedRuntimeConfig?.entry ?? {}).filter(
-        ([name]) => name !== "native-hook-relay/entry",
-      ),
+      ...runtimeEntries.filter(([name]) => name !== "native-hook-relay/entry"),
       ...standaloneEntries,
     ]);
     for (const declarationConfig of unifiedDeclarationConfigs) {
       expect(declarationConfig?.dts).toMatchObject({ emitDtsOnly: true });
-      // Splitting executable graphs keeps all declaration aliases and the shared input order.
+      // Runtime and inventory graphs retain every alias in the declaration input map.
       expect(declarationConfig?.entry).toEqual(declarationInputs);
       expect(
-        Object.keys(declarationConfig?.entry ?? {}).filter((name) => !standaloneNames.has(name)),
-      ).toEqual(declarationEntryNames);
+        Object.keys(declarationConfig?.entry ?? {})
+          .filter((name) => !standaloneNames.has(name))
+          .toSorted(),
+      ).toEqual(declarationEntryNames.toSorted());
     }
   });
 

@@ -130,7 +130,7 @@ describe("doctor workspace alias repair", () => {
   it("reports a repointed alias as a warning finding", async () => {
     const { alias } = await repointAlias({ seedAttestedFile: false });
 
-    const findings = collectRepointedWorkspaceAliasFindings(buildAliasCfg(alias));
+    const findings = await collectRepointedWorkspaceAliasFindings(buildAliasCfg(alias));
 
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
@@ -144,7 +144,7 @@ describe("doctor workspace alias repair", () => {
     const dir = testState!.workspaceDir;
     await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
 
-    expect(collectRepointedWorkspaceAliasFindings(buildAliasCfg(dir))).toHaveLength(0);
+    expect(await collectRepointedWorkspaceAliasFindings(buildAliasCfg(dir))).toHaveLength(0);
   });
 
   it("requires explicit confirmation even when generated hashes match", async () => {

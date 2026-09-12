@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getCompactionProvider, type CompactionProvider } from "./compaction-provider.js";
 import { createPluginRecord } from "./loader-records.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginRegistry } from "./registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -46,18 +47,18 @@ function makeProvider(id: string, label?: string): CompactionProvider {
 describe("compaction provider registry", () => {
   it("reads providers registered through the plugin API from the active registry", async () => {
     const pluginRegistry = createTestRegistry();
+    const record = createRecord("owner");
     const provider = makeProvider("owned");
-    pluginRegistry
-      .createApi(createRecord("owner"), { config: {} })
-      .registerCompactionProvider(provider);
+    pluginRegistry.createApi(record, { config: {} }).registerCompactionProvider(provider);
     setActivePluginRegistry(pluginRegistry.registry);
 
     expect(pluginRegistry.registry.compactionProviders).toEqual([
       { provider, ownerPluginId: "owner" },
     ]);
-    await expect(getCompactionProvider("owned")?.summarize({ messages: [] })).resolves.toBe(
-      "summary-from-owned",
-    );
+    const resolved = getCompactionProvider("owned");
+    await expect(resolved?.summarize({ messages: [] })).resolves.toBe("summary-from-owned");
+    await getPluginInstance(record)?.dispose();
+    expect(() => resolved?.summarize({ messages: [] })).toThrow(/reloaded|disabled|retiring/);
   });
 
   it("keeps the first provider when another plugin registers the same id", () => {

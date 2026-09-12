@@ -236,9 +236,13 @@ describe("prior-release state startup corpus", () => {
               { catalogMode: "static" },
             );
             try {
-              expect(lease.snapshot.modelCatalog.entries.length).toBeGreaterThan(0);
+              if (configName === "generic-github-token.json") {
+                expect(lease.snapshot.modelCatalog.entries).toEqual([]);
+              } else {
+                expect(lease.snapshot.modelCatalog.entries.length).toBeGreaterThan(0);
+              }
             } finally {
-              lease.release();
+              await lease[Symbol.asyncDispose]();
             }
           }
           await closeOpenClawAgentDatabasesAsync(stateDir);

@@ -73,7 +73,7 @@ export async function resolveBareResetBootstrapFileAccess(params: {
       return inventory.groups.some((group) => group.tools.some((tool) => tool.id === "read"));
     });
   } finally {
-    acquired.release();
+    await acquired[Symbol.asyncDispose]();
   }
 }
 

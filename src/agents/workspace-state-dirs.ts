@@ -15,12 +15,12 @@ import { assertWorkspaceStateMigrationReady } from "./workspace-legacy-state.js"
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 
 /** Select configured workspaces and active sandbox copies for migration and readiness. */
-export function listWorkspaceStateDirs(params: {
+export async function listWorkspaceStateDirs(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   stateDir: string;
-}): string[] {
+}): Promise<string[]> {
   const dirs = new Set(listAgentWorkspaceDirs(params.cfg, params.env));
 
   for (const agentId of listAgentIds(params.cfg)) {
@@ -53,7 +53,7 @@ export function listWorkspaceStateDirs(params: {
 
     // Sandbox containers may be pruned while their workspace survives. The
     // agent-owned session store remains the durable authority for that copy.
-    const sessionKeys = listSessionEntryKeysReadOnly({
+    const sessionKeys = await listSessionEntryKeysReadOnly({
       agentId,
       env: params.env,
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -83,34 +83,24 @@ export function listWorkspaceStateDirs(params: {
   return [...dirs];
 }
 
-type ConfiguredWorkspaceStateParams = {
+/** Refuse completion before channels accept work that a workspace cannot execute. */
+export async function assertConfiguredWorkspaceStateReady(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-};
-
-function configuredWorkspaceStateScope(params: ConfiguredWorkspaceStateParams) {
+  operation?: "doctor";
+}): Promise<void> {
   const env = params.env ?? process.env;
   const homedir = os.homedir;
-  const workspaceDirs = listWorkspaceStateDirs({
+  const workspaceDirs = await listWorkspaceStateDirs({
     cfg: params.cfg,
     env,
     homedir,
     stateDir: resolveStateDir(env, homedir),
   });
-  return { ...params, workspaceDirs, env, homedir };
-}
-
-/** Refuse completion before channels accept work that a workspace cannot execute. */
-export function assertConfiguredWorkspaceStateReady(params: ConfiguredWorkspaceStateParams): void {
-  assertWorkspaceStateMigrationReady(configuredWorkspaceStateScope(params));
-}
-
-export async function assertConfiguredWorkspaceStateReadyForDoctor(
-  params: ConfiguredWorkspaceStateParams,
-): Promise<void> {
-  const scope = configuredWorkspaceStateScope(params);
-  for (const workspaceDir of scope.workspaceDirs) {
-    await readWorkspaceStateSnapshot(workspaceDir, { env: scope.env, readOnly: true });
+  if (params.operation === "doctor") {
+    for (const workspaceDir of workspaceDirs) {
+      await readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
+    }
   }
-  assertWorkspaceStateMigrationReady({ ...scope, operation: "doctor" });
+  assertWorkspaceStateMigrationReady({ ...params, workspaceDirs, env, homedir });
 }

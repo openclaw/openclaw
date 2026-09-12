@@ -172,7 +172,7 @@ describe("prepared model runtime owner selection", () => {
       workspaceDir: "/tmp/isolated-probe-workspace",
     });
     expect(lease.snapshot.agentDir).toBe(state.agentDir("isolated-probe-agent"));
-    lease.release();
+    await lease[Symbol.asyncDispose]();
   });
 
   it.each(["static", undefined] as const)(
@@ -200,7 +200,7 @@ describe("prepared model runtime owner selection", () => {
           catalogMode === "static" ? 0 : 1,
         );
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
       expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
     },
@@ -257,9 +257,9 @@ describe("prepared model runtime owner selection", () => {
       workspaceDir: "/tmp/unused-workspace",
     };
     const first = await acquireAgentRunPreparedModelRuntime(runInput);
-    first.release();
+    await first[Symbol.asyncDispose]();
     const second = await acquireAgentRunPreparedModelRuntime(runInput);
-    second.release();
+    await second[Symbol.asyncDispose]();
 
     expect(first.snapshot).toBe(configured);
     expect(second.snapshot).toBe(first.snapshot);
@@ -291,8 +291,8 @@ describe("prepared model runtime owner selection", () => {
     expect(liveLease.snapshot).not.toBe(staticLease.snapshot);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-    staticLease.release();
-    liveLease.release();
+    await staticLease[Symbol.asyncDispose]();
+    await liveLease[Symbol.asyncDispose]();
   });
 
   it("rejects unpublished plugin generations while matching pending callers share their owner", async () => {
@@ -351,12 +351,14 @@ describe("prepared model runtime owner selection", () => {
       );
       expect(leaseA.snapshot.metadataSnapshot).toBe(generationA!.pluginMetadataSnapshot);
       await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(leaseA.snapshot);
-      leaseA.release();
-      matchingLeaseA.release();
+      await leaseA[Symbol.asyncDispose]();
+      await matchingLeaseA[Symbol.asyncDispose]();
     } finally {
       finishGenerationAGate.resolve();
       await Promise.allSettled(
-        [pendingA, matchingPendingA].map(async (pending) => (await pending)?.release()),
+        [pendingA, matchingPendingA].map(async (pending) =>
+          (await pending)?.[Symbol.asyncDispose](),
+        ),
       );
     }
   });
@@ -433,13 +435,13 @@ describe("prepared model runtime owner selection", () => {
             committedSnapshot,
           );
           expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(registryLoads);
-          resumed.release();
+          await resumed[Symbol.asyncDispose]();
           const clonedConfigLease = await acquireAgentRunPreparedModelRuntime(
             runInput(structuredClone(previousConfig)),
             { pluginGeneration: admitted!.pluginGeneration },
           );
           expect(clonedConfigLease.snapshot).toBe(previousSnapshot);
-          clonedConfigLease.release();
+          await clonedConfigLease[Symbol.asyncDispose]();
           await expect(
             acquireAgentRunPreparedModelRuntime(
               { ...runInput(previousConfig), workspaceDir: "/tmp/different-workspace" },
@@ -461,7 +463,7 @@ describe("prepared model runtime owner selection", () => {
       );
     } finally {
       outerLeaseActive = false;
-      outerLease.release();
+      await outerLease[Symbol.asyncDispose]();
       releaseDetachedAdmission();
       await Promise.allSettled([detachedAdmission]);
     }
@@ -477,7 +479,7 @@ describe("prepared model runtime owner selection", () => {
 
     const next = await acquireAgentRunPreparedModelRuntime(runInput(committedConfig));
     expect(next.snapshot).toBe(committedSnapshot);
-    next.release();
+    await next[Symbol.asyncDispose]();
   });
 
   it("does not let a stale pinned generation replace an owner awaiting auth refresh", async () => {
@@ -527,7 +529,7 @@ describe("prepared model runtime owner selection", () => {
         runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
         workspaceDir: "/tmp/unused-workspace",
       });
-      lease.release();
+      await lease[Symbol.asyncDispose]();
       return lease.snapshot;
     };
 
@@ -559,7 +561,7 @@ describe("prepared model runtime owner selection", () => {
     const configured = getPreparedModelRuntimeSnapshot(configuredInput);
     const configuredLease = await acquireAgentRunPreparedModelRuntime(configuredInput);
     expect(configuredLease.snapshot).toBe(configured);
-    configuredLease.release();
+    await configuredLease[Symbol.asyncDispose]();
 
     for (let index = 0; index < 9; index += 1) {
       const lease = await acquireAgentRunPreparedModelRuntime({
@@ -568,7 +570,7 @@ describe("prepared model runtime owner selection", () => {
           { provider: "openai", modelId: `run-model-${index}`, runtime: "codex" },
         ],
       });
-      lease.release();
+      await lease[Symbol.asyncDispose]();
     }
 
     expect(getPreparedModelRuntimeSnapshot(configuredInput)).toBe(configured);
@@ -591,7 +593,7 @@ describe("prepared model runtime owner selection", () => {
         ],
         workspaceDir: "/tmp/unused-workspace",
       });
-      lease.release();
+      await lease[Symbol.asyncDispose]();
     }
     expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(4);
 

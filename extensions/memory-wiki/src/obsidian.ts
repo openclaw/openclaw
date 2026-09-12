@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements obsidian behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -47,10 +46,6 @@ async function resolveCommandOnPath(command: string): Promise<string | null> {
       ? (process.env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT"])
       : [""];
 
-  if (command.includes(path.sep)) {
-    return (await isExecutableFile(command)) ? command : null;
-  }
-
   for (const dir of pathEntries) {
     for (const extension of windowsExts) {
       const candidate = path.join(dir, extension ? `${command}${extension}` : command);
@@ -61,10 +56,6 @@ async function resolveCommandOnPath(command: string): Promise<string | null> {
   }
 
   return null;
-}
-
-function buildVaultPrefix(config: ResolvedMemoryWikiConfig): string[] {
-  return config.obsidian.vaultName ? [`vault=${config.obsidian.vaultName}`] : [];
 }
 
 export async function probeObsidianCli(
@@ -84,12 +75,16 @@ async function runObsidianCli(params: {
   args?: string[];
   deps?: ObsidianCliDeps;
 }): Promise<ObsidianCliResult> {
-  const resolveCommand = params.deps?.resolveCommand ?? resolveCommandOnPath;
-  const probe = await probeObsidianCli({ resolveCommand });
+  const probe = await probeObsidianCli(params.deps);
   if (!probe.command) {
     throw new Error("Obsidian CLI is not available on PATH.");
   }
-  const argv = [...buildVaultPrefix(params.config), params.subcommand, ...(params.args ?? [])];
+  const { vaultName } = params.config.obsidian;
+  const argv = [
+    ...(vaultName ? [`vault=${vaultName}`] : []),
+    params.subcommand,
+    ...(params.args ?? []),
+  ];
   const exec = params.deps?.exec ?? runExec;
   const { stdout, stderr } = await exec(probe.command, argv, {
     logOutput: false,

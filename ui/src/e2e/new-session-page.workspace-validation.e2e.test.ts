@@ -363,7 +363,7 @@ suite.define(() => {
       const where = page.locator("wa-popover.new-session-page__where-popover");
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       await whereTrigger.click();
-      await where.getByRole("button", { name: "Cloud · aws" }).click();
+      await where.getByRole("button", { name: "aws", exact: true }).click();
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
 
@@ -379,8 +379,10 @@ suite.define(() => {
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await whereTrigger.click();
-      const cloud = where.getByRole("button", { name: "Cloud · aws" });
+      const cloud = where.getByRole("button", { name: "aws", exact: true });
       expect(await cloud.isDisabled()).toBe(true);
+      await cloud.focus();
+      await page.keyboard.press("Enter");
       await expect
         .poll(() => tooltipTitleText(cloud))
         .toBe("Couldn't verify Git for this folder. Choose it again to retry.");

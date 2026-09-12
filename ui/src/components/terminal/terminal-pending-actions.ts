@@ -1,8 +1,4 @@
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
-import {
-  TerminalOpenTimeoutError,
-  TerminalOpenUnusableSessionError,
-} from "./terminal-connection.ts";
 import type {
   TerminalPanelAction,
   TerminalPanelCatalogReference,
@@ -12,44 +8,6 @@ import {
   persistTerminalActions,
 } from "./terminal-session-storage.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
-
-type RetryOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
-
-/** Retains the exact failed open intent until the operator retries or the tab becomes ready. */
-export class TerminalOpenRetry {
-  private action: RetryOpenAction | null = null;
-
-  remember(catalog: TerminalPanelCatalogReference | undefined, agentId: string | null): void {
-    this.action = catalog ? { kind: "catalog", agentId, catalog } : { kind: "open", agentId };
-  }
-
-  clearUnlessRetryable(error: unknown): void {
-    if (
-      !(
-        error instanceof TerminalOpenTimeoutError ||
-        error instanceof TerminalOpenUnusableSessionError
-      )
-    ) {
-      this.clear();
-    }
-  }
-
-  clear(): void {
-    this.action = null;
-  }
-
-  get available(): boolean {
-    return this.action !== null;
-  }
-
-  run(): void {
-    const action = this.action;
-    this.clear();
-    if (action) {
-      void terminalIntentQueue.queue(action);
-    }
-  }
-}
 
 export type TerminalIntentHost = {
   bootQueue: Pick<TerminalTaskQueue, "enqueue">;
@@ -77,7 +35,7 @@ export type TerminalIntentHost = {
  * over one storage key drop each other's intents and run the same open twice.
  * Hosts bind while connected; the most recent binding executes.
  */
-class TerminalIntentQueue {
+export class TerminalIntentQueue {
   private readonly actions: TerminalPanelAction[];
   private refreshPending = false;
   private refreshTimedOut = false;
@@ -88,7 +46,7 @@ class TerminalIntentQueue {
   private fenceGeneration = 0;
   private timeoutHost: TerminalIntentHost | null = null;
 
-  constructor() {
+  constructor(private readonly persistent = true) {
     this.actions = [];
     this.rehydrate();
   }
@@ -98,6 +56,9 @@ class TerminalIntentQueue {
    * its terminals unmounted resumes exactly like a freshly loaded one.
    */
   private rehydrate(): void {
+    if (!this.persistent) {
+      return;
+    }
     const persisted = loadPersistedTerminalActions();
     // Explicit user work supersedes a generic reconnect restore. Otherwise the
     // restored shell would open first and obscure the action the operator chose.
@@ -106,6 +67,12 @@ class TerminalIntentQueue {
       : persisted;
     this.actions.splice(0, this.actions.length, ...admitted);
     if (admitted.length !== persisted.length) {
+      this.persist();
+    }
+  }
+
+  private persist(): void {
+    if (this.persistent) {
       persistTerminalActions(this.actions);
     }
   }
@@ -203,7 +170,7 @@ class TerminalIntentQueue {
       changed = true;
     }
     if (changed) {
-      persistTerminalActions(this.actions);
+      this.persist();
     }
     // A session-route intent is persisted before its embedded panel mounts.
     // The shell's bottom-only panel must not claim it in that gap; the next
@@ -240,7 +207,7 @@ class TerminalIntentQueue {
         const index = this.actions.indexOf(action);
         if (index !== -1) {
           this.actions.splice(index, 1);
-          persistTerminalActions(this.actions);
+          this.persist();
         }
       });
     } finally {
@@ -261,7 +228,7 @@ class TerminalIntentQueue {
       return;
     }
     this.actions.splice(0);
-    persistTerminalActions(this.actions);
+    this.persist();
     host.setBooting(false);
     this.clearRefreshFailure();
   }
@@ -357,9 +324,6 @@ export function terminalToggleIntent(
       sessionId: detail.terminalSessionId,
       agentOwned: detail.agentOwned ?? true,
     };
-  }
-  if (detail.catalog) {
-    return { kind: "catalog", agentId, catalog: detail.catalog };
   }
   return detail.open === true ? { kind: "restore", agentId } : null;
 }

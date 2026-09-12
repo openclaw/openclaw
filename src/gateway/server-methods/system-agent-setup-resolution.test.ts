@@ -498,7 +498,9 @@ describe("openclaw.setup provider resolution", () => {
     ["missing", null],
     ["retryable", { config, retrySelection: true, authProfiles: [], persistAuthProfiles: vi.fn() }],
   ])("returns actionable doctor guidance when provider setup is %s", async (_, result) => {
-    providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockResolvedValueOnce(result);
+    providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockImplementationOnce(
+      async (_params, consume) => consume(result),
+    );
     const { wizardSessions, context } = makeContext();
     const handler = expectDefined(
       systemAgentHandlers["openclaw.setup.prepare.start"],

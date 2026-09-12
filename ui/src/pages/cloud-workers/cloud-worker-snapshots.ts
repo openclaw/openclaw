@@ -24,6 +24,7 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { renderSnapshotBuildDialog } from "./cloud-worker-snapshot-build-dialog.ts";
 import {
   renderSnapshotBuildRow,
   renderSnapshotImage,
@@ -54,7 +55,9 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
   @state() private repositoriesLoading = false;
   @state() private buildError: string | null = null;
   @state() private preparing = false;
-  @state() private cancelling: string | null = null;
+  @state() private destroying: string | null = null;
+  /** Failed builds the operator cleared; the Gateway keeps their records until retention. */
+  private dismissed = new Set<string>();
   private refreshAgain = false;
   private pickerGeneration = 0;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -69,7 +72,8 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       this.builds = [];
       this.failedBuilds = [];
       this.preparing = false;
-      this.cancelling = null;
+      this.destroying = null;
+      this.dismissed.clear();
       this.result = null;
       this.loading = false;
       this.recovering = null;
@@ -127,7 +131,9 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       );
       this.failedBuilds = builds.filter(
         (environment) =>
-          environment.worker && ["failed", "orphaned"].includes(environment.worker.state),
+          environment.worker &&
+          ["failed", "orphaned"].includes(environment.worker.state) &&
+          !this.dismissed.has(environment.id),
       );
       if (this.failedBuilds.length) {
         this.notice = null;
@@ -274,28 +280,39 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     }
   }
 
-  private async cancelBuild(environment: EnvironmentSummary) {
+  /** Both build actions call environments.destroy; only dismissal clears a terminal row. */
+  private async destroyBuild(environment: EnvironmentSummary, dismiss: boolean) {
     const scope = this.gateway.capture();
-    if (!scope || this.cancelling || this.confirmation || !this.canCall("environments.destroy")) {
+    if (!scope || this.destroying || this.confirmation || !this.canCall("environments.destroy")) {
       return;
     }
     const confirmed = await this.confirm({
-      title: t("cloudWorkersPage.snapshots.cancelBuild"),
-      message: t("cloudWorkersPage.snapshots.cancelBuildMessage"),
+      title: t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuild"}`),
+      message: t(
+        `cloudWorkersPage.snapshots.${dismiss ? "dismissBuildMessage" : "cancelBuildMessage"}`,
+      ),
       details: environment.id,
-      confirmLabel: t("cloudWorkersPage.snapshots.cancelBuild"),
-      danger: true,
+      confirmLabel: t(`cloudWorkersPage.snapshots.${dismiss ? "dismiss" : "cancelBuild"}`),
+      danger: !dismiss,
     });
     if (!confirmed || !this.gateway.isCurrent(scope) || !this.canCall("environments.destroy")) {
       return;
     }
-    this.cancelling = environment.id;
+    this.destroying = environment.id;
     this.error = null;
     this.notice = null;
     try {
       await scope.client.request("environments.destroy", { environmentId: environment.id });
       if (this.gateway.isCurrent(scope)) {
-        this.notice = t("cloudWorkersPage.snapshots.buildCancelled");
+        // The Gateway keeps a terminal build record until its retention window ends, so
+        // clearing the row is a local view decision that lasts until this page reloads.
+        if (dismiss) {
+          this.dismissed.add(environment.id);
+          this.failedBuilds = this.failedBuilds.filter((build) => build.id !== environment.id);
+        }
+        this.notice = t(
+          `cloudWorkersPage.snapshots.${dismiss ? "buildDismissed" : "buildCancelled"}`,
+        );
         await this.load();
       }
     } catch (error) {
@@ -304,7 +321,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
-        this.cancelling = null;
+        this.destroying = null;
       }
     }
   }
@@ -313,79 +330,24 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     if (!this.buildDialog) {
       return nothing;
     }
-    const valid =
-      this.result?.profiles.some(
-        (profile) => profile.id === this.buildProfile && profile.warmImages === "on",
-      ) && this.repositories.some((repository) => repository.root === this.buildProject);
-    return html`<openclaw-modal-dialog
-      label=${t("cloudWorkersPage.snapshots.buildSnapshot")}
-      @modal-cancel=${(event: Event) => {
-        if (this.preparing) {
-          event.preventDefault();
-        } else {
-          this.closeBuildDialog();
-        }
-      }}
-    >
-      <div class="exec-approval-card">
-        <h2>${t("cloudWorkersPage.snapshots.buildSnapshot")}</h2>
-        <p>${t("cloudWorkersPage.snapshots.buildHelp")}</p>
-        <label class="field"
-          ><span>${t("cloudWorkersPage.snapshots.profile")}</span>
-          <select
-            class="settings-select"
-            .value=${this.buildProfile}
-            ?disabled=${this.preparing}
-            @change=${(event: Event) => {
-              if (event.currentTarget instanceof HTMLSelectElement) {
-                this.buildProfile = event.currentTarget.value;
-              }
-            }}
-          >
-            <option value="">${t("cloudWorkersPage.snapshots.chooseProfile")}</option>
-            ${this.result?.profiles.map((profile) => html`<option value=${profile.id} ?disabled=${profile.warmImages !== "on"}>${profile.id}${profile.warmImages === "on" ? "" : ` — ${profile.reason}`}</option>`)}
-          </select>
-        </label>
-        <label class="field"
-          ><span>${t("cloudWorkersPage.snapshots.repository")}</span>
-          <select
-            class="settings-select"
-            .value=${this.buildProject}
-            ?disabled=${this.preparing || this.repositoriesLoading}
-            @change=${(event: Event) => {
-              if (event.currentTarget instanceof HTMLSelectElement) {
-                this.buildProject = event.currentTarget.value;
-              }
-            }}
-          >
-            <option value="">
-              ${t(this.repositoriesLoading ? "common.loading" : "cloudWorkersPage.snapshots.chooseRepository")}
-            </option>
-            ${this.repositories.map((repository) => html`<option value=${repository.root}>${repository.label === repository.root ? repository.root : `${repository.label} · ${repository.root}`}</option>`)}
-          </select>
-        </label>
-        ${!this.repositoriesLoading && !this.repositories.length && !this.buildError ? html`<p>${t("cloudWorkersPage.snapshots.noRepositories")}</p>` : nothing}
-        ${this.buildError ? html`<div class="callout warning" role="alert">${this.buildError}</div>` : nothing}
-        <div class="exec-approval-actions">
-          <button
-            class="btn primary"
-            type="button"
-            ?disabled=${!valid || this.preparing || !this.canCall("environments.prepare")}
-            @click=${() => void this.prepare(this.buildProfile, this.buildProject, true)}
-          >
-            ${t("cloudWorkersPage.snapshots.buildSnapshot")}
-          </button>
-          <button
-            class="btn"
-            type="button"
-            ?disabled=${this.preparing}
-            @click=${() => this.closeBuildDialog()}
-          >
-            ${t("common.cancel")}
-          </button>
-        </div>
-      </div>
-    </openclaw-modal-dialog>`;
+    return renderSnapshotBuildDialog({
+      profiles: this.result?.profiles ?? [],
+      repositories: this.repositories,
+      repositoriesLoading: this.repositoriesLoading,
+      profileId: this.buildProfile,
+      projectPath: this.buildProject,
+      preparing: this.preparing,
+      canPrepare: this.canCall("environments.prepare"),
+      error: this.buildError,
+      onProfileChange: (value) => {
+        this.buildProfile = value;
+      },
+      onProjectChange: (value) => {
+        this.buildProject = value;
+      },
+      onSubmit: () => void this.prepare(this.buildProfile, this.buildProject, true),
+      onClose: () => this.closeBuildDialog(),
+    });
   }
 
   private async recoverCapture(image: SnapshotImage) {
@@ -521,6 +483,17 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     }
   }
 
+  private renderBuildRow(environment: EnvironmentSummary) {
+    // Orphaned records still track provider artifacts awaiting cleanup, so only a failed
+    // build offers dismissal; an active one still offers cancellation.
+    const action = !this.canCall("environments.destroy")
+      ? {}
+      : environment.worker?.state === "failed"
+        ? { onDismiss: () => void this.destroyBuild(environment, true) }
+        : { onCancel: () => void this.destroyBuild(environment, false) };
+    return renderSnapshotBuildRow(environment, { busy: this.destroying !== null, ...action });
+  }
+
   private renderImage(image: SnapshotImage, showMachineFacts: boolean) {
     const { profileId, projectRoot } = image;
     return renderSnapshotImage(image, {
@@ -639,7 +612,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
                   count: group.images.length + group.builds.length,
                 },
                 group.images.length || group.builds.length
-                  ? html`${group.builds.map((entry) => renderSnapshotBuildRow(entry, this.cancelling !== null, this.canCall("environments.destroy") ? () => void this.cancelBuild(entry) : undefined))}${group.images.map((entry) => this.renderImage(entry, mixedMetadata))}`
+                  ? html`${group.builds.map((entry) => this.renderBuildRow(entry))}${group.images.map((entry) => this.renderImage(entry, mixedMetadata))}`
                   : renderSettingsEmpty(t("cloudWorkersPage.snapshots.profileEmpty")),
               );
             })

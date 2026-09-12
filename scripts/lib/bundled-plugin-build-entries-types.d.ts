@@ -3,6 +3,7 @@ export type BundledPluginBuildEntry = {
   id: string;
   hasPackageJson: boolean;
   packageJson: unknown;
+  catalogSourceEntries: string[];
   sourceEntries: string[];
 };
 

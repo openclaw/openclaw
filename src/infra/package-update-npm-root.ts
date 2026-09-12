@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "./errors.js";
 import {
   createPackageIntegrityReader,
+  type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
 } from "./package-update-integrity.js";
 
@@ -63,6 +64,7 @@ export async function verifyNpmRootRecovery(
     fromBackup: boolean;
     hadPackage: boolean;
     previousRoot: PackageRootIntegrityFingerprint | undefined;
+    previousIdentity?: PackageDirectoryIdentity;
     targetSwapRoot: string;
     shims: readonly { destination: string; backup: string | null; fingerprint?: string }[];
   },
@@ -73,11 +75,13 @@ export async function verifyNpmRootRecovery(
   await reader.observe(fromBackup ? "retained" : "restored", async () => {
     if (
       hadPackage
-        ? !previousRoot ||
-          !isDeepStrictEqual(
-            await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
-            previousRoot,
-          )
+        ? previousRoot
+          ? !isDeepStrictEqual(
+              await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
+              previousRoot,
+            )
+          : !params.previousIdentity ||
+            !isDeepStrictEqual(await reader.directoryIdentity(root), params.previousIdentity)
         : !fromBackup && (await reader.exists(root))
     ) {
       throw new Error(

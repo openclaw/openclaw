@@ -1,12 +1,9 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
-export type ChatModelCatalogState = {
-  hasSnapshot: boolean;
-  refreshFailed?: boolean;
-  status: "idle" | "loading" | "ready" | "error" | "offline";
-};
+export type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
 export function renderChatModelCatalogState(
   state: ChatModelCatalogState | undefined,
@@ -19,7 +16,7 @@ export function renderChatModelCatalogState(
   if (!state) {
     return nothing;
   }
-  const status = state.status === "ready" && state.refreshFailed ? "error" : state.status;
+  const { status } = state;
   if (status === "ready" && hasSelectableOptions) {
     return nothing;
   }
@@ -39,6 +36,7 @@ export function renderChatModelCatalogState(
         hasOptions ? "" : "chat-controls__model-catalog-state--empty"
       }"
       data-chat-model-catalog-state=${status}
+      role="status"
       aria-live="polite"
     >
       <span class="chat-controls__model-catalog-state-label">

@@ -8,7 +8,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   createPluginStateKeyedStore,
-  registerPluginStateSyncSequencedJournalEntry,
+  registerPluginStateSequencedJournalEntry,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
@@ -238,27 +238,27 @@ describe("plugin state keyed store", () => {
                 pluginId: "memory-core",
                 namespace: "memory-host.event-cursors",
                 key: "workspace",
-                value: { kind: "cursor", lastSequence: 1 },
+                value: { kind: "cursor", lastSequence: 9 },
               },
             ]
           : [
               {
                 pluginId: "memory-core",
                 namespace: "memory-host.events",
-                key: "event-2",
-                value: { sequence: 2 },
+                key: "event-0000000000000010",
+                value: { sequence: 10 },
               },
             ]),
         {
           pluginId: "memory-core",
           namespace: "memory-host.events",
-          key: "event-1",
-          value: { sequence: 1 },
+          key: "event-0000000000000009",
+          value: { sequence: 9 },
         },
       ]);
 
       expect(
-        registerPluginStateSyncSequencedJournalEntry({
+        await registerPluginStateSequencedJournalEntry({
           pluginId: "memory-core",
           cursorOptions: {
             namespace: "memory-host.event-cursors",
@@ -266,11 +266,11 @@ describe("plugin state keyed store", () => {
           },
           cursorKey: "workspace",
           journalOptions: { namespace: "memory-host.events", maxEntries: 10_000 },
-          initialSequence: existingCursor ? 0 : 2,
-          journalKey: (sequence) => `event-${sequence}`,
+          journalKeyPrefix: "event-",
+          journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
           journalValue: (sequence) => ({ sequence }),
         }),
-      ).toBe(existingCursor ? 2 : 3);
+      ).toBe(existingCursor ? 10 : 11);
 
       const durable = createPluginStateKeyedStore("memory-core", {
         namespace: "durable-state",
@@ -293,16 +293,16 @@ describe("plugin state keyed store", () => {
       await expect(checkpoints.lookup("generation")).resolves.toEqual({
         kind: "raw-checkpoint",
       });
-      await expect(journal.lookup("event-1")).resolves.toBeUndefined();
+      await expect(journal.lookup("event-0000000000000009")).resolves.toBeUndefined();
       if (existingCursor) {
-        await expect(journal.lookup("event-2")).resolves.toEqual({ sequence: 2 });
+        await expect(journal.lookup("event-0000000000000010")).resolves.toEqual({ sequence: 10 });
       } else {
-        await expect(journal.lookup("event-2")).resolves.toBeUndefined();
-        await expect(journal.lookup("event-3")).resolves.toEqual({ sequence: 3 });
+        await expect(journal.lookup("event-0000000000000010")).resolves.toBeUndefined();
+        await expect(journal.lookup("event-0000000000000011")).resolves.toEqual({ sequence: 11 });
       }
       await expect(cursor.lookup("workspace")).resolves.toEqual({
         kind: "cursor",
-        lastSequence: existingCursor ? 2 : 3,
+        lastSequence: existingCursor ? 10 : 11,
       });
     },
   );

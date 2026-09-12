@@ -207,7 +207,6 @@ const SETTINGS_NAVIGATION_GROUPS = [
     labelKey: "nav.settingsGroupAgents",
     routes: [
       "agents",
-      "labs",
       "model-providers",
       "plugin-settings",
       "skill-settings",
@@ -222,7 +221,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
+    routes: ["infrastructure", "labs", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -346,6 +345,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   devices: ["monitorSmartphone", "tabs.devices", "subtitles.devices"],
   "cloud-workers": ["server", "tabs.cloudWorkers", "subtitles.cloudWorkers"],
   chat: ["messageSquare", "tabs.chat", "subtitles.chat"],
+  terminal: ["terminal", "terminal.title", "terminal.open"],
   dashboard: ["layoutDashboard", "tabs.chat", "subtitles.chat"],
   dashboards: ["layoutDashboard", "tabs.dashboards", "subtitles.dashboards"],
   custodian: ["lobster", "tabs.custodian", "subtitles.custodian"],

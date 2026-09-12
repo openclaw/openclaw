@@ -5,6 +5,7 @@ import type {
   ModelsAuthLogoutParams,
   ModelsAuthOrderSetParams,
 } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusProfile } from "../../api/types.ts";
 import {
   getRenderedModalDialog,
@@ -17,7 +18,6 @@ import {
   appendPage,
   createAuthStatus,
   createHarness,
-  deferred,
   requestCount,
 } from "./model-providers-page.test-support.ts";
 
@@ -307,7 +307,7 @@ describe("ModelProvidersPage profile actions", () => {
       return originalRequest(method);
     });
 
-    const refreshing = page.refresh({ force: true });
+    const refreshing = page.refresh("forced");
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(1));
     page.profileActions.setOrder("openai", "openai", ["openai:two", "openai:one"]);
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
@@ -331,7 +331,7 @@ describe("ModelProvidersPage profile actions", () => {
       auth: { role: "operator", scopes: ["operator.admin"] },
     };
     const originalRequest = request.getMockImplementation()!;
-    const logout = deferred<void>();
+    const logout = deferred();
     let failLogout = true;
     let profiles: ModelAuthStatusProfile[] = [
       {
