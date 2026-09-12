@@ -65,6 +65,7 @@ it("the config watcher restarts a channel that can save provider settings after 
     await state.writeConfig(initialConfig);
     const initial = await readConfigFileSnapshot();
     expect(initial.valid, JSON.stringify(initial.issues)).toBe(true);
+    assert(initial.hash);
     const login = createDeferred();
     const restarted = createDeferred();
     const saved = createDeferred();
@@ -149,7 +150,7 @@ it("the config watcher restarts a channel that can save provider settings after 
           },
         );
         ownership.markRuntimeCommitted(next, plan);
-        return { status: "applied" };
+        return "applied";
       },
       onRestart: () => {
         throw new Error("unexpected Gateway restart");
