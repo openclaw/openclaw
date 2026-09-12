@@ -177,7 +177,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private outboundPacketFailed = false;
   private activeInboundSsrc: number | undefined;
   private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
-  private mediaTimer: ReturnType<typeof setInterval> | undefined;
+  private mediaTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
   private pendingResampledAudio = Buffer.alloc(OUTBOUND_RESAMPLE_PREROLL_SAMPLES * 2);
   private readonly inboundResampler = createStreamingPcmResampler(
@@ -266,7 +266,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     }
     this.closed = true;
     if (this.mediaTimer) {
-      clearInterval(this.mediaTimer);
+      clearTimeout(this.mediaTimer);
       this.mediaTimer = undefined;
     }
     this.pendingAudio.clear();
@@ -462,10 +462,24 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     if (this.mediaTimer || this.closed) {
       return;
     }
-    this.mediaTimer = setInterval(() => this.sendNextAudioFrame(), OPUS_FRAME_DURATION_MS);
-    this.mediaTimer.unref?.();
-    // Publish the timer before the first tick so synchronous error teardown can clear it.
-    this.sendNextAudioFrame();
+    let nextFrameAt = performance.now();
+    const tick = () => {
+      if (this.closed) {
+        return;
+      }
+      // Skip elapsed media slots after a stall without draining queued microphone audio.
+      const missedSlots = Math.max(
+        0,
+        Math.floor((performance.now() - nextFrameAt) / OPUS_FRAME_DURATION_MS),
+      );
+      this.timestamp = (this.timestamp + missedSlots * OPUS_FRAME_SAMPLES) >>> 0;
+      nextFrameAt += (missedSlots + 1) * OPUS_FRAME_DURATION_MS;
+      // Publish before sending so synchronous error teardown can cancel the next tick.
+      this.mediaTimer = setTimeout(tick, Math.max(0, nextFrameAt - performance.now()));
+      this.mediaTimer.unref?.();
+      this.sendNextAudioFrame();
+    };
+    tick();
   }
 
   private sendNextAudioFrame(): void {

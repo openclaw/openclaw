@@ -279,11 +279,14 @@ sidebarTitle: "Voice and speech"
     exchanges the browser's SDP and returns only the answer SDP; it does not
     send an OAuth token, Platform key, or ephemeral client secret to the browser.
 
-    Gateway-relay WebRTC calls conceal malformed incoming audio packets and
-    continue playing later audio. One rejected audio packet send does not end
-    an otherwise connected call. Unusable codec state, unexpected stream changes,
-    and terminal connection states still end the call. Packet-drop diagnostics
-    omit raw error details.
+    Gateway-relay WebRTC paces microphone audio against a continuous sample
+    clock, so timer delays do not accumulate during longer calls. After a scheduler
+    pause, queued audio resumes at its normal pace while timestamps account for
+    the elapsed gap. Calls conceal
+    malformed incoming audio packets and continue playing later audio. One
+    rejected audio packet send does not end an otherwise connected call. Unusable
+    codec state, unexpected stream changes, and terminal connection states still
+    end the call. Packet-drop diagnostics omit raw error details.
 
     The enabled OpenAI plugin starts the broker automatically, including when
     you sign in after the Gateway has started. The broker opens a provider
