@@ -198,7 +198,13 @@ export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
     }
     writeScope.assertCurrent();
     // Authority callbacks can change paths; resolve again after their checks.
-    return acquireLifecycleCoordinator("state-lifecycle", params, keepAlive);
+    return acquireLifecycleCoordinator(
+      "state-lifecycle",
+      params,
+      params.keepAlive !== false &&
+        params.coordinatorPath === undefined &&
+        params.runtimeDirectory === undefined,
+    );
   } else if (heldCoordinators.has(handlesPath)) {
     throw new StateDatabaseCoordinatorContentionError("state-handles");
   }

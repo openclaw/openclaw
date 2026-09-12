@@ -195,38 +195,56 @@ describe("idle SQLite coordinator connections", () => {
     },
   );
 
-  it("rechecks idle eligibility after an authority callback changes the runtime location", () => {
-    const { directory } = fixture();
-    const params: { databasePath: string; runtimeDirectory?: string } = {
-      databasePath: path.join(directory, "state.sqlite"),
-    };
-    const exclusion = acquireStateDatabaseHandleExclusion(params);
-    let changeRuntime = false;
-    let coordinatorPath: string | undefined;
-    try {
-      exclusion.runWithCanonicalWrites(
-        () => {
-          if (changeRuntime) {
-            params.runtimeDirectory = directory;
-          }
-        },
-        () => {
-          changeRuntime = true;
-          const databases = observeConnections();
-          const coordinator = acquireStateDatabaseCoordinator(params);
-          coordinatorPath = coordinator.path;
-          coordinator.release();
-          expect([...databases()].every((database) => !database.isOpen)).toBe(true);
-        },
-      );
-    } finally {
-      exclusion.release();
-    }
-    expect(coordinatorPath).toBeDefined();
-    if (coordinatorPath) {
-      fs.unlinkSync(coordinatorPath);
-    }
-  });
+  it.each(["runtimeDirectory", "coordinatorPath", "keepAlive"] as const)(
+    "rechecks idle eligibility after an authority callback changes %s",
+    (override) => {
+      const { directory } = fixture();
+      const params: Parameters<typeof acquireStateDatabaseCoordinator>[0] = {
+        databasePath: path.join(directory, "state.sqlite"),
+      };
+      const prepared = acquireStateDatabaseCoordinator({
+        databasePath: params.databasePath,
+        runtimeDirectory: override === "keepAlive" ? undefined : directory,
+        keepAlive: false,
+      });
+      const expectedPath = prepared.path;
+      prepared.release();
+      const exclusion = acquireStateDatabaseHandleExclusion(params);
+      let changeRuntime = false;
+      let coordinatorPath: string | undefined;
+      try {
+        exclusion.runWithCanonicalWrites(
+          () => {
+            if (changeRuntime) {
+              if (override === "runtimeDirectory") {
+                params.runtimeDirectory = directory;
+              } else if (override === "coordinatorPath") {
+                params.coordinatorPath = expectedPath;
+              } else {
+                params.keepAlive = false;
+              }
+            }
+          },
+          () => {
+            changeRuntime = true;
+            const databases = observeConnections();
+            const coordinator = acquireStateDatabaseCoordinator(params);
+            coordinatorPath = coordinator.path;
+            coordinator.release();
+            expect(coordinatorPath).toBe(expectedPath);
+            expect(databases().size).toBe(1);
+            expect([...databases()].every((database) => !database.isOpen)).toBe(true);
+          },
+        );
+      } finally {
+        exclusion.release();
+      }
+      expect(coordinatorPath).toBeDefined();
+      if (coordinatorPath) {
+        fs.unlinkSync(coordinatorPath);
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "reopens an idle file after its access mode changes",
