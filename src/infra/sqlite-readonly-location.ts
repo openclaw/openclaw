@@ -16,12 +16,12 @@ import {
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
+import { readSqliteSchemaHeader, type SqliteSchemaHeader } from "./sqlite-schema-header.js";
 import {
   withSqliteSourceHandle,
   withSqliteSourceHandleAsync,
   withSqliteSourceReadDatabase,
 } from "./sqlite-source-handle.js";
-import { readSqliteSchemaHeader, type SqliteSchemaHeader } from "./sqlite-user-version.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;

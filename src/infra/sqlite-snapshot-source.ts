@@ -15,8 +15,8 @@ import {
   type PreparedSqliteReadOnlyLocation,
 } from "./sqlite-readonly-location.js";
 import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
+import type { SqliteSchemaHeader } from "./sqlite-schema-header.js";
 import { withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
-import type { SqliteSchemaHeader } from "./sqlite-user-version.js";
 import {
   hasStateDatabaseSourceExclusion,
   prepareStateDatabaseCanonicalMutation,

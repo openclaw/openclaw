@@ -18,13 +18,13 @@ import {
   collectSqliteSchemaIssues,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
+import { readSqliteWriterAppVersion as readWriterAppVersion } from "../infra/sqlite-schema-header.js";
 import {
   inspectSqliteSchemaHeader,
   prepareSqliteReadOnlyLocation,
 } from "../infra/sqlite-snapshot-source.js";
 import {
   readSqliteUserVersion,
-  readSqliteWriterAppVersion as readWriterAppVersion,
   SqliteSchemaVersionError,
 } from "../infra/sqlite-user-version.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
