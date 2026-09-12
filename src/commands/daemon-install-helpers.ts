@@ -9,6 +9,8 @@ import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.j
 import type { OpenClawConfig } from "../config/types.js";
 import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
+import { resolveLaunchAgentEnvWrapperPath } from "../daemon/launchd-service-files.js";
 import { resolveGatewayStateDir, resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import {
   OPENCLAW_WRAPPER_ENV_KEY,
@@ -836,7 +838,21 @@ export async function buildGatewayInstallPlan(params: {
       `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the Windows task script; using the OpenClaw gateway entrypoint directly to avoid a recursive gateway.cmd wrapper.`,
     );
   }
-  const wrapperPath = wrapperPointsAtWindowsTaskScript
+  const generatedLaunchAgentWrapperPath =
+    platform === "darwin"
+      ? resolveLaunchAgentEnvWrapperPath(params.env, resolveLaunchAgentLabel(params.env))
+      : undefined;
+  const wrapperPointsAtGeneratedLaunchAgentWrapper =
+    Boolean(wrapperInput?.trim()) &&
+    isSameServicePath(wrapperInput, generatedLaunchAgentWrapperPath, platform);
+  if (wrapperPointsAtGeneratedLaunchAgentWrapper) {
+    params.warn?.(
+      `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the generated LaunchAgent environment wrapper; using the OpenClaw gateway entrypoint directly to avoid a self-referencing wrapper.`,
+    );
+  }
+  const wrapperPointsAtGeneratedScript =
+    wrapperPointsAtWindowsTaskScript || wrapperPointsAtGeneratedLaunchAgentWrapper;
+  const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
   const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
@@ -848,7 +864,7 @@ export async function buildGatewayInstallPlan(params: {
   });
   const serviceInputEnv: Record<string, string | undefined> = wrapperPath
     ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
-    : wrapperPointsAtWindowsTaskScript
+    : wrapperPointsAtGeneratedScript
       ? omitEnvKey(params.env, OPENCLAW_WRAPPER_ENV_KEY)
       : params.env;
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({

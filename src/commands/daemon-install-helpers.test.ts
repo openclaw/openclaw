@@ -6,11 +6,13 @@ import { Writable } from "node:stream";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
 import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
+import { resolveLaunchAgentEnvWrapperPath } from "../daemon/launchd-service-files.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -619,6 +621,46 @@ describe("buildGatewayInstallPlan", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(
         "Ignoring OPENCLAW_WRAPPER because it points to the Windows task script",
+      ),
+    );
+  });
+
+  it("clears a macOS wrapper env that points at the generated LaunchAgent env wrapper", async () => {
+    const env = isolatedPlanEnv();
+    const selfWrapperPath = resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env));
+    const warn = vi.fn();
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENCLAW_WRAPPER: selfWrapperPath,
+      }),
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      warn,
+    });
+
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBeUndefined();
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimePath: "/opt/node" }),
+    );
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,
+    ).toBeUndefined();
+    expect(plan.environment.OPENCLAW_WRAPPER).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Ignoring OPENCLAW_WRAPPER because it points to the generated LaunchAgent environment wrapper",
       ),
     );
   });
