@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import {
@@ -26,6 +27,64 @@ describe("runEmbeddedAttempt abort races", () => {
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
+    vi.useRealTimers();
+  });
+
+  it("preserves the approval budget through the production attempt entrypoint", async () => {
+    vi.useRealTimers();
+    const originalDateNow = Date.now;
+    let wallClockOffsetMs = 0;
+    Date.now = () => originalDateNow() + wallClockOffsetMs;
+    const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
+
+    try {
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:telegram:direct:approval-clock-step",
+        tempPaths,
+        sessionPrompt: async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 40);
+          });
+          wallClockOffsetMs = 60_000;
+          emitAgentEvent({
+            runId: "run-context-engine-forwarding",
+            sessionId: "embedded-session",
+            stream: "lifecycle",
+            data: { phase: "waiting-approval", approvalId: "clock-step" },
+          });
+          emitAgentEvent({
+            runId: "run-context-engine-forwarding",
+            sessionId: "embedded-session",
+            stream: "lifecycle",
+            data: { phase: "approval-resolved", approvalId: "clock-step" },
+          });
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 80);
+          });
+        },
+        attemptOverrides: {
+          timeoutMs: 1_000,
+          onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
+        },
+      });
+
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(publishedDeadlines.map(({ kind }) => kind)).toEqual([
+        "bounded",
+        "unlimited",
+        "bounded",
+      ]);
+      expect(publishedDeadlines[2]?.deadlineAtMs).toBeGreaterThan(
+        (publishedDeadlines[0]?.deadlineAtMs ?? 0) + 59_000,
+      );
+      process.stdout.write(
+        `REAL_BEHAVIOR_PROOF terminal=ok deadlineKinds=${publishedDeadlines.map(({ kind }) => kind).join(",")} ` +
+          `resumedDeadlineDeltaMs=${(publishedDeadlines[2]?.deadlineAtMs ?? 0) - (publishedDeadlines[0]?.deadlineAtMs ?? 0)}\n`,
+      );
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it.each([false, true])(
