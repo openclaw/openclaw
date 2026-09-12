@@ -660,12 +660,11 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                     ${
                       state.viewMode === "list"
                         ? html`<div class="workboard-list-header" aria-hidden="true">
+                            <span>${t("workboard.fieldPriority")}</span>
                             <span>${t("workboard.fieldTitle")}</span>
                             <span>${t("workboard.fieldSession")}</span>
-                            <span>${t("workboard.detailTabDetails")}</span>
-                            <span>${t("workboard.fieldPriority")}</span>
                             <span>${t("workboard.detailUpdated")}</span>
-                            <span></span><span></span>
+                            <span></span>
                           </div>`
                         : nothing
                     }

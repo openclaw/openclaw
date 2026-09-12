@@ -1234,6 +1234,64 @@ describe("renderWorkboard", () => {
     expect(statusButton(container, "All").getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("keeps list disclosure accessible and keyboard focus usable while its cards are unmounted", async () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.viewMode = "list";
+    state.cards = [createWorkboardCard({ title: "Inspect release notes", status: "todo" })];
+    renderView();
+    const group = expectDefined(
+      container.querySelector('section[aria-label="Todo, 1"]'),
+      "Todo group",
+    );
+    const toggle = () =>
+      expectDefined(
+        group.querySelector<HTMLButtonElement>("h2 button[aria-expanded]"),
+        "Todo disclosure",
+      );
+    const controlled = () =>
+      expectDefined(
+        document.getElementById(
+          expectDefined(toggle().getAttribute("aria-controls"), "controlled group id"),
+        ),
+        "controlled group",
+      );
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(controlled().textContent).toContain("Inspect release notes");
+    toggle().focus();
+    // Native keyboard activation produces a click with detail 0.
+    toggle().click();
+    renderView();
+    await Promise.resolve();
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(controlled().hidden).toBe(true);
+    expect(group.querySelector('[role="listitem"]')).toBeNull();
+    expect(document.activeElement).toBe(toggle());
+    toggle().click();
+    renderView();
+    await Promise.resolve();
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(controlled().hidden).toBe(false);
+    expect(controlled().textContent).toContain("Inspect release notes");
+    expect(document.activeElement).toBe(toggle());
+  });
+
+  it("keeps list group actions independent of its disclosure while collapsed", () => {
+    const { state, container, renderView } = createWorkboardView({ canWrite: true });
+    state.viewMode = "list";
+    state.cards = [createWorkboardCard({ id: "todo-card", title: "Review notes", status: "todo" })];
+    state.collapsedStatuses.add("todo");
+    renderView();
+    const group = expectDefined(
+      container.querySelector('section[aria-label="Todo, 1"]'),
+      "Todo group",
+    );
+    expectDefined(buttonByLabel(group, "New card in Todo"), "new card in group").click();
+    renderView();
+    expect(state.draftOpen).toBe(true);
+    expect(state.draftStatus).toBe("todo");
+    expect(state.collapsedStatuses).toContain("todo");
+  });
+
   it("supports showing, collapsing, and hiding empty columns", () => {
     const { state, container, renderView } = createWorkboardView({
       onRequestUpdate: () => undefined,

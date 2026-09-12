@@ -30,7 +30,6 @@ import {
   cardRelativeTime,
   renderCardMeta,
   renderCardCounts,
-  renderAgentChip,
   renderCardSession,
 } from "./view-card-content.ts";
 import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-details.ts";
@@ -186,49 +185,47 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
   const listContents =
     surface === "list"
       ? html`
-          <div class="workboard-list-row__title">
-            <h3
-              class="workboard-truncate"
-              title=${[card.title, card.notes].filter(Boolean).join("\n\n")}
-            >
-              ${card.title}
-            </h3>
-            ${
-              card.labels.length
-                ? html`<div class="workboard-card__labels">
-                    ${card.labels
-                      .slice(0, 1)
-                      .map(
-                        (label) =>
-                          html`<span class="workboard-chip workboard-truncate" title=${label}
-                            >${label}</span
-                          >`,
-                      )}
-                    ${
-                      card.labels.length > 1
-                        ? html`<span
-                            class="workboard-chip"
-                            title=${card.labels.slice(1).join(", ")}
-                            aria-label=${t("workboard.cardMoreLabels", {
-                              count: String(card.labels.length - 1),
-                              labels: card.labels.slice(1).join(", "),
-                            })}
-                            >+${card.labels.length - 1}</span
-                          >`
-                        : nothing
-                    }
-                  </div>`
-                : nothing
-            }
-            ${
-              archived
-                ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
-                : nothing
-            }
-          </div>
-          <div class="workboard-list-row__metadata">
-            <div class="workboard-list-row__session">
-              ${renderCardSession(props, card, lifecycle, task, sessionStatus, false)}
+          <div class="workboard-list-row__priority">${priority}</div>
+          <div class="workboard-list-row__identity">
+            <div class="workboard-list-row__title">
+              <h3
+                class="workboard-truncate"
+                title=${[card.title, card.notes].filter(Boolean).join("\n\n")}
+              >
+                ${card.title}
+              </h3>
+              ${
+                card.labels.length
+                  ? html`<div class="workboard-card__labels">
+                      ${card.labels
+                        .slice(0, 1)
+                        .map(
+                          (label) =>
+                            html`<span class="workboard-chip workboard-truncate" title=${label}
+                              >${label}</span
+                            >`,
+                        )}
+                      ${
+                        card.labels.length > 1
+                          ? html`<span
+                              class="workboard-chip"
+                              title=${card.labels.slice(1).join(", ")}
+                              aria-label=${t("workboard.cardMoreLabels", {
+                                count: String(card.labels.length - 1),
+                                labels: card.labels.slice(1).join(", "),
+                              })}
+                              >+${card.labels.length - 1}</span
+                            >`
+                          : nothing
+                      }
+                    </div>`
+                  : nothing
+              }
+              ${
+                archived
+                  ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
+                  : nothing
+              }
             </div>
             <div class="workboard-list-row__context">
               ${
@@ -241,9 +238,10 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
               ${renderCardCounts(card)}
             </div>
           </div>
-          <div class="workboard-list-row__priority">${priority}</div>
+          <div class="workboard-list-row__session">
+            ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
+          </div>
           <div class="workboard-list-row__updated">${updatedTime}</div>
-          <div class="workboard-list-row__agent">${renderAgentChip(props, card)}</div>
           <div class="workboard-list-row__actions">${actionsMenu}</div>
         `
       : nothing;
@@ -413,7 +411,9 @@ export function renderColumn(
     // The toggle is replaced on collapse; keep keyboard focus on its replacement.
     queueMicrotask(() => {
       column
-        ?.querySelector<HTMLButtonElement>(".workboard-column__rail, .workboard-column__collapse")
+        ?.querySelector<HTMLButtonElement>(
+          ".workboard-column__rail, .workboard-column__collapse, .workboard-list-group__toggle",
+        )
         ?.focus({ preventScroll: true });
     });
   };
@@ -495,7 +495,7 @@ export function renderColumn(
       }}
     >
       ${
-        collapsed
+        collapsed && surface !== "list"
           ? html`
               <button
                 class="workboard-column__rail"
@@ -514,85 +514,112 @@ export function renderColumn(
           : html`
               <div class="workboard-column__header">
                 <div class="workboard-column__heading">
-                  <h2>${label}</h2>
-                  <span class="workboard-column__count">${cards.length}</span>
+                  ${
+                    surface === "list"
+                      ? html`<h2>
+                          <button
+                            class="workboard-list-group__toggle"
+                            type="button"
+                            aria-expanded=${!collapsed}
+                            aria-controls=${`workboard-column-cards-${status}`}
+                            @click=${collapsed ? expandColumn : collapseColumn}
+                          >
+                            <span class="workboard-list-group__chevron" aria-hidden="true">
+                              ${collapsed ? icons.chevronRight : icons.chevronDown}
+                            </span>
+                            <span class="workboard-list-group__label">${label}</span>
+                            <span class="workboard-column__count">${cards.length}</span>
+                          </button>
+                        </h2>`
+                      : html`<h2>${label}</h2>
+                          <span class="workboard-column__count">${cards.length}</span>`
+                  }
                 </div>
                 ${
                   collapsible
                     ? html`<div class="workboard-column__header-actions">
-                        <button
-                          class="workboard-column__control workboard-column__collapse"
-                          type="button"
-                          aria-label=${t("workboard.collapseColumn", { column: label })}
-                          title=${t("workboard.collapseColumn", { column: label })}
-                          aria-expanded="true"
-                          @click=${collapseColumn}
-                        >
-                          <span class="workboard-column__direction-icon" aria-hidden="true"
-                            >${icons.minimize}</span
-                          >
-                        </button>
+                        ${
+                          surface !== "list"
+                            ? html`<button
+                                class="workboard-column__control workboard-column__collapse"
+                                type="button"
+                                aria-label=${t("workboard.collapseColumn", { column: label })}
+                                title=${t("workboard.collapseColumn", { column: label })}
+                                aria-expanded="true"
+                                @click=${collapseColumn}
+                              >
+                                <span class="workboard-column__direction-icon" aria-hidden="true"
+                                  >${icons.minimize}</span
+                                >
+                              </button>`
+                            : nothing
+                        }
                         ${canCreate ? renderCreateButton("workboard-column__control") : nothing}
                       </div>`
                     : nothing
                 }
               </div>
-              <div
-                class="workboard-column__cards"
-                role=${surface === "list" ? "list" : nothing}
-                ${ref(workboardScrollFadeRef())}
-              >
-                ${
-                  cards.length
-                    ? cards.map(
-                        (card) => html`
-                          <div
-                            class="workboard-column__item ${
-                              dropTarget && state.dragBeforeCardId === card.id
-                                ? "workboard-column__item--drop-before"
-                                : ""
-                            } ${
-                              dropTarget &&
-                              state.dragBeforeCardId === null &&
-                              card.id === lastDropCardId
-                                ? "workboard-column__item--drop-after"
-                                : ""
-                            }"
-                            role=${surface === "list" ? "listitem" : nothing}
-                            data-card-id=${card.id}
-                          >
-                            ${renderCard(props, card, surface)}
-                          </div>
-                        `,
-                      )
-                    : state.draggedCardId
-                      ? html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`
-                      : !hasHiddenCards && canCreate
-                        ? renderCreateButton(
-                            "workboard-column__add workboard-column__add--empty",
-                            true,
-                          )
-                        : html`<div class="workboard-column__empty">
-                            <span
-                              >${t(
-                                hasHiddenCards
-                                  ? "workboard.emptyFilteredTitle"
-                                  : "workboard.emptyColumnTitle",
-                              )}</span
-                            >
-                            ${
-                              hasHiddenCards
-                                ? html`<span>${t("workboard.emptyFilteredHint")}</span>`
-                                : nothing
-                            }
-                          </div>`
-                }
-                ${
-                  canCreate && !state.draggedCardId && cards.length > 0 && surface !== "list"
-                    ? renderCreateButton("workboard-column__add", true)
-                    : nothing
-                }
-              </div>
+              ${
+                collapsed
+                  ? html`<div id=${`workboard-column-cards-${status}`} hidden></div>`
+                  : html`<div
+                      class="workboard-column__cards"
+                      id=${surface === "list" ? `workboard-column-cards-${status}` : nothing}
+                      role=${surface === "list" ? "list" : nothing}
+                      ${ref(workboardScrollFadeRef())}
+                    >
+                      ${
+                        cards.length
+                          ? cards.map(
+                              (card) => html`
+                                <div
+                                  class="workboard-column__item ${
+                                    dropTarget && state.dragBeforeCardId === card.id
+                                      ? "workboard-column__item--drop-before"
+                                      : ""
+                                  } ${
+                                    dropTarget &&
+                                    state.dragBeforeCardId === null &&
+                                    card.id === lastDropCardId
+                                      ? "workboard-column__item--drop-after"
+                                      : ""
+                                  }"
+                                  role=${surface === "list" ? "listitem" : nothing}
+                                  data-card-id=${card.id}
+                                >
+                                  ${renderCard(props, card, surface)}
+                                </div>
+                              `,
+                            )
+                          : state.draggedCardId
+                            ? html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`
+                            : !hasHiddenCards && canCreate
+                              ? renderCreateButton(
+                                  "workboard-column__add workboard-column__add--empty",
+                                  true,
+                                )
+                              : html`<div class="workboard-column__empty">
+                                  <span
+                                    >${t(
+                                      hasHiddenCards
+                                        ? "workboard.emptyFilteredTitle"
+                                        : "workboard.emptyColumnTitle",
+                                    )}</span
+                                  >
+                                  ${
+                                    hasHiddenCards
+                                      ? html`<span>${t("workboard.emptyFilteredHint")}</span>`
+                                      : nothing
+                                  }
+                                </div>`
+                      }
+                      ${
+                        canCreate && !state.draggedCardId && cards.length > 0 && surface !== "list"
+                          ? renderCreateButton("workboard-column__add", true)
+                          : nothing
+                      }
+                    </div>`
+              }
             `
       }
     </section>

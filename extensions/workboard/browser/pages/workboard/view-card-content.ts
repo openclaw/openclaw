@@ -215,12 +215,8 @@ export function renderCardSession(
   lifecycle: WorkboardLifecycle,
   task: WorkboardTaskSummary | undefined,
   status: SessionStatusPresentation,
-  showAgent = true,
 ) {
   const hasSession = lifecycle.state !== "unlinked" || Boolean(task);
-  if (!hasSession && !showAgent) {
-    return nothing;
-  }
   const sessionName = hasSession
     ? (lifecycle.session?.displayName ??
       lifecycle.session?.label ??
@@ -228,7 +224,7 @@ export function renderCardSession(
       t("workboard.fieldSession"))
     : cardAgentLabel(card, props.agentsList);
   return html`<div class="workboard-card__session workboard-card__session--${status.tone}">
-    ${showAgent ? renderAgentChip(props, card) : nothing}
+    ${renderAgentChip(props, card)}
     <span class="workboard-card__session-name workboard-truncate" title=${sessionName}
       >${sessionName}</span
     >
