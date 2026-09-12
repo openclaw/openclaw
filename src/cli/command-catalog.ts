@@ -1,5 +1,6 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
+import { CONFIG_UNSET_EFFECT_PROFILE, type CommandEffectProfile } from "./catalog-metadata.js";
 
 export type CliCommandPluginLoadPolicy =
   | "never"
@@ -57,6 +58,8 @@ export type CliCommandCatalogEntry = {
   policy?: Partial<CliCommandPathPolicy>;
   route?: {
     id: CliRoutedCommandId;
+    preloadPlugins?: boolean;
+    effectProfile?: CommandEffectProfile;
   };
 };
 
@@ -336,7 +339,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["config", "unset"],
     exact: true,
     policy: { configGuard: "run", ensureCliPath: false, networkProxy: "bypass" },
-    route: { id: "config-unset" },
+    route: { id: "config-unset", effectProfile: CONFIG_UNSET_EFFECT_PROFILE },
   },
   {
     commandPath: ["models"],
@@ -371,6 +374,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "models-status" },
   },
+  { commandPath: ["tools", "commands"], policy: PASSIVE_STARTUP_POLICY },
   {
     commandPath: ["tasks", "list"],
     exact: true,
@@ -410,8 +414,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
   {
-    // This unregistered root is reserved so plugin registration cannot claim it;
-    // the catalog entry preserves its startup policy.
     commandPath: ["tools"],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },

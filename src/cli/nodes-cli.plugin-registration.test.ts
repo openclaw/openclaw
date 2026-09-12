@@ -79,6 +79,16 @@ describe("registerNodesCli plugin registration", () => {
     );
   });
 
+  it("can hydrate built-ins without activating plugin registrars", async () => {
+    const program = new Command();
+    await registerNodesCli(program, ["node", "openclaw", "nodes"], {
+      includePluginCommands: false,
+    });
+
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
+    expect(program.commands.find((command) => command.name() === "nodes")).toBeDefined();
+  });
+
   it("documents the supported system.which parameter shape", async () => {
     const program = await registerWithArgv(["node", "openclaw", "nodes", "--help"]);
     const nodesCommand = program.commands.find((command) => command.name() === "nodes");

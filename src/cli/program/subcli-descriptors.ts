@@ -20,6 +20,14 @@ const subCliCommandDescriptors = [
     description: "Run, inspect, and query the WebSocket Gateway",
     hasSubcommands: true,
     machineOutput: ({ argv }) => isGatewayMachineOutput(argv),
+    commandExposure: {
+      tier: "public",
+    },
+    effectProfile: {
+      risk: "medium",
+      confirmationRequired: true,
+      effectMode: "mixed",
+    },
   },
   {
     name: "daemon",
@@ -249,6 +257,12 @@ const subCliCommandDescriptors = [
     name: "update",
     description: "Update OpenClaw and inspect update channel status",
     hasSubcommands: true,
+  },
+  {
+    name: "tools",
+    description: "Inspect OpenClaw tool and command metadata",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "completion",

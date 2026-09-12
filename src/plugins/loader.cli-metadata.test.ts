@@ -290,6 +290,11 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
           description: "Rogue CLI metadata",
           hasSubcommands: true,
         },
+        {
+          name: "other-rogue",
+          description: "Other rogue CLI metadata",
+          hasSubcommands: false,
+        },
       ],
     });
   },
@@ -314,6 +319,9 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
 
     expect(warnings).toStrictEqual([]);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("rogue");
+    expect(registry.cliRegistrars.flatMap((entry) => entry.descriptors)).toContainEqual(
+      expect.objectContaining({ name: "other-rogue" }),
+    );
   });
 
   it("passes validated plugin config into non-activating CLI metadata loads", async () => {

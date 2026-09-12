@@ -22,7 +22,7 @@ import {
 import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 export type SubCliRegistrationContext = {
-  purpose?: "runtime" | "completion";
+  purpose?: "runtime" | "completion" | "inspection";
 };
 
 type PluginCliModule = typeof import("../../plugins/cli.js");
@@ -105,7 +105,10 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<
   ],
   [
     ["nodes"],
-    async (program, argv) => (await import("../nodes-cli.js")).registerNodesCli(program, argv),
+    async (program, argv, context) =>
+      (await import("../nodes-cli.js")).registerNodesCli(program, argv, {
+        includePluginCommands: context.purpose !== "inspection",
+      }),
   ],
   [["devices"], async (program) => (await import("../devices-cli.js")).registerDevicesCli(program)],
   [["users"], async (program) => (await import("../users-cli.js")).registerUsersCli(program)],
@@ -190,6 +193,7 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<
   [["secrets"], async (program) => (await import("../secrets-cli.js")).registerSecretsCli(program)],
   [["skills"], async (program) => (await import("../skills-cli.js")).registerSkillsCli(program)],
   [["update"], async (program) => (await import("../update-cli.js")).registerUpdateCli(program)],
+  [["tools"], async (program) => (await import("../tools-cli.js")).registerToolsCli(program)],
 ];
 
 function resolveSubCliCommandGroups(

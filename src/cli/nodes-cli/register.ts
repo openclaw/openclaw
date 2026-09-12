@@ -17,7 +17,11 @@ import { registerNodesScreenCommands } from "./register.screen.js";
 import { registerNodesStatusCommands } from "./register.status.js";
 
 /** Register the `nodes` command group and lazy plugin-provided node commands. */
-export async function registerNodesCli(program: Command, argv: readonly string[] = process.argv) {
+export async function registerNodesCli(
+  program: Command,
+  argv: readonly string[] = process.argv,
+  options: { includePluginCommands?: boolean } = {},
+) {
   const nodes = program
     .command("nodes")
     .description("Manage gateway-owned nodes (pairing, status, invoke, and media)")
@@ -50,7 +54,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
   // path: loading plugin CLI/runtime to resolve them only adds startup cost. Plugin-provided node
   // subcommands (e.g. `nodes canvas`) are not registered above, so only pay the plugin load when
   // the invoked subcommand is not already a built-in.
-  if (!shouldRegisterNodesPluginCommands(nodes, argv)) {
+  if (options.includePluginCommands === false || !shouldRegisterNodesPluginCommands(nodes, argv)) {
     return;
   }
   const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
