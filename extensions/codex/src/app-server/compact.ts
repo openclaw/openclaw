@@ -49,13 +49,13 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import {
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
+  createIsolatedCodexAppServerClient,
+  retainSharedCodexAppServerClientByInstanceId,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import {
   isSameCodexAppServerThreadOwner,
-  withCodexAppServerThreadMutation,
+  withCodexAppServerThreadMutationHold,
 } from "./thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
@@ -77,6 +77,16 @@ type CodexAppServerCompactOptions = {
 type CodexNativeCompactionCompletion =
   | { completed: true; turnId?: string; itemId?: string; tokensAfter?: number }
   | { completed: false; reason: string };
+
+/** Keeps same-thread ownership held when bounded temporary cleanup is uncertain. */
+export async function waitForCodexAppServerTemporaryClientExit(
+  client: Pick<CodexAppServerClient, "waitForTransportExit">,
+  exited: boolean,
+): Promise<void> {
+  if (!exited) {
+    await client.waitForTransportExit();
+  }
+}
 
 function watchCodexNativeCompactionCompletion(params: {
   client: CodexAppServerClient;
@@ -316,14 +326,14 @@ function watchCodexNativeCompactionCompletion(params: {
 async function runExclusiveCodexNativeCompaction<T>(
   threadId: string,
   signal: AbortSignal | undefined,
-  run: () => Promise<T>,
+  run: (hold: (until: Promise<unknown>) => void) => Promise<T>,
 ): Promise<T> {
   signal?.throwIfAborted();
   let started = false;
-  const queued = withCodexAppServerThreadMutation(threadId, async () => {
+  const queued = withCodexAppServerThreadMutationHold(threadId, async (hold) => {
     started = true;
     signal?.throwIfAborted();
-    return run();
+    return run(hold);
   });
   if (!signal) {
     return queued;
@@ -551,7 +561,7 @@ async function compactCodexNativeThread(
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
   const shouldReleaseDefaultLease = !options.clientFactory;
-  const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
+  const clientFactory = options.clientFactory ?? createIsolatedCodexAppServerClient;
   const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
   // A user-home app-server keeps its native Codex account; injecting a prepared key
   // would rewrite the CODEX_HOME auth that Codex CLI and Desktop share.
@@ -571,20 +581,30 @@ async function compactCodexNativeThread(
     return await runExclusiveCodexNativeCompaction(
       binding.threadId,
       params.abortSignal,
-      async () => {
+      async (hold) => {
         assertCurrent();
-        const client = await clientFactory({
-          startOptions: appServer.start,
-          ...(preparedApiKey
-            ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
-            : { authProfileId: connection.clientAuthProfileId }),
-          agentDir: params.agentDir,
-          config: params.config,
-          assertCurrent,
+        const boundClientLease = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+        const client =
+          boundClientLease?.client ??
+          (await clientFactory({
+            startOptions: appServer.start,
+            ...(preparedApiKey
+              ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
+              : { authProfileId: connection.clientAuthProfileId }),
+            authRequirement: runtimeAuthPlan?.modelRoute?.authRequirement,
+            agentDir: params.agentDir,
+            config: params.config,
+            assertCurrent,
+          }));
+        embeddedAgentLog.info("selected codex app-server compaction client", {
+          clientId: client.getInstanceId(),
+          recordedOwnerReused: Boolean(boundClientLease),
+          threadId: binding.threadId,
         });
         let releaseThreadSubscription: (() => Promise<void>) | undefined;
         let retainedThreadOwnership: CodexAppServerLiveThreadOwnership | undefined;
         let compactionSucceeded = false;
+        let temporaryClientExited = true;
         let compactionRequestDefinitelyRejected = false;
         let tokensAfter: number | undefined;
         const releaseCompactionThread = async (threadId: string) => {
@@ -614,6 +634,7 @@ async function compactCodexNativeThread(
               exitTimeoutMs: 5_000,
               forceKillDelayMs: 250,
             });
+            temporaryClientExited = transportStopped.exited;
             if (appServer.start.transport === "stdio") {
               if (transportStopped.exited) {
                 return;
@@ -892,10 +913,34 @@ async function compactCodexNativeThread(
               await releaseThreadSubscription?.();
             }
           } finally {
-            if (shouldReleaseDefaultLease) {
-              releaseLeasedSharedCodexAppServerClient(client);
+            const boundClientClosed = boundClientLease?.release() ?? false;
+            // Unsubscribe keeps the native thread loaded. A cold compaction owns
+            // its process and must release the writer before a later turn resumes.
+            if (boundClientClosed && appServer.start.transport === "stdio") {
+              // Releasing the final lease can initiate asynchronous physical
+              // shutdown of a detached recorded owner. Keep the same-thread
+              // lane fenced until that process has actually exited.
+              hold(waitForCodexAppServerTemporaryClientExit(client, false));
+              embeddedAgentLog.info("fenced recorded-owner compaction client until process exit", {
+                clientId: client.getInstanceId(),
+                threadId: binding.threadId,
+              });
+            } else if (!boundClientLease && shouldReleaseDefaultLease) {
+              temporaryClientExited = temporaryClientExited && (await client.closeAndWait()).exited;
+              if (!temporaryClientExited && appServer.start.transport === "stdio") {
+                // Register the hold before any catch return can release the
+                // outer thread lane. Failure results must fence successors too.
+                hold(waitForCodexAppServerTemporaryClientExit(client, temporaryClientExited));
+              }
             }
           }
+        }
+        if (!temporaryClientExited) {
+          // The cleanup finally registered the physical-exit hold before any
+          // failure return can release the outer thread lane.
+          throw new CodexAppServerUnsafeSubscriptionError(
+            `Codex compaction client did not exit: ${binding.threadId}`,
+          );
         }
         const details: JsonObject = {
           backend: "codex-app-server",

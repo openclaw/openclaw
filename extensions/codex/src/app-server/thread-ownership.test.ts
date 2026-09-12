@@ -84,4 +84,32 @@ describe("Codex thread ownership across module copies", () => {
     }
     expect(events).toEqual(["active", "other", "waiting"]);
   });
+
+  it("keeps a thread lane held after a failed mutation returns", async () => {
+    const owner = await import("./thread-ownership.js");
+    vi.resetModules();
+    const successor = await import("./thread-ownership.js");
+    const release = createDeferred<void>();
+    const failed = owner.withCodexAppServerThreadMutationHold("held-thread", async (hold) => {
+      hold(release.promise);
+      throw new Error("cleanup uncertain");
+    });
+    await expect(failed).rejects.toThrow("cleanup uncertain");
+
+    let successorRan = false;
+    const successorMutation = successor.withCodexAppServerThreadMutation(
+      "held-thread",
+      async () => {
+        successorRan = true;
+      },
+    );
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(successorRan).toBe(false);
+
+    release.resolve();
+    await successorMutation;
+    expect(successorRan).toBe(true);
+  });
 });

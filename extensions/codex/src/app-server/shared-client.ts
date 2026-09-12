@@ -1315,16 +1315,25 @@ export function retainSharedCodexAppServerClientIfCurrent(
 /** Retains the live shared client whose initialized instance id matches a thread binding. */
 export function retainSharedCodexAppServerClientByInstanceId(
   clientId: string | undefined,
-): { client: CodexAppServerClient; release: () => void } | undefined {
+): { client: CodexAppServerClient; release: () => boolean } | undefined {
   const normalizedClientId = clientId?.trim();
   if (!normalizedClientId) {
     return undefined;
   }
-  for (const entry of getSharedCodexAppServerClientState().clients.values()) {
-    const client = entry.client;
-    if (client?.getInstanceId() !== normalizedClientId || entry.closeWhenIdle || entry.closeError) {
+  const state = getSharedCodexAppServerClientState();
+  for (const client of state.liveClients) {
+    const entry = state.entriesByClient.get(client);
+    if (
+      client.getInstanceId() !== normalizedClientId ||
+      entry?.client !== client ||
+      entry.closeError ||
+      client.getCloseError()
+    ) {
       continue;
     }
+    // Graceful retirement removes the process from generic acquisition while
+    // existing leases drain. Its persisted thread bindings still need the
+    // exact physical owner until the final lease closes that process.
     return { client, release: retainSharedClientEntry(entry) };
   }
   return undefined;
@@ -1532,25 +1541,26 @@ export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
 function retainSharedClientEntry(
   entry: SharedCodexAppServerClientEntry,
   counter: "activeLeases" | "pendingAcquires" = "activeLeases",
-): () => void {
+): () => boolean {
   let released = false;
   entry[counter] += 1;
   return () => {
     if (released) {
-      return;
+      return false;
     }
     released = true;
-    releaseSharedClientEntry(entry, counter);
+    return releaseSharedClientEntry(entry, counter);
   };
 }
 
 function releaseSharedClientEntry(
   entry: SharedCodexAppServerClientEntry,
   counter: "activeLeases" | "pendingAcquires",
-): void {
+): boolean {
   entry[counter] -= 1;
-  closeRetiredSharedClientEntryIfIdle(entry);
+  const closed = closeRetiredSharedClientEntryIfIdle(entry);
   notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
+  return closed;
 }
 
 function closeSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerClientEntry): boolean {
