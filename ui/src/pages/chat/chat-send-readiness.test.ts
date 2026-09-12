@@ -272,6 +272,53 @@ it.each([false, true])(
   },
 );
 
+it.each(["original-leaf", null])(
+  "preserves the submitted leaf fence %s when history starts after outbox admission",
+  async (expectedLeafEntryId) => {
+    const sessionKey = "agent:main:main";
+    const history = createDeferred<ChatHistoryResult>();
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: "current-session",
+      chatDisplayedLeafEntryId: expectedLeafEntryId,
+      chatMessage: "Send against the branch I selected",
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": { status: "started", messageSeq: 1 },
+      },
+    });
+    let loading: ReturnType<typeof loadChatHistory> | undefined;
+    const sending = handleSendChat(host, undefined, {
+      onOutboxAdmitted: () => {
+        loading = loadChatHistory(host, { deferBranches: true });
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(host.chatLoading).toBe(true));
+      expect(host.chatMessage).toBe("");
+      expect(host.chatQueue).toHaveLength(1);
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    } finally {
+      history.resolve({
+        messages: [],
+        sessionInfo: {
+          key: sessionKey,
+          sessionId: "current-session",
+          activeLeafEntryId: "different-branch-leaf",
+          kind: "direct",
+          updatedAt: 2,
+        },
+      });
+      await loading;
+      await sending;
+    }
+
+    expect(host.chatDisplayedLeafEntryId).toBe("different-branch-leaf");
+    expect(findChatSendPayload(host)).toHaveProperty("expectedLeafEntryId", expectedLeafEntryId);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+  },
+);
+
 it.each(["connection", "conversation", "discard"] as const)(
   "does not deliver stale queued work after a %s change during history",
   async (change) => {

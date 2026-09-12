@@ -132,10 +132,25 @@ export function captureChatConnectionOwner(
     host.connectionEpoch === connectionEpoch;
 }
 
+export function resolveQueuedChatLeaf(
+  host: ChatHost,
+  item: ChatQueueItem,
+  options?: QueuedChatSendOptions,
+): string | null | undefined {
+  if (options?.expectedLeafEntryId !== undefined) {
+    return options.expectedLeafEntryId;
+  }
+  return options?.routingSessionKey &&
+    visibleSessionMatches(host, item.sessionKey ?? host.sessionKey, item.agentId)
+    ? resolveDisplayedLeafEntryId(host)
+    : undefined;
+}
+
 export function waitForQueuedChatHistory(
   host: ChatHost,
   item: ChatQueueItem,
   queuedSessionKey: string,
+  options?: QueuedChatSendOptions,
 ):
   | Promise<{ item: ChatQueueItem; expectedLeafEntryId: string | null | undefined } | null>
   | undefined {
@@ -173,7 +188,7 @@ export function waitForQueuedChatHistory(
     ) {
       return null;
     }
-    return { item: current, expectedLeafEntryId: resolveDisplayedLeafEntryId(host) };
+    return { item: current, expectedLeafEntryId: resolveQueuedChatLeaf(host, current, options) };
   });
 }
 

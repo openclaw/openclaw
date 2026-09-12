@@ -608,7 +608,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     </openclaw-tooltip>
   `;
   const dictationSendAction =
-    props.dictation && !sendDisabledReason
+    props.dictation && (!props.submitDisabledReason || canSubmitBeforeChatHistory(props.draft))
       ? renderComposerDictationSendAction(
           props.dictation,
           () => props.onSend(),

@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -14,6 +15,8 @@ import {
   renderChatPrimaryActions,
   type ChatRunControlsProps,
 } from "./components/chat-composer-controls.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { renderChatComposer } from "./components/chat-composer.ts";
 import type { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(async () => {
@@ -85,15 +88,11 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  function renderActiveDictationActions(overrides: {
-    finishActive: ReturnType<typeof vi.fn>;
-    onSend?: ChatRunControlsProps["onSend"];
-    submitDisabledReason?: string;
-  }) {
+  function renderActiveDictationActions(overrides: { finishActive: ReturnType<typeof vi.fn> }) {
     const container = document.createElement("div");
     const cancelActive = vi.fn();
     const handleClick = vi.fn();
-    const onSend = overrides.onSend ?? vi.fn<ChatRunControlsProps["onSend"]>();
+    const onSend = vi.fn<ChatRunControlsProps["onSend"]>();
     const dictation = {
       active: true,
       connecting: false,
@@ -113,7 +112,6 @@ describe("renderChatComposer controls", () => {
         sending: false,
         dictation,
         onSend,
-        submitDisabledReason: overrides.submitDisabledReason,
       }),
       container,
     );
@@ -137,29 +135,56 @@ describe("renderChatComposer controls", () => {
   });
 
   it.each([undefined, "Loading chat"])(
-    "commits dictation before sending the complete draft with history hold %s",
+    "finishes locked dictation before submitting the complete composer draft with history hold %s",
     async (submitDisabledReason) => {
-      const order: string[] = [];
-      const finishActive = vi.fn(async () => {
-        order.push("commit");
-        return true;
-      });
-      const onSend = vi.fn(() => order.push("send"));
-      const { cancelActive, container, handleClick } = renderActiveDictationActions({
-        finishActive,
-        onSend,
+      let draft = "Typed beginning";
+      const onSend = vi.fn();
+      const { container, props } = renderComposer({
+        draft,
+        getDraft: () => draft,
+        onDraftChange: (value) => {
+          draft = value;
+        },
+        onSend: () => onSend(draft),
+        onToggleRealtimeTalk: vi.fn(),
         submitDisabledReason,
       });
-      const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+      const dictation = getChatComposerState(props.paneId).dictation;
+      if (!dictation) {
+        throw new Error("expected the composer dictation controller");
+      }
+      const active = vi.spyOn(dictation, "active", "get").mockReturnValue(true);
+      const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
+      const update = vi.spyOn(dictation, "update");
+      render(renderChatComposer(props), container);
+      const commit = update.mock.lastCall?.[0].onCommit;
+      if (!commit) {
+        throw new Error("expected the composer transcript callback");
+      }
+      const finalTranscript = createDeferred<string>();
+      const finishActive = vi.spyOn(dictation, "finishActive").mockImplementation(async () => {
+        const transcript = await finalTranscript.promise;
+        active.mockReturnValue(false);
+        locked.mockReturnValue(false);
+        commit(transcript);
+        return true;
+      });
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      textarea.setSelectionRange(draft.length, draft.length);
+      pressComposerEnter(container);
+      expect(onSend).not.toHaveBeenCalled();
 
-      expect(send?.getAttribute("aria-label")).toBe("Send");
-      send?.click();
-      await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+      const send = primaryButton(container);
+      expect(send.getAttribute("aria-label")).toBe("Send");
+      expect(send.disabled).toBe(false);
+      send.click();
 
       expect(finishActive).toHaveBeenCalledOnce();
-      expect(order).toEqual(["commit", "send"]);
-      expect(cancelActive).not.toHaveBeenCalled();
-      expect(handleClick).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      finalTranscript.resolve("dictated ending");
+      await vi.waitFor(() =>
+        expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending"),
+      );
     },
   );
 

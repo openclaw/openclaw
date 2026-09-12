@@ -39,6 +39,7 @@ import {
   finishScopedChatSending,
   reconnectSafeQueuedSendState,
   prepareQueuedChatPayload,
+  resolveQueuedChatLeaf,
   setChatError,
   updateQueuedSendItem,
   waitForQueuedChatHistory,
@@ -148,8 +149,8 @@ async function sendQueuedChatMessage(
   if (!queued || queued.pendingRunId || (queued.localCommandName && !approvedReset)) {
     return "failed";
   }
-  let expectedLeafEntryId = options?.expectedLeafEntryId;
-  const history = waitForQueuedChatHistory(host, queued, queuedSessionKey);
+  let expectedLeafEntryId = resolveQueuedChatLeaf(host, queued, options);
+  const history = waitForQueuedChatHistory(host, queued, queuedSessionKey, options);
   if (history) {
     const ready = await history;
     if (!ready) {
@@ -715,10 +716,8 @@ export async function deliverChatQueueItem(
   return result;
 }
 
-const sendResetSlashCommand = createResetSlashCommandSender(deliverChatQueueItem);
-
 export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
   sendQueuedChatMessage,
-  sendResetSlashCommand,
+  sendResetSlashCommand: createResetSlashCommandSender(deliverChatQueueItem),
   setChatError,
 };
