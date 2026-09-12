@@ -10,7 +10,7 @@ Kilo Gateway routes requests to many models behind a single OpenAI-compatible en
 
 | Property | Value                              |
 | -------- | ---------------------------------- |
-| Provider | `kilocode`                         |
+| Provider | `kilocode` (alias: `kilo`)         |
 | Auth     | `KILOCODE_API_KEY`                 |
 | API      | OpenAI-compatible                  |
 | Base URL | `https://api.kilo.ai/api/gateway/` |
