@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   JsonValue,
@@ -106,6 +107,27 @@ export function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       : {}),
     ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
   };
+}
+
+function withoutFlowRevision(flow: TaskFlowRecord): Omit<TaskFlowRecord, "revision"> {
+  const { revision: _revision, ...projection } = flow;
+  const canonical = Object.fromEntries(
+    Object.entries(projection).filter(([, value]) => value !== undefined),
+  ) as Omit<TaskFlowRecord, "revision">; // SAFETY: Object.fromEntries preserves every TaskFlowRecord key except intentionally omitted undefined optional fields and revision.
+  // Older mirrored rows stored SQL NULL for wait_json; the current projection
+  // uses JSON null when it explicitly clears the wait state.
+  if (canonical.waitJson === null) {
+    delete canonical.waitJson;
+  }
+  return canonical;
+}
+
+/** Mirrored sync must not bump revision when the derived projection is unchanged. */
+export function isEquivalentMirroredFlowProjection(
+  current: TaskFlowRecord,
+  next: TaskFlowRecord,
+): boolean {
+  return isDeepStrictEqual(withoutFlowRevision(current), withoutFlowRevision(next));
 }
 
 export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
