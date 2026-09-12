@@ -426,6 +426,13 @@ export class ShellChromeOwner {
       window.dispatchEvent(new CustomEvent(KEYBOARD_SHORTCUTS_REQUEST_EVENT));
       return;
     }
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession, event)) {
+      event.preventDefault();
+      if (!event.repeat) {
+        this.handleNativeNewSession();
+      }
+      return;
+    }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, event)) {
       const target = event.target;
       if (

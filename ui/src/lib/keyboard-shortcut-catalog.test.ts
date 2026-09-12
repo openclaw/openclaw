@@ -79,6 +79,41 @@ describe("keyboard shortcut catalog matching", () => {
     }
   });
 
+  it.each([
+    "browserPanel",
+    "tasksPanel",
+    "desktopPanel",
+    "discussionPanel",
+    "dashboardPanel",
+    "reviewPanel",
+  ] as const)("preserves Firefox Mac Command+Option for %s without consuming AltGr", (name) => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const combo = KEYBOARD_SHORTCUT_COMBOS[name];
+    const keyboard = {
+      key: "¨",
+      code: `Key${combo.key.toUpperCase()}`,
+      metaKey: true,
+      altKey: true,
+      shiftKey: true,
+      modifierAltGraph: true,
+    };
+    expect(matchesShortcutCombo(combo, new KeyboardEvent("keydown", keyboard))).toBe(true);
+    for (const platform of ["MacIntel", "Win32", "Linux x86_64"]) {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      expect(
+        matchesShortcutCombo(
+          combo,
+          new KeyboardEvent("keydown", {
+            ...keyboard,
+            key: combo.key,
+            metaKey: false,
+            ctrlKey: true,
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("matches physical Backquote and Comma keys independently of their produced characters", () => {
     const terminal = new KeyboardEvent("keydown", {
       key: "ö",
@@ -159,6 +194,7 @@ describe("keyboard shortcut catalog presentation", () => {
         .find((entry) => entry.id === id)?.combos;
 
     expect(entryCombos("startNewSession")).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
+    expect(entryCombos("newSession")).toEqual([KEYBOARD_SHORTCUT_COMBOS.newSession]);
     expect(entryCombos("sendMessage")).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
   });
 

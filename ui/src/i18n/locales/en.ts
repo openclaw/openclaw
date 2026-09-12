@@ -166,6 +166,7 @@ export const en: TranslationMap & {
       debugOverlay: "Toggle debug overlay",
       appearanceSettings: "Open appearance settings",
       startNewSession: "Start new session (from the new-session page)",
+      newSession: "Open new session for the current agent",
       closeDialog: "Close dialog or exit settings",
       sendMessage: "Send message",
       newline: "Insert new line",
