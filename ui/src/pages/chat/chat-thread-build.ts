@@ -46,7 +46,6 @@ import {
   canvasPreviewBaseIdentity,
   createCanvasAssistantMessage,
   extractChatMessagePreview,
-  findCanvasInsertionIndex,
   findNearestAssistantMessage,
   hasRenderableNormalizedMessage,
   insertionIndexesForBounds,
@@ -54,6 +53,7 @@ import {
   messageMatchesSearchQuery,
   queuedSendThreadMessage,
   rawMessageTimestamp,
+  reconcileCanvasDisplayCopies,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -142,6 +142,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
+  const toolOwnedCanvasSources = new Map<
+    string,
+    NonNullable<ReturnType<typeof extractChatMessagePreview>>
+  >();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
   let canvasTurn: {
@@ -151,8 +155,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     previews: [],
     lastMatchingAssistantIndex: -1,
   };
-  // Rows in one turn share these facts so a tool result can see the assistant
-  // projection that follows it, without consuming a view from another turn.
+  // Search keeps its existing assistant-centric projection. Non-search display
+  // copies are reconciled only after all live/history rows have been placed.
   const canvasTurns = historyItems.map((item, index) => {
     const message = normalizedHistory[index];
     const role = message && normalizeRoleForGrouping(message.role);
@@ -229,7 +233,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       canvasTurns[i]!.previews.find(({ preview }) =>
         canvasPreviewsMatch(preview, persistedCanvasSource.preview),
       );
-    if (persistedCanvasSource && matchingCanvas) {
+    if (persistedCanvasSource && matchingCanvas && searchFiltering) {
       // Enrich the owned display row, including a later assistant shortcode,
       // without changing transcript input or introducing a second widget card.
       matchingCanvas.item.message = appendCanvasBlockToAssistantMessage(
@@ -240,12 +244,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
-      !matchingCanvas &&
+      (!matchingCanvas || !searchFiltering) &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
+      const key = canvasAssistantItemKey(msg, persistedCanvasSource, itemKey);
+      toolOwnedCanvasSources.set(key, persistedCanvasSource);
       items.push({
         kind: "message",
-        key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
+        key,
         message: createCanvasAssistantMessage(
           persistedCanvasSource,
           persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
@@ -310,11 +316,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const futureQueuedSends = threadQueuedSends.filter(
     (queued) => !currentRunQueuedSends.includes(queued),
-  );
-  const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
-    (earliest, queued) =>
-      earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
-    null,
   );
   // Transient projections merge into stable history + queued-send rows by timestamp.
   // Stable rows keep their relative order despite client and Gateway clock skew.
@@ -383,6 +384,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   }
   const currentTurnBounds = findCurrentTurnBounds(items);
   const canvasRunBounds = createRunTurnLookup(items);
+  const canvasProjections: Array<{ canvas: ChatProjection; tool: ChatProjection }> = [];
   for (const { projection, preview } of toolItems) {
     if (!preview) {
       continue;
@@ -401,53 +403,38 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       items,
       canvasBounds ?? undefined,
     );
-    const assistant = findNearestAssistantMessage(
-      items,
-      preview.timestamp,
-      canvasMinimumIndex,
-      canvasMaximumIndex,
-    );
-    if (assistant) {
-      items[assistant.index] = {
-        ...assistant.item,
-        message: appendCanvasBlockToAssistantMessage(
-          assistant.item.message,
-          preview.preview,
-          preview.text,
-        ),
-      };
-      continue;
-    }
     if (searchFiltering) {
+      const assistant = findNearestAssistantMessage(
+        items,
+        preview.timestamp,
+        canvasMinimumIndex,
+        canvasMaximumIndex,
+      );
+      if (assistant) {
+        items[assistant.index] = {
+          ...assistant.item,
+          message: appendCanvasBlockToAssistantMessage(
+            assistant.item.message,
+            preview.preview,
+            preview.text,
+          ),
+        };
+      }
       continue;
     }
-    const insertionIndex = findCanvasInsertionIndex(
-      items,
-      preview.timestamp,
-      canvasMinimumIndex,
-      canvasMaximumIndex,
-    );
-    const nextItem = items[insertionIndex];
-    const nextTimestamp =
-      nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
-    const boundaryTimestamp =
-      nextTimestamp == null
-        ? futureQueuedTimestamp
-        : futureQueuedTimestamp == null
-          ? nextTimestamp
-          : Math.min(nextTimestamp, futureQueuedTimestamp);
-    const timestamp =
-      preview.timestamp != null && boundaryTimestamp != null
-        ? Math.min(preview.timestamp, boundaryTimestamp)
-        : preview.timestamp;
-    // Canvas previews are positioned relative to the queued-send tail that
-    // existed when they were lifted, so they stay in the stable row order
-    // rather than being re-sorted with live stream/tool cards.
-    items.splice(insertionIndex, 0, {
-      kind: "message",
-      key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
-      message: createCanvasAssistantMessage(preview, timestamp),
-    });
+    // The tool owns the preview's position. Attaching it to a nearby assistant
+    // collapses intervening live commentary and moves widgets again at final.
+    const canvas: ChatProjection = {
+      item: {
+        kind: "message",
+        key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
+        message: createCanvasAssistantMessage(preview),
+      },
+      bounds: canvasBounds ?? undefined,
+    };
+    toolOwnedCanvasSources.set(canvas.item.key, preview);
+    canvasProjections.push({ canvas, tool: projection });
+    projections.push(canvas);
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
@@ -611,6 +598,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     items,
     toolItems.map((tool) => tool.projection),
   );
+  for (const { canvas, tool } of canvasProjections) {
+    canvas.bounds = tool.bounds ?? canvas.bounds;
+    canvas.predecessorKey = tool.predecessorKey;
+  }
   insertChatItemsByTimestamp(items, projections);
 
   // The active claw is telemetry, not a placeholder: it stays through visible
@@ -686,5 +677,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
-  return groupMessages(coalesceToolActivityMessages(items));
+  const coalesced = coalesceToolActivityMessages(items);
+  const grouped = groupMessages(coalesced);
+  if (searchFiltering) {
+    return grouped;
+  }
+  const reconciled = reconcileCanvasDisplayCopies(coalesced, grouped, toolOwnedCanvasSources);
+  // Rebuild only changed projections so group keys and content facts stay current.
+  return reconciled === coalesced ? grouped : groupMessages(reconciled);
 }

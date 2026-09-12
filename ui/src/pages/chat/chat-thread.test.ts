@@ -4434,7 +4434,7 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("attaches lifted canvas previews to the nearest assistant turn", () => {
+  it("keeps a lifted canvas preview before the later unrelated reply", () => {
     const groups = messageGroups({
       messages: [
         assistantMessage([{ type: "text", text: "First reply." }], 1_000, {
@@ -4455,7 +4455,7 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
+    expect(canvasBlocksAcross(groupAt(groups, 0))).toHaveLength(1);
     expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
   });
 

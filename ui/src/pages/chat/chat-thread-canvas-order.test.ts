@@ -1,0 +1,401 @@
+// @vitest-environment node
+import { describe, expect, it } from "vitest";
+import {
+  appendChatCanvasBlocksToMessage,
+  augmentChatHistoryWithCanvasBlocks,
+  extractChatToolResultCanvasPreview,
+} from "../../../../src/gateway/chat-display-projection.canvas.js";
+import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { buildCachedChatItems } from "./chat-thread.ts";
+import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
+
+const runId = "run-interleaved-widgets";
+const expectedOrder = ["Step one", "Widget one", "Step two", "Widget two"];
+
+function widgetResult(index: number) {
+  return {
+    role: "toolResult",
+    runId,
+    toolCallId: `call-widget-${index}`,
+    toolName: "show_widget",
+    timestamp: index * 2_000,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          kind: "canvas",
+          view: {
+            backend: "canvas",
+            id: `cv_interleaved_${index}`,
+            url: `/__openclaw__/canvas/documents/cv_interleaved_${index}/index.html`,
+            title: index === 1 ? "Widget one" : "Widget two",
+            preferred_height: 160,
+          },
+          presentation: { target: "assistant_message" },
+        }),
+      },
+    ],
+  };
+}
+
+function visibleOrder(props: Partial<Parameters<typeof buildCachedChatItems>[0]>) {
+  return buildCachedChatItems({
+    paneId: "interleaved-widgets",
+    sessionKey: "main",
+    runId,
+    messages: [],
+    toolMessages: [],
+    streamSegments: [],
+    stream: null,
+    streamStartedAt: null,
+    showToolCalls: false,
+    ...props,
+  }).flatMap((item) => {
+    if (item.kind === "stream") {
+      return [item.text];
+    }
+    if (item.kind !== "group" || item.role !== "assistant") {
+      return [];
+    }
+    return item.messages.flatMap(({ message }) =>
+      normalizeMessage(message).content.flatMap((block) =>
+        block.type === "canvas" ? [block.preview.title] : block.type === "text" ? [block.text] : [],
+      ),
+    );
+  });
+}
+
+describe("interleaved widget transcript order", () => {
+  it.each([
+    { copies: 2, showToolCalls: false },
+    { copies: 2, showToolCalls: true },
+    { copies: 3, showToolCalls: false },
+    { copies: 3, showToolCalls: true },
+  ])("keeps $copies text copies counted once with widgets and tools=$showToolCalls", (options) => {
+    const result = widgetResult(1);
+    const messages = [
+      { role: "user", content: "Show a visual step", timestamp: 500 },
+      ...Array.from({ length: options.copies }, (_, index) => ({
+        role: "assistant",
+        content: "Step one",
+        timestamp: 1_000 + index,
+      })),
+      result,
+      appendChatCanvasBlocksToMessage(
+        { role: "assistant", content: "", timestamp: 3_000 },
+        [result].flatMap((value) => extractChatToolResultCanvasPreview(value) ?? []),
+      ),
+    ];
+    const original = structuredClone(messages);
+    const items = buildCachedChatItems({
+      paneId: `widget-repeat-count-${options.copies}-${options.showToolCalls}`,
+      sessionKey: "main",
+      messages,
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: options.showToolCalls,
+    });
+    const entries = items.flatMap((item) => (item.kind === "group" ? item.messages : []));
+    const repeated = entries.filter(({ message }) =>
+      normalizeMessage(message).content.some(
+        (block) => block.type === "text" && block.text === "Step one",
+      ),
+    );
+    expect(repeated).toHaveLength(1);
+    expect(repeated[0]?.duplicateCount).toBe(options.copies);
+    expect(visibleOrder({ messages, showToolCalls: options.showToolCalls })).toEqual([
+      "Step one",
+      "Widget one",
+    ]);
+    expect(messages).toEqual(original);
+  });
+
+  it.each(["streaming", "history", "overlap"] as const)(
+    "renders a repeated widget once within its turn at %s",
+    (stage) => {
+      const user = { role: "user", content: "Show a visual step", timestamp: 500 };
+      const progress = { role: "assistant", content: "Step one", timestamp: 1_000 };
+      const result = widgetResult(1);
+      const replay = { ...result, toolCallId: "call-widget-replay", timestamp: 3_000 };
+      expect(
+        visibleOrder({
+          messages:
+            stage === "overlap"
+              ? [user, progress, result]
+              : stage === "history"
+                ? augmentChatHistoryWithCanvasBlocks([user, progress, result, replay])
+                : [user, progress],
+          toolMessages:
+            stage === "history" ? [] : stage === "overlap" ? [replay] : [result, replay],
+        }),
+      ).toEqual(["Step one", "Widget one"]);
+    },
+  );
+
+  it("does not deduplicate the same widget across user turns", () => {
+    const result = widgetResult(1);
+    expect(
+      visibleOrder({
+        messages: [
+          { role: "user", content: "Show the widget", timestamp: 500 },
+          result,
+          { role: "user", content: "Show it again", timestamp: 3_000 },
+          { ...result, toolCallId: "call-later-turn", timestamp: 4_000 },
+        ],
+      }),
+    ).toEqual(["Widget one", "Widget one"]);
+  });
+
+  it.each([
+    { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
+    { __openclaw: { id: "projected-turn", turnBoundary: true } },
+  ])("keeps a repeated widget after assistant-side turn boundary %j", (metadata) => {
+    const result = widgetResult(1);
+    expect(
+      visibleOrder({
+        messages: [
+          { role: "user", content: "Show the widget", timestamp: 500 },
+          result,
+          { role: "assistant", content: "Another turn", timestamp: 3_000, ...metadata },
+          { ...result, toolCallId: "call-forwarded-turn", timestamp: 4_000 },
+        ],
+      }),
+    ).toEqual(["Widget one", "Another turn", "Widget one"]);
+  });
+
+  it("allows adjacent widgets to share a message group", () => {
+    const items = buildCachedChatItems({
+      paneId: "adjacent-widgets",
+      sessionKey: "main",
+      messages: [],
+      toolMessages: [widgetResult(1), widgetResult(2)],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: false,
+    });
+    const assistants = items.filter((item) => item.kind === "group" && item.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(visibleOrder({ toolMessages: [widgetResult(1), widgetResult(2)] })).toEqual([
+      "Widget one",
+      "Widget two",
+    ]);
+  });
+
+  it("removes a display copy from a coalesced assistant tool invocation", () => {
+    // The canonical activity row owns the replayed call. Coalescing leaves a
+    // new assistant object for its earlier prose and Canvas display copy.
+    const result = widgetResult(1);
+    const mixed = appendChatCanvasBlocksToMessage(
+      {
+        role: "assistant",
+        timestamp: 3_000,
+        content: [
+          { type: "text", text: "Keep going" },
+          { type: "toolCall", id: "call-read", name: "read", arguments: { path: "report.txt" } },
+        ],
+      },
+      [result].flatMap((value) => extractChatToolResultCanvasPreview(value) ?? []),
+    );
+    expect(
+      visibleOrder({
+        showToolCalls: true,
+        messages: [
+          { role: "user", content: "Show the widget", timestamp: 500 },
+          result,
+          mixed,
+          {
+            role: "assistant",
+            timestamp: 3_500,
+            __openclaw: {
+              transcriptPosition: {
+                source: "test-history",
+                rawSeq: 4,
+                activity: { afterRawSeq: 3, scopeId: runId, startOrder: 0 },
+              },
+            },
+            content: [
+              {
+                type: "toolCall",
+                id: "call-read",
+                name: "read",
+                arguments: { path: "report.txt" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual(["Widget one", "Keep going"]);
+  });
+
+  describe.each(["history", "live"] as const)("%s display-copy ownership", (source) => {
+    it.each(["assistant", "Assistant", "ASSISTANT"])(
+      "reconciles structured display copies for normalized role %s without losing prose",
+      (role) => {
+        const result = widgetResult(1);
+        const messages = [
+          { role: "user", content: "Show the widget", timestamp: 500 },
+          ...(source === "history" ? [result] : []),
+          appendChatCanvasBlocksToMessage(
+            { role, content: "Keep this explanation.", timestamp: 3_000 },
+            [result].flatMap((value) => extractChatToolResultCanvasPreview(value) ?? []),
+          ),
+        ];
+        const original = structuredClone(messages);
+        expect(visibleOrder({ messages, toolMessages: source === "live" ? [result] : [] })).toEqual(
+          ["Widget one", "Keep this explanation."],
+        );
+        expect(messages).toEqual(original);
+      },
+    );
+
+    it.each([
+      { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
+      { __openclaw: { id: "projected-embed-turn", turnBoundary: true } },
+    ])("preserves a later turn's embed without another tool result: %j", (metadata) => {
+      const result = widgetResult(1);
+      const messages = [
+        { role: "user", content: "Show the widget", timestamp: 500 },
+        ...(source === "history" ? [result] : []),
+        { role: "assistant", content: "Another turn", timestamp: 3_000, ...metadata },
+        {
+          role: "assistant",
+          content: '[embed ref="cv_interleaved_1" title="Widget one" /]',
+          timestamp: 4_000,
+        },
+      ];
+      const original = structuredClone(messages);
+      expect(visibleOrder({ messages, toolMessages: source === "live" ? [result] : [] })).toEqual([
+        "Widget one",
+        "Another turn",
+        "Widget one",
+      ]);
+      expect(messages).toEqual(original);
+    });
+
+    it("does not materialize an unrelated shortcode over its structured sibling", () => {
+      const result = widgetResult(1);
+      const sibling = {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_interleaved_2",
+          title: "Widget two",
+          url: "/__openclaw__/canvas/documents/cv_interleaved_2/index.html",
+          sandbox: "scripts",
+          preferredHeight: 480,
+        },
+      };
+      const messages = [
+        { role: "user", content: "Show the widget", timestamp: 500 },
+        ...(source === "history" ? [result] : []),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: '[embed ref="cv_interleaved_1" /][embed ref="cv_interleaved_2" /]',
+            },
+            sibling,
+          ],
+          timestamp: 3_000,
+        },
+      ];
+      const original = structuredClone(messages);
+      expect(visibleOrder({ messages, toolMessages: source === "live" ? [result] : [] })).toEqual([
+        "Widget one",
+        "Widget two",
+      ]);
+      const items = buildCachedChatItems({
+        paneId: "mixed-embed-metadata",
+        sessionKey: "main",
+        messages,
+        toolMessages: source === "live" ? [result] : [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        showToolCalls: false,
+      });
+      const previews = items.flatMap((item) =>
+        item.kind === "group"
+          ? item.messages.flatMap(({ message }) =>
+              normalizeMessage(message).content.flatMap((block) =>
+                block.type === "canvas" && block.preview.viewId === sibling.preview.viewId
+                  ? [block.preview]
+                  : [],
+              ),
+            )
+          : [],
+      );
+      expect(previews).toEqual([sibling.preview]);
+      expect(messages).toEqual(original);
+    });
+  });
+
+  it.each(["streaming", "terminal", "terminal-with-widgets", "history"] as const)(
+    "keeps each widget between its surrounding progress messages at %s",
+    (stage) => {
+      const user = { role: "user", content: "Show two visual steps", timestamp: 500 };
+      const results = [widgetResult(1), widgetResult(2)];
+      const streamSegments: ChatStreamSegment[] = [
+        { text: "Step one", ts: 1_000, itemId: "progress-one", runId },
+        { text: "Step two", ts: 3_000, itemId: "progress-two", runId },
+      ];
+      const terminalMessages = materializeVisibleStreamState(
+        [user],
+        {
+          chatMessages: [user],
+          chatRunId: runId,
+          chatStream: null,
+          chatStreamStartedAt: null,
+          chatStreamSegments: streamSegments,
+        },
+        {
+          persistCommentary: true,
+          isHiddenAssistantMessage: () => false,
+          isHiddenStreamText: () => false,
+        },
+      );
+      const savedProgress = streamSegments.map((segment) => ({
+        role: "assistant",
+        content: [{ type: "text", text: segment.text }],
+        timestamp: segment.ts,
+        phase: "commentary",
+      }));
+      const history = augmentChatHistoryWithCanvasBlocks([
+        user,
+        savedProgress[0],
+        results[0],
+        savedProgress[1],
+        results[1],
+      ]);
+      if (stage === "terminal-with-widgets") {
+        terminalMessages.push(
+          appendChatCanvasBlocksToMessage(
+            { role: "assistant", content: [], timestamp: 5_000 },
+            results.flatMap((result) => extractChatToolResultCanvasPreview(result) ?? []),
+          ),
+        );
+      }
+
+      expect(
+        visibleOrder({
+          messages:
+            stage === "streaming"
+              ? [user]
+              : stage.startsWith("terminal")
+                ? terminalMessages
+                : history,
+          toolMessages: stage === "history" ? [] : results,
+          streamSegments: stage === "streaming" ? streamSegments : [],
+          runWorking: stage === "streaming",
+        }),
+      ).toEqual(expectedOrder);
+    },
+  );
+});
