@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
