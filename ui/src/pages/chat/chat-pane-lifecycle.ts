@@ -153,7 +153,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         ) {
           return;
         }
-        void this.loadCatalogSession(currentKey, false);
+        void this.loadCatalogSession(currentKey, false, true);
         if (attempt + 1 < CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS.length) {
           reconcile(attempt + 1);
         }
