@@ -1309,7 +1309,8 @@ async function inspectNpmGlobalOwner(
   let target = await fs.realpath(launcher).catch(() => null);
   if (process.platform === "win32" && target) {
     const script = await fs.readFile(launcher, "utf8").catch(() => "");
-    const relative = /"(?:%dp0%|%~dp0)[\\/]([^"\r\n]+)"/iu.exec(script)?.[1];
+    // npm shims check the interpreter first; the package entrypoint precedes %*.
+    const relative = /"(?:%dp0%|%~dp0)[\\/]([^"\r\n]+)"[ \t]+%\*/iu.exec(script)?.[1];
     target = relative
       ? await fs
           .realpath(path.resolve(layout.binDir, ...relative.split(/[\\/]/u)))
