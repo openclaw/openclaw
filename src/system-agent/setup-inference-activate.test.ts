@@ -12,6 +12,10 @@ import { resolveAuthProfilePortability } from "../agents/auth-profiles/portabili
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { buildAllowedModelSet } from "../agents/model-selection.js";
+import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -50,6 +54,7 @@ async function fixture(
     profiles?: ProviderAuthResult["profiles"];
     restartRequired?: boolean;
     addProviderDuringLogin?: boolean;
+    fresh?: boolean;
   } = {},
 ) {
   const root = tempDirs.make("setup-activation-");
@@ -93,6 +98,11 @@ async function fixture(
       },
     },
   };
+  if (options.fresh) {
+    delete config.gateway;
+    delete config.agents?.entries;
+    delete config.agents?.defaults?.models;
+  }
   const providerModels = config.models;
   if (options.addProviderDuringLogin) {
     delete config.models;
@@ -251,6 +261,7 @@ async function fixture(
     before,
     config,
     configPath,
+    workspace,
     readProfile,
     reply,
     resolveAuth,
@@ -262,6 +273,69 @@ async function fixture(
 }
 
 describe("setup activation credentials and configuration", () => {
+  it.each([false, true])(
+    "preserves first-team provisioning across provider activation (rejected: %s)",
+    async (rejected) => {
+      const setup = await fixture({ fresh: true });
+      if (rejected) {
+        setup.run.mockRejectedValueOnce(new Error("fixture provider unavailable"));
+      }
+      const result = await setup.activate();
+      expect(result, await setup.diagnostics(result)).toMatchObject({ ok: !rejected });
+      const activated = await readConfigFileSnapshot();
+      expect(hasResolvedRosterBeforeMigrations(activated)).toBe(false);
+      if (rejected) {
+        expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+        expect(await fs.readdir(path.dirname(setup.workspace))).not.toContain("workspace");
+        return;
+      }
+      const created = await ensureOnboardingAgent({
+        config: activated.sourceConfig,
+        baseConfig: activated.sourceConfig,
+        workspace: setup.workspace,
+        firstAgent: { name: "coordinator", team: true },
+        expectedConfigHash: activated.hash ?? null,
+      });
+      expect(created.createdAgent).toBe(true);
+      expect(created.createdAgentIds).toEqual(["coordinator", "researcher", "writer", "reviewer"]);
+      for (const agentId of created.createdAgentIds ?? []) {
+        const modelId = modelRef.slice("openai/".length);
+        expect(
+          resolveModelRuntimePolicy({
+            config: created.config,
+            agentId,
+            provider: "openai",
+            modelId,
+          }).policy?.id,
+        ).toBe("openclaw");
+        expect(
+          (
+            await setup.resolveAuth({
+              provider: "openai",
+              cfg: created.config,
+              agentDir: resolveAgentDir(created.config, agentId),
+              workspaceDir: path.join(setup.workspace, agentId),
+              profileId: setup.readProfile()?.[0],
+              lockedProfile: true,
+              modelId,
+              modelApi: "openai-responses",
+            })
+          ).profileId,
+        ).toBe(setup.readProfile()?.[0]);
+      }
+      expect(
+        buildAllowedModelSet({
+          cfg: created.config,
+          catalog: [],
+          defaultProvider: "openai",
+        }).allowAny,
+      ).toBe(true);
+      expect(created.config.agents?.defaults?.model).toBe(
+        `${modelRef}@${setup.readProfile()?.[0]}`,
+      );
+    },
+  );
+
   it.each([
     {
       name: "matching-last",

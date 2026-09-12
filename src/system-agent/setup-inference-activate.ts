@@ -13,6 +13,7 @@ import {
   GEMINI_CLI_DEFAULT_MODEL_REF,
   OPENAI_API_DEFAULT_MODEL_REF,
 } from "../commands/onboard-inference.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -432,6 +433,7 @@ async function verifyAndActivateCandidate(
           model: staged.modelRef,
           ...(params.agentId ? { targetAgentId: routeAgentId } : {}),
           ...(staged.agentRuntimeId ? { agentRuntimeId: staged.agentRuntimeId } : {}),
+          runtimeInDefaults: !params.agentId && !hasResolvedRosterBeforeMigrations(snapshot),
           ...(staged.authProfileId ? { authProfileId: staged.authProfileId } : {}),
         });
   const buildCandidate = (base: OpenClawConfig) => {
