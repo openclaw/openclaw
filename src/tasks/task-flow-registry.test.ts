@@ -503,6 +503,25 @@ describe("task-flow-registry", () => {
       expect(delivered.status).toBe("blocked");
       expect(delivered.endedAt).toBe(200);
       expect(delivered.updatedAt).toBe(200);
+      expect(delivered.revision).toBe(blocked.revision);
+
+      const stale = syncFlowFromTaskForTest({
+        taskId: "task-blocked",
+        parentFlowId: mirrored.flowId,
+        status: "failed",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 260,
+        endedAt: 260,
+        terminalSummary: "Provider failed.",
+      });
+      if (!stale) {
+        throw new Error("Expected stale mirrored flow repair");
+      }
+      expect(stale.status).toBe("failed");
+      expect(stale.endedAt).toBe(260);
+      expect(stale.revision).toBe(blocked.revision + 1);
 
       const terminalCreated = createTaskFlowForTask({
         task: {
@@ -547,6 +566,59 @@ describe("task-flow-registry", () => {
       expect(syncedManaged.status).toBe("waiting");
       expect(syncedManaged.currentStep).toBe("wait_for");
       expect(syncedManaged.waitJson).toEqual({ kind: "external_event" });
+    });
+  });
+
+  it("does not rewrite a SQLite-restored terminal mirrored flow without state JSON", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const mirrored = createTaskFlowForTask({
+        task: {
+          ownerKey: "agent:main:main",
+          taskId: "task-restored-terminal",
+          notifyPolicy: "done_only",
+          status: "running",
+          label: "Restore terminal projection",
+          task: "Restore terminal projection",
+          createdAt: 100,
+          lastEventAt: 100,
+        },
+      });
+      expect(Object.hasOwn(mirrored, "stateJson")).toBe(false);
+      expect(Object.hasOwn(mirrored, "controllerId")).toBe(false);
+
+      const terminalTask = {
+        taskId: "task-restored-terminal",
+        parentFlowId: mirrored.flowId,
+        status: "succeeded" as const,
+        notifyPolicy: "done_only" as const,
+        label: "Restore terminal projection",
+        task: "Restore terminal projection",
+        lastEventAt: 200,
+        endedAt: 200,
+      };
+      const terminal = syncFlowFromTaskForTest(terminalTask);
+      if (!terminal) {
+        throw new Error("Expected terminal mirrored flow update");
+      }
+      expect(terminal.status).toBe("succeeded");
+      const persistedRevision = terminal.revision;
+
+      resetTaskFlowRegistryForTests({ persist: false });
+      reloadTaskFlowRegistryFromStore();
+
+      const restored = getTaskFlowById(mirrored.flowId);
+      expect(restored?.status).toBe("succeeded");
+      expect(Object.hasOwn(restored ?? {}, "stateJson")).toBe(false);
+      expect(Object.hasOwn(restored ?? {}, "controllerId")).toBe(false);
+      expect(restored?.revision).toBe(persistedRevision);
+
+      const replayed = syncFlowFromTaskForTest(terminalTask);
+      if (!replayed) {
+        throw new Error("Expected restored mirrored flow replay");
+      }
+      expect(replayed.status).toBe("succeeded");
+      expect(replayed.revision).toBe(persistedRevision);
+      expect(replayed.endedAt).toBe(200);
     });
   });
 

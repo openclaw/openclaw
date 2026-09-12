@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   JsonValue,
@@ -106,6 +107,32 @@ export function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       : {}),
     ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
   };
+}
+
+function omitUndefinedProperties(value: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
+}
+
+function canonicalizeMirroredFlowProjection(flow: TaskFlowRecord): Record<string, unknown> {
+  const { revision: _revision, ...projection } = flow;
+  const canonical = omitUndefinedProperties(projection);
+  // Mirrored sync writes waitJson: null; older rows stored SQL NULL and restore
+  // without the field. Treat those as the same cleared wait state.
+  if (canonical.waitJson === null) {
+    delete canonical.waitJson;
+  }
+  return canonical;
+}
+
+/** Mirrored sync must not bump revision when the derived projection is unchanged. */
+export function isEquivalentMirroredFlowProjection(
+  current: TaskFlowRecord,
+  next: TaskFlowRecord,
+): boolean {
+  return isDeepStrictEqual(
+    canonicalizeMirroredFlowProjection(current),
+    canonicalizeMirroredFlowProjection(next),
+  );
 }
 
 export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
