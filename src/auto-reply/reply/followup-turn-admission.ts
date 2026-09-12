@@ -27,6 +27,7 @@ import {
 } from "./compaction-notice.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   admitFollowupRunLifecycle,
   isFollowupRunAborted,
@@ -99,6 +100,33 @@ function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefine
     queued.run.inputProvenance.sourceTool === "restart-sentinel"
     ? queued.originatingReplyToId
     : queued.messageId;
+}
+
+/** Implicit reply IDs are same-channel external/legacy turns, plus restart-sentinel anchors. */
+export function resolveFollowupImplicitReplyCurrentMessageId(
+  queued: FollowupRun,
+): string | undefined {
+  const currentMessageId = resolveFollowupCurrentMessageId(queued);
+  if (!currentMessageId) {
+    return undefined;
+  }
+  if (
+    queued.run.inputProvenance?.kind === "internal_system" &&
+    queued.run.inputProvenance.sourceTool === "restart-sentinel"
+  ) {
+    return currentMessageId;
+  }
+  const provider = resolveOriginMessageProvider({
+    provider: queued.run.messageProvider,
+  });
+  const origin = resolveOriginMessageProvider({
+    originatingChannel: queued.originatingChannel,
+  });
+  const sameChannelOrigin = Boolean(origin && origin === provider);
+  const allowedProvenance =
+    queued.run.inputProvenance?.kind === undefined ||
+    queued.run.inputProvenance.kind === "external_user";
+  return sameChannelOrigin && allowedProvenance ? currentMessageId : undefined;
 }
 
 function isSameSessionGeneration(
