@@ -376,6 +376,8 @@ describe("msteams doctor state migration", () => {
         conversations: {
           "z-invalid-record": {
             serviceUrl: "https://invalid-service.example.com",
+            agent: {},
+            bot: { id: "shadowed-valid-bot" },
             user: { id: "invalid-user" },
           },
           "z-newer-alias": baseRef,
@@ -431,7 +433,16 @@ describe("msteams doctor state migration", () => {
     );
     await fs.writeFile(
       rotatedArchivedPath,
-      `${JSON.stringify({ version: 1, conversations: { malformed: null } })}\n`,
+      `${JSON.stringify({
+        version: 1,
+        conversations: {
+          malformed: null,
+          "malformed-embedded-id": {
+            ...ref,
+            conversation: { id: 123 },
+          },
+        },
+      })}\n`,
     );
 
     const migration = migrationById("msteams-conversations-json-to-plugin-state");
@@ -446,7 +457,7 @@ describe("msteams doctor state migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      expect.stringContaining("Recovered 1 Microsoft Teams conversation entry"),
+      expect.stringContaining("Recovered 2 Microsoft Teams conversation entries"),
       expect.stringContaining("Preserved 2 Microsoft Teams conversation recovery archives"),
     ]);
     const store = context.openPluginStateKeyedStore<StoredConversationReference>({
@@ -459,6 +470,9 @@ describe("msteams doctor state migration", () => {
         user: expect.objectContaining({ id: "valid-user" }),
       }),
     );
+    await expect(
+      store.lookup(buildMSTeamsConversationStateKey("malformed-embedded-id")),
+    ).resolves.toEqual(expect.objectContaining({ conversation: { id: "malformed-embedded-id" } }));
     await expect(fs.access(archivedPath)).resolves.toBeUndefined();
     await expect(fs.access(rotatedArchivedPath)).resolves.toBeUndefined();
   });

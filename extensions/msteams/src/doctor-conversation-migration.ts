@@ -26,16 +26,21 @@ function isUsableStoredConversationReference(value: unknown): value is StoredCon
   if (!isRecord(value) || typeof value.serviceUrl !== "string" || !value.serviceUrl.trim()) {
     return false;
   }
-  const agent = isRecord(value.agent) ? value.agent : null;
-  const bot = isRecord(value.bot) ? value.bot : null;
+  // Sending prefers any present agent object over the legacy bot object, so
+  // migration must validate that same effective identity before retention.
+  const identity = isRecord(value.agent)
+    ? value.agent
+    : isRecord(value.bot)
+      ? value.bot
+      : null;
   const user = isRecord(value.user) ? value.user : null;
   // Proactive sends require a Connector endpoint plus user and bot identities. Drop
   // unusable archive rows before retention so they cannot crowd out valid references.
   return (
     typeof user?.id === "string" &&
     Boolean(user.id.trim()) &&
-    ((typeof agent?.id === "string" && Boolean(agent.id.trim())) ||
-      (typeof bot?.id === "string" && Boolean(bot.id.trim())))
+    typeof identity?.id === "string" &&
+    Boolean(identity.id.trim())
   );
 }
 
@@ -108,8 +113,10 @@ export function resolveLegacyConversationId(
   rawConversationId: string,
   reference: StoredConversationReference,
 ): string {
-  const storedConversationId = reference.conversation?.id
-    ? normalizeStoredConversationId(reference.conversation.id)
+  const embeddedConversationId = reference.conversation?.id;
+  const storedConversationId =
+    typeof embeddedConversationId === "string" && embeddedConversationId.trim()
+      ? normalizeStoredConversationId(embeddedConversationId)
     : "";
   return storedConversationId || normalizeStoredConversationId(rawConversationId);
 }
