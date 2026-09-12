@@ -711,7 +711,12 @@ describe("frozen admission bootstrap repairs", () => {
 });
 
 describe("frozen admission entry", () => {
-  it.each([
+  it.each<{
+    name: string;
+    files: Record<string, string>;
+    allow: boolean;
+    mode: "required" | "unsupported" | null;
+  }>([
     { name: "legacy authorized", files: {}, allow: true, mode: "unsupported" },
     { name: "legacy strict", files: {}, allow: false, mode: "required" },
     {
