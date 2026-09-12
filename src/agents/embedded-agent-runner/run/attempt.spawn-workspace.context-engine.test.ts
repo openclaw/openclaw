@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 // Coverage for context-engine bootstrap, assembly, and turn finalization.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +12,10 @@ import {
   createSessionEntryWithTranscript,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptPreparation,
+} from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -251,6 +255,89 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(availableTools).toBeInstanceOf(Set);
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
   });
+
+  it.each([
+    {
+      owner: "explicit requester",
+      memoryPromptAgentId: "hq",
+      expectedAgentId: "hq",
+      rejectOwner: false,
+      expectedClaims: ["HQ_MEMORY_CLAIM"],
+    },
+    {
+      owner: "session owner",
+      memoryPromptAgentId: undefined,
+      expectedAgentId: "openclaw",
+      rejectOwner: false,
+      expectedClaims: ["SYSTEM_MEMORY_CLAIM"],
+    },
+    {
+      owner: "rejected requester",
+      memoryPromptAgentId: "hq",
+      expectedAgentId: "hq",
+      rejectOwner: true,
+      expectedClaims: [],
+    },
+  ])(
+    "submits scoped memory for the $owner without changing the assembly session",
+    async ({ memoryPromptAgentId, expectedAgentId, rejectOwner, expectedClaims }) => {
+      const prepare = vi.fn(async ({ agentId }: { agentId?: string }) => {
+        if (agentId === "hq") {
+          if (rejectOwner) {
+            throw new Error("Unknown memory-wiki agentId: hq.");
+          }
+          return ["HQ_MEMORY_CLAIM"];
+        }
+        return [agentId === "openclaw" ? "SYSTEM_MEMORY_CLAIM" : "DECOY_MEMORY_CLAIM"];
+      });
+      registerMemoryPromptPreparation("memory-wiki", prepare);
+      const assemble = vi.fn<AttemptContextEngine["assemble"]>(
+        async ({ messages, sessionKey: assemblySessionKey, availableTools, citationsMode }) => ({
+          messages,
+          estimatedTokens: 1,
+          systemPromptAddition: buildMemorySystemPromptAddition({
+            availableTools: availableTools ?? new Set(),
+            citationsMode,
+            agentSessionKey: assemblySessionKey,
+          }),
+        }),
+      );
+      let submittedSystemPrompt: string | undefined;
+
+      await createContextEngineAttemptRunner({
+        contextEngine: { assemble },
+        sessionKey: "agent:openclaw:conversation",
+        tempPaths,
+        attemptOverrides: {
+          agentId: "openclaw",
+          memoryPromptAgentId,
+          sessionTarget: undefined,
+        },
+        sessionPrompt: async (session) => {
+          submittedSystemPrompt = session.agent.state.systemPrompt;
+          session.messages = [...session.messages, doneMessage];
+        },
+      });
+
+      expect(submittedSystemPrompt).toBeTypeOf("string");
+      expect(
+        ["HQ_MEMORY_CLAIM", "SYSTEM_MEMORY_CLAIM", "DECOY_MEMORY_CLAIM"].filter((claim) =>
+          submittedSystemPrompt?.includes(claim),
+        ),
+      ).toEqual(expectedClaims);
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: expectedAgentId,
+          agentSessionKey: "agent:openclaw:conversation",
+        }),
+      );
+      if (!rejectOwner) {
+        expect(assemble).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey: "agent:openclaw:conversation" }),
+        );
+      }
+    },
+  );
 
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({

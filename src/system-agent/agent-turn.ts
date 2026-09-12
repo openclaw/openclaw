@@ -10,10 +10,13 @@ import {
 } from "../agents/agent-run-result.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimePluginGeneration } from "../agents/prepared-model-runtime.types.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -60,6 +63,8 @@ export type SystemAgentTurnRunner = (params: {
   approvalArmed: boolean;
   /** The host authorizes delegated proposals; chat replies cannot self-approve. */
   operatorApprovalOnly?: boolean;
+  /** Conversation owner used only for agent-scoped memory prompt preparation. */
+  memoryPromptAgentId?: string;
   session: SystemAgentSession;
 }) => Promise<SystemAgentTurnReply | null>;
 
@@ -277,7 +282,17 @@ async function runSystemAgentTurnWithDeps(
     return throwSystemAgentInferenceUnavailable({ session: params.session });
   }
   let plan: SystemAgentConfiguredRoute | null;
+  let pluginGeneration: PreparedModelRuntimePluginGeneration | undefined;
   try {
+    if (binding.execution.runner === "embedded") {
+      const { loadPublishedGatewayReplyDispatchRuntime } =
+        await import("../agents/prepared-model-runtime.js");
+      const runtime = await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: binding.execution.agentId,
+        abortSignal: getAsyncWorkSignal(),
+      });
+      pluginGeneration = runtime?.pluginGeneration;
+    }
     plan = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
   } catch (error) {
     return throwSystemAgentInferenceUnavailable({
@@ -406,23 +421,28 @@ async function runSystemAgentTurnWithDeps(
       clearSystemAgentCliSession(params.session);
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
-      result = (await runEmbedded({
-        ...shared,
-        preparedRunAdmission,
-        extraSystemPrompt: SYSTEM_AGENT_SYSTEM_PROMPT,
-        toolsAllow: ["openclaw"],
-        systemAgentTool,
-        disableMessageTool: true,
-        provider: plan.provider,
-        model: plan.model,
-        agentDir: plan.agentDir,
-        agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
-        sandboxSessionKey: policySessionKey,
-        ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
-        ...(plan.authProfileId
-          ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
-      })) as EmbeddedRunResult;
+      // The inference owner's generation preserves its projected policy without borrowing the caller's.
+      result = (await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+        runEmbedded({
+          ...shared,
+          preparedRunAdmission,
+          pluginGeneration,
+          memoryPromptAgentId: params.memoryPromptAgentId ?? plan.agentId,
+          extraSystemPrompt: SYSTEM_AGENT_SYSTEM_PROMPT,
+          toolsAllow: ["openclaw"],
+          systemAgentTool,
+          disableMessageTool: true,
+          provider: plan.provider,
+          model: plan.model,
+          agentDir: plan.agentDir,
+          agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
+          sandboxSessionKey: policySessionKey,
+          ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
+          ...(plan.authProfileId
+            ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
+            : {}),
+        }),
+      )) as EmbeddedRunResult;
     }
     // Failed runs can retain partial text; it must not publish a reply or a tool directive.
     const terminalError = extractAgentRunTerminalError(result);

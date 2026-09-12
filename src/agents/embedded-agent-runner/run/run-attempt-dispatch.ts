@@ -383,6 +383,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
     contextEngineAgentId: runInput.contextEngineAgentId,
+    memoryPromptAgentId: params.memoryPromptAgentId,
     ...(runtime.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId,
