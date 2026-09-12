@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
@@ -991,24 +992,26 @@ describe("fleet service", () => {
 
   it("serializes same-tenant mutations across service instances", async () => {
     const containers = createContainerMock();
-    let releaseNetwork: (() => void) | undefined;
-    containers.createNetwork.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          releaseNetwork = resolve;
-        }),
-    );
+    const networkStarted = createDeferred();
+    const releaseNetwork = createDeferred();
+    containers.createNetwork.mockImplementation(async () => {
+      networkStarted.resolve();
+      await releaseNetwork.promise;
+    });
     const first = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     const second = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
 
     const creating = first.create({ tenant: "acme", gatewayToken: "token" });
-    await vi.waitFor(() => expect(containers.createNetwork).toHaveBeenCalledOnce());
-    await expect(second.create({ tenant: "acme", gatewayToken: "other-token" })).rejects.toThrow(
-      /fleet create.*already running/iu,
-    );
-
-    releaseNetwork?.();
-    await expect(creating).resolves.toMatchObject({ tenant: "acme" });
+    try {
+      await networkStarted.promise;
+      expect(containers.createNetwork).toHaveBeenCalledOnce();
+      await expect(second.create({ tenant: "acme", gatewayToken: "other-token" })).rejects.toThrow(
+        /fleet create.*already running/iu,
+      );
+    } finally {
+      releaseNetwork.resolve();
+      await expect(creating).resolves.toMatchObject({ tenant: "acme" });
+    }
   });
 
   it("releases a failed operation lease for a retry", async () => {

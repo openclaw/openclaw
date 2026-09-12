@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
-import { WebSocket, type RawData } from "ws";
+import type { RawData } from "ws";
 import { GatewayWebSocketTlsPinError } from "../../packages/gateway-client/src/websocket-transport.js";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import {
   type WorkerAdmissionResponseFrame,
   WorkerAdmissionResponseFrameSchema,
