@@ -82,6 +82,11 @@ const config = {
   },
   skills: { allowBundled: [] },
   tools: { allow: ["get_weather"] },
+  session: {
+    maintenance: {
+      coldStorage: { enabled: true, afterDays: 30 },
+    },
+  },
 };
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });

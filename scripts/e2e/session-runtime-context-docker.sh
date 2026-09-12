@@ -29,7 +29,7 @@ docker_e2e_run_with_harness \
   -e "OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE=$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" \
   -e "OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE=$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" \
   "$IMAGE_NAME" \
-  bash -lc 'set -euo pipefail; tsx scripts/e2e/session-runtime-context-docker-client.ts' \
+  bash -lc 'set -euo pipefail; tsx scripts/e2e/session-runtime-context-docker-client.ts; bash scripts/e2e/lib/session-cold-storage/scenario.sh' \
   >"$RUN_LOG" 2>&1
 status=$?
 set -e
