@@ -3375,7 +3375,7 @@ describe("createBackupArchive", () => {
       marker,
     })),
   ])(
-    "backupCreateCommand preserves and reports $label links through backupRestoreCommand",
+    "backupCreateCommand applies privacy to $label links through backupRestoreCommand",
     async ({ relative, targetExists, directory, internal, cyclic, marker }) => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-backup-symbolic-link-", scenario: "minimal" },
@@ -3402,12 +3402,35 @@ describe("createBackupArchive", () => {
             await fs.symlink("ordinary-link", targetPath);
           }
           const runtime = createTestRuntime();
-          const result = await backupCreateCommand(runtime, {
-            output: state.path("backup.tar.gz"),
-            includeWorkspace: false,
-            verify: true,
-          });
+          const output = state.path("backup.tar.gz");
+          const create = () =>
+            backupCreateCommand(runtime, { output, includeWorkspace: false, verify: true });
+          if (marker && marker !== "valid") {
+            await expect(create()).rejects.toThrow("Private update capture marker");
+            await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+            return;
+          }
+          const result = await create();
           const entries = await listArchiveEntryDetails(result.archivePath);
+          if (marker) {
+            expect(
+              entries.some(
+                (entry) =>
+                  entry.path.endsWith("/ordinary-link") || entry.path.includes("/outside-target"),
+              ),
+            ).toBe(false);
+            expect(result.externalSymbolicLinks ?? []).toEqual([]);
+            const restored = state.path("restored");
+            await backupRestoreCommand(runtime, { archive: result.archivePath, target: restored });
+            const asset = expectDefined(
+              result.assets.find((asset) => asset.kind === "state"),
+              "state asset",
+            );
+            await expect(
+              fs.lstat(path.join(restored, asset.archivePath, "ordinary-link")),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+            return;
+          }
           const link = expectDefined(
             entries.find((entry) => entry.path.endsWith("/state/ordinary-link")),
             "archived ordinary link",
@@ -4014,7 +4037,7 @@ describe("createBackupArchive", () => {
             });
           if (privateTarget) {
             await expect(create()).rejects.toThrow(
-              "Private update captures are excluded from backups and support exports.",
+              "SQLite hardlink journal owner may be outside the backup inventory",
             );
             expect(await fs.readdir(outputDir)).toEqual([]);
             expect(db.prepare("SELECT value FROM durable_state WHERE id = 1").get()).toEqual({
