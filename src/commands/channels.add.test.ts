@@ -1932,49 +1932,52 @@ describe("channelsAddCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed numeric channel setup options before plugin setup", async () => {
-    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        matrix: {
-          enabled: true,
-          initialSyncLimit: (input as MatrixSetupInput).initialSyncLimit,
+  it.each(["10x", ""])(
+    "rejects malformed numeric channel setup options before plugin setup (%j)",
+    async (initialSyncLimit) => {
+      const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          matrix: {
+            enabled: true,
+            initialSyncLimit: (input as MatrixSetupInput).initialSyncLimit,
+          },
         },
-      },
-    }));
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "legacy-numeric", label: "Legacy Numeric" }),
-      setup: { applyAccountConfig },
-    };
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createSetupOptionCatalogEntry("legacy-numeric", "Legacy Numeric", [
-        {
-          flags: "--initial-sync-limit <n>",
-          description: "Matrix initial sync limit",
-          valueType: "int",
-        },
-      ]),
-    ]);
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "legacy-numeric", plugin, source: "test" }]),
-    );
+      }));
+      const plugin = {
+        ...createChannelTestPluginBase({ id: "legacy-numeric", label: "Legacy Numeric" }),
+        setup: { applyAccountConfig },
+      };
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        createSetupOptionCatalogEntry("legacy-numeric", "Legacy Numeric", [
+          {
+            flags: "--initial-sync-limit <n>",
+            description: "Matrix initial sync limit",
+            valueType: "int",
+          },
+        ]),
+      ]);
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "legacy-numeric", plugin, source: "test" }]),
+      );
 
-    await expect(
-      channelsAddCommand(
-        {
-          channel: "legacy-numeric",
-          initialSyncLimit: "10x",
-        },
-        runtime,
-        { hasFlags: true },
-      ),
-    ).rejects.toThrow("--initial-sync-limit must be a non-negative integer.");
+      await expect(
+        channelsAddCommand(
+          {
+            channel: "legacy-numeric",
+            initialSyncLimit,
+          },
+          runtime,
+          { hasFlags: true },
+        ),
+      ).rejects.toThrow("--initial-sync-limit must be a non-negative integer.");
 
-    expect(applyAccountConfig).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
+      expect(applyAccountConfig).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("coerces list-valued channel setup options from delimited strings", async () => {
     const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({

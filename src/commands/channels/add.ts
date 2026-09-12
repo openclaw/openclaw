@@ -86,7 +86,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
           : value;
       continue;
     }
-    if (value === null || value === "") {
+    if (value === null) {
       input[key] = undefined;
       continue;
     }
@@ -99,9 +99,9 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   return input as ChannelSetupInput;
 }
 
-// Safe to forward every defined key: CLI registration is selection-scoped and
-// resolveChannelsAddOptions drops non-user-authored values (Commander defaults),
-// so no other channel's options or defaults can reach the selected contract.
+// Safe to forward every defined key: CLI registration is selection-scoped.
+// Modern setup drops Commander defaults in resolveChannelsAddOptions; legacy
+// setup keeps manifest defaults and drops empty-string defaults only for ints.
 function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(opts).filter(
