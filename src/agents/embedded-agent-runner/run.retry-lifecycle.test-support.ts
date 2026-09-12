@@ -48,7 +48,10 @@ describe("direct embedded retry lifecycle", () => {
       mockedSleep.mockImplementation((_delayMs, signal) => {
         sleepSignal = signal;
         wait = new Promise<void>((_resolve, reject) => {
-          const abort = () => reject(signal?.reason ?? new Error("aborted"));
+          const abort = () => {
+            const reason = signal?.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")));
+          };
           if (signal?.aborted) {
             abort();
           } else {
