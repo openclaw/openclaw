@@ -867,6 +867,82 @@ describe("web auto-reply connection", () => {
     },
   );
 
+  it.each([
+    { enabled: false, expectedImageDebounce: false },
+    { enabled: true, expectedImageDebounce: true },
+  ])(
+    "applies the opt-in inbound image batching policy ($enabled)",
+    async ({ enabled, expectedImageDebounce }) => {
+      const capture = createWebListenerFactoryCapture();
+      setLoadConfigMock({
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+            batchInboundImages: enabled,
+          },
+        },
+      } as OpenClawConfig);
+
+      await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+        text: "ok",
+      }));
+
+      const shouldDebounce = capture.getLastOptions()?.shouldDebounce;
+      expect(shouldDebounce).toEqual(expect.any(Function));
+      expect(capture.getLastOptions()?.releaseDeferredLane).toBe(enabled);
+      expect(
+        shouldDebounce?.(
+          createTestWebInboundMessage({
+            payload: {
+              body: "",
+              media: { path: "/tmp/first.jpg", type: "image/jpeg", kind: "image" },
+            },
+          }),
+        ),
+      ).toBe(expectedImageDebounce);
+      expect(
+        shouldDebounce?.(
+          createTestWebInboundMessage({
+            payload: {
+              body: "",
+              media: { path: "/tmp/clip.mp4", type: "video/mp4", kind: "video" },
+            },
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        shouldDebounce?.(
+          createTestWebInboundMessage({
+            payload: {
+              body: "",
+              media: { path: "/tmp/photo-as-document.jpg", type: "image/jpeg", kind: "document" },
+            },
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        shouldDebounce?.(
+          createTestWebInboundMessage({
+            payload: {
+              body: "",
+              media: { path: "/tmp/sticker.webp", type: "image/webp", kind: "sticker" },
+            },
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        shouldDebounce?.(
+          createTestWebInboundMessage({
+            payload: {
+              body: "/status",
+              media: { path: "/tmp/command.jpg", type: "image/jpeg", kind: "image" },
+            },
+          }),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("raises the process listener budget before opening the web listener", async () => {
     const originalMax = process.getMaxListeners();
     process.setMaxListeners?.(1);

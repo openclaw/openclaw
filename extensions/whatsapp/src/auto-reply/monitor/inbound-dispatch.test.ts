@@ -1007,6 +1007,29 @@ describe("whatsapp inbound dispatch", () => {
     ]);
   });
 
+  it("projects every batched WhatsApp image in receive order", async () => {
+    const ctx = await buildWhatsAppInboundContext({
+      combinedBody: "compare these",
+      msg: makeMsg({
+        payload: {
+          body: "compare these",
+          media: { path: "/tmp/first.jpg", type: "image/jpeg", kind: "image" },
+          mediaItems: [
+            { path: "/tmp/first.jpg", type: "image/jpeg", kind: "image" },
+            { path: "/tmp/second.png", type: "image/png", kind: "image" },
+          ],
+        },
+      }),
+      route: makeRoute(),
+      sender: { e164: "+1000" },
+    });
+
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: "/tmp/first.jpg", contentType: "image/jpeg" }),
+      expect.objectContaining({ path: "/tmp/second.png", contentType: "image/png" }),
+    ]);
+  });
+
   it("defaults responsePrefix to identity name in self-chats when unset", async () => {
     const responsePrefix = resolveWhatsAppResponsePrefix({
       cfg: {

@@ -222,13 +222,26 @@ export async function monitorWebChannel(
       }
 
       const connectionId = newConnectionId();
-      const shouldDebounce = (msg: WebInboundCallbackMessage) =>
-        shouldDebounceTextInbound({
-          text: msg.payload.commandBody ?? msg.payload.body,
+      const shouldDebounce = (msg: WebInboundCallbackMessage) => {
+        const text = msg.payload.commandBody ?? msg.payload.body;
+        const hasMedia = Boolean(msg.payload.media?.path || msg.payload.media?.type);
+        const mediaKind = msg.payload.media?.kind;
+        const hasBatchableImage =
+          account.batchInboundImages === true &&
+          (mediaKind !== undefined
+            ? mediaKind === "image"
+            : msg.payload.media?.type?.toLowerCase().startsWith("image/") === true);
+        const allowDebounce = !(msg.payload.location || msg.quote?.id || msg.quote?.body);
+        if (hasBatchableImage && !text.trim()) {
+          return allowDebounce;
+        }
+        return shouldDebounceTextInbound({
+          text,
           cfg,
-          hasMedia: Boolean(msg.payload.media?.path || msg.payload.media?.type),
-          allowDebounce: !(msg.payload.location || msg.quote?.id || msg.quote?.body),
+          hasMedia: hasMedia && !hasBatchableImage,
+          allowDebounce,
         });
+      };
 
       let connection;
       try {
@@ -284,6 +297,7 @@ export async function monitorWebChannel(
                   }
                 : undefined,
               shouldDebounce,
+              releaseDeferredLane: account.batchInboundImages === true,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
               disconnectRetryPolicy: reconnectPolicy,

@@ -52,6 +52,8 @@ type MonitorWebInboxOptions = {
   appendReplyWindow?: WhatsAppAppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
+  /** Release durable same-conversation claims after handing work to the debouncer. */
+  releaseDeferredLane?: boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
   /** Whether send retries should wait for a reconnect. */
@@ -133,6 +135,7 @@ export async function attachWebInboxToSocket(
     debounceMs: options.debounceMs,
     appendReplyWindow: options.appendReplyWindow,
     shouldDebounce: options.shouldDebounce,
+    releaseDeferredLane: options.releaseDeferredLane,
     onPendingWorkChanged: options.onPendingWorkChanged,
     durableInboundQueue:
       options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId),

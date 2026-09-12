@@ -87,6 +87,11 @@ Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
 Batches rapid text-only messages from the same sender into a single agent turn. Media/attachments flush immediately. Control commands bypass debouncing. Default `debounceMs`: `2000`.
 
+WhatsApp can opt image messages into the same debounce window with
+`channels.whatsapp.batchInboundImages: true`. This preserves every image in receive order and
+combines rapid captions or text into one agent turn. Other media types, replies, locations, and
+control commands still flush immediately.
+
 ### Other message keys
 
 - `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this canonical value is unset.

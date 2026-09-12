@@ -697,6 +697,33 @@ Example:
 }
 ```
 
+## Batch rapid inbound images
+
+By default, every WhatsApp image starts or joins agent processing immediately. If people commonly
+send several images as one request, enable image batching and choose the WhatsApp inbound debounce
+window:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      batchInboundImages: true,
+    },
+  },
+  messages: {
+    inbound: {
+      byChannel: {
+        whatsapp: 2000,
+      },
+    },
+  },
+}
+```
+
+Rapid images and accompanying text from the same sender and conversation then become one agent
+turn, with all images preserved in receive order. The option is disabled by default. Audio, video,
+documents, locations, replies/quotes, and control commands keep their immediate behavior.
+
 ## Configuration reference pointers
 
 Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
@@ -707,7 +734,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`                     |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `enabled`                                                                                      |
-| Inbound batching | `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`                                           |
+| Inbound batching | `batchInboundImages`, `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`                     |
 | Acknowledgments  | `messages.ackReaction`, `messages.ackReactionScope`                                                            |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
 | Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |

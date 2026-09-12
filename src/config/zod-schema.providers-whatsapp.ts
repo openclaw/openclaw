@@ -44,6 +44,7 @@ const WhatsAppCommonShape = {
   ...accountShape,
   sendReadReceipts: ChannelSendReadReceiptsSchema,
   selfChatMode: z.boolean().optional(),
+  batchInboundImages: z.boolean().optional(),
   groups: WhatsAppGroupsSchema,
   direct: WhatsAppDirectSchema,
   ...buildChannelReactionShape({
