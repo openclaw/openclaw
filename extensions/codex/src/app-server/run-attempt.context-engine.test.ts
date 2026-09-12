@@ -166,16 +166,10 @@ function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
     role: "toolResult",
     toolCallId: `call-${timestamp}`,
     toolName: "bulk_context_probe",
-    content: [
-      {
-        type: "toolResult",
-        toolUseId: `call-${timestamp}`,
-        output: payload,
-      },
-    ],
+    content: [{ type: "text", text: JSON.stringify(payload) ?? "" }],
     isError: false,
     timestamp,
-  } as unknown as AgentMessage;
+  };
 }
 
 function createStartedThreadHarness(
