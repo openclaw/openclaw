@@ -182,6 +182,15 @@ export async function runCodeModeWorker(
         signal.reason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
       );
     }
+    // A host exchange observes the same deadline as the scope that owns this run, so it
+    // can reject with the scope's own error before that scope's signal settles. Classify
+    // by the typed error too; otherwise an expired deadline reports an internal failure.
+    if (error instanceof CodeModeHeadlessTimeoutError) {
+      return failedCodeModeWorkerResult("code mode timeout exceeded", "timeout");
+    }
+    if (error instanceof CodeModeHeadlessAbortError) {
+      return failedCodeModeWorkerResult("code mode execution aborted", "aborted");
+    }
     return error instanceof WorkerTaskError && error.code === "timeout"
       ? failedCodeModeWorkerResult("code mode worker timeout exceeded", "timeout")
       : failedCodeModeWorkerResult(
