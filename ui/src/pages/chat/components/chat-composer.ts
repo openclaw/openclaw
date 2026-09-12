@@ -24,8 +24,7 @@ import { renderContextNotice } from "./chat-composer-context.ts";
 import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
   adjustTextareaHeight,
-  disconnectTextareaOverflowObserver,
-  observeTextareaOverflow,
+  replaceComposerTextarea,
   paneDomId,
   preserveComposerFocusOnPrimaryAction,
   replaceComposerPopoverAnchor,
@@ -35,6 +34,10 @@ import { createGoalComposerController } from "./chat-composer-goal-mode.ts";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
+import {
+  rebindComposerResizeInput,
+  restoreComposerHeightOverride,
+} from "./chat-composer-resize.ts";
 import {
   isSkillMenuVisible,
   resetSkillMenuState,
@@ -94,17 +97,17 @@ export function renderChatComposer(props: ChatComposerProps) {
   const visibleDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : props.draft;
   state.composerInputRef ??= (element?: Element) => {
+    const prev = state.composerInput;
     state.composerInput = replaceComposerPopoverAnchor(state.composerInput, element);
+    rebindComposerResizeInput(prev, state.composerInput, {
+      onWidthCommit: props.onComposerWidthCommit ?? undefined,
+    });
   };
   state.textareaRef ??= (element?: Element) => {
-    const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-    const prevTextarea = state.composerTextarea;
-    if (prevTextarea && prevTextarea !== nextTextarea) {
-      disconnectTextareaOverflowObserver(prevTextarea);
-    }
+    const nextTextarea = replaceComposerTextarea(state.composerTextarea, element);
     state.composerTextarea = nextTextarea;
     if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea);
+      restoreComposerHeightOverride(nextTextarea);
       scheduleTextareaHeightAdjustment(nextTextarea);
       if (state.restoreComposerFocus) {
         state.restoreComposerFocus = false;

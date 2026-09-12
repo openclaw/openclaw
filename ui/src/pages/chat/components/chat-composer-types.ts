@@ -34,6 +34,7 @@ import type {
   ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
+import type { ComposerWidthCommit } from "./chat-composer-resize.ts";
 import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
 import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
@@ -146,6 +147,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   anchoredNotices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
+  /** Width-grip commit as a Message width setting value, or undefined on
+      double-click reset. The chat host forwards it through applySettings. */
+  onComposerWidthCommit?: ComposerWidthCommit | null;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSlashCommand?: (command: string) => void;

@@ -471,6 +471,98 @@
   text-overflow: ellipsis;
 }
 
+/* Operator resize grips. The top grip drags the editor taller than its
+   six-line CSS cap (double-click restores the default); the left grip only
+   reveals on hover and drags the whole chat column wider via the shared
+   --chat-thread-max-width token, which keeps transcript and composer centered
+   via margin auto (double-click resets). Both are prepended by
+   observeComposerResize, so they sit above the lede row without disturbing
+   it. The input is already position: relative, so these anchor without
+   moving the slash menu or any other overlay. */
+.agent-chat__composer-resize-top,
+.agent-chat__composer-resize-side {
+  position: absolute;
+  z-index: 6;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.agent-chat__composer-resize-top {
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 120px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+}
+
+.agent-chat__composer-resize-top::before {
+  content: "";
+  width: 64px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--chat-composer-tertiary);
+  opacity: 0.55;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.agent-chat__input:hover .agent-chat__composer-resize-top::before,
+.agent-chat__composer-resize-top:hover::before,
+.agent-chat__input.agent-chat__composer-resizing .agent-chat__composer-resize-top::before {
+  opacity: 1;
+  background: var(--accent);
+}
+
+.agent-chat__composer-resize-side {
+  top: 50%;
+  left: -7px;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.agent-chat__composer-resize-side::before {
+  content: "";
+  width: 4px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--chat-composer-tertiary);
+  opacity: 0.55;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.agent-chat__input:hover .agent-chat__composer-resize-side,
+.agent-chat__composer-resize-side:focus-visible,
+.agent-chat__input.agent-chat__composer-resizing .agent-chat__composer-resize-side {
+  opacity: 1;
+}
+
+.agent-chat__composer-resize-side:hover::before,
+.agent-chat__input.agent-chat__composer-resizing .agent-chat__composer-resize-side::before {
+  opacity: 1;
+  background: var(--accent);
+}
+
+.agent-chat__composer-resize-top:focus-visible,
+.agent-chat__composer-resize-side:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .agent-chat__composer-status-stack {
   display: flex;
   flex-wrap: wrap;

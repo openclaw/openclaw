@@ -297,6 +297,8 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatSendShortcut: next.chatSendShortcut,
+      // Width grip commits through the same seam so Settings stays the owner.
+      chatMessageMaxWidth: next.chatMessageMaxWidth,
     });
     renderLifecycle.invalidate();
   };

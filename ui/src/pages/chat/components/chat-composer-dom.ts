@@ -316,3 +316,18 @@ export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up"
 export function paneDomId(paneId: string, suffix: string): string {
   return `chat-${encodeURIComponent(paneId)}-${suffix}`;
 }
+
+/** Refs share one overflow-observer lifecycle across both composer surfaces. */
+export function replaceComposerTextarea(
+  previous: HTMLTextAreaElement | null,
+  element?: Element,
+): HTMLTextAreaElement | null {
+  const next = element instanceof HTMLTextAreaElement ? element : null;
+  if (previous && previous !== next) {
+    disconnectTextareaOverflowObserver(previous);
+  }
+  if (next) {
+    observeTextareaOverflow(next);
+  }
+  return next;
+}
