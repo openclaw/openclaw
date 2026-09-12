@@ -88,7 +88,10 @@ function applyConfiguredMcpApproval(
 ): AnyAgentTool[] {
   return tools.flatMap((tool) => {
     const mcp = getPluginToolMeta(tool)?.mcp;
-    if (mcp?.operation !== "tool") {
+    // Only the trusted requester OAuth sign-in bootstrap is exempt — identified by
+    // provenance, never by tool name, so a real server capability named "connect"
+    // stays behind the per-call approval gate.
+    if (mcp?.operation !== "tool" || mcp.oauthConnectBootstrap === true) {
       return [tool];
     }
     const projectedMode = resolveProjectedMcpCodexToolApprovalMode(
@@ -167,6 +170,12 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   /** Builds a capability profile when conversationCapabilityProfile is omitted. */
   policyContext?: Omit<ConversationCapabilityProfileParams, "runtimeToolAllowlist">;
+  /** Exact established Codex yolo predicate; no other profile bypasses approval metadata. */
+  autoApproveCodexAppServerApprovals?: boolean;
+  /** Interactive turns request approval before the original MCP executor runs. */
+  requestInteractiveCodexApproval?: (
+    params: InteractiveConfiguredMcpApprovalRequest,
+  ) => Promise<void>;
   warn?: (message: string) => void;
 };
 
@@ -405,9 +414,19 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
 
     const filteredTools = applyHarnessToolPolicy(tools, params);
     const filteredAdvertised = applyHarnessToolPolicy(advertisedTools, params);
-    // Policy must keep both lists aligned by name for fingerprint stability.
-    const allowedNames = new Set(filteredAdvertised.map((tool) => tool.name));
-    const executableTools = filteredTools.filter((tool) => allowedNames.has(tool.name));
+    // Requester-scoped tools run as dynamic tools, so every prompt-required MCP
+    // call passes the same per-call approval gate as the configured path before
+    // the bridge dispatches it — whenever the caller provides an approval
+    // channel. OpenClaw's own requester turns always provide one. Callers that
+    // pass no approval callback keep their pre-gate behavior: tools stay
+    // registered on both surfaces and dispatch ungated, so a caller's tool
+    // surface never silently loses availability across upgrades.
+    const executableTools = params.requestInteractiveCodexApproval
+      ? applyConfiguredMcpApproval(filteredTools, {
+          fullPermission: params.autoApproveCodexAppServerApprovals === true,
+          requestApproval: params.requestInteractiveCodexApproval,
+        })
+      : filteredTools;
 
     let disposed = false;
     return {

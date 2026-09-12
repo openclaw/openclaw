@@ -3612,13 +3612,16 @@ process.on("SIGINT", shutdown);`,
         transport: "streamable-http" as const,
         url: "https://placeholder.invalid/mcp",
       };
-      const params = makeRequesterParams(
-        "session-real-requester-sweep",
-        {
-          mcp: { sessionIdleTtlMs: 600_000, servers: { "real-requester": declaredServer } },
-        },
-        "proof-requester",
-      );
+      const params = {
+        ...makeRequesterParams(
+          "session-real-requester-sweep",
+          {
+            mcp: { sessionIdleTtlMs: 600_000, servers: { "real-requester": declaredServer } },
+          },
+          "proof-requester",
+        ),
+        autoApproveCodexAppServerApprovals: true,
+      };
       const singletonStore = globalThis as Record<PropertyKey, unknown>;
       const hadRuntimeManager = Object.hasOwn(singletonStore, SESSION_MCP_RUNTIME_MANAGER_KEY);
       const previousRuntimeManager = singletonStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
@@ -5575,6 +5578,7 @@ describe("requester-scoped MCP connection resolution", () => {
             workspaceDir: "/workspace",
             cfg: scopedConfig as never,
             requesterSenderId: "authed",
+            autoApproveCodexAppServerApprovals: true,
           });
           expect(first?.advertisedTools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
           await first?.dispose();
@@ -5586,6 +5590,128 @@ describe("requester-scoped MCP connection resolution", () => {
             requesterSenderId: "guest",
           });
           expect(afterRemoval).toBeUndefined();
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      });
+    },
+  );
+
+  it(
+    "gates requester MCP dispatch behind the approval boundary on a real transport",
+    { timeout: 15_000 },
+    async () => {
+      let toolsCallCount = 0;
+      const resolverRegistry = createMcpProofPluginRegistry();
+      await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+        const server = http.createServer((request, response) => {
+          if (request.method === "DELETE") {
+            response.writeHead(204).end();
+            return;
+          }
+          if (request.method !== "POST") {
+            response.writeHead(405).end();
+            return;
+          }
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            const message = JSON.parse(body) as { id?: string | number; method?: string };
+            if (message.method === "notifications/initialized") {
+              response.writeHead(202).end();
+              return;
+            }
+            if (message.method === "tools/call") {
+              toolsCallCount += 1;
+            }
+            response.setHeader("content-type", "application/json");
+            response.setHeader("mcp-session-id", "session-approval-proof");
+            response.writeHead(200).end(
+              JSON.stringify(
+                message.method === "initialize"
+                  ? {
+                      jsonrpc: "2.0",
+                      id: message.id,
+                      result: {
+                        protocolVersion: "2025-03-26",
+                        capabilities: { tools: {} },
+                        serverInfo: { name: "approval-proof-server", version: "1.0.0" },
+                      },
+                    }
+                  : message.method === "tools/call"
+                    ? {
+                        jsonrpc: "2.0",
+                        id: message.id,
+                        result: {
+                          content: [{ type: "text", text: "server-result" }],
+                        },
+                      }
+                    : {
+                        jsonrpc: "2.0",
+                        id: message.id,
+                        result: {
+                          tools: [
+                            {
+                              name: "inbox",
+                              description: "read inbox",
+                              inputSchema: { type: "object", properties: {} },
+                            },
+                          ],
+                        },
+                      },
+              ),
+            );
+          });
+        });
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address() as { port: number };
+
+        const resolverApi = resolverRegistry.apiFor("test-plugin");
+        resolverApi.registerMcpServerConnectionResolver({
+          serverName: "user-mail",
+          resolve: async () => ({ url: `http://127.0.0.1:${address.port}/mcp` }),
+        });
+        const scopedConfig = {
+          mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+        };
+
+        try {
+          // Unannotated auto-mode tool: approval required; a deny must produce zero
+          // server tool dispatches across the real transport.
+          const denied = await materializeRequesterScopedMcpToolsForHarnessRun({
+            sessionId: "session-approval-proof",
+            workspaceDir: "/workspace",
+            cfg: scopedConfig as never,
+            requesterSenderId: "authed",
+            requestInteractiveCodexApproval: async () => {
+              throw new Error("operator denied");
+            },
+          });
+          const gatedTool = expectDefined(denied?.tools[0], "gated requester tool");
+          await expect(gatedTool.execute("denied-call", {})).rejects.toThrow("operator denied");
+          expect(toolsCallCount).toBe(0);
+
+          // An approval grants exactly one dispatch through to the real server.
+          const allowed = await materializeRequesterScopedMcpToolsForHarnessRun({
+            sessionId: "session-approval-proof",
+            workspaceDir: "/workspace",
+            cfg: scopedConfig as never,
+            requesterSenderId: "authed",
+            requestInteractiveCodexApproval: async () => {},
+          });
+          const allowedTool = expectDefined(allowed?.tools[0], "approved requester tool");
+          const result = await allowedTool.execute("allowed-call", {});
+          expect(result.content[0]).toMatchObject({ type: "text", text: "server-result" });
+          expect(toolsCallCount).toBe(1);
+          await denied?.dispose();
+          await allowed?.dispose();
         } finally {
           await new Promise<void>((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()));
