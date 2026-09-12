@@ -18,10 +18,19 @@ function captureError(run: () => unknown): Error & { errorCode?: string; errorBo
 }
 
 describe("parseTerminalToolCallArguments", () => {
-  it("preserves unsafe integer literals in complete object arguments", () => {
-    expect(parseTerminalToolCallArguments('{"target":9223372036854775807,"safe":42}')).toEqual({
+  it("preserves unsafe integer literals and surrounding argument values", () => {
+    expect(
+      parseTerminalToolCallArguments(
+        '{"target":9223372036854775807,"safe":42,"negative":-9223372036854775808,"fraction":9007199254740992.0,"exponent":1e20,"text":"literal 9223372036854775807 \\"quoted\\" 日本語😀","last":9007199254740992}',
+      ),
+    ).toEqual({
       target: "9223372036854775807",
       safe: 42,
+      negative: "-9223372036854775808",
+      fraction: 9007199254740992,
+      exponent: 1e20,
+      text: 'literal 9223372036854775807 "quoted" 日本語😀',
+      last: "9007199254740992",
     });
     expect(parseTerminalToolCallArguments({})).toEqual({});
   });
