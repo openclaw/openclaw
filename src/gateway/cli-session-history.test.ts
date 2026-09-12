@@ -291,9 +291,12 @@ describe("cli session history", () => {
           expect(await readChatHistoryCliSessionImportSnapshot(params)).toEqual(first);
           expect(streamSpy).toHaveBeenCalledTimes(1);
           expect(redactSpy).toHaveBeenCalledTimes(first.length);
-          // Cold and cached requests must both leave filesystem discovery off the event loop.
-          expect(readdirSyncSpy).not.toHaveBeenCalled();
-          expect(existsSyncSpy).not.toHaveBeenCalled();
+          // Scope this to transcript discovery; redaction may load unrelated config.
+          const projectsDir = path.dirname(path.dirname(filePath));
+          expect(
+            readdirSyncSpy.mock.calls.filter(([directory]) => directory === projectsDir),
+          ).toHaveLength(0);
+          expect(existsSyncSpy).not.toHaveBeenCalledWith(filePath);
           return resolveChatHistoryWithCliSessionImports({
             ...params,
             preparedImportedMessages: first,
