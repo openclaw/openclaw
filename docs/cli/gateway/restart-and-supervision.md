@@ -32,11 +32,14 @@ leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Lo
 heartbeat timeouts do not extend it. When available, the drain log reports the
 largest observed model request timeout for context.
 
-If work still ignores cancellation at the shutdown deadline, the process logs
+If work still ignores cancellation at the shutdown deadline under systemd or launchd, the process logs
 the remaining work categories, writes a diagnostic stability bundle, and exits
 with status `0`. It does not reuse that unfinished runtime for an in-process
 restart. This lets a requested stop finish cleanly and lets the service manager
 start a fresh Gateway for a restart.
+
+Foreground/manual Gateways and other supervisors retain exit status `1` when
+cleanup cannot finish before the shutdown deadline.
 
 `--force` skips the active-work drain and restarts immediately. Plain `restart` normally uses the service-manager restart path.
 

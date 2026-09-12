@@ -707,14 +707,12 @@ export async function runGatewayLoop(params: {
         return;
       }
       forceExitTimer = setTimeout(() => {
-        // Other supervisors still need failure recovery when no restart handoff was committed.
-        const cleanExit = action !== "restart" || nativeStopBudget;
         gatewayLog.warn(
-          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${cleanExit ? "cleanly" : "for supervisor recovery"}`,
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${nativeStopBudget ? "cleanly" : "with incomplete cleanup"}`,
         );
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-          cleanExit ? 0 : 1,
+          nativeStopBudget ? 0 : 1,
         );
       }, forceExitMs);
       if (params.ownsProcessLifecycle === true) {

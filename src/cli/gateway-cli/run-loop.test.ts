@@ -1546,10 +1546,11 @@ describe("runGatewayLoop", () => {
   it.each<{
     signal: "SIGTERM" | "SIGUSR1";
     honorsAbort: boolean;
-    supervisor: "systemd" | "launchd";
+    supervisor: "systemd" | "launchd" | "foreground";
     waitMs?: number;
   }>([
     { signal: "SIGTERM", honorsAbort: false, supervisor: "systemd" },
+    { signal: "SIGTERM", honorsAbort: false, supervisor: "foreground" },
     { signal: "SIGTERM", honorsAbort: true, supervisor: "systemd" },
     { signal: "SIGUSR1", honorsAbort: false, supervisor: "systemd" },
     { signal: "SIGTERM", honorsAbort: false, supervisor: "launchd" },
@@ -1572,7 +1573,7 @@ describe("runGatewayLoop", () => {
       if (supervisor === "systemd") {
         process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
         setPlatform("linux");
-      } else {
+      } else if (supervisor === "launchd") {
         process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
         setPlatform("darwin");
       }
@@ -1619,8 +1620,11 @@ describe("runGatewayLoop", () => {
             expect(runtime.exit).not.toHaveBeenCalled();
           }
           await vi.advanceTimersByTimeAsync(1);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
-          expect(successStatuses).toContain(runtime.exit.mock.calls[0]?.[0]);
+          const expectedExit = supervisor === "foreground" && !honorsAbort ? 1 : 0;
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(expectedExit);
+          if (supervisor !== "foreground") {
+            expect(successStatuses).toContain(runtime.exit.mock.calls[0]?.[0]);
+          }
           expect(start).toHaveBeenCalledOnce();
           if (!honorsAbort) {
             expect(gatewayLog.warn).toHaveBeenCalledWith(
@@ -1665,7 +1669,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("bounds managed provider service cleanup after server close", async () => {
+  it("reports failure when foreground provider service cleanup times out after server close", async () => {
     vi.clearAllMocks();
     hasManagedProviderLocalServices.mockReturnValue(true);
     stopManagedProviderLocalServices.mockReturnValue(new Promise<void>(() => {}));
@@ -1679,7 +1683,7 @@ describe("runGatewayLoop", () => {
         expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
         expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
           "gateway.stop_shutdown_timeout",
           undefined,
