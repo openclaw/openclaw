@@ -523,7 +523,10 @@ describe("Where chip", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onEnvironmentQueryInput).toHaveBeenCalledExactlyOnceWith("cloud");
 
-    expect(container.querySelector('[data-value="connect-machine"]')).toBeNull();
+    const connect = container.querySelector<HTMLButtonElement>('[data-action="connect-machine"]');
+    expect(connect?.disabled).toBe(false);
+    connect?.click();
+    expect(onConnectMachine).toHaveBeenCalledOnce();
   });
 
   it.each([true, false])("preserves destination eligibility with Auto set to %s", (autoDevice) => {

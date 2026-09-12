@@ -66,6 +66,17 @@ suite.define(() => {
       const where = page.locator("#new-session-where-trigger");
       await where.click();
       const picker = page.locator("wa-popover.new-session-page__where-popover");
+      await expect
+        .poll(() =>
+          picker.locator('input[type="search"]').evaluate((input) => {
+            const root = input.getRootNode();
+            return (
+              (root instanceof Document || root instanceof ShadowRoot) &&
+              root.activeElement === input
+            );
+          }),
+        )
+        .toBe(true);
       const profile = picker.locator('[data-value="cloud:aws"]');
       await profile.hover();
       await picker.locator('[data-value="machine:fast"]').waitFor();
@@ -136,6 +147,7 @@ suite.define(() => {
       await where.click();
 
       const profile = page.locator('[data-value="cloud:aws"]');
+      await profile.click();
       await profile.hover();
       await page.locator('[data-value="machine:fast"]').click();
       await page.keyboard.press("Escape");

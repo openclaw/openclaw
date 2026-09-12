@@ -288,12 +288,67 @@ suite.define(() => {
         const loading = picker.locator('[data-chat-account-option="loading"]');
         await expect.poll(() => loading.isVisible()).toBe(true);
         expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+        if (input === "keyboard") {
+          await page.keyboard.press("Enter");
+        } else {
+          const bounds = await pendingMoreTarget!.boundingBox();
+          expect(bounds).not.toBeNull();
+          await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+        }
+        expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+          inventoryRequests.length + 1,
+        );
+        expect(page.url()).toBe(beforePaginationUrl);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",
           accounts: [work],
+          nextCursor: "accounts-page-3",
           links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
         });
+        await expect.poll(() => loading.isVisible()).toBe(false);
+        await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+        const pageRequests = await gateway.getRequests("users.listModelAccounts");
+        await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-3" });
+        const beforeLastPageUrl = page.url();
+        if (input === "keyboard") {
+          expect(await pendingMoreTarget!.evaluate((row) => row === document.activeElement)).toBe(
+            true,
+          );
+          await page.keyboard.press("Enter");
+        } else {
+          await pendingMoreTarget!.click();
+        }
+        await expect
+          .poll(async () => {
+            const requests = await gateway.getRequests("users.listModelAccounts");
+            return requests.length > pageRequests.length || page.url() !== beforeLastPageUrl;
+          })
+          .toBe(true);
+        expect(page.url()).toBe(beforeLastPageUrl);
+        const lastPage = await gateway.waitForRequest("users.listModelAccounts", {
+          after: pageRequests.length,
+        });
+        expect(lastPage.params).toEqual({ cursor: "accounts-page-3" });
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+        if (input === "keyboard") {
+          await page.keyboard.press("Enter");
+        } else {
+          const bounds = await pendingMoreTarget!.boundingBox();
+          expect(bounds).not.toBeNull();
+          await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+        }
+        expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+          pageRequests.length + 1,
+        );
+        expect(page.url()).toBe(beforeLastPageUrl);
+        await gateway.resolveDeferred("users.listModelAccounts", {
+          profileId: "test-person",
+          accounts: [],
+          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        });
+        await expect.poll(() => more.isVisible()).toBe(false);
         const workOption = picker.locator(
           `[data-chat-account-option="account:${work.authProfileId}"]`,
         );
