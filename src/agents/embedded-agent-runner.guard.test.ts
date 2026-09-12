@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { markRedactionProvenance } from "@openclaw/normalization-core/redaction-provenance";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -15,6 +16,7 @@ import { createFileBackedSessionManagerForTest } from "../../test/helpers/sessio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { serializeRedactionMarker } from "../logging/redaction-provenance.test-support.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -516,10 +518,18 @@ describe("guardSessionManager integration", () => {
     expect(serialized).not.toContain("contact peter@dc.io");
     expect(serialized).not.toContain("peter@dc.io\\n");
     expect(serialized).not.toContain('"/tmp/peter@dc.io"');
-    expect(serialized).toContain('"thinking":"the email is peter@d***.io"');
-    expect(serialized).toContain('"text":"contact peter@d***.io"');
-    expect(serialized).toContain('"text":"peter@d***.io\\n"');
-    expect(serialized).toContain('"/tmp/peter@d***.io"');
+    expect(serialized).toContain(
+      `"thinking":"the email is peter@d${serializeRedactionMarker(markRedactionProvenance("***"))}.io"`,
+    );
+    expect(serialized).toContain(
+      `"text":"contact peter@d${serializeRedactionMarker(markRedactionProvenance("***"))}.io"`,
+    );
+    expect(serialized).toContain(
+      `"text":"peter@d${serializeRedactionMarker(markRedactionProvenance("***"))}.io\\n"`,
+    );
+    expect(serialized).toContain(
+      `"/tmp/peter@d${serializeRedactionMarker(markRedactionProvenance("***"))}.io"`,
+    );
   });
 
   it("can skip plugin write hooks without skipping core transcript redaction", () => {
@@ -554,7 +564,7 @@ describe("guardSessionManager integration", () => {
     expect(entry).toMatchObject({
       message: {
         role: "assistant",
-        content: [{ type: "text", text: "contact peter@d***.io" }],
+        content: [{ type: "text", text: `contact peter@d${markRedactionProvenance("***")}.io` }],
       },
     });
   });

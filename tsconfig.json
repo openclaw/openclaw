@@ -204,6 +204,9 @@
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"
       ],
+      "@openclaw/normalization-core/redaction-provenance": [
+        "./packages/normalization-core/src/redaction-provenance.ts"
+      ],
       "@openclaw/normalization-core/result": [
         "./packages/normalization-core/src/result.ts"
       ],

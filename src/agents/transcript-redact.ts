@@ -7,15 +7,7 @@ import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-pa
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readLoggingConfig } from "../logging/config.js";
-import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
-import {
-  redactModelVisibleSensitiveFieldValueWithConfig,
-  redactModelVisibleToolPayloadTextWithConfig,
-  redactSensitiveFieldValueWithConfig,
-  redactSensitiveText,
-  redactToolPayloadTextWithConfig,
-} from "../logging/redact.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -32,41 +24,11 @@ import {
   shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
-
-function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
-  const configuredLogging = readLoggingConfig();
-  const redactPatterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
-  return redactPatterns ? { redactPatterns } : undefined;
-}
-
-function redactTranscriptText(
-  value: string,
-  cfg?: OpenClawConfig,
-  modelVisibleToolResult = false,
-): string {
-  const loggingConfig = resolveTranscriptLoggingConfig(cfg);
-  return modelVisibleToolResult
-    ? redactModelVisibleToolPayloadTextWithConfig(value, loggingConfig)
-    : redactToolPayloadTextWithConfig(value, loggingConfig);
-}
-
-function redactTranscriptStructuredFieldValue(
-  key: string,
-  value: string,
-  cfg?: OpenClawConfig,
-  modelVisibleToolResult = false,
-): string {
-  // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
-  return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
-    ? redactTranscriptText(value, cfg, modelVisibleToolResult)
-    : modelVisibleToolResult
-      ? redactModelVisibleSensitiveFieldValueWithConfig(
-          key,
-          value,
-          resolveTranscriptLoggingConfig(cfg),
-        )
-      : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
-}
+import {
+  redactTranscriptSourceInputText,
+  redactTranscriptStructuredFieldValue,
+  redactTranscriptText,
+} from "./transcript-redact-values.js";
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
@@ -682,7 +644,7 @@ function redactTranscriptStructuredValue(
     }
     const redacted =
       typeof item === "string" && sourceFields?.get(key) === item
-        ? redactSourceInputTextWithConfig(item, resolveTranscriptLoggingConfig(cfg))
+        ? redactTranscriptSourceInputText(item, cfg)
         : redactTranscriptStructuredValue(
             item,
             cfg,
@@ -754,7 +716,7 @@ export function redactTranscriptMessage(
     readCodeModeSourceFields(message, sourceAppend),
   ) as AgentMessage;
   copyCodeModeSourceAppend(message, redacted, sourceAppend, (source) =>
-    redactSourceInputTextWithConfig(source, resolveTranscriptLoggingConfig(cfg)),
+    redactTranscriptSourceInputText(source, cfg),
   );
   return redacted;
 }

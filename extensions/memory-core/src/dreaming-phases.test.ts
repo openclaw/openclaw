@@ -1641,7 +1641,8 @@ describe("memory-core dreaming phases", () => {
     );
     const corpus = await fs.readFile(corpusPath, "utf-8");
     expect(corpus).not.toContain("OPENAI_API_KEY=sk-1234567890abcdef");
-    expect(corpus).toContain("OPENAI_API_KEY=***");
+    expect(corpus).toContain("OPENAI_API_KEY=\u001F⟦openclaw:redacted:1⟧");
+    expect(corpus).toContain("⟦/openclaw:redacted:1⟧");
   });
 
   it("skips dreaming-generated narrative transcripts during session ingestion", async () => {
