@@ -30,7 +30,7 @@ type CoverageReason =
   | "invalid-advisory"
   | "invalid-range"
   | "invalid-pagination";
-type CoverageIssue = { subject: string; reason: CoverageReason };
+type CoverageIssue = { subject: string; reason: CoverageReason; rawRange?: string };
 type PackageVersions = Record<string, string[]>;
 type RepositoryPackages = Map<string, Set<string>>;
 type AdvisoryReconciliation = {
@@ -105,6 +105,40 @@ function githubRange(value: unknown) {
   } catch {
     return null;
   }
+}
+
+// Published repository advisories can list release trains as in Undici's
+// GHSA-rfgv-xxqx-mfg5. Recover only explicit comparator intervals, never infer an
+// operator for bare lower bounds. Every such recovery retains partial coverage.
+function explicitRepositoryIntervals(value: unknown) {
+  if (typeof value !== "string" || value.length > 256 || !value.includes("; ")) {
+    return null;
+  }
+  const intervals: semver.Comparator[][] = [];
+  for (const part of value.split("; ")) {
+    const match = /^(?:(>=|>) )?(\d+\.\d+\.\d+) (<|<=) (\d+\.\d+\.\d+)$/u.exec(part);
+    if (!match) {
+      return null;
+    }
+    const [, lowerOperator, lower, upperOperator, upper] = match;
+    if (
+      !lower ||
+      !upper ||
+      !semver.valid(lower) ||
+      !semver.valid(upper) ||
+      !semver.lt(lower, upper)
+    ) {
+      return null;
+    }
+    if (lowerOperator) {
+      const interval = githubRange(`${lowerOperator} ${lower}, ${upperOperator} ${upper}`);
+      if (!interval) {
+        return null;
+      }
+      intervals.push(interval);
+    }
+  }
+  return intervals.length > 0 ? intervals : null;
 }
 
 function nextCursor(
@@ -189,19 +223,29 @@ function collectRepositoryMatches(
       if (!versions) {
         continue;
       }
-      const range = githubRange(vulnerability.vulnerable_version_range);
+      const rawRange = vulnerability.vulnerable_version_range;
+      const range = githubRange(rawRange);
+      const intervals = range ? [range] : explicitRepositoryIntervals(rawRange);
       if (!range) {
-        issues.push({ subject: `${name}#${row.ghsa_id}`, reason: "invalid-range" });
+        issues.push({
+          subject: `${name}#${row.ghsa_id}`,
+          reason: "invalid-range",
+          ...(intervals && typeof rawRange === "string" ? { rawRange } : {}),
+        });
+      }
+      if (!intervals) {
         continue;
       }
       const affected = [...versions].filter((version) =>
-        range.every((bound) => bound.test(version)),
+        intervals.some((interval) => interval.every((bound) => bound.test(version))),
       );
       if (affected.length === 0) {
         continue;
       }
       const match = matches.get(name) ?? { ranges: new Set<string>(), versions: new Set<string>() };
-      match.ranges.add(range.map((bound) => bound.value).join(" "));
+      for (const interval of intervals) {
+        match.ranges.add(interval.map((bound) => bound.value).join(" "));
+      }
       for (const version of affected) {
         match.versions.add(version);
       }
