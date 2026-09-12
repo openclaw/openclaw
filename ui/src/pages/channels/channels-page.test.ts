@@ -138,6 +138,89 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
+  it.each([
+    ["Save & Publish", 401, 200],
+    ["Import from Relays", 401, 200],
+    ["Save & Publish", 401, 401],
+    ["Import from Relays", 401, 401],
+    ["Save & Publish", 403, 200],
+    ["Import from Relays", 403, 200],
+  ] as const)(
+    "handles credentials through rendered %s after %s then %s",
+    async (action, firstStatus, nextStatus) => {
+      const gateway = createGateway();
+      gateway.connection.token = "saved-token";
+      gateway.snapshot.hello = {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "device-token" },
+      };
+      const source = createContext(gateway);
+      vi.spyOn(source.channels, "refresh").mockResolvedValue();
+      source.channels.state.channelsSnapshot = {
+        ts: 0,
+        channelOrder: ["nostr"],
+        channelLabels: { nostr: "Nostr" },
+        channels: { nostr: { configured: true, profile: { name: "Alice" } } },
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      };
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(new Response(null, { status: firstStatus }))
+        .mockResolvedValueOnce(
+          nextStatus === 200
+            ? Response.json({ ok: true, persisted: true, saved: true, merged: { name: "Alice" } })
+            : new Response(null, { status: nextStatus }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+      page.context = source.context;
+      document.body.append(page);
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>(".channels-item")?.click();
+      await page.updateComplete;
+      const click = (label: string) => {
+        const button = Array.from(page.querySelectorAll("button")).find(
+          (entry) => entry.textContent?.trim() === label,
+        );
+        if (!button) {
+          throw new Error(`Missing action: ${label}`);
+        }
+        button.click();
+      };
+      click("Edit Profile");
+      await page.updateComplete;
+      const name = page.querySelector<HTMLInputElement>("#nostr-profile-name");
+      if (!name) {
+        throw new Error("Missing profile name");
+      }
+      name.value = "Alice Updated";
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      await page.updateComplete;
+      click(action);
+      const recovered = firstStatus === 401 && nextStatus === 200;
+      await vi.waitFor(() =>
+        expect(page.textContent).toContain(
+          recovered
+            ? action === "Save & Publish"
+              ? "Profile published"
+              : "Profile imported"
+            : "Last error",
+        ),
+      );
+      expect(
+        fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+      ).toEqual(
+        firstStatus === 403
+          ? ["Bearer device-token"]
+          : ["Bearer device-token", "Bearer saved-token"],
+      );
+      source.runtimeConfig.dispose();
+      source.channels.dispose();
+    },
+  );
+
   it.each([false, true])(
     "prefers the exact plugin icon with owner first: %s",
     async (ownerFirst) => {
@@ -654,47 +737,55 @@ describe("ChannelsPage lifecycle", () => {
     source.channels.dispose();
   });
 
-  it("drops a profile save when the channel source is replaced", async () => {
+  it.each([200, 401])(
+    "drops a profile save after source replacement and status %s",
+    async (status) => {
+      const gateway = createGateway();
+      gateway.connection.token = "first-token";
+      gateway.connection.password = "saved-password";
+      const first = createContext(gateway);
+      const second = createContext(gateway);
+      const firstRefresh = vi.spyOn(first.channels, "refresh").mockResolvedValue();
+      const secondRefresh = vi.spyOn(second.channels, "refresh").mockResolvedValue();
+      const response = createDeferred<Response>();
+      const fetchMock = vi.fn(() => response.promise);
+      vi.stubGlobal("fetch", fetchMock);
+      const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+      page.context = first.context;
+      document.body.append(page);
+      await page.updateComplete;
+      page.editNostrProfile("old-account", { name: "old" });
+
+      const save = page.saveNostrProfile();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      page.context = second.context;
+      page.requestUpdate();
+      await page.updateComplete;
+      expect(page.nostrProfileFormState).toBeNull();
+
+      response.resolve(
+        new Response(JSON.stringify({ ok: true, persisted: true }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      await save;
+
+      expect(page.nostrProfileFormState).toBeNull();
+      expect(firstRefresh).not.toHaveBeenCalled();
+      expect(secondRefresh).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      first.runtimeConfig.dispose();
+      second.runtimeConfig.dispose();
+      first.channels.dispose();
+      second.channels.dispose();
+    },
+  );
+
+  it.each([200, 401])("drops a profile import after disconnect and status %s", async (status) => {
     const gateway = createGateway();
-    const first = createContext(gateway);
-    const second = createContext(gateway);
-    const firstRefresh = vi.spyOn(first.channels, "refresh").mockResolvedValue();
-    const secondRefresh = vi.spyOn(second.channels, "refresh").mockResolvedValue();
-    const response = createDeferred<Response>();
-    const fetchMock = vi.fn(() => response.promise);
-    vi.stubGlobal("fetch", fetchMock);
-    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
-    page.context = first.context;
-    document.body.append(page);
-    await page.updateComplete;
-    page.editNostrProfile("old-account", { name: "old" });
-
-    const save = page.saveNostrProfile();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    page.context = second.context;
-    page.requestUpdate();
-    await page.updateComplete;
-    expect(page.nostrProfileFormState).toBeNull();
-
-    response.resolve(
-      new Response(JSON.stringify({ ok: true, persisted: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    await save;
-
-    expect(page.nostrProfileFormState).toBeNull();
-    expect(firstRefresh).not.toHaveBeenCalled();
-    expect(secondRefresh).not.toHaveBeenCalled();
-    first.runtimeConfig.dispose();
-    second.runtimeConfig.dispose();
-    first.channels.dispose();
-    second.channels.dispose();
-  });
-
-  it("drops a profile import when the gateway disconnects", async () => {
-    const gateway = createGateway();
+    gateway.connection.token = "first-token";
+    gateway.connection.password = "saved-password";
     const source = createContext(gateway);
     const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
     const response = createDeferred<Response>();
@@ -713,7 +804,7 @@ describe("ChannelsPage lifecycle", () => {
 
     response.resolve(
       new Response(JSON.stringify({ ok: true, saved: true, merged: { name: "stale import" } }), {
-        status: 200,
+        status,
         headers: { "Content-Type": "application/json" },
       }),
     );
@@ -721,6 +812,7 @@ describe("ChannelsPage lifecycle", () => {
 
     expect(page.nostrProfileFormState).toBeNull();
     expect(refresh).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });
