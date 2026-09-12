@@ -165,3 +165,56 @@ export function createConfigObserveAuditRecord(params: {
     restoreErrorMessage: params.restoreErrorMessage ?? null,
   };
 }
+
+type ConfigObserveAuditDeps = Pick<NormalizedConfigIoDeps, "env" | "homedir">;
+
+export function createConfigObserveAuditAppendParams(
+  deps: ConfigObserveAuditDeps,
+  params: Parameters<typeof createConfigObserveAuditRecord>[0],
+) {
+  return {
+    env: deps.env,
+    homedir: deps.homedir,
+    record: createConfigObserveAuditRecord(params),
+  };
+}
+
+export function extractRestoreErrorDetails(error: unknown): {
+  code: string | null;
+  message: string | null;
+} {
+  if (!error || typeof error !== "object") {
+    return { code: null, message: typeof error === "string" ? error : null };
+  }
+  return {
+    code: "code" in error && typeof error.code === "string" ? error.code : null,
+    message: "message" in error && typeof error.message === "string" ? error.message : null,
+  };
+}
+
+export function createBackupRestoreAuditAppendParams(params: {
+  deps: ConfigObserveAuditDeps;
+  configPath: string;
+  restoredFromBackup: boolean;
+  current: ConfigHealthFingerprint;
+  suspicious: string[];
+  entry: ConfigHealthEntry;
+  backup: ConfigHealthFingerprint | null | undefined;
+  clobberedPath: string | null;
+  backupPath: string;
+  restoreErrorDetails: { code: string | null; message: string | null };
+}) {
+  return createConfigObserveAuditAppendParams(params.deps, {
+    configPath: params.configPath,
+    valid: params.restoredFromBackup,
+    current: params.current,
+    suspicious: params.suspicious,
+    lastKnownGood: params.entry.lastKnownGood,
+    backup: params.backup,
+    clobberedPath: params.clobberedPath,
+    restoredFromBackup: params.restoredFromBackup,
+    restoredBackupPath: params.backupPath,
+    restoreErrorCode: params.restoreErrorDetails.code,
+    restoreErrorMessage: params.restoreErrorDetails.message,
+  });
+}

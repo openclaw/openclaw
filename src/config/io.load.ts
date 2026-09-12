@@ -138,6 +138,7 @@ export function loadConfigFromContext(
     if (!deps.suppressFutureVersionWarning) {
       warnIfConfigFromFuture(validated.config, deps.logger);
     }
+    let retrySuspiciousRecovery = false;
     if (
       deps.observe &&
       !options.skipSuspiciousRecovery &&
@@ -158,6 +159,7 @@ export function loadConfigFromContext(
         });
         return loadConfigFromContext(context, { skipSuspiciousRecovery: true });
       }
+      retrySuspiciousRecovery = recovery.retrySuspiciousRecovery === true;
     }
     const cfg = materializeRuntimeConfig(validated.config, {
       ...pathResolution,
@@ -178,6 +180,7 @@ export function loadConfigFromContext(
         resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
       }),
+      { recordSuspiciousSignature: !retrySuspiciousRecovery },
     );
     return context.finalizeLoadedRuntimeConfig(cfg);
   } catch (error) {

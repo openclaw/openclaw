@@ -5,6 +5,7 @@ import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.
 import { isRecord } from "../utils.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
+  formatClobberSnapshotSkipWarning,
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
@@ -15,8 +16,10 @@ import {
   type ConfigHealthFingerprint,
 } from "./io.health-state.js";
 import {
+  createBackupRestoreAuditAppendParams,
   createConfigHealthFingerprint,
-  createConfigObserveAuditRecord,
+  createConfigObserveAuditAppendParams,
+  extractRestoreErrorDetails,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
@@ -84,9 +87,10 @@ type ConfigReadRecoveryParams = {
   allowBackupRecovery?: () => Promise<boolean>;
 };
 
-type ConfigReadRecoveryResult = {
+export type ConfigReadRecoveryResult = {
   raw: string;
   parsed: unknown;
+  retrySuspiciousRecovery?: boolean;
 };
 
 function createRecoveryCommitEffect(params: {
@@ -131,34 +135,12 @@ function createRecoveryCommitEffect(params: {
   };
 }
 
-type ConfigObserveAuditRecordParams = Parameters<typeof createConfigObserveAuditRecord>[0];
-
-function createConfigObserveAuditAppendParams(
-  deps: ObserveRecoveryDeps,
-  params: ConfigObserveAuditRecordParams,
-) {
-  return {
-    env: deps.env,
-    homedir: deps.homedir,
-    record: createConfigObserveAuditRecord(params),
-  };
-}
-
-function extractRestoreErrorDetails(error: unknown): {
-  code: string | null;
-  message: string | null;
-} {
-  if (!error || typeof error !== "object") {
-    return { code: null, message: typeof error === "string" ? error : null };
-  }
-  return {
-    code: "code" in error && typeof error.code === "string" ? error.code : null,
-    message: "message" in error && typeof error.message === "string" ? error.message : null,
-  };
-}
-
 function returnOriginalConfigRead(params: ConfigReadRecoveryParams): ConfigReadRecoveryResult {
   return { raw: params.raw, parsed: params.parsed };
+}
+
+function returnRetryableConfigRead(params: ConfigReadRecoveryParams): ConfigReadRecoveryResult {
+  return { raw: params.raw, parsed: params.parsed, retrySuspiciousRecovery: true };
 }
 
 function parseBackupConfigRaw(
@@ -170,33 +152,6 @@ function parseBackupConfigRaw(
   } catch {
     return null;
   }
-}
-
-function createBackupRestoreAuditAppendParams(params: {
-  deps: ObserveRecoveryDeps;
-  configPath: string;
-  restoredFromBackup: boolean;
-  current: ConfigHealthFingerprint;
-  suspicious: string[];
-  entry: ConfigHealthEntry;
-  backup: ConfigHealthFingerprint | null | undefined;
-  clobberedPath: string | null;
-  backupPath: string;
-  restoreErrorDetails: { code: string | null; message: string | null };
-}) {
-  return createConfigObserveAuditAppendParams(params.deps, {
-    configPath: params.configPath,
-    valid: params.restoredFromBackup,
-    current: params.current,
-    suspicious: params.suspicious,
-    lastKnownGood: params.entry.lastKnownGood,
-    backup: params.backup,
-    clobberedPath: params.clobberedPath,
-    restoredFromBackup: params.restoredFromBackup,
-    restoredBackupPath: params.backupPath,
-    restoreErrorCode: params.restoreErrorDetails.code,
-    restoreErrorMessage: params.restoreErrorDetails.message,
-  });
 }
 
 function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
@@ -316,7 +271,7 @@ type SuspiciousConfigRecoveryPlan = {
   assertUnchanged: () => void;
   apply: (
     beforeCommit?: () => void,
-  ) => ConfigRecoveryOperation<{ restored: boolean; error: unknown }>;
+  ) => ConfigRecoveryOperation<{ restored: boolean; error: unknown; preserved: boolean }>;
 };
 
 /** Prepare the existing recovery without observing or writing the selected config. */
@@ -359,7 +314,10 @@ function* recoverSuspiciousConfigRead(
       return returnOriginalConfigRead(params);
     }
   }
-  yield* plan.apply();
+  const applied = yield* plan.apply();
+  if (!applied.preserved) {
+    return returnRetryableConfigRead(params);
+  }
   return plan.candidate;
 }
 
@@ -496,6 +454,11 @@ function* planSuspiciousConfigRead(
         sync: () => persistBoundedClobberedConfigSnapshotSync(snapshotParams),
         async: () => persistBoundedClobberedConfigSnapshot(snapshotParams),
       }) as string | null;
+      if (!clobberedPath) {
+        const skipped = formatClobberSnapshotSkipWarning("backup restore", configPath, suspicious);
+        deps.logger.warn(skipped);
+        return { restored: false, error: new Error(skipped), preserved: false };
+      }
       let restoredFromBackup = false;
       let restoreError: unknown;
       try {
@@ -557,7 +520,7 @@ function* planSuspiciousConfigRead(
           }),
         );
       }
-      return { restored: restoredFromBackup, error: restoreError };
+      return { restored: restoredFromBackup, error: restoreError, preserved: true };
     },
   };
 }
@@ -685,6 +648,12 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     raw: snapshot.raw,
     observedAt: now,
   });
+  if (!clobberedPath) {
+    deps.logger.warn(
+      formatClobberSnapshotSkipWarning("last-known-good recovery", snapshot.path, [params.reason]),
+    );
+    return false;
+  }
   if (recoveryCandidate.raw !== backupRaw) {
     warnIfJSON5CommentsWillBeStripped({
       raw: backupRaw,
