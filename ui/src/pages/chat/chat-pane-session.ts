@@ -40,6 +40,7 @@ import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
+import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
@@ -206,8 +207,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.pendingDeferredSessionHydration = null;
       // These affordances do not shape the transcript. Start them together only
-      // after the authoritative history has committed so they cannot delay chat paint.
-      state.renderLifecycle.afterCommit((complete) => {
+      // after the transcript paints; a DOM commit still runs before the browser can paint.
+      scheduleControlUiAfterPaint(state, () => {
         if (isCurrent() && this.presented) {
           this.deferredSessionHydrationActive = false;
           if (historyCommitted) {
@@ -222,7 +223,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         } else {
           retireIfCurrent();
         }
-        complete();
       });
     };
     void transcriptLoad.then(scheduleHydration, () => scheduleHydration(false));
