@@ -262,27 +262,8 @@ export function patchScopedAccountConfig(params: {
   };
   if (accountId === DEFAULT_ACCOUNT_ID && !params.scopeDefaultToAccounts) {
     // Default accounts historically live at channel root unless the channel opts into accounts.default.
-    const clearedBase = clearFields(base ?? {});
-    const accounts = base?.accounts ?? {};
-    const defaultAccountKey = resolveExistingAccountKey(accounts, DEFAULT_ACCOUNT_ID);
-    const defaultAccount = accounts[defaultAccountKey];
-    // Resolvers read accounts.default ahead of the channel root when the record
-    // exists (promoted single-account credentials), so a default-scope write has
-    // to retire the same fields there too; otherwise the stale account-scoped
-    // value keeps winning over the rotated root value.
-    if (defaultAccount && params.clearFields?.length) {
-      return writeChannelSection(params.cfg, params.channelKey, {
-        ...clearedBase,
-        ...(ensureChannelEnabled ? { enabled: true } : {}),
-        ...patch,
-        accounts: {
-          ...accounts,
-          [defaultAccountKey]: clearFields(defaultAccount),
-        },
-      });
-    }
     return writeChannelSection(params.cfg, params.channelKey, {
-      ...clearedBase,
+      ...clearFields(base ?? {}),
       ...(ensureChannelEnabled ? { enabled: true } : {}),
       ...patch,
     });
@@ -338,13 +319,6 @@ function resolveExistingAccountKey(
   accounts: Record<string, Record<string, unknown>>,
   targetAccountId: string,
 ): string {
-  // Exact keys win, matching resolver precedence (resolveAccountEntry): when a
-  // config carries both `Default` and `default`, resolvers read the exact
-  // record, so writers must select it too. Fall back to a normalized match to
-  // preserve authored casing like `accounts.Ops`.
-  if (Object.hasOwn(accounts, targetAccountId)) {
-    return targetAccountId;
-  }
   return (
     Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
     targetAccountId

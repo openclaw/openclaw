@@ -293,4 +293,27 @@ describe("LINE rotation after single-account promotion", () => {
     expect(channel.channelAccessToken).toBe("ROTATED_TOKEN");
     expect(resolvedToken(rotated)).toBe("ROTATED_TOKEN");
   });
+
+  it("retires a case-variant default record when no exact key exists", () => {
+    // With only an authored `Default` record, the resolver falls back to the
+    // case-insensitive match and reads that record, so the rotation must
+    // clear the stale credential there under its authored key.
+    const variantOnly = {
+      channels: {
+        line: {
+          enabled: true,
+          accounts: {
+            Default: { channelAccessToken: "STALE_VARIANT_TOKEN", name: "Main" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const rotated = applyLineSetup({ channelAccessToken: "ROTATED_TOKEN" }, variantOnly);
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(promotedAccount(rotated)?.Default).toEqual({ name: "Main" });
+    expect(channel.channelAccessToken).toBe("ROTATED_TOKEN");
+    expect(resolvedToken(rotated)).toBe("ROTATED_TOKEN");
+  });
 });
