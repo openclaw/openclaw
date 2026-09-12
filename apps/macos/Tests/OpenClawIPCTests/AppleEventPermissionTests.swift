@@ -24,6 +24,64 @@ struct AppleEventPermissionTests {
         #expect(recorder.snapshot().mainThreadCalls == [false])
     }
 
+    @Test func `concurrent passive checks share one blocking probe`() async {
+        let gate = BlockingProbeGate(status: noErr)
+        let probe = AppleEventPermissionProbe(
+            determinePermission: gate.determine,
+            passiveTimeout: .seconds(5),
+            coordinator: AppleEventPermissionProbeCoordinator())
+
+        let states = await withTaskGroup(of: AppleEventPermissionState.self) { group in
+            for _ in 0..<32 {
+                group.addTask { await probe.state(askUserIfNeeded: false) }
+            }
+            // Every caller is parked on the single in-flight probe; nothing else may block.
+            await gate.waitUntilEntered()
+            gate.release()
+            var collected: [AppleEventPermissionState] = []
+            for await state in group { collected.append(state) }
+            return collected
+        }
+
+        #expect(states.count == 32)
+        #expect(states.allSatisfy { $0 == .authorized })
+        #expect(gate.callCount == 1)
+    }
+
+    @Test func `a hung passive probe times out instead of blocking callers`() async {
+        let gate = BlockingProbeGate(status: noErr)
+        let probe = AppleEventPermissionProbe(
+            determinePermission: gate.determine,
+            passiveTimeout: .milliseconds(200),
+            coordinator: AppleEventPermissionProbeCoordinator())
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        let state = await probe.state(askUserIfNeeded: false)
+        let elapsed = clock.now - start
+
+        #expect(state == .failed(OSStatus(errAETimeout)))
+        #expect(TerminalAutomationPermission.authorizationStatus(for: state) == .unknown)
+        #expect(elapsed < .seconds(3))
+        gate.release()
+    }
+
+    @Test func `interactive prompts are never timed out`() async {
+        let gate = BlockingProbeGate(status: noErr)
+        let probe = AppleEventPermissionProbe(
+            determinePermission: gate.determine,
+            passiveTimeout: .milliseconds(50),
+            coordinator: AppleEventPermissionProbeCoordinator())
+
+        async let pending = probe.state(askUserIfNeeded: true)
+        await gate.waitUntilEntered()
+        try? await Task.sleep(for: .milliseconds(300))
+        gate.release()
+
+        #expect(await pending == .authorized)
+        #expect(gate.callCount == 1)
+    }
+
     @Test func `target not running is an unknown capability state`() {
         #expect(TerminalAutomationPermission.authorizationStatus(for: .authorized) == .granted)
         #expect(TerminalAutomationPermission.authorizationStatus(for: .notDetermined) == .notGranted)
@@ -175,5 +233,44 @@ private final class PermissionUIRecorder {
 
     func openSettings() {
         self.settingsCount += 1
+    }
+}
+
+/// Blocks inside `determine` until released, mimicking `AEDeterminePermissionToAutomateTarget`
+/// waiting on a target app or on tccd.
+private final class BlockingProbeGate: @unchecked Sendable {
+    private let status: OSStatus
+    private let entered = DispatchSemaphore(value: 0)
+    private let gate = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var calls = 0
+
+    init(status: OSStatus) {
+        self.status = status
+    }
+
+    var callCount: Int {
+        self.lock.withLock { self.calls }
+    }
+
+    func determine(askUserIfNeeded _: Bool) -> OSStatus {
+        self.lock.withLock { self.calls += 1 }
+        self.entered.signal()
+        self.gate.wait()
+        return self.status
+    }
+
+    func waitUntilEntered() async {
+        let entered = self.entered
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                entered.wait()
+                continuation.resume()
+            }
+        }
+    }
+
+    func release() {
+        self.gate.signal()
     }
 }
