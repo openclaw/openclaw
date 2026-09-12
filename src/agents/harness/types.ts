@@ -10,6 +10,7 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
+import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -175,6 +176,8 @@ type AgentHarnessIsolatedCompletionParams = {
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
   outputTextPolicy?: "strict-visible";
+  /** Native final-output schema when the harness transport supports one. */
+  outputSchema?: JsonSchemaObject;
   streamParams?: {
     maxTokens?: number;
     temperature?: number;

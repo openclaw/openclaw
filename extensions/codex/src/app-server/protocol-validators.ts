@@ -25,6 +25,7 @@ import {
   type CodexTurn,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
+  type CodexUserInput,
 } from "./protocol.js";
 
 type ValidationError = {
@@ -362,10 +363,10 @@ export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResp
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
-/** Only the current text prompt may be echoed; capabilities and historical items are not passive. */
+/** Only the exact submitted text input may be echoed; capabilities and history are not passive. */
 export function assertCodexPassiveTurnItems(
   items: readonly CodexThreadItem[],
-  prompt: string,
+  submittedInput: readonly CodexUserInput[],
   taskLabel: string,
 ): void {
   let promptEchoSeen = false;
@@ -375,12 +376,18 @@ export function assertCodexPassiveTurnItems(
     }
     if (item.type === "userMessage" && !promptEchoSeen) {
       const content = Array.isArray(item.content) ? item.content : [];
-      const input = content[0];
       if (
-        content.length === 1 &&
-        isJsonObject(input) &&
-        input.type === "text" &&
-        input.text === prompt
+        submittedInput.length > 0 &&
+        content.length === submittedInput.length &&
+        submittedInput.every((expected, index) => {
+          const echoed = content[index];
+          return (
+            expected.type === "text" &&
+            isJsonObject(echoed) &&
+            echoed.type === "text" &&
+            echoed.text === expected.text
+          );
+        })
       ) {
         promptEchoSeen = true;
         continue;

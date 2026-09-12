@@ -398,6 +398,7 @@ export type CodexTurnStartParams = JsonObject & {
   input: CodexUserInput[];
   /** Native 0.153.4 flattens these entries into its Responses turn-metadata object. */
   responsesapiClientMetadata?: Record<string, string> | null;
+  outputSchema?: JsonObject;
   additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
   cwd?: string;
   runtimeWorkspaceRoots?: string[] | null;
