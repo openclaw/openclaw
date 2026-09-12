@@ -164,8 +164,12 @@ package root; a broken same-ID source copy does not trigger replacement of a
 healthy managed package.
 
 With `--json`, stdout contains one JSON document. Doctor panels and other
-diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
-plugin finalization steps still exit non-zero.
+diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
+availability, installation, or load failures appear in
+`postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
+successfully when required checks pass. Failed required Doctor execution,
+invalid configuration or state, ownership errors, and failed required readiness
+checks still exit nonzero.
 
 Doctor repair uses the same enabled-plugin and default-check selection as
 ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,

@@ -95,10 +95,13 @@ modify WAL sidecars beside live databases. Each schema inspection has a
 30-second deadline; if compatibility cannot be verified, rollback is refused.
 
 The canary binds a free loopback port and must report `/startupz` as `started`,
-then `/readyz` as ready within the configured per-step timeout. Failure records the
-phase, elapsed time, and bounded diagnostics; the canary process group and
-temporary state are cleaned up. This proves candidate startup on copied state;
-live channel and provider behavior are checked after activation.
+then `/readyz` as ready within the configured per-step timeout. Plugin-resolution
+errors attributed to a named plugin are recorded without rejecting the candidate.
+An invalid plugin inventory, an unattributed registry error, or failure to meet
+the required core startup or readiness checks still fails validation. Failure
+records the phase, elapsed time, and bounded diagnostics; the canary process group
+and temporary state are cleaned up. This proves candidate core startup on copied
+state; live channel and provider behavior are checked after activation.
 Targets that predate migration continuation record runtime validation as
 unavailable and use the current updater's existing finalization path. A present
 continuation entry with an invalid schema contract still refuses activation.
@@ -106,10 +109,12 @@ The database-schema preflight still refuses incompatible downgrades. These older
 targets do not support automatic schema-neutral rollback; see
 [Downgrade finalization](/install/updating#roll-back-a-package-install).
 
-Candidate Doctor, config, plugin, or canary validation failures enter a bounded
-`repairing` phase using configured inference. The updater reruns the failed
-check after each attempt and activates only after it passes. Failed or unavailable
-repair discards the candidate and leaves the serving Gateway untouched.
+Blocking candidate validation failures enter a bounded `repairing` phase using
+configured inference. These include failed required Doctor checks, invalid config
+or state, invalid or unattributed plugin-registry results, and failed core startup
+or readiness checks. The updater reruns the failed check after each attempt and
+activates only after it passes. Failed or unavailable repair discards the
+candidate and leaves the serving Gateway untouched.
 Pre-activation repair uses disposable rehearsal state and configuration, then
 independently validates surviving candidate changes before activation, and
 `repair-requires-config-change` reports changed top-level keys that require
@@ -125,8 +130,9 @@ inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
 the normal 12-probe health settle and a Gateway hello handshake matching the
-expected version and Git build identity, checks for plugin activation errors and
-channel readiness, and requires HTTP 200 from `/readyz`.
+expected version and Git build identity, checks channel readiness, and requires
+HTTP 200 from `/readyz`. Plugin activation or load failures remain named warnings
+when these core checks pass; they do not turn a successful core update into an error.
 
 A candidate can be running while verification fails. Recovery guidance uses the
 latest observed service state and names the running version when known; an
@@ -416,53 +422,60 @@ the sentinel.
 On stable updates, a configured OpenClaw-owned official plugin with no install
 record is repaired from the selected core release cohort. This also applies to
 `doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Post-core
-reconciliation installs it before restart. Existing install records retain their source and
-selector policy. Verified official packages use the existing
+reconciliation attempts installation before restart; an unavailable target remains
+a named warning while the core update continues. Existing records keep their
+registry and source choices. Verified official packages use the existing
 [capability-consent exemption](/plugins/manage-plugins#capability-consent).
+
+Eligible managed release pins for npm and trusted official ClawHub installs of
+`@openclaw/*` packages resume the catalog's default selector after a successful
+update. The recorded selector must be an exact OpenClaw release no newer than the
+installed core, and the same package must have a verified default catalog target.
+This includes previously recorded automatic and manual pins. An explicit selector
+supplied to the current plugin update command takes precedence. Pins outside that
+eligibility, ranges, explicit tags, and other sources keep their existing policy.
 
 Managed npm plugins on the beta channel select the newest version by semantic
 version order from their `beta` and `latest` dist-tags, using the same policy as
 the core updater. This includes official plugins with a default/latest catalog
 target and managed `@beta` selectors. OpenClaw installs the exact inspected
-version and retains the recorded selector for future updates.
+version while keeping the selected tag or restored catalog default for future updates.
 
 ClawHub plugins on the beta channel try their own `@beta` tag. If that release
 is unavailable, OpenClaw falls back to the default/latest spec and reports a
 warning naming the requested and used targets.
 Integrity, compatibility, trust, install-policy, and capability-consent failures
 do not trigger fallback. Availability fallback warnings do not fail the core
-update. Ordinary exact versions, ranges, and explicit tags other than `beta`
-retain their selector.
+update. Pins outside the managed release-pin recovery described above, ranges,
+and explicit tags other than `beta` retain their selector.
 Doctor can refresh a stale official runtime plugin that is bound to the current
-OpenClaw release cohort. That repair stays on the recorded registry, verifies
-the replacement artifact, and records its exact version if the npm install was
-previously pinned.
+OpenClaw release cohort. That repair stays on the recorded registry and verifies
+the replacement artifact.
 Already-current runtime plugins are kept in place; a no-op startup repair does
 not reinstall the package or invalidate the migration checkpoint.
 
-When the npm update probe finds a newer release for an exact-pinned official
-plugin and post-core convergence retains that pin, the update prints the pin
-advisory and reports `postUpdate.plugins.status: "warning"` in JSON. The warning
-includes the observed installed and available versions and an explicit command
-to replace the pin. Keep the pin if intentional. This advisory does not establish
+When post-core convergence retains an official pin outside automatic release-pin
+recovery and the npm probe finds a newer release, the update prints a pin advisory
+and reports `postUpdate.plugins.status: "warning"` in JSON. The warning includes
+the observed installed and available versions and an explicit command to replace
+the pin. Keep the pin if intentional. This advisory does not establish
 incompatibility, change the pin, or fail an otherwise successful core update.
 
-An unavailable npm target or unreachable registry does not block the core update
-when a compatible, runnable plugin is already installed. Plugin sync retains that
+An unavailable npm target or unreachable registry does not fail an otherwise
+successful core update. When a compatible, runnable plugin is installed, plugin
+sync retains that
 installed version and its recorded selector. The summary, warning log, and run
 history name the plugin, requested target, resolution failure, and
 `openclaw plugins update <id>` next action. JSON keeps top-level `status: "ok"`
 with a `plugin-target-unavailable` advisory under `postUpdate.plugins.warnings`.
 
-Before mutation, an installed plugin whose declared `openclaw.compat.pluginApi`
-range or `openclaw.install.minHostVersion` excludes the target core can block the
-update if the requested replacement is unavailable or also incompatible. The
-`plugin-incompatible` refusal names the installed version and requirement.
-When the installed plugin is known to be incompatible, a registry outage also
-blocks the update because a compatible replacement cannot be resolved. Retry
-when the registry is reachable, pin a compatible plugin version, explicitly
-disable the plugin, or wait for a compatible release. Compatible installed
-plugins still follow the advisory path described above.
+Before mutation, OpenClaw checks installed compatibility metadata and skips
+registry queries for compatible plugins. If a plugin's declared
+`openclaw.compat.pluginApi` range or `openclaw.install.minHostVersion` excludes
+the target core and a compatible replacement cannot be resolved, it records a
+named notice and continues the core update. The plugin can remain unavailable
+until a compatible version can be installed. Configuration, ownership, schema,
+and core readiness checks still have to pass.
 
 Older updaters may still refuse with `plugin-target-unavailable` before candidate
 code runs. Use your installation's [manual update method](/install/updating/update-methods),
@@ -473,19 +486,43 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 </Warning>
 
 <Note>
-Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (for example an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`. When a failed update leaves a managed plugin unusable, OpenClaw disables its runtime entry and resets active slots without changing the operator-authored `plugins.allow` or `plugins.deny` policy.
+Plugin-only availability, installation, and load failures are reported as named,
+actionable warnings after an otherwise successful core update. JSON keeps
+top-level `status: "ok"` and reports `postUpdate.plugins.status: "warning"`.
+Follow the command in `postUpdate.plugins.warnings[].guidance`. For a named
+plugin, retry failed installs or updates with `openclaw plugins update <id>`;
+use `openclaw doctor --fix` for load problems.
+A failed plugin operation retains previous payloads and install records where
+possible and preserves registry choices, plugin settings, enable/disable choices,
+and active slots. A plugin can remain unavailable until repaired.
 
-After installing the core and before restarting the managed Gateway, `openclaw update` runs mandatory **post-core convergence**: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable and its declared `openclaw.extensions` entries are loadable. When a package does not declare OpenClaw extensions, the check instead verifies any explicitly declared npm `main`. Failures from this pass, and an invalid config snapshot, return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits nonzero and does not restart with the unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json`. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here (mirroring the `skipDisabledPlugins` policy used by the missing-payload check), so a stale disabled plugin record cannot block an otherwise valid update. A changed plugin snapshot completes the fresh Doctor, restart, and runtime verification sequence described above before the run succeeds.
+After installing the core and before restarting the managed Gateway,
+`openclaw update` runs mandatory **post-core convergence**: it repairs missing
+configured plugin payloads, validates each _active_ tracked install record on disk,
+and statically verifies its `package.json` is parseable and its declared
+`openclaw.extensions` entries are loadable. When a package does not declare
+OpenClaw extensions, the check instead verifies any explicitly declared npm
+`main`. Missing or unloadable plugin payloads add warnings while the core update
+continues. An invalid config snapshot still returns
+`postUpdate.plugins.status: "error"`, makes the top-level update `status`
+`"error"`, and exits nonzero. Invalid state, ownership errors, failed required
+Doctor or readiness checks also remain errors. Disabled plugins are skipped unless their records are trusted official
+sync targets. A changed plugin snapshot completes fresh Doctor and, when restart
+is requested, the Gateway restart and core runtime verification described above
+before the run succeeds.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts are handed to the CLI managed-service path, so the package swap happens outside the old Gateway process and the service health checks decide whether the update can be reported as complete.
 </Note>
 
 After an extended-stable core update succeeds, post-core plugin integrity and
-convergence target eligible official npm and trusted official ClawHub plugins at the exact installed core
-version. For default/`latest` intent, OpenClaw does not query plugin
-`@extended-stable` or fall back to npm `latest`; it derives the package version
-from the installed core. Explicit version pins, explicit non-`latest` tags,
-third-party packages, custom registries, and other sources keep their existing intent.
+convergence target eligible official npm and trusted official ClawHub plugins at
+the exact installed core version. For default/`latest` intent, OpenClaw does not
+query plugin `@extended-stable` or fall back to npm `latest`; it derives the
+package version from the installed core. Eligible managed release pins resume
+the catalog default under the recovery rules above. Pins outside that eligibility,
+explicit non-`latest` tags, third-party packages, custom ClawHub registries, and
+other sources keep their existing intent. An explicit selector supplied for the
+current plugin operation takes precedence.
 
 ## Package-manager installs
 

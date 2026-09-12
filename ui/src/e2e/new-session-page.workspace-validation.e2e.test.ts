@@ -381,7 +381,8 @@ suite.define(() => {
       await whereTrigger.click();
       const cloud = where.getByRole("button", { name: "aws", exact: true });
       expect(await cloud.isDisabled()).toBe(true);
-      await cloud.hover();
+      await cloud.focus();
+      await page.keyboard.press("Enter");
       await expect
         .poll(() => tooltipTitleText(cloud))
         .toBe("Couldn't verify Git for this folder. Choose it again to retry.");

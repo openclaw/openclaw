@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createPackageDistContentInventoryEntry,
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
@@ -214,12 +215,11 @@ function stampFixtureVersion(packageRoot, version) {
     const bytes = fs.readFileSync(paths.buildInfo);
     return entries.map((entry) =>
       entry.path === "dist/build-info.json"
-        ? {
-            path: entry.path,
-            sha256: createHash("sha256").update(bytes).digest("hex"),
-            size: bytes.length,
-            mode: fs.statSync(paths.buildInfo).mode & 0o777,
-          }
+        ? createPackageDistContentInventoryEntry(
+            entry.path,
+            bytes,
+            fs.statSync(paths.buildInfo).mode,
+          )
         : entry,
     );
   });
