@@ -21,7 +21,6 @@ import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
@@ -39,6 +38,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
+import { resolveCompactionFallbacksOverride } from "./compact-fallbacks.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
@@ -195,21 +195,6 @@ export async function compactNativeCliSession(params: {
 
 function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): boolean {
   return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
-}
-
-function resolveCompactionFallbacksOverride(
-  params: CompactEmbeddedAgentSessionParams,
-): string[] | undefined {
-  if (params.modelSelectionLocked) {
-    return [];
-  }
-  return (
-    params.modelFallbacksOverride ??
-    resolveRunModelFallbacksOverride({
-      cfg: params.config,
-      sessionKey: params.sessionKey,
-    })
-  );
 }
 
 function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessionParams): boolean {
@@ -600,6 +585,7 @@ export const testing = {
   buildBeforeCompactionHookMetrics,
   resolveCompactionProviderStream,
   prepareCompactionSessionAgent,
+  resolveCompactionFallbacksOverride,
   runBeforeCompactionHooks,
   runAfterCompactionHooks,
   runPostCompactionSideEffects,
