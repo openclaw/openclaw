@@ -164,6 +164,9 @@ export async function applyMediaUnderstanding(params: {
       ctx,
       workspaceDir: params.workspaceDir,
     }),
+    // The scoped root set is authoritative: merging sessionless defaults back in would restore
+    // the shared workspace/sandbox parents for sandboxed sessions.
+    includeDefaultLocalPathRoots: false,
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     workspaceDir: params.workspaceDir,
   });

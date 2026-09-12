@@ -5,6 +5,7 @@ import JSZip from "jszip";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
+import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
 
 const { buildRandomTempFilePathMock, readRemoteMediaBufferMock } = vi.hoisted(() => ({
   buildRandomTempFilePathMock: vi.fn(),
@@ -36,6 +37,59 @@ const PNG_1X1 = Buffer.from(
 const AMBIGUOUS_WEBM = Buffer.from("1a45dfa3874282847765626d", "hex");
 
 describe("media understanding attachment cache", () => {
+  it("keeps session-scoped attachment roots authoritative through the cache getBuffer path", async () => {
+    await withTestDir({ prefix: "openclaw-media-cache-session-scoped-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
+      const siblingDir = path.join(stateDir, "sandboxes", "session-b");
+      const sharedWorkspaceDir = path.join(stateDir, "workspace");
+      for (const dir of [sessionWorkspaceDir, siblingDir, sharedWorkspaceDir]) {
+        await fs.mkdir(dir, { recursive: true });
+      }
+      const ownFile = path.join(sessionWorkspaceDir, "own.txt");
+      const siblingFile = path.join(siblingDir, "sibling.txt");
+      const hostWorkspaceFile = path.join(sharedWorkspaceDir, "host-secret.txt");
+      await fs.writeFile(ownFile, "OWN-SANDBOX-CONTENT");
+      await fs.writeFile(siblingFile, "SIBLING-SANDBOX-CONTENT");
+      await fs.writeFile(hostWorkspaceFile, "SHARED-HOST-WORKSPACE-CONTENT");
+
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      try {
+        const roots = resolveMediaAttachmentLocalRoots({
+          cfg: {} as never,
+          ctx: {} as never,
+          workspaceDir: sessionWorkspaceDir,
+        });
+        // Production construction (apply.ts / file-context.ts): the scoped root set is
+        // authoritative — merging sessionless defaults back in would restore the shared
+        // workspace/sandbox parents for sandboxed sessions.
+        const cache = new MediaAttachmentCache(
+          [
+            { index: 0, path: ownFile },
+            { index: 1, path: siblingFile },
+            { index: 2, path: hostWorkspaceFile },
+          ],
+          { localPathRoots: roots, includeDefaultLocalPathRoots: false },
+        );
+
+        const own = await cache.getBuffer({
+          attachmentIndex: 0,
+          maxBytes: 1024,
+          timeoutMs: 1000,
+        });
+        expect(own.buffer.toString()).toBe("OWN-SANDBOX-CONTENT");
+        await expect(
+          cache.getBuffer({ attachmentIndex: 1, maxBytes: 1024, timeoutMs: 1000 }),
+        ).rejects.toThrow(/outside allowed roots/i);
+        await expect(
+          cache.getBuffer({ attachmentIndex: 2, maxBytes: 1024, timeoutMs: 1000 }),
+        ).rejects.toThrow(/outside allowed roots/i);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     buildRandomTempFilePathMock.mockReset();

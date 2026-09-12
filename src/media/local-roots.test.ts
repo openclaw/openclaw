@@ -10,6 +10,7 @@ import {
   getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsBase,
   getAgentScopedMediaLocalRootsForSources as getAgentScopedMediaLocalRootsForSourcesBase,
   getDefaultMediaLocalRoots,
+  getSessionSafeDefaultMediaLocalRoots,
 } from "./local-roots.js";
 
 function loadedConfig(config: OpenClawConfig): OpenClawConfig {
@@ -143,6 +144,118 @@ describe("local media roots", () => {
       expectedExcluded: expectedExcluded.map((suffix) => path.join(stateDir, suffix)),
       minLength,
     });
+  });
+
+  it("does not promote sibling sandbox directories via source-parent expansion", () => {
+    const stateDir = path.join("/tmp", "openclaw-sibling-sandbox-expansion-state");
+    const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
+    const siblingFile = path.join(stateDir, "sandboxes", "session-b", "secret.txt");
+
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRootsForSources({
+        cfg: {},
+        agentId: "ops",
+        mediaSources: [siblingFile],
+        sessionWorkspaceDir,
+      }),
+    );
+
+    expectNormalizedRootsContain(roots, [sessionWorkspaceDir]);
+    expectNormalizedRootsExclude(roots, [
+      path.join(stateDir, "sandboxes"),
+      path.join(stateDir, "sandboxes", "session-b"),
+    ]);
+  });
+
+  it("does not re-add the shared workspace via source-parent expansion for sandboxed sessions", () => {
+    const stateDir = path.join("/tmp", "openclaw-shared-workspace-expansion-state");
+    const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
+    const sharedWorkspaceFile = path.join(stateDir, "workspace", "notes.png");
+
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRootsForSources({
+        cfg: {},
+        agentId: "ops",
+        mediaSources: [sharedWorkspaceFile],
+        sessionWorkspaceDir,
+      }),
+    );
+
+    expectNormalizedRootsExclude(roots, [path.join(stateDir, "workspace")]);
+  });
+
+  it("keeps parent expansion for locations outside shared isolation parents", () => {
+    const stateDir = path.join("/tmp", "openclaw-parent-expansion-state");
+    const externalDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Downloads" : "/Users/peter/Downloads";
+
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRootsForSources({
+        cfg: {},
+        agentId: "ops",
+        mediaSources: [path.join(externalDir, "clip.mp4")],
+      }),
+    );
+
+    expectNormalizedRootsContain(roots, [externalDir]);
+    expectNormalizedRootsExclude(roots, [path.join(stateDir, "sandboxes")]);
+  });
+
+  it("keeps own sandbox parents readable via source-parent expansion", () => {
+    const stateDir = path.join("/tmp", "openclaw-own-sandbox-expansion-state");
+    const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
+    const ownFile = path.join(sessionWorkspaceDir, "media", "clip.mp4");
+
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRootsForSources({
+        cfg: {},
+        agentId: "ops",
+        mediaSources: [ownFile],
+        sessionWorkspaceDir,
+      }),
+    );
+
+    expectNormalizedRootsContain(roots, [path.join(sessionWorkspaceDir, "media")]);
+  });
+
+  it("excludes shared sandbox parents from session-safe default attachment roots", () => {
+    const stateDir = path.join("/tmp", "openclaw-session-safe-defaults-state");
+
+    const roots = withStateDir(stateDir, () => getSessionSafeDefaultMediaLocalRoots());
+
+    expectNormalizedRootsExclude(roots, [
+      path.join(stateDir, "sandboxes"),
+      path.join(stateDir, "sandboxes", "session-a"),
+    ]);
+    expectNormalizedRootsContain(roots, [path.join(stateDir, "workspace")]);
+  });
+
+  it("drops the shared workspace from session-safe attachment roots for sandboxed sessions", () => {
+    const stateDir = path.join("/tmp", "openclaw-session-safe-sandbox-state");
+    const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
+
+    const roots = withStateDir(stateDir, () =>
+      getSessionSafeDefaultMediaLocalRoots(sessionWorkspaceDir),
+    );
+
+    // The session workspace itself is merged back by the caller
+    // (resolveMediaAttachmentLocalRoots adds params.workspaceDir explicitly).
+    expectNormalizedRootsExclude(roots, [
+      path.join(stateDir, "workspace"),
+      path.join(stateDir, "sandboxes"),
+      path.join(stateDir, "sandboxes", "session-b"),
+    ]);
+  });
+
+  it("keeps the shared workspace in session-safe attachment roots when the session workspace lives inside it", () => {
+    const stateDir = path.join("/tmp", "openclaw-session-safe-host-workspace-state");
+
+    const roots = withStateDir(stateDir, () =>
+      getSessionSafeDefaultMediaLocalRoots(path.join(stateDir, "workspace")),
+    );
+
+    expectNormalizedRootsContain(roots, [path.join(stateDir, "workspace")]);
+    expectNormalizedRootsExclude(roots, [path.join(stateDir, "sandboxes")]);
   });
 
   it("adds concrete parent roots for local media sources without widening to filesystem root", () => {
