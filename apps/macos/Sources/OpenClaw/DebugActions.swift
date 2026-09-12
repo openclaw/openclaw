@@ -118,7 +118,9 @@ enum DebugActions {
         }
         do {
             try requireCurrentRoute()
-            await RemoteTunnelManager.shared.stopAll()
+            await RemoteTunnelManager.shared.stopAll(ifCurrent: {
+                !Task.isCancelled && GatewayEndpointStore.shared.routeRevision == endpointRevision
+            })
             try requireCurrentRoute()
             await GatewayConnection.shared.shutdown(ifCurrent: {
                 !Task.isCancelled && GatewayEndpointStore.shared.routeRevision == endpointRevision

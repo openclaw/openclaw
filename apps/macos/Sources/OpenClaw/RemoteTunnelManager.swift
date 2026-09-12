@@ -367,7 +367,9 @@ actor RemoteTunnelManager {
         await self.stopAll()
     }
 
-    func stopAll() async {
+    func stopAll(ifCurrent: @Sendable () -> Bool = { true }) async {
+        // A queued reset cannot retire a successor selected before this actor admits it.
+        guard ifCurrent() else { return }
         // Invalidate every captured route before terminating processes. Delayed
         // health checks and create completions cannot resurrect this epoch.
         self.beginRetirement()
