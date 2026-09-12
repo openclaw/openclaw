@@ -1,6 +1,7 @@
 import { nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
+import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
 import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
 
@@ -15,6 +16,15 @@ function tabLabel(tab: BrowserPanelTab): string {
   }
 }
 
+export function browserPanelHostedTabs(tabs: BrowserPanelTab[]): PanelHostedTab[] {
+  return tabs.map((tab) => ({
+    id: tab.id,
+    label: tabLabel(tab),
+    url: tab.url,
+    kind: tab.kind,
+  }));
+}
+
 export function renderBrowserPanelTabs(params: {
   tabs: BrowserPanelTab[];
   activeTargetId: string | null;
@@ -24,17 +34,14 @@ export function renderBrowserPanelTabs(params: {
   /** Embedded chrome hosts the new-tab action in its toolbar instead. */
   hideNewControl?: boolean;
 }) {
-  const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {
-    const label = tabLabel(tab);
-    return {
-      id: tab.id,
-      domId: `browser-tab-${tab.id}`,
-      label,
-      title: `${t(tab.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
-      icon: tab.kind === "native" ? icons.monitor : icons.globe,
-      closeLabel: `${t("browser.closeTab")}: ${label}`,
-    };
-  });
+  const tabs: PanelTabStripTab[] = browserPanelHostedTabs(params.tabs).map((tab) => ({
+    id: tab.id,
+    domId: `browser-tab-${tab.id}`,
+    label: tab.label,
+    title: `${t(tab.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
+    icon: tab.kind === "native" ? icons.monitor : icons.globe,
+    closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+  }));
   return renderPanelTabStrip({
     tabs,
     activeId: params.activeTargetId,

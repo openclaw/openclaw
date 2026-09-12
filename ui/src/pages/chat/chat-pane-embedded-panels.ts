@@ -31,6 +31,7 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  browserTabsInHeader: boolean;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
@@ -149,6 +150,7 @@ export function sidebarPanelDefinitions(
           hello: state.hello,
         })}
         .presented=${params?.browserPresented ?? false}
+        .tabsInHeader=${params?.browserTabsInHeader ?? false}
         .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
         .sessionKey=${state.sessionKey}
         .preferredTab=${params?.preferredBrowserTab}
