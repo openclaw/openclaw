@@ -29,6 +29,25 @@ describe("resolveCodexCatalogCreateSession", () => {
     });
   });
 
+  it("preserves an existing Sol selection under an unchanged Sol-only policy", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": {} },
+          modelPolicy: { allow: ["openai/gpt-5.6-sol"] },
+        },
+      },
+    };
+    const before = structuredClone(config);
+
+    expect(resolveCodexCatalogCreateSession(modelConfig, config, "main")).toEqual({
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+    });
+    expect(config).toEqual(before);
+  });
+
   it("pins the Codex model even when ordinary chats use the direct runtime", () => {
     expect(
       resolveCodexCatalogCreateSession(
@@ -46,7 +65,14 @@ describe("resolveCodexCatalogCreateSession", () => {
     expect(
       resolveCodexCatalogCreateSession(
         modelConfig,
-        configWithAllowedModels(["openai/gpt-5.6-terra"]),
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+            },
+          },
+        },
         "main",
       ),
     ).toBeUndefined();
@@ -63,9 +89,9 @@ describe("resolveCodexCatalogCreateSession", () => {
           { id: "main", default: true },
           {
             id: "research",
-            model: { primary: "openai/gpt-5.6-terra" },
-            models: { "openai/gpt-5.6-terra": {} },
-            modelPolicy: { allow: ["openai/gpt-5.6-terra"] },
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: { "openai/gpt-5.6-luna": {} },
+            modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
           },
         ],
       },
@@ -75,7 +101,20 @@ describe("resolveCodexCatalogCreateSession", () => {
       model: "openai/gpt-6-astra",
       agentRuntime: "codex",
     });
-    expect(resolveCodexCatalogCreateSession(modelConfig, config, "research")).toBeUndefined();
+    expect(resolveCodexCatalogCreateSession(modelConfig, config, "research")).toEqual({
+      model: "openai/gpt-5.6-luna",
+      agentRuntime: "codex",
+    });
+  });
+
+  it("uses Astra for Codex creation when ordinary chats use another provider", () => {
+    expect(
+      resolveCodexCatalogCreateSession(
+        modelConfig,
+        configWithAllowedModels(["anthropic/claude-sonnet-4-6", "openai/gpt-6-astra"]),
+        "main",
+      ),
+    ).toEqual({ model: "openai/gpt-6-astra", agentRuntime: "codex" });
   });
 
   it("does not advertise creation before runtime config is available", () => {
