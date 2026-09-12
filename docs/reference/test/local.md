@@ -130,9 +130,10 @@ Isolated Doctor config scripts also share the prepared config-flow, health-write
 and install-index modules. Each case still starts a fresh process with separate
 state; standalone and watch runs resolve the original TypeScript entrypoints.
 
-The prepared model-catalog worker also uses this compiled generation. Separate
-prepared model generations still own separate worker threads, and their choice
-of source or built plugin artifacts stays independent of worker compilation.
+The model-catalog and session model-context workers also use this compiled generation.
+Model-catalog workers still belong to their prepared model generations; context reads
+retain their serial worker pool. Plugin source/built selection remains independent
+of worker compilation.
 Other worker-thread entries and arbitrary source CLI fixtures remain outside
 this declared set.
 
