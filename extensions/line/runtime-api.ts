@@ -38,12 +38,8 @@ export { probeLineBot } from "./src/probe.js";
 export { buildTemplateMessageFromPayload } from "./src/template-messages.js";
 export {
   createQuickReplyItems,
-  pushFlexMessage,
-  pushLocationMessage,
   pushMessageLine,
   pushMessagesLine,
-  pushTemplateMessage,
-  pushTextMessageWithQuickReplies,
   sendMessageLine,
 } from "./src/send.js";
 export { monitorLineProvider } from "./src/monitor.js";
@@ -77,7 +73,6 @@ export {
 export {
   createFlexMessage,
   createLocationMessage,
-  createTextMessageWithQuickReplies,
   getUserDisplayName,
   getUserProfile,
   pushImageMessage,

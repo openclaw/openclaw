@@ -1,9 +1,9 @@
 import { HTTPFetchError } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { createRuntime, lineResult } from "./outbound-harness.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import {
   createPendingLineResponse,
@@ -11,6 +11,29 @@ import {
   stubLineApiFetch,
 } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
+
+const ssrfMocks = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+}));
+
+// The payload owner builds its own media message now, so the media URL is
+// validated in-process instead of behind a stand-in sender.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
+}));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
+beforeEach(() => {
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+    hostname: "example.com",
+    addresses: ["93.184.216.34"],
+  });
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -29,7 +52,7 @@ describe("line outbound delivery outcomes", () => {
       headers: new Headers(),
       body: "provider rejection",
     });
-    mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+    mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
     setLineRuntime(runtime);
 
     await expect(
@@ -107,7 +130,7 @@ describe("line outbound delivery outcomes", () => {
       headers: new Headers(),
       body: JSON.stringify({ message: "You have reached your monthly limit." }),
     });
-    mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+    mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
     const fetchMock = stubLineApiFetch(
       quota ? Response.json(quota) : Response.json({ message: "unavailable" }, { status: 503 }),
       ...(used === undefined ? [] : [Response.json({ totalUsage: used })]),
@@ -124,7 +147,7 @@ describe("line outbound delivery outcomes", () => {
       name: "PlatformMessageNotDispatchedError",
       cause: rejection,
     });
-    expect(mocks.pushMessageLine).toHaveBeenCalledOnce();
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls.map(([input]) => resolveRequestUrl(input))[0]).toBe(
       "https://api.line.me/v2/bot/message/quota",
     );
@@ -151,7 +174,7 @@ describe("line outbound delivery outcomes", () => {
         headers: new Headers(),
         body: JSON.stringify({ message: "You have reached your monthly limit." }),
       });
-      mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+      mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
       setLineRuntime(runtime);
 
       delivered = lineOutboundAdapter.sendPayload!({
@@ -184,14 +207,12 @@ describe("line outbound delivery outcomes", () => {
       headers: new Headers(),
       body: "provider rejection",
     });
-    const events: string[] = [];
-    const onDeliveryResult = vi.fn(() => {
-      events.push("media-receipt");
-    });
-    mocks.pushTextMessageWithQuickReplies.mockImplementationOnce(async () => {
-      events.push("text-refused");
-      throw rejection;
-    });
+    const onDeliveryResult = vi.fn();
+    // The caption rides the last push because it carries the quick replies, so the
+    // media push before it is the one whose receipt must survive the refusal.
+    mocks.pushMessagesLine
+      .mockResolvedValueOnce(lineResult("m-media"))
+      .mockRejectedValueOnce(rejection);
     const fetchMock = stubLineApiFetch(
       Response.json({ type: "limited", value: 200 }),
       Response.json({ totalUsage: 200 }),
@@ -212,9 +233,29 @@ describe("line outbound delivery outcomes", () => {
       }),
     ).rejects.toBe(rejection);
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledOnce();
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
-    expect(events).toEqual(["media-receipt", "text-refused"]);
+    expect(mocks.pushMessagesLine.mock.calls).toEqual([
+      [
+        "line:user:U123",
+        [
+          {
+            type: "image",
+            originalContentUrl: "https://example.com/image.jpg",
+            previewImageUrl: "https://example.com/image.jpg",
+          },
+        ],
+        expect.any(Object),
+      ],
+      [
+        "line:user:U123",
+        [{ type: "text", text: "Caption", quickReply: { items: ["Continue"] } }],
+        expect.any(Object),
+      ],
+    ]);
+    // The media receipt is published before the text push is even attempted, so
+    // the refusal that follows cannot take it back.
+    expect(onDeliveryResult.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.pushMessagesLine.mock.invocationCallOrder[1]!,
+    );
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "line",
@@ -237,7 +278,7 @@ describe("line outbound delivery outcomes", () => {
       messageIds: ["accepted-first"],
       visibleReplySent: true,
     });
-    mocks.pushMessageLine.mockRejectedValueOnce(partial);
+    mocks.pushMessagesLine.mockRejectedValueOnce(partial);
     setLineRuntime(runtime);
 
     await expect(

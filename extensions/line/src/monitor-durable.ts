@@ -25,6 +25,9 @@ export function resolveLineDurableReplyOptions(params: {
   if (params.replyToken && !params.replyTokenUsed) {
     return false;
   }
+  // Widening which replies take the durable path is a separate contract change
+  // from resolving one that was interrupted, so rich and media replies keep the
+  // inline path this fix does not touch.
   if (hasLineChannelData(params.payload)) {
     return false;
   }
@@ -32,7 +35,7 @@ export function resolveLineDurableReplyOptions(params: {
   if (reply.hasMedia || !reply.hasText) {
     return false;
   }
-  return {
-    to: params.to,
-  };
+  // No reply-to here: core takes it from the payload or the turn context, and the
+  // outbound adapter turns it into a quote on the request it records.
+  return { to: params.to };
 }

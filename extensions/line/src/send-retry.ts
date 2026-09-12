@@ -1,4 +1,5 @@
 // Line plugin module implements push retry policy behavior.
+import { createHash, randomUUID } from "node:crypto";
 import { HTTPFetchError } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -8,11 +9,70 @@ import {
 } from "openclaw/plugin-sdk/retry-runtime";
 import { readLineAccountMessageQuota } from "./probe.js";
 
+/** LINE keeps a retry key for 24 hours; past that a replay delivers a second copy. */
+export const LINE_RETRY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A replay that reached its retry key's deadline before the request went out. It is
+ * never retryable: LINE has stopped deduplicating the key, so the next attempt would
+ * deliver a second copy rather than resolve the first.
+ */
+export class LineRetryKeyExpiredError extends Error {
+  constructor() {
+    super("LINE retry key expired before the queued send could be reconciled");
+    this.name = "LineRetryKeyExpiredError";
+  }
+}
+
+/**
+ * Derives the retry key for one platform send. A durable intent id produces the
+ * same key in every process, so recovery can replay the exact request that may
+ * already have been accepted; unqueued sends fall back to a fresh key.
+ * The key spans both indices because core numbers the parts it plans while the
+ * payload sender numbers the pushes one part fans out into.
+ */
+export function resolveLinePushRetryKey(params: {
+  deliveryQueueId?: string | null;
+  partIndex?: number;
+  pushIndex?: number;
+}): string {
+  const durableId = params.deliveryQueueId?.trim();
+  if (!durableId) {
+    return randomUUID();
+  }
+  const digest = createHash("sha256")
+    .update(`line:push-retry-key:${durableId}:${params.partIndex ?? 0}:${params.pushIndex ?? 0}`)
+    .digest("hex");
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    digest.slice(12, 16),
+    digest.slice(16, 20),
+    digest.slice(20, 32),
+  ].join("-");
+}
+
+/** True when a replay stopped because its retry key's window closed, at any wrap depth. */
+export function isLineRetryKeyExpiredError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).some(
+    (candidate) => candidate instanceof LineRetryKeyExpiredError,
+  );
+}
+
 /** The LINE HTTP response carried by an error graph, when the request reached LINE. */
 export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
   return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).find(
     (candidate): candidate is HTTPFetchError => candidate instanceof HTTPFetchError,
   );
+}
+
+/**
+ * LINE rejected the request itself, so the same bytes were refused whenever they were
+ * sent. A 401 or 403 refuses the caller's credentials instead, which says nothing about
+ * whether an earlier attempt under the same retry key was accepted.
+ */
+export function isLineRequestRejection(error: unknown): boolean {
+  return findLineHttpError(error)?.status === 400;
 }
 
 /**
@@ -61,6 +121,13 @@ export function resolveLineNonDispatchRetryable(error: unknown): boolean | undef
 }
 
 function isRetryableLinePushError(error: unknown): boolean {
+  // Redundant today — this error carries no code, so the transport check below would
+  // also refuse it — but the refusal is the point, not the route to it. Past the retry
+  // key's window a replay is a second delivery, and that must not depend on an error
+  // shape happening never to look transient.
+  if (error instanceof LineRetryKeyExpiredError) {
+    return false;
+  }
   const httpError = findLineHttpError(error);
   if (httpError) {
     // LINE documents server errors and transport failures as the retriable

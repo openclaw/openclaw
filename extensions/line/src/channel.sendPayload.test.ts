@@ -1,22 +1,18 @@
 // Line tests cover channel.sendPayload plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  verifyChannelMessageAdapterCapabilityProofs,
-  verifyChannelMessageReceiveAckPolicyAdapterProofs,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { verifyChannelMessageReceiveAckPolicyAdapterProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveLineAccount } from "./accounts.js";
 import { linePlugin } from "./channel.js";
-import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { createRuntime, lineResult } from "./outbound-harness.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
-import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
+import { resolveLinePushRetryKey } from "./send-retry.js";
 
 const ssrfMocks = vi.hoisted(() => ({
   resolvePinnedHostnameWithPolicy: vi.fn(),
@@ -77,37 +73,44 @@ describe("line outbound sendPayload", () => {
       cfg: { channels: { line: {} } } as OpenClawConfig,
     });
 
-    const messages = [
-      ...mocks.pushFlexMessage.mock.calls.map((args, index) => ({
-        position: mocks.pushFlexMessage.mock.invocationCallOrder[index],
-        type: args[1] === "Code" ? "code-card" : "valid-table-card",
-      })),
-      ...mocks.pushMessageLine.mock.calls.map((args, index) => ({
-        position: mocks.pushMessageLine.mock.invocationCallOrder[index],
-        type: String(args[1]).includes("Large") ? "oversized-table-text" : "text",
-      })),
-      ...mocks.pushMessagesLine.mock.calls.flatMap((args, index) =>
-        args[1].map((message: { type: string; altText?: string }) => ({
-          position: mocks.pushMessagesLine.mock.invocationCallOrder[index],
-          type: message.altText === "Code" ? "code-card" : message.type,
-        })),
-      ),
-    ]
-      .toSorted((left, right) => left.position - right.position)
-      .map((message) => message.type)
+    // Every push leaves in the order it was planned, so the call order is the order
+    // the recipient sees.
+    const pushedMessages = mocks.pushMessagesLine.mock.calls.flatMap(
+      (args) => args[1] as { type: string; text?: string; altText?: string }[],
+    );
+    const messages = pushedMessages
+      .map((message) =>
+        message.type === "flex"
+          ? message.altText === "Code"
+            ? "code-card"
+            : "valid-table-card"
+          : String(message.text).includes("Large")
+            ? "oversized-table-text"
+            : "text",
+      )
       .filter((type) => type !== "text");
 
     expect(messages).toEqual(["valid-table-card", "oversized-table-text", "code-card"]);
-    expect(mocks.pushMessageLine.mock.calls.every((args) => String(args[1]).length <= 5000)).toBe(
-      true,
-    );
+    expect(
+      pushedMessages.every(
+        (message) => message.type !== "text" || String(message.text).length <= 5000,
+      ),
+    ).toBe(true);
     if (quickReplies.length > 0) {
-      expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
-        "line:user:ordered",
-        [expect.objectContaining({ altText: "Code", quickReply: { items: quickReplies } })],
-        expect.any(Object),
-      );
-      expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
+      // Exactly one push carries the quick replies, and it is the last card.
+      expect(
+        mocks.pushMessagesLine.mock.calls.filter((args) =>
+          (args[1] as { quickReply?: unknown }[]).some(
+            (message) => message.quickReply !== undefined,
+          ),
+        ),
+      ).toEqual([
+        [
+          "line:user:ordered",
+          [expect.objectContaining({ altText: "Code", quickReply: { items: quickReplies } })],
+          expect.any(Object),
+        ],
+      ]);
     }
   });
 
@@ -132,40 +135,47 @@ describe("line outbound sendPayload", () => {
   });
 
   it.each([
-    { name: "title", title: " ", address: "1 Main Street" },
-    { name: "address", title: "Meet here", address: " " },
-  ])("delivers a blank-$name location instead of dropping it", async (location) => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
+    {
+      name: "title",
+      title: " ",
+      address: "1 Main Street",
+      degradedText: "1 Main Street\n35.6895, 139.6917",
+    },
+    {
+      name: "address",
+      title: "Meet here",
+      address: " ",
+      degradedText: "Meet here\n35.6895, 139.6917",
+    },
+  ])(
+    "delivers a blank-$name location instead of dropping it",
+    async ({ degradedText, ...location }) => {
+      const { runtime, mocks } = createRuntime();
+      setLineRuntime(runtime);
 
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:U123",
-      text: "Meet me there.",
-      payload: {
+      await lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
         text: "Meet me there.",
-        channelData: {
-          line: {
-            location: { ...location, latitude: 35.6895, longitude: 139.6917 },
+        payload: {
+          text: "Meet me there.",
+          channelData: {
+            line: {
+              location: { ...location, latitude: 35.6895, longitude: 139.6917 },
+            },
           },
         },
-      },
-      accountId: "default",
-      cfg: { channels: { line: {} } } as OpenClawConfig,
-    });
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+      });
 
-    // The pin LINE will not render still reaches the chat as the text it was
-    // made of; the builder owns that degradation, so delivery must not skip it.
-    expect(mocks.pushLocationMessage).toHaveBeenCalledWith(
-      "line:user:U123",
-      { ...location, latitude: 35.6895, longitude: 139.6917 },
-      expect.any(Object),
-    );
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
-      "line:user:U123",
-      "Meet me there.",
-      expect.any(Object),
-    );
-  });
+      // The pin LINE will not render still reaches the chat as the text it was
+      // made of; the builder owns that degradation, so delivery must not skip it.
+      expect(mocks.pushMessagesLine.mock.calls).toEqual([
+        ["line:user:U123", [{ type: "text", text: degradedText }], expect.any(Object)],
+        ["line:user:U123", [{ type: "text", text: "Meet me there." }], expect.any(Object)],
+      ]);
+    },
+  );
 
   it("keeps a degraded location in the quick-reply inline batch", async () => {
     const { runtime, mocks } = createRuntime();
@@ -201,12 +211,6 @@ describe("line outbound sendPayload", () => {
           quickReply: expect.any(Object),
         }),
       ],
-      expect.any(Object),
-    );
-    expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalledWith(
-      "line:user:U123",
-      expect.stringContaining("Continue"),
-      ["Continue"],
       expect.any(Object),
     );
   });
@@ -269,10 +273,80 @@ describe("line outbound sendPayload", () => {
     expect(result.messageId).toBe("m-flex");
     expect(result.receipt?.platformMessageIds).toEqual(["m-flex"]);
     expect(result.receipt?.threadId).toBe("c1");
-    expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:U123",
+      [expect.objectContaining({ type: "flex" })],
+      expect.any(Object),
+    );
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(onDeliveryResult).toHaveBeenCalledWith(expect.objectContaining({ messageId: "m-flex" }));
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("sends a direct captioned media send as one push, media first, as main did", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const result = await lineOutboundAdapter.sendMedia!({
+      to: "line:user:U123",
+      text: "caption",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "default",
+      cfg,
+    });
+
+    // One request, so the caption cannot arrive without its media and the send costs
+    // one monthly message, the shape `sendMessageLine` sent before this path recorded.
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:U123",
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/image.png",
+          previewImageUrl: "https://example.com/image.png",
+        },
+        { type: "text", text: "caption" },
+      ],
+      expect.any(Object),
+    );
+    expect(result.messageId).toBe("m-batch");
+  });
+
+  it("records a direct captioned media send as one push under one retry key", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendMedia!({
+      to: "line:user:U123",
+      text: "caption",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "default",
+      cfg,
+      deliveryQueueId: "queue-media",
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:U123",
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/image.png",
+          previewImageUrl: "https://example.com/image.png",
+        },
+        { type: "text", text: "caption" },
+      ],
+      expect.objectContaining({
+        durableRetryKey: resolveLinePushRetryKey({
+          deliveryQueueId: "queue-media",
+          partIndex: 0,
+          pushIndex: 0,
+        }),
+      }),
+    );
   });
 
   it("publishes completed Flex receipts before a later legacy text send fails", async () => {
@@ -292,7 +366,7 @@ describe("line outbound sendPayload", () => {
       )
       .mockRejectedValueOnce(laterFailure);
     vi.stubGlobal("fetch", fetch);
-    mocks.pushFlexMessage
+    mocks.pushMessagesLine
       .mockResolvedValueOnce(lineResult("m-first-flex"))
       .mockRejectedValueOnce(laterFailure);
     const onDeliveryResult = vi.fn();
@@ -342,12 +416,18 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.pushFlexMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", {
-      verbose: false,
-      accountId: "default",
-      cfg,
-    });
+    expect(mocks.pushMessagesLine.mock.calls).toEqual([
+      [
+        "line:group:1",
+        [{ type: "flex", altText: "Now playing", contents: { type: "bubble" } }],
+        { verbose: false, accountId: "default", cfg },
+      ],
+      [
+        "line:group:1",
+        [{ type: "text", text: "Now playing:" }],
+        { verbose: false, accountId: "default", cfg },
+      ],
+    ]);
   });
 
   it("reports each platform result for text and media payloads", async () => {
@@ -461,12 +541,18 @@ describe("line outbound sendPayload", () => {
     });
 
     expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledTimes(1);
-    expect(mocks.pushTemplateMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
-      verbose: false,
-      accountId: "default",
-      cfg,
-    });
+    expect(mocks.pushMessagesLine.mock.calls).toEqual([
+      [
+        "line:user:1",
+        [{ type: "template", altText: "Choose one", template: { type: "buttons" } }],
+        { verbose: false, accountId: "default", cfg },
+      ],
+      [
+        "line:user:1",
+        [{ type: "text", text: "Choose one:" }],
+        { verbose: false, accountId: "default", cfg },
+      ],
+    ]);
   });
 
   it("attaches quick replies while preserving the provider's full Flex alternative-text limit", async () => {
@@ -495,7 +581,6 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
     expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
       "line:user:2",
       [
@@ -530,10 +615,15 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
       "line:user:quick",
-      "Options:\n- One\n- Two",
-      ["One", "Two"],
+      [
+        {
+          type: "text",
+          text: "Options:\n- One\n- Two",
+          quickReply: { items: ["One", "Two"] },
+        },
+      ],
       { verbose: false, accountId: "default", cfg },
     );
     expect(result).toEqual({
@@ -596,27 +686,26 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/img.jpg",
-      mediaKind: undefined,
-      previewImageUrl: undefined,
-      durationMs: undefined,
-      trackingId: undefined,
-      accountId: "default",
-      cfg,
-    });
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
-      "line:user:3",
-      "Hello",
-      ["One", "Two"],
-      { verbose: false, accountId: "default", cfg },
-    );
-    const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
-    const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
-    expect(expectDefined(mediaOrder, "LINE media invocation")).toBeLessThan(
-      expectDefined(quickReplyOrder, "LINE quick-reply invocation"),
-    );
+    // The media push is planned before the quick-reply text, so the buttons stay
+    // on the last message the recipient receives.
+    expect(mocks.pushMessagesLine.mock.calls).toEqual([
+      [
+        "line:user:3",
+        [
+          {
+            type: "image",
+            originalContentUrl: "https://example.com/img.jpg",
+            previewImageUrl: "https://example.com/img.jpg",
+          },
+        ],
+        { verbose: false, accountId: "default", cfg },
+      ],
+      [
+        "line:user:3",
+        [{ type: "text", text: "Hello", quickReply: { items: ["One", "Two"] } }],
+        { verbose: false, accountId: "default", cfg },
+      ],
+    ]);
   });
 
   it("forwards generic media payloads to the shared send path unresolved", async () => {
@@ -634,12 +723,13 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:4", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/video.mp4",
-      accountId: "default",
-      cfg,
-    });
+    // No LINE-specific option is supplied, so the shared media builder resolves the
+    // URL on its own: a video with no poster LINE can render degrades to its URL.
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:4",
+      [{ type: "text", text: "https://example.com/video.mp4" }],
+      { verbose: false, accountId: "default", cfg },
+    );
   });
 
   it("uses LINE-specific media options for rich media payloads", async () => {
@@ -664,16 +754,21 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:5", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/video.mp4",
-      mediaKind: "video",
-      previewImageUrl: "https://example.com/preview.jpg",
-      durationMs: undefined,
-      trackingId: "track-123",
-      accountId: "default",
-      cfg,
-    });
+    // The declared kind and poster both reach the wire. The tracking id does not:
+    // this recipient is not a user id, and LINE only accepts one on a video sent to
+    // a user, so the shared builder drops it (pinned by the two inline-media tests
+    // below, which send the same options to a user and to a group).
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:5",
+      [
+        {
+          type: "video",
+          originalContentUrl: "https://example.com/video.mp4",
+          previewImageUrl: "https://example.com/preview.jpg",
+        },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
   });
 
   it("uses configured text chunk limit for payloads", async () => {
@@ -899,82 +994,6 @@ describe("line outbound sendPayload", () => {
         cfg,
       }),
     ).rejects.toThrow(/require previewimageurl/i);
-  });
-
-  it("declares message adapter durable text, media, and reply-to with proofs", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
-    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "line",
-      adapter: linePlugin.message!,
-      proofs: {
-        text: async () => {
-          const result = await linePlugin.message?.send?.text?.({
-            cfg,
-            to: "line:user:U123",
-            text: "hello",
-            accountId: "primary",
-          });
-          expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "hello", {
-            verbose: false,
-            accountId: "primary",
-            cfg,
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["m-text"]);
-        },
-        media: async () => {
-          const result = await linePlugin.message?.send?.media?.({
-            cfg,
-            to: "line:user:U123",
-            text: "image",
-            mediaUrl: "https://example.com/image.jpg",
-            accountId: "primary",
-          });
-          expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:U123", "", {
-            verbose: false,
-            mediaUrl: "https://example.com/image.jpg",
-            accountId: "primary",
-            cfg,
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
-        },
-        replyTo: async () => {
-          recordLineQuoteToken({
-            accountId: "primary",
-            chatId: "U123",
-            messageId: "m-answered",
-            quoteToken: "q-answered",
-          });
-
-          await linePlugin.message?.send?.text?.({
-            cfg,
-            to: "line:user:U123",
-            text: "answering you",
-            replyToId: "m-answered",
-            accountId: "primary",
-          });
-
-          expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "answering you", {
-            verbose: false,
-            accountId: "primary",
-            cfg,
-            quoteToken: "q-answered",
-          });
-        },
-        messageSendingHooks: () => {
-          expect(linePlugin.message?.send?.text).toBeTypeOf("function");
-        },
-      },
-    });
-
-    expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
-    expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
-    expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
-    expect(proofResults.find((result) => result.capability === "messageSendingHooks")?.status).toBe(
-      "verified",
-    );
   });
 
   it("declares receive ack policies for immediate LINE webhook acknowledgement", async () => {
