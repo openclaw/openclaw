@@ -691,7 +691,10 @@ export async function handleControlUiAssistantMediaRequest(
       }
     }
     assertCurrentPolicy();
-    if (media.outsideRoots && mediaKind === "image") {
+    // Every image served on this route becomes a same-origin document when opened
+    // directly, so workspace images get the same document sandbox as outside-root
+    // ones; in-workspace files are agent-writable and must not be privileged.
+    if (mediaKind === "image") {
       applyHttpImageContentSecurityPolicy(res);
     }
     res.setHeader("Content-Type", contentType);
