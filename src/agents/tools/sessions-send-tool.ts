@@ -38,6 +38,7 @@ import {
   normalizeAgentIdStrict,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { classifySessionKind } from "../../sessions/classify-session-kind.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
@@ -277,20 +278,15 @@ async function createConfiguredAgentMainSession(params: {
   }
 }
 
-type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
+export type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
 
-function isRequesterParentOfNativeSubagentSession(params: {
+export function isRequesterParentOfNativeSubagentSession(params: {
   entry: SessionsSendRouteEntry | null | undefined;
   acpMeta?: unknown;
   requesterSessionKey: string | null | undefined;
   targetSessionKey: string;
 }): boolean {
-  if (
-    !params.entry ||
-    params.acpMeta ||
-    params.entry.acp ||
-    !isSubagentSessionKey(params.targetSessionKey)
-  ) {
+  if (!params.entry || params.acpMeta || params.entry.acp) {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
@@ -299,7 +295,19 @@ function isRequesterParentOfNativeSubagentSession(params: {
   }
   const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
   const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey;
+
+  // For traditional subagent: key shapes, either spawnedBy or parentSessionKey establishes parentage.
+  if (isSubagentSessionKey(params.targetSessionKey)) {
+    return requester === spawnedBy || requester === parentSessionKey;
+  }
+
+  // For visible dashboard sessions, spawnedBy is the authoritative marker that
+  // distinguishes an explicitly spawned child from an ordinary transcript fork.
+  if (classifySessionKind(params.targetSessionKey, params.entry) === "spawn-child") {
+    return Boolean(spawnedBy) && requester === spawnedBy;
+  }
+
+  return false;
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
