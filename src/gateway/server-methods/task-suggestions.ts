@@ -251,6 +251,7 @@ async function createSuggestedTaskSession(params: {
   options: GatewayRequestHandlerOptions;
   agentId: string;
   mode: Exclude<TaskSuggestionAcceptMode, "session">;
+  cwd: string;
   cloudProfileId?: string;
 }): Promise<TaskSuggestionAcceptanceResult> {
   let sessionResponse: Parameters<RespondFn> | undefined;
@@ -279,7 +280,7 @@ async function createSuggestedTaskSession(params: {
         label: params.suggestion.title,
         ...(params.mode === "cloud" ? {} : { task }),
         ...(params.mode === "local" ? {} : { worktree: true }),
-        cwd: params.suggestion.cwd,
+        cwd: params.cwd,
       },
       respond: (...args) => {
         sessionResponse = args;
@@ -511,19 +512,17 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const agentId = normalizeAgentId(sourceOwner.agentId);
-    // Sandboxed sessions report container paths; the card must carry a cwd the
-    // host can resolve when it is accepted.
+    // Sandboxed sessions report container paths. Record the host directory when
+    // the sandbox can name one, but keep the reported path otherwise: whether a
+    // host cwd is required depends on the acceptance mode the user picks.
     const hostCwd = await resolveTaskSuggestionHostCwd({
       cfg,
       sessionKey: params.sessionKey,
       agentId,
       cwd: params.cwd,
     });
-    if (!hostCwd.ok) {
-      respond(false, undefined, hostCwd.error);
-      return;
-    }
-    const created = createTaskSuggestion({ ...params, cwd: hostCwd.cwd, agentId });
+    const recordedCwd = hostCwd.ok ? hostCwd.cwd : params.cwd;
+    const created = createTaskSuggestion({ ...params, cwd: recordedCwd, agentId });
     if (created.status === "full") {
       respond(
         false,
@@ -647,21 +646,36 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         });
       }
       const agentId = normalizeAgentId(sourceOwner.agentId);
-      return mode === "session"
-        ? deliverSuggestedTaskToSourceSession({
-            taskId: params.taskId,
-            suggestion: acceptance.suggestion,
-            options,
-            agentId,
-          })
-        : createSuggestedTaskSession({
-            taskId: params.taskId,
-            suggestion: acceptance.suggestion,
-            options,
-            agentId,
-            mode,
-            ...(cloudProfileId ? { cloudProfileId } : {}),
-          });
+      if (mode === "session") {
+        // Delivering to the source session never launches a host session, so a
+        // container-only cwd must not stop the documented in-session action.
+        return deliverSuggestedTaskToSourceSession({
+          taskId: params.taskId,
+          suggestion: acceptance.suggestion,
+          options,
+          agentId,
+        });
+      }
+      // Every other mode starts a host session in the recorded cwd, so resolve
+      // it now instead of refusing the suggestion when it is created.
+      const hostCwd = await resolveTaskSuggestionHostCwd({
+        cfg: config,
+        sessionKey: acceptance.suggestion.sessionKey,
+        agentId,
+        cwd: acceptance.suggestion.cwd,
+      });
+      if (!hostCwd.ok) {
+        return restoreSuggestedTaskClaim({ taskId: params.taskId, options, error: hostCwd.error });
+      }
+      return createSuggestedTaskSession({
+        taskId: params.taskId,
+        suggestion: acceptance.suggestion,
+        options,
+        agentId,
+        mode,
+        cwd: hostCwd.cwd,
+        ...(cloudProfileId ? { cloudProfileId } : {}),
+      });
     })().catch((error: unknown) => {
       abandonSuggestedTaskAcceptance(params.taskId, options);
       throw error;

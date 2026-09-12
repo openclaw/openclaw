@@ -6,10 +6,15 @@ import {
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { mapSandboxContainerWorkspacePath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
+import {
+  buildSandboxFsMounts,
+  resolveSandboxFsPathWithMounts,
+} from "../../agents/sandbox/fs-paths.js";
 import type { SandboxWorkspaceInfo } from "../../agents/sandbox/types.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 
 function isExistingHostDirectory(candidate: string): boolean {
   try {
@@ -38,10 +43,76 @@ function unavailableTaskSuggestionCwdError(params: {
 }
 
 /**
- * Accepting a suggestion creates a host session, so its cwd must resolve on the
- * host. Sandboxed sessions see container paths: translate the container
- * workspace path back to the host sandbox workspace it is bind-mounted from and
- * refuse anything else, instead of recording a cwd that can never resolve.
+ * The workspace a session actually runs in, which a spawned run or a dashboard
+ * session opened on a selected folder or managed worktree pins away from the
+ * agent's configured workspace. Sandbox setup mounts this one, so resolving the
+ * container path against anything else points at the wrong checkout.
+ */
+function resolveSessionWorkspaceDir(params: {
+  sessionKey: string;
+  agentId: string;
+}): string | undefined {
+  try {
+    const entry = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+      agentId: params.agentId,
+    }).entry;
+    return resolveIngressWorkspaceOverrideForSessionRun({
+      spawnedBy: entry?.spawnedBy,
+      workspaceDir: entry?.spawnedWorkspaceDir,
+      cwd: entry?.spawnedCwd,
+    });
+  } catch {
+    // An unreadable store leaves the configured agent workspace in charge.
+    return undefined;
+  }
+}
+
+/**
+ * Map a recorded cwd onto the host directory the sandbox mounts there. The
+ * mount table owns precedence (nested binds beat the workspace root) and
+ * containment, so a path outside every mount stays unresolved instead of being
+ * guessed from a container prefix.
+ */
+function mapCwdThroughSandboxMounts(params: {
+  sandbox: SandboxWorkspaceInfo;
+  containerWorkdir: string;
+  cwd: string;
+}): string | undefined {
+  const mounts = buildSandboxFsMounts({
+    workspaceDir: params.sandbox.workspaceDir,
+    agentWorkspaceDir: params.sandbox.agentWorkspaceDir ?? params.sandbox.workspaceDir,
+    ...(params.sandbox.skillsWorkspaceDir
+      ? { skillsWorkspaceDir: params.sandbox.skillsWorkspaceDir }
+      : {}),
+    ...(params.sandbox.readOnlyResourceMounts
+      ? { readOnlyResourceMounts: params.sandbox.readOnlyResourceMounts }
+      : {}),
+    workspaceAccess: params.sandbox.workspaceAccess ?? "ro",
+    containerName: "",
+    containerWorkdir: params.containerWorkdir,
+    docker: params.sandbox.dockerBinds ? { binds: [...params.sandbox.dockerBinds] } : {},
+  });
+  try {
+    return resolveSandboxFsPathWithMounts({
+      filePath: params.cwd,
+      cwd: params.containerWorkdir,
+      defaultWorkspaceRoot: params.sandbox.workspaceDir,
+      defaultContainerRoot: params.containerWorkdir,
+      mounts,
+    }).hostPath;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the host directory a recorded cwd refers to. Sandboxed sessions see
+ * container paths, so translate through the source session's effective
+ * workspace and mounts; every other session keeps host cwd semantics.
+ *
+ * Callers choose the policy: acceptance that starts a host session refuses what
+ * does not resolve, while task suggestion creation keeps the recorded path so
+ * "start in this session" stays available.
  */
 export async function resolveTaskSuggestionHostCwd(params: {
   cfg: OpenClawConfig;
@@ -49,7 +120,8 @@ export async function resolveTaskSuggestionHostCwd(params: {
   agentId: string;
   cwd: string;
 }): Promise<{ ok: true; cwd: string } | { ok: false; error: ErrorShape }> {
-  const hostWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const hostWorkspaceDir =
+    resolveSessionWorkspaceDir(params) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
   let sandbox: SandboxWorkspaceInfo | null;
   try {
     sandbox = await ensureSandboxWorkspaceForSession({
@@ -73,10 +145,10 @@ export async function resolveTaskSuggestionHostCwd(params: {
     return { ok: true, cwd: params.cwd };
   }
   const mappedHostCwd = sandbox.containerWorkdir
-    ? mapSandboxContainerWorkspacePath({
-        candidate: params.cwd,
-        sandboxRoot: sandbox.workspaceDir,
+    ? mapCwdThroughSandboxMounts({
+        sandbox,
         containerWorkdir: sandbox.containerWorkdir,
+        cwd: params.cwd,
       })
     : undefined;
   const hostCwd = mappedHostCwd ?? params.cwd;

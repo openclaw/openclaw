@@ -38,6 +38,7 @@ type SandboxConfigParams = {
   storePath: string;
   workspaceAccess?: "rw" | "none";
   workspaceRoot?: string;
+  binds?: string[];
 };
 
 function sandboxedConfig(params: SandboxConfigParams) {
@@ -50,6 +51,7 @@ function sandboxedConfig(params: SandboxConfigParams) {
           scope: "agent",
           ...(params.workspaceAccess ? { workspaceAccess: params.workspaceAccess } : {}),
           ...(params.workspaceRoot ? { workspaceRoot: params.workspaceRoot } : {}),
+          ...(params.binds ? { docker: { binds: params.binds } } : {}),
         },
       },
       entries: { main: { workspace: params.workspace } },
@@ -151,7 +153,7 @@ describe("task suggestion host cwd for sandboxed sessions", () => {
     });
   });
 
-  it("rejects a sandbox cwd the host cannot resolve instead of recording it", async () => {
+  it("keeps a container-only cwd acceptable in its source session", async () => {
     await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
       const workspace = await fs.realpath(state.workspaceDir);
       const config = sandboxedConfig({
@@ -159,14 +161,104 @@ describe("task suggestion host cwd for sandboxed sessions", () => {
         storePath: state.statePath("agents", "{agentId}", "sessions", "sessions.json"),
         workspaceAccess: "rw",
       });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+        { sessionId: "follow-up-source", updatedAt: 1 },
+      );
 
-      const result = await createSuggestion({ config, cwd: "/sandbox-only/folder" });
+      // The container owns this directory; the host sandbox workspace has no build/.
+      const created = await createSuggestion({ config, cwd: `${BASE_CWD}/build` });
+      const { taskId } = requireSuggestion(created);
 
-      expect(result.response?.[0]).toBe(false);
-      expect(result.response?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
-      expect(result.response?.[2]?.message).toContain("task suggestion cwd is unavailable");
-      expect(result.response?.[2]?.message).toContain(workspace);
-      expect(result.broadcast).not.toHaveBeenCalled();
+      // Starting a host session still refuses a directory the host does not have.
+      const refused = await call("taskSuggestions.accept", { taskId, mode: "local" }, vi.fn(), {
+        config,
+        context: {
+          loadGatewayModelCatalog: async () => [],
+          getSessionEventSubscriberConnIds: () => new Set(),
+        },
+      });
+      expect(refused.response?.[0]).toBe(false);
+      expect(refused.response?.[2]?.message).toContain("task suggestion cwd is unavailable");
+
+      // "Start in this session" never needs a host cwd, so it still works.
+      const accepted = await call("taskSuggestions.accept", { taskId, mode: "session" }, vi.fn(), {
+        config,
+      });
+      const { key } = requirePayload(accepted) as { key: string };
+      expect(key).toBe(SOURCE_SESSION_KEY);
+      expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("resolves container cwd against the source session's selected folder", async () => {
+    await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
+      const workspace = await fs.realpath(state.workspaceDir);
+      const selected = state.path("selected-folder");
+      await fs.mkdir(selected, { recursive: true });
+      const config = sandboxedConfig({
+        workspace,
+        storePath: state.statePath("agents", "{agentId}", "sessions", "sessions.json"),
+        workspaceAccess: "rw",
+      });
+      // Dashboard worktree sessions record the folder they were started in.
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+        { sessionId: "follow-up-source", updatedAt: 1, spawnedCwd: selected },
+      );
+
+      const created = await createSuggestion({ config, cwd: BASE_CWD });
+
+      expect(requireSuggestion(created).suggestion.cwd).toBe(selected);
+      expect(requireSuggestion(created).suggestion.cwd).not.toBe(workspace);
+    });
+  });
+
+  it("resolves container cwd against a spawned session's inherited workspace", async () => {
+    await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
+      const workspace = await fs.realpath(state.workspaceDir);
+      const inherited = state.path("inherited-workspace");
+      await fs.mkdir(inherited, { recursive: true });
+      const config = sandboxedConfig({
+        workspace,
+        storePath: state.statePath("agents", "{agentId}", "sessions", "sessions.json"),
+        workspaceAccess: "rw",
+      });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+        {
+          sessionId: "follow-up-source",
+          updatedAt: 1,
+          spawnedBy: "agent:main:parent",
+          spawnedWorkspaceDir: inherited,
+        },
+      );
+
+      const created = await createSuggestion({ config, cwd: BASE_CWD });
+
+      expect(requireSuggestion(created).suggestion.cwd).toBe(inherited);
+      expect(requireSuggestion(created).suggestion.cwd).not.toBe(workspace);
+    });
+  });
+
+  it("resolves a cwd covered by a nested bind mount to the bind host directory", async () => {
+    await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
+      const workspace = await fs.realpath(state.workspaceDir);
+      const otherCheckout = state.path("other-checkout");
+      await fs.mkdir(otherCheckout, { recursive: true });
+      // The container path exists in the workspace mount too: the bind wins.
+      await fs.mkdir(path.join(workspace, "project"), { recursive: true });
+      const config = sandboxedConfig({
+        workspace,
+        storePath: state.statePath("agents", "{agentId}", "sessions", "sessions.json"),
+        workspaceAccess: "rw",
+        binds: [`${otherCheckout}:/workspace/project`],
+      });
+
+      const created = await createSuggestion({ config, cwd: `${BASE_CWD}/project` });
+
+      expect(requireSuggestion(created).suggestion.cwd).toBe(path.resolve(otherCheckout));
+      expect(requireSuggestion(created).suggestion.cwd).not.toBe(path.join(workspace, "project"));
     });
   });
 

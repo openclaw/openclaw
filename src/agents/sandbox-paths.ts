@@ -386,22 +386,6 @@ function normalizeContainerWorkdir(containerWorkdir?: string): string {
   return normalized.replace(/\/+$/, "") || "/";
 }
 
-/**
- * Maps a container workspace path back to the host sandbox workspace path it is
- * bind-mounted from; undefined when the path lies outside the container workdir.
- */
-export function mapSandboxContainerWorkspacePath(params: {
-  candidate: string;
-  sandboxRoot: string;
-  containerWorkdir: string;
-}): string | undefined {
-  return mapContainerWorkspacePath({
-    candidate: params.candidate,
-    sandboxRoot: params.sandboxRoot,
-    containerWorkdir: normalizeContainerWorkdir(params.containerWorkdir),
-  });
-}
-
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
