@@ -1177,8 +1177,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
     }
-    const { openOpenClawStateDatabase, closeOpenClawStateDatabaseByPath } =
+    const { openOpenClawStateDatabase } =
       await import("../../../../src/state/openclaw-state-db.js");
+    const { closeOpenClawStateDatabaseByPath } =
+      await import("../../../../src/state/openclaw-state-db-cache.js");
     const { readSubagentRun } =
       await import("../../../../src/agents/subagents/registry/subagent-registry.store.sqlite.js");
     const database = openOpenClawStateDatabase({ env: gateway.runtimeEnv });

@@ -9,7 +9,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";

@@ -18,7 +18,7 @@ import {
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   prepareSystemAgentRunAdmission,

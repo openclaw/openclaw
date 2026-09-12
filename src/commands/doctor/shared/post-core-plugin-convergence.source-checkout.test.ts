@@ -19,7 +19,7 @@ import {
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
-import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
