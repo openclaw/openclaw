@@ -1,5 +1,9 @@
 import type { OpenAICompletionsOptions } from "../provider-options.js";
-import { resolveOpenAIReasoningEffortForModel } from "../providers/openai-reasoning-effort.js";
+import {
+  resolveOpenAIModelReasoningEfforts,
+  resolveOpenAIReasoningEffortForModel,
+  supportsOpenAIReasoningEffort,
+} from "../providers/openai-reasoning-effort.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
@@ -20,6 +24,11 @@ export function applyDirectCompletionsReasoningAndRouting(
     | Partial<Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string | null>>
     | undefined = model.thinkingLevelMap;
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
+  const declaredEfforts = resolveOpenAIModelReasoningEfforts(model);
+  const hasReasoningContract =
+    compat.supportsReasoningEffort !== false &&
+    declaredEfforts !== undefined &&
+    declaredEfforts.length > 0;
   let reasoningEffort: string | undefined;
   if (options?.reasoningEffort === undefined) {
     reasoningEffort = offReasoningEffort ?? undefined;
@@ -27,13 +36,14 @@ export function applyDirectCompletionsReasoningAndRouting(
     reasoningEffort = reasoningEffortMap[options.reasoningEffort];
   } else if (thinkingLevelMap && options.reasoningEffort in thinkingLevelMap) {
     reasoningEffort = thinkingLevelMap[options.reasoningEffort] ?? undefined;
+  } else if (hasReasoningContract) {
+    reasoningEffort = resolveOpenAIReasoningEffortForModel({
+      model,
+      effort: options.reasoningEffort,
+      fallbackMap: reasoningEffortMap,
+    });
   } else {
-    reasoningEffort =
-      resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: options.reasoningEffort,
-        fallbackMap: reasoningEffortMap,
-      }) ?? options.reasoningEffort;
+    reasoningEffort = options.reasoningEffort;
   }
   const reasoningEnabled =
     reasoningEffort !== undefined && isOpenAICompletionsThinkingEnabled(reasoningEffort);
@@ -67,10 +77,26 @@ export function applyDirectCompletionsReasoningAndRouting(
       params.reasoning_effort = reasoningEffort;
     }
   } else if (model.reasoning && compat.supportsReasoningEffort) {
+    const isNoneSupported = supportsOpenAIReasoningEffort(model, "none");
+    const isOffNone =
+      typeof offReasoningEffort === "string" && offReasoningEffort.trim().toLowerCase() === "none";
+    const isReasoningEffortNone =
+      typeof reasoningEffort === "string" && reasoningEffort.trim().toLowerCase() === "none";
+    const isMappedNone =
+      options?.reasoningEffort !== undefined &&
+      ((typeof reasoningEffortMap[options.reasoningEffort] === "string" &&
+        reasoningEffortMap[options.reasoningEffort]!.trim().toLowerCase() === "none") ||
+        (typeof thinkingLevelMap?.[options.reasoningEffort] === "string" &&
+          thinkingLevelMap[options.reasoningEffort]!.trim().toLowerCase() === "none"));
+    const isNoneExplicitlyMapped = isOffNone || isMappedNone;
+
     if (reasoningEnabled && reasoningEffort) {
       // OpenAI-style reasoning_effort
       params.reasoning_effort = reasoningEffort;
-    } else if (reasoningEffort === "none" || offReasoningEffort === "none") {
+    } else if (
+      (isReasoningEffortNone || isOffNone) &&
+      (isNoneSupported || isNoneExplicitlyMapped)
+    ) {
       params.reasoning_effort = "none";
     } else if (typeof offReasoningEffort === "string") {
       params.reasoning_effort = offReasoningEffort;

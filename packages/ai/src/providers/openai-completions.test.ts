@@ -1050,6 +1050,72 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("omits reasoning_effort on the wire in direct completions when reasoningEffort is none and unsupported", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        reasoning: true,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "none",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("preserves literal minimal effort for custom completions models without declared capabilities", async () => {
+    const stream = streamSimpleOpenAICompletions(
+      {
+        ...createModel(32_000),
+        reasoning: true,
+        compat: {
+          supportsReasoningEffort: true,
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoning: "minimal",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      reasoning_effort: "minimal",
+    });
+  });
+
+  it("omits reasoning_effort in direct completions for undeclared models when reasoningEffort is none without explicit map", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        reasoning: true,
+        compat: {
+          supportsReasoningEffort: true,
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "none",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
   it("forwards simple stop sequences to request params", async () => {
     let capturedStop: unknown;
     const stream = streamSimpleOpenAICompletions(createModel(32_000), context, {
