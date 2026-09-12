@@ -18,6 +18,8 @@ import {
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   listActiveReplyRunSessionIds,
+  expireStaleReplyOperation,
+  replyRunRegistry,
   resolveActiveReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveReplyBackendQueueMessageMismatch,
@@ -1443,12 +1445,33 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
   const settleDeadline = Date.now() + settleMs;
-  const embeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
+  const capturedEmbeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
   // Capture the exact handle's session owner before cancellation can replace the run.
-  const agentId = embeddedRunHandle
-    ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embeddedRunHandle)?.agentId
+  const capturedRegistration = capturedEmbeddedRunHandle
+    ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(capturedEmbeddedRunHandle)
     : undefined;
-  const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
+  const agentId = capturedRegistration?.agentId;
+  // A handle looked up by session id belongs to whichever run registered that id,
+  // which may be another key's. Excluding it here keeps every cleanup side effect
+  // below (handle deletion, run-id deregistration, diagnostics close, waiter
+  // notification) off a foreign, still-running backend.
+  const embeddedRunHandle =
+    params.sessionKey &&
+    capturedRegistration?.sessionKey !== undefined &&
+    capturedRegistration.sessionKey !== params.sessionKey
+      ? undefined
+      : capturedEmbeddedRunHandle;
+  // The reply registry is keyed by session key, and its session-id index is not
+  // exclusive either: two operations that share a session id repoint it at the
+  // later one. Force-clear below acts on whatever this resolves to, so resolve
+  // the owner from the key the caller named whenever it has one.
+  const replyOperation = params.sessionKey
+    ? replyRunRegistry.get(params.sessionKey)
+    : resolveActiveReplyOperationForSessionId(params.sessionId);
+  // Abort and wait below are addressed by session id too, so they must not run
+  // against a handle this call does not own.
+  const embeddedRunHandleOwnedByAnotherKey =
+    capturedEmbeddedRunHandle !== undefined && embeddedRunHandle === undefined;
   if (
     params.reason === "stuck_recovery" &&
     replyOperation &&
@@ -1466,12 +1489,17 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
+  // Expiry must reach the same owner force-clear will: addressing it by session
+  // id would stamp and settle another key's operation instead.
+  const staleExpiryOptions = {
+    afterClearBarrier: staleExpiryBarrier,
+    followupAdmissionBarrierTimeout: settleMs + 1_000,
+  };
   const expiredReplyRun =
     params.reason === "stuck_recovery" &&
-    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery", {
-      afterClearBarrier: staleExpiryBarrier,
-      followupAdmissionBarrierTimeout: settleMs + 1_000,
-    });
+    (replyOperation
+      ? expireStaleReplyOperation(replyOperation, "stuck_recovery", staleExpiryOptions)
+      : expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery", staleExpiryOptions));
   const stampedStaleReplyRun =
     params.reason === "stuck_recovery" && replyOperation?.staleExpiryReason === "stuck_recovery";
   const waitForExpiredOwnerSettlement = async () => {
@@ -1497,9 +1525,11 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
         setImmediate(resolve);
       });
     }
-    let aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+    let aborted =
+      (!embeddedRunHandleOwnedByAnotherKey && abortEmbeddedAgentRun(params.sessionId)) ||
+      expiredReplyRun;
     const embeddedDrained =
-      aborted || stampedStaleReplyRun
+      (aborted || stampedStaleReplyRun) && !embeddedRunHandleOwnedByAnotherKey
         ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)
         : false;
     const ownerSettled = await waitForExpiredOwnerSettlement();

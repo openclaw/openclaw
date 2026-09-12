@@ -3,12 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
+  abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
+  isEmbeddedAgentRunHandleActive,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
   createReplyOperation,
+  resolveActiveReplyRunSessionId,
+  retainReplyOperationUntilComplete,
   runAfterReplyOperationClear,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
@@ -955,5 +959,56 @@ describe("stuck session recovery integration", () => {
 
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
+  });
+  it("leaves an embedded handle owned by another key registered and unaborted", async () => {
+    // The handle is looked up by session id too, so the same collision would send
+    // every handle-addressed cleanup side effect at a foreign, live backend.
+    const sharedSessionId = "shared-session-handle-collision";
+    const wedgedKey = "agent:main:dm-wedged-handle";
+    const bystanderKey = "agent:main:group-bystander-handle";
+
+    const wedged = createReplyOperation({
+      sessionKey: wedgedKey,
+      sessionId: sharedSessionId,
+      resetTriggered: false,
+    });
+    retainReplyOperationUntilComplete(wedged);
+    wedged.setPhase("running");
+    wedged.fail("run_failed", new Error("delivery failed"));
+
+    // The same collision also points the reply index at the bystander's operation.
+    const bystander = createReplyOperation({
+      sessionKey: bystanderKey,
+      sessionId: sharedSessionId,
+      resetTriggered: false,
+    });
+    bystander.setPhase("running");
+
+    const bystanderAbort = vi.fn<() => void>();
+    const bystanderHandle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: bystanderAbort,
+    };
+    setActiveEmbeddedRun(sharedSessionId, bystanderHandle, bystanderKey);
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId: sharedSessionId,
+      sessionKey: wedgedKey,
+      settleMs: 50,
+      forceClear: true,
+      reason: "stuck_recovery",
+    });
+
+    // The foreign handle stays registered and its backend is never cancelled.
+    expect(isEmbeddedAgentRunHandleActive(sharedSessionId)).toBe(true);
+    expect(bystanderAbort).not.toHaveBeenCalled();
+    // Its reply operation and slot are untouched for the same reason.
+    expect(bystander.phase).toBe("running");
+    expect(resolveActiveReplyRunSessionId(bystanderKey)).toBe(sharedSessionId);
+    // Nothing may be reported as aborted or drained on a handle we never owned.
+    expect(result.aborted).toBe(false);
+    expect(result.drained).toBe(false);
   });
 });
