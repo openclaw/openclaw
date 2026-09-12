@@ -38,24 +38,34 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    runSqliteTranscriptArchiveWorkerOperation: (
-      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
-    ) =>
-      actual.runSqliteTranscriptArchiveWorkerOperation({
-        ...params,
-        onCommitRequest: params.onCommitRequest
-          ? () => {
-              archiveMaterializationHook.beforeCommitRequest?.();
-              params.onCommitRequest?.();
-              archiveMaterializationHook.afterCommitRequest?.();
-            }
-          : undefined,
-      }),
     materializeSessionStateDeletePlans: async (
       ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
     ) => {
       await archiveMaterializationHook.beforeMaterialize?.();
       return await actual.materializeSessionStateDeletePlans(...args);
+    },
+  };
+});
+
+vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
+  return {
+    ...actual,
+    SqliteReclamationWorker: class extends actual.SqliteReclamationWorker {
+      override run(
+        params: Parameters<InstanceType<typeof actual.SqliteReclamationWorker>["run"]>[0],
+      ) {
+        return super.run({
+          ...params,
+          onCommitRequest: () => {
+            archiveMaterializationHook.beforeCommitRequest?.();
+            const errors = params.onCommitRequest();
+            archiveMaterializationHook.afterCommitRequest?.();
+            return errors;
+          },
+        });
+      }
     },
   };
 });

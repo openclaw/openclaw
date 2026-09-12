@@ -19,7 +19,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive.js";
+import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,

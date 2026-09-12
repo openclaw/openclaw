@@ -30,6 +30,7 @@ import {
   readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   createHistoryEvictionReclamationPlan,
   runExclusiveSqliteSessionReclamation,
@@ -464,7 +465,10 @@ export async function enforceSqliteSessionHistoryDiskBudget(
     queues: SESSION_HISTORY_MAINTENANCE_QUEUES,
     storePath: params.storePath,
     label: "enforceSqliteSessionHistoryDiskBudget",
-    fn: async () => await enforceSessionHistoryMaintenanceSerialized(params),
+    fn: async () => {
+      await using worker = new SqliteReclamationWorker();
+      return await enforceSessionHistoryMaintenanceSerialized(params, worker);
+    },
   });
 }
 
@@ -474,6 +478,7 @@ export async function enforceSqliteSessionHistoryDiskBudget(
 // supplementary pressure pass.
 async function enforceSessionHistoryMaintenanceSerialized(
   params: SessionHistoryDiskBudgetParams,
+  worker: SqliteReclamationWorker,
 ): Promise<SessionDiskBudgetSweepResult | null> {
   const { highWaterBytes, maxDiskBytes } = params.maintenance;
   if (maxDiskBytes == null || highWaterBytes == null) {
@@ -594,6 +599,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
           }
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
+            worker,
             forceInProcess: params.reclamationMode === "in-process",
             plan: reclamationPlan,
           });
@@ -680,6 +686,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
                 target: { canonicalKey: candidate.sessionKey, storeKeys: [candidate.sessionKey] },
               },
               resolved,
+              worker,
             ),
         });
         if (!deletion.deleted) {
@@ -707,9 +714,11 @@ async function enforceSessionHistoryMaintenanceSerialized(
   }
   if (removedEntries > 0) {
     await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, removedEntries);
-    usage = await measureSessionPhysicalDiskUsage(params.storePath);
   }
 
+  // Join the retained connection before final physical accounting and queue release.
+  await worker.close();
+  usage = await measureSessionPhysicalDiskUsage(params.storePath);
   return createPhysicalBudgetResult({
     totalBytesBefore: initialUsage.totalBytes,
     totalBytesAfter: usage.totalBytes,

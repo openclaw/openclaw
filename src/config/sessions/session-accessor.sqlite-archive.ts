@@ -1,39 +1,21 @@
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { isMainThread, threadId, Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import {
-  encodeSessionArchiveContent,
-  readSessionArchiveContentSync,
-  SESSION_ARCHIVE_ZSTD_SUFFIX,
-} from "./archive-compression.js";
-import {
-  formatSessionArchiveTimestamp,
-  isSessionArchiveArtifactName,
-  type SessionArchiveReason,
-} from "./artifacts.js";
-import type {
-  SessionLifecycleArchivedTranscript,
-  SqliteSessionReclamationAdmissionDiagnostics,
-  SqliteSessionReclamationDiagnostics,
-} from "./session-accessor.sqlite-contract.js";
+import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-
-const log = createSubsystemLogger("session-sqlite");
-const SLOW_RECLAMATION_WORKER_MS = 1_000;
+import {
+  runSqliteMutationWorkerRequest,
+  type SqliteWorkerWriteAdmission,
+} from "./session-accessor.sqlite-worker-request.js";
+import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -73,19 +55,6 @@ export type TranscriptArchiveWorkerMessage = {
   results: TranscriptArchiveWorkerResult[];
 };
 
-export const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
-
-// Leave room under the 255-byte component limit for timestamps, generations,
-// compression suffixes, and staging UUIDs. Raising this can break publication.
-const MAX_REGISTERED_ARCHIVE_SESSION_ID_BYTES = 96;
-
-function resolveRegisteredArchiveSessionIdComponent(sessionId: string): string {
-  if (Buffer.byteLength(sessionId, "utf8") <= MAX_REGISTERED_ARCHIVE_SESSION_ID_BYTES) {
-    return sessionId;
-  }
-  return `session-${createHash("sha256").update(sessionId).digest("hex")}`;
-}
-
 export type TranscriptArchivePublishPlan = {
   agentId: string;
   archiveDirectory: string;
@@ -106,193 +75,6 @@ export type TranscriptArchivePublishWorkerMessage = {
   results: TranscriptArchivePublishResult[];
 };
 
-export function resolveSqliteTranscriptArchivePath(params: {
-  archiveDirectory: string;
-  generation?: string;
-  identityOwner: "filename" | "registry";
-  reason: SessionArchiveReason;
-  sessionId: string;
-  nowMs?: number;
-}): string {
-  const archiveDirectory = path.resolve(params.archiveDirectory);
-  const generationSuffix = params.generation ? `.${params.generation}` : "";
-  const sessionIdComponent =
-    params.identityOwner === "registry"
-      ? resolveRegisteredArchiveSessionIdComponent(params.sessionId)
-      : params.sessionId;
-  const archivePath = path.resolve(
-    archiveDirectory,
-    `${sessionIdComponent}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
-  );
-  if (path.dirname(archivePath) !== archiveDirectory) {
-    throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);
-  }
-  return archivePath;
-}
-
-export function resolveRegisteredSqliteTranscriptArchiveName(params: {
-  createdAt: number;
-  encoding: "identity" | "zstd";
-  generation: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string {
-  return path.basename(
-    `${resolveSqliteTranscriptArchivePath({
-      archiveDirectory: ".",
-      generation: params.generation,
-      identityOwner: "registry",
-      reason: params.reason,
-      sessionId: params.sessionId,
-      nowMs: params.createdAt,
-    })}${params.encoding === "zstd" ? SESSION_ARCHIVE_ZSTD_SUFFIX : ""}`,
-  );
-}
-
-function findMatchingSqliteTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string | null {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(params.archiveDirectory);
-  } catch {
-    return null;
-  }
-  const prefix = `${params.sessionId}.jsonl.${params.reason}.`;
-  for (const entry of entries) {
-    if (!entry.startsWith(prefix) || !isSessionArchiveArtifactName(entry)) {
-      continue;
-    }
-    const archivePath = path.join(params.archiveDirectory, entry);
-    const compressed = entry.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
-    try {
-      const stat = fs.statSync(archivePath);
-      if (!stat.isFile()) {
-        continue;
-      }
-      if (!compressed && stat.size !== Buffer.byteLength(params.content, "utf8")) {
-        continue;
-      }
-      if (readSessionArchiveContentSync(archivePath) === params.content) {
-        return archivePath;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-/** Writes or reuses a transcript archive and returns its durable path. */
-export function writeTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string {
-  fs.mkdirSync(params.archiveDirectory, { recursive: true });
-  const existing = findMatchingSqliteTranscriptArchive(params);
-  if (existing) {
-    return existing;
-  }
-  // Archives are the long-lived cold tier; compress when the runtime can so
-  // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
-  const encoded = encodeSessionArchiveContent(params.content);
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const archivePath = `${resolveSqliteTranscriptArchivePath({
-      archiveDirectory: params.archiveDirectory,
-      identityOwner: "filename",
-      reason: params.reason,
-      sessionId: params.sessionId,
-      nowMs: Date.now() + attempt,
-    })}${encoded.suffix}`;
-    if (fs.existsSync(archivePath)) {
-      continue;
-    }
-    const tempPath = `${archivePath}.${randomUUID()}.tmp`;
-    try {
-      writeDurableFileExclusive(tempPath, encoded.bytes);
-      fs.renameSync(tempPath, archivePath);
-      syncDirectoryBestEffortSync(params.archiveDirectory);
-      // Full readback is bounded by the same single-generation content held by
-      // this Worker (Node string limits cap both); a partial
-      // or corrupt archive must fail here, before any rows are reclaimed.
-      if (readSessionArchiveContentSync(archivePath) !== params.content) {
-        fs.rmSync(archivePath, { force: true });
-        throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
-      }
-      return archivePath;
-    } catch (error) {
-      fs.rmSync(tempPath, { force: true });
-      if ((error as { code?: unknown })?.code === "EEXIST") {
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
-}
-
-// Windows rejects fsync on read-only handles, so keep the exclusive writable
-// descriptor open through both the write and durability boundary.
-function writeDurableFileExclusive(filePath: string, content: Buffer): void {
-  const fd = fs.openSync(filePath, "wx", 0o600);
-  try {
-    fs.writeFileSync(fd, content);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-export function hashSessionArchiveBytes(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-/** Publishes one exact canonical archive without directory scans or replacement. */
-export function publishEncodedSessionTranscriptArchive(params: {
-  archiveDirectory: string;
-  archiveName: string;
-  bytes: Uint8Array;
-  sha256: string;
-}): string {
-  const archiveDirectory = path.resolve(params.archiveDirectory);
-  const archivePath = path.resolve(archiveDirectory, params.archiveName);
-  if (
-    path.dirname(archivePath) !== archiveDirectory ||
-    path.basename(archivePath) !== params.archiveName
-  ) {
-    throw new Error(`Cannot publish SQLite transcript archive outside ${archiveDirectory}`);
-  }
-  fs.mkdirSync(archiveDirectory, { recursive: true, mode: 0o700 });
-  if (fs.existsSync(archivePath)) {
-    if (hashSessionArchiveBytes(fs.readFileSync(archivePath)) !== params.sha256) {
-      throw new Error(`SQLite transcript archive collision for ${params.archiveName}`);
-    }
-    return archivePath;
-  }
-
-  const tempPath = `${archivePath}.${randomUUID()}.tmp`;
-  writeDurableFileExclusive(tempPath, Buffer.from(params.bytes));
-  try {
-    fs.linkSync(tempPath, archivePath);
-  } catch (error) {
-    if ((error as { code?: unknown }).code !== "EEXIST") {
-      throw error;
-    }
-  } finally {
-    fs.rmSync(tempPath, { force: true });
-  }
-  syncDirectoryBestEffortSync(archiveDirectory);
-  if (hashSessionArchiveBytes(fs.readFileSync(archivePath)) !== params.sha256) {
-    throw new Error(`SQLite transcript archive verification failed for ${params.archiveName}`);
-  }
-  return archivePath;
-}
-
 function resolveSourceWorkerExecArgv(): string[] {
   // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
   // register tsx's ESM resolver inside a Worker. Explicitly register the
@@ -303,132 +85,49 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
-function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  diagnostics?: SqliteSessionReclamationDiagnostics;
-  expectedMessageType: "done" | "published" | "reclaimed";
-  onCommitRequest?: () => void;
-  withWriteAdmission?: (
-    run: (refusal?: { error: unknown }) => Promise<Result[] | undefined>,
-    diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
-  ) => Promise<void>;
-  transferList?: ArrayBuffer[];
-  workerData: object;
-}): Promise<Result[]> {
-  const reclamationKind = params.diagnostics?.kind;
-  const startedAt = performance.now();
+export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
+  return new Worker(workerUrl, {
+    workerData,
+    execArgv: workerUrl.pathname.endsWith(".ts") ? resolveSourceWorkerExecArgv() : undefined,
+  });
+}
+
+type TranscriptArchiveWorkerOperation<Result> =
+  | { expectedMessageType: "done" | "published"; workerData: object }
+  | {
+      expectedMessageType: "reclaimed";
+      workerData: SessionColdWorkerData;
+      onCommitRequest: () => void;
+      withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
+    };
+
+function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
+  params: TranscriptArchiveWorkerOperation<Result>,
+): Promise<Result[]> {
   let worker: Worker;
   try {
-    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
-      ? resolveSourceWorkerExecArgv()
-      : undefined;
-    worker = new Worker(workerUrl, {
-      workerData: params.workerData,
-      execArgv: sourceWorkerExecArgv,
-      transferList: params.transferList,
-    });
-    // Node clears threadId at exit. Keep only the spawned identity for the awaiting writer.
-    if (params.diagnostics) {
-      params.diagnostics.workerThreadId = worker.threadId;
-    }
+    worker = createSqliteTranscriptArchiveWorker(params.workerData);
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
 
-  const workerThreadId = worker.threadId;
-  let exitCode: number | undefined;
-  const operation = new Promise<Result[]>((resolve, reject) => {
+  if (params.expectedMessageType === "reclaimed") {
+    // Cold mutations retain their one-shot cleanup/exit lifetime, never a sweep connection.
+    return runSqliteMutationWorkerRequest<Result>({
+      worker,
+      operationId: 0,
+      completion: "exit",
+      onCommitRequest: params.onCommitRequest,
+      withWriteAdmission: params.withWriteAdmission,
+    }).then((result) => [result]);
+  }
+
+  return new Promise((resolve, reject) => {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
-    let admission:
-      | {
-          id: number;
-          released: Deferred;
-          diagnostics: SqliteSessionReclamationAdmissionDiagnostics;
-        }
-      | undefined;
-    let admissionId = 0;
-    let exited = false;
-    const admissionTasks: Promise<void>[] = [];
-    worker.on("message", (message: { results: Result[]; type: string; admissionId?: number }) => {
-      if (message.type === "commit-request") {
-        try {
-          params.onCommitRequest?.();
-        } catch (error) {
-          workerError = toStringifiedError(error);
-        }
-      } else if (message.type === "admission-request") {
-        const withWriteAdmission = params.withWriteAdmission;
-        if (!withWriteAdmission || admission || message.admissionId !== admissionId + 1) {
-          workerError ??= new Error(
-            "SQLite reclamation Worker requested invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
-          );
-          void worker.terminate();
-          return;
-        }
-        const requested = {
-          id: ++admissionId,
-          released: createDeferredCore(),
-          diagnostics: { admissionId } satisfies SqliteSessionReclamationAdmissionDiagnostics,
-        };
-        admission = requested;
-        const task = withWriteAdmission(async (refusal) => {
-          if (exited) {
-            return undefined;
-          }
-          if (refusal) {
-            workerError ??= toStringifiedError(refusal.error);
-          }
-          worker.postMessage(
-            {
-              type: "admission",
-              admissionId: requested.id,
-              allowed: refusal === undefined && workerError === undefined,
-            },
-            [],
-          );
-          // Denial still owns this FIFO section while the Worker unwinds its
-          // partially opened handle. Final admission is released only on exit.
-          await requested.released.promise;
-          if (exited && exitCode === 0 && !workerError) {
-            return results;
-          }
-          return undefined;
-        }, requested.diagnostics).catch(async (error: unknown) => {
-          workerError ??= toStringifiedError(error);
-          if (!exited && admission === requested) {
-            try {
-              // An unavailable scheduler cannot authorize repair. Let the
-              // suspended owner unwind its handle and lease before exit.
-              worker.postMessage(
-                { type: "admission", admissionId: requested.id, allowed: false },
-                [],
-              );
-            } catch (dispatchError) {
-              workerError = new AggregateError(
-                [workerError, dispatchError],
-                "SQLite reclamation admission failed and Worker cleanup is uncertain; restart OpenClaw before deleting the owning agent",
-                { cause: workerError },
-              );
-              await worker.terminate();
-            }
-          }
-          await requested.released.promise;
-        });
-        admissionTasks.push(task);
-      } else if (message.type === "admission-release") {
-        if (!admission || message.admissionId !== admission.id) {
-          workerError ??= new Error(
-            "SQLite reclamation Worker released invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
-          );
-          void worker.terminate();
-          return;
-        }
-        const released = admission;
-        admission = undefined;
-        released.diagnostics.releaseCause = "worker-release";
-        released.released.resolve();
-      } else if (message.type === params.expectedMessageType) {
+    worker.on("message", (message: { results: Result[]; type: string }) => {
+      if (message.type === params.expectedMessageType) {
         (results ??= []).push(...message.results);
       }
     });
@@ -438,53 +137,22 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
       workerError ??= toStringifiedError(error);
     });
     worker.once("exit", (code) => {
-      exited = true;
-      exitCode = code;
-      if (admission) {
-        admission.diagnostics.releaseCause = "worker-exit";
-        admission.released.resolve();
-      }
       worker.removeAllListeners();
-      void Promise.all(admissionTasks).then(() => {
-        if (workerError) {
-          reject(workerError);
-        } else if (code !== 0) {
-          reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
-        } else if (!results) {
-          reject(new Error("SQLite transcript archive worker exited without results"));
-        } else {
-          resolve(results);
-        }
-      }, reject);
-    });
-  });
-  if (reclamationKind) {
-    const observeCompletion = (outcome: "resolved" | "rejected") => {
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      if (elapsedMs < SLOW_RECLAMATION_WORKER_MS) {
+      if (workerError) {
+        reject(workerError);
         return;
       }
-      log.warn("slow SQLite reclamation Worker operation", {
-        pid: process.pid,
-        threadId,
-        isMainThread,
-        reclamationKind,
-        workerThreadId,
-        elapsedMs,
-        outcome,
-        exitCode,
-      });
-    };
-    // Observe in the caller's trace scope, after Worker exit and admission settlement.
-    // A failed log must neither change the operation nor leave an unhandled rejection.
-    void operation
-      .then(
-        () => observeCompletion("resolved"),
-        () => observeCompletion("rejected"),
-      )
-      .catch(() => {});
-  }
-  return operation;
+      if (code !== 0) {
+        reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
+        return;
+      }
+      if (!results) {
+        reject(new Error("SQLite transcript archive worker exited without results"));
+        return;
+      }
+      resolve(results);
+    });
+  });
 }
 
 // Serialize lifecycle archive Workers so this path cannot multiply
@@ -492,20 +160,18 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
 const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
-export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  diagnostics?: SqliteSessionReclamationDiagnostics;
-  expectedMessageType: "done" | "published" | "reclaimed";
-  onCommitRequest?: () => void;
-  withWriteAdmission?: (
-    run: (refusal?: { error: unknown }) => Promise<Result[] | undefined>,
-    diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
-  ) => Promise<void>;
-  transferList?: ArrayBuffer[];
-  workerData: object;
-}): Promise<Result[]> {
+export function runExclusiveSqliteTranscriptArchiveWorker<T>(run: () => Promise<T>): Promise<T> {
   return sqliteTranscriptArchiveWorkerQueue.enqueue(
     SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    () => spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
+    run,
+  );
+}
+
+export function runSqliteTranscriptArchiveWorkerOperation<Result>(
+  params: TranscriptArchiveWorkerOperation<Result>,
+): Promise<Result[]> {
+  return runExclusiveSqliteTranscriptArchiveWorker(() =>
+    spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
   );
 }
 

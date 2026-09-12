@@ -87,15 +87,22 @@ The worker opens its database under the session writer, then releases that write
 while full integrity and foreign-key checks run on the same connection. Unrelated
 session writes can continue during those checks. It reacquires the writer and
 revalidates current authority before index repair, schema work, or deletion.
-The connection and lease remain owned throughout admission; refusal unwinds that
-owner, and final writer admission remains held until the worker exits.
+A physical disk-pressure sweep lazily retains one validated worker connection and
+lease across victims. Each victim keeps its own transaction, retained parent claim,
+write admission, and current-authority check in that request's async context. The
+parent publishes committed removals before releasing that victim's writer admission;
+refusal holds admission until the worker unwinds and exits. The sweep closes and
+joins the worker before final physical accounting and maintenance-queue release.
+Standalone reclamation uses the same owner for one request. Archive materialization
+and file publication remain separate one-shot workers.
 
 Disk-budget cleanup rechecks protection after archive materialization. A candidate
 already excluded by that fresh protection set is canceled before worker admission
 and is not counted as reclaimed. After releasing its lifecycle holds, cleanup
 remeasures physical usage before considering another candidate, so space freed by
-a peer does not cause unnecessary eviction. Every admitted worker still performs
-the full integrity, foreign-key, and current-owner checks described here.
+a peer does not cause unnecessary eviction. Every physical worker connection open
+still performs the full integrity and foreign-key checks; every victim revalidates
+current ownership and protection.
 
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the

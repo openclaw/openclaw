@@ -11,7 +11,7 @@ import {
 import {
   publishEncodedSessionTranscriptArchive,
   resolveRegisteredSqliteTranscriptArchiveName,
-} from "../config/sessions/session-accessor.sqlite-archive.js";
+} from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   closeOpenClawAgentDatabasesForTest,

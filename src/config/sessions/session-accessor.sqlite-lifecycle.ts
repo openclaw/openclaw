@@ -53,6 +53,7 @@ import {
   readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   createHistoricalGenerationReclamationPlan,
   createLifecycleArtifactReclamationPlan,
@@ -285,30 +286,18 @@ export async function resetSessionEntryLifecycle(
             // Reset only advances the live entry and route. Historical rows stay searchable;
             // disk-budget cleanup owns durable extraction before reclaiming them.
           }, toDatabaseOptions(resolved));
-          if (current) {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              kind: "reset",
-              previous: {
-                ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
-                sessionKeys: targetSnapshot.map((row) => row.sessionKey),
-              },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          } else {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              kind: "create",
-              previous: { sessionKeys: [] },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          }
+          emitSessionIdentityMutation({
+            agentId: resolved.agentId,
+            kind: current ? "reset" : "create",
+            previous: {
+              ...(current?.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
+              sessionKeys: targetSnapshot.map((row) => row.sessionKey),
+            },
+            current: {
+              ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
+              sessionKeys: [params.target.canonicalKey],
+            },
+          });
           await params.afterEntryMutation?.(mutation);
           return {
             ...mutation,
@@ -352,6 +341,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   expectedPluginOwnerId: string | undefined,
   recordCommit: (database: OpenClawAgentDatabase) => void,
   markCommitted: () => void,
+  worker?: SqliteReclamationWorker,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const databaseOptions = toDatabaseOptions(resolved);
   const prepared = await runExclusiveSqliteSessionWrite(
@@ -549,6 +539,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           }
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
+            worker,
             assertCommitAllowed: assertDeletionCurrent,
             forceInProcess: hasPreparedNativeSessionDeletion(),
             onInProcessCommit: recordCommit,
@@ -612,6 +603,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         }
         const reclaimed = await runSqliteSessionReclamation({
           diagnostics,
+          worker,
           assertCommitAllowed: assertDeletionCurrent,
           forceInProcess: hasPreparedNativeSessionDeletion(),
           onInProcessCommit: recordCommit,
@@ -680,6 +672,7 @@ export async function deleteSessionEntryLifecycle(
 export async function deleteDiskBudgetSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
   resolved: ResolvedSqliteScope,
+  worker: SqliteReclamationWorker,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   // A shared store lends its physical owner, not the victim's logical identity.
   // Validate against captured ownership so a custom selector cannot retarget cleanup.
@@ -701,6 +694,7 @@ export async function deleteDiskBudgetSessionEntryLifecycle(
         undefined,
         recordCommit,
         markCommitted,
+        worker,
       ),
     { scheduleNext: false },
   );

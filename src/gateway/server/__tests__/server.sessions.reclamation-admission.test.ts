@@ -46,7 +46,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
             import { DatabaseSync } from 'node:sqlite';
             import { workerData } from 'node:worker_threads';
             const gate = new Int32Array(workerData.reclamationTestGate);
-            const databasePath = realpathSync(workerData.plan.databaseOptions.path);
+            const databasePath = realpathSync(workerData.databaseOptions.path);
             const validated = new WeakSet();
             const prepare = DatabaseSync.prototype.prepare;
             DatabaseSync.prototype.prepare = function (sql) {
