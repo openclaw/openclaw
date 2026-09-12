@@ -1,10 +1,12 @@
 // Timer tight-loop tests cover cron service guards against immediate rearm loops.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
+import { ensureLoaded } from "./service/store.js";
 import { armTimer } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
-import { saveCronStore } from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -275,5 +277,96 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     timeoutSpy.mockRestore();
     await store.cleanup();
+  });
+
+  it("keeps a maintenance wake armed for legacy jobs without enabled", () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const now = Date.parse("2026-02-28T12:32:00.000Z");
+    const job = {
+      id: "legacy-missing-enabled",
+      name: "legacy-missing-enabled",
+      enabled: undefined as unknown as boolean,
+      deleteAfterRun: false,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "cron" as const, expr: "*/15 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "test" },
+      delivery: { mode: "none" as const },
+      state: {},
+    } satisfies CronJob;
+    const state = createTimerState({ storePath: "/tmp/test-cron/jobs.json", now });
+    state.store = { version: 1, jobs: [job] };
+
+    try {
+      armTimer(state);
+      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+      expect(extractTimeoutDelays(timeoutSpy)).toContain(60_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("keeps a maintenance wake armed after loading a persisted legacy row", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-28T12:32:00.000Z");
+    const job = {
+      id: "persisted-legacy-missing-enabled",
+      name: "persisted-legacy-missing-enabled",
+      enabled: true,
+      deleteAfterRun: false,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "cron" as const, expr: "*/15 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "test" },
+      delivery: { mode: "none" as const },
+      state: {},
+    } satisfies CronJob;
+
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const row = db
+        .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+        .get(store.storePath, job.id) as { job_json: string };
+      const persisted = JSON.parse(row.job_json) as Record<string, unknown>;
+      delete persisted.enabled;
+      db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
+        JSON.stringify(persisted),
+        store.storePath,
+        job.id,
+      );
+    });
+
+    try {
+      const state = createTimerState({ storePath: store.storePath, now });
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+      expect(state.store?.jobs).toHaveLength(1);
+      expect(state.store?.jobs[0]?.enabled).toBeUndefined();
+      armTimer(state);
+
+      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+      expect(extractTimeoutDelays(timeoutSpy)).toContain(60_000);
+      expect(noopLogger.debug).toHaveBeenLastCalledWith(
+        { jobCount: 1, enabledCount: 1, withNextRun: 0, delayMs: 60_000 },
+        "cron: timer armed for maintenance recheck",
+      );
+
+      await onTimer(state);
+      const recovered = (await loadCronStore(store.storePath)).jobs[0];
+      expect(recovered?.enabled).toBe(true);
+      expect(recovered?.state.nextRunAtMs).toBeGreaterThan(now);
+      expect(noopLogger.debug).toHaveBeenLastCalledWith(
+        expect.objectContaining({ nextAt: recovered?.state.nextRunAtMs }),
+        "cron: timer armed",
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+      await store.cleanup();
+    }
   });
 });

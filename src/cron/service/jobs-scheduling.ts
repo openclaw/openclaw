@@ -744,13 +744,11 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
     jobCount += 1;
     const nextRun = job.state.nextRunAtMs;
     const hasNextRun = hasScheduledNextRunAtMs(nextRun);
-    const rawEnabled = job.enabled;
-    // Timer diagnostics historically count only explicit enablement, while
-    // wake selection keeps older jobs without `enabled` runnable.
-    if (rawEnabled) {
+    const enabled = isJobEnabled(job);
+    if (enabled) {
       enabledCount += 1;
     }
-    if ((rawEnabled ?? true) && hasNextRun) {
+    if (enabled && hasNextRun) {
       nextWake = nextWake === undefined ? nextRun : Math.min(nextWake, nextRun);
     }
   }
