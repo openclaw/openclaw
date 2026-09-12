@@ -292,45 +292,16 @@ describe("mutable update execution", () => {
   );
 
   it.each([
-    {
-      allowance: "measured startup",
-      timeoutMs: undefined,
-      readyAtMs: 400_000,
-      verified: true,
-      failure: undefined,
-    },
-    {
-      allowance: "explicit allowance",
-      timeoutMs: 450_000,
-      readyAtMs: 400_000,
-      verified: true,
-      failure: undefined,
-    },
-    {
-      allowance: "explicit deadline",
-      timeoutMs: 30_000,
-      readyAtMs: 400_000,
-      verified: false,
-      failure: undefined,
-    },
-    {
-      allowance: "terminal version mismatch",
-      timeoutMs: undefined,
-      readyAtMs: 400_000,
-      verified: false,
-      failure: "version",
-    },
-    {
-      allowance: "replaced executor",
-      timeoutMs: undefined,
-      readyAtMs: 400_000,
-      verified: false,
-      failure: "executor",
-    },
-  ])(
-    "preserves previous Gateway verification through slow readiness ($allowance)",
-    async ({ timeoutMs, readyAtMs, verified, failure }) =>
+    ["measured startup", undefined, true, undefined],
+    ["explicit allowance", 450_000, true, undefined],
+    ["explicit deadline", 30_000, false, undefined],
+    ["terminal version mismatch", undefined, false, "version"],
+    ["replaced executor", undefined, false, "executor"],
+  ] as const)(
+    "preserves previous Gateway verification through slow readiness (%s)",
+    async (_allowance, timeoutMs, verified, failure) =>
       withTestDir({ prefix: "previous-gateway-readiness-" }, async (root) => {
+        const readyAtMs = 400_000;
         mockProcessPlatform("linux");
         let elapsedMs = 0;
         const epochMs = Date.now();
