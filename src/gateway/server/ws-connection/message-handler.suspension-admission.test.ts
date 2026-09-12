@@ -62,7 +62,7 @@ const cleanups: Array<() => Promise<void>> = [];
 
 function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boolean } = {}) {
   const connectionWork = new GatewayConnectionWork();
-  let onMessage: ((data: string) => void) | undefined;
+  let onMessage: ((data: WebSocket.RawData) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
   let client: unknown = null;
   let closed = false;
@@ -76,7 +76,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
   const socket = {
     _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     send: socketSend,
-    on: vi.fn((event: string, handler: (data: string) => void) => {
+    on: vi.fn((event: string, handler: (data: WebSocket.RawData) => void) => {
       if (event === "message") {
         onMessage = handler;
       }
@@ -156,84 +156,92 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     },
     sendConnect: () =>
       onMessage?.(
-        JSON.stringify({
-          type: "req",
-          id: "connect-1",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: "gateway-client",
-              version: "dev",
-              platform: "test",
-              mode: "backend",
+        Buffer.from(
+          JSON.stringify({
+            type: "req",
+            id: "connect-1",
+            method: "connect",
+            params: {
+              minProtocol: PROTOCOL_VERSION,
+              maxProtocol: PROTOCOL_VERSION,
+              client: {
+                id: "gateway-client",
+                version: "dev",
+                platform: "test",
+                mode: "backend",
+              },
+              role: "operator",
+              scopes: [],
+              caps: [],
             },
-            role: "operator",
-            scopes: [],
-            caps: [],
-          },
-        }),
+          }),
+        ),
       ),
     sendNodeConnect: () =>
       onMessage?.(
-        JSON.stringify({
-          type: "req",
-          id: "node-connect-1",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: "gateway-client",
-              version: "dev",
-              platform: "test",
-              mode: "backend",
+        Buffer.from(
+          JSON.stringify({
+            type: "req",
+            id: "node-connect-1",
+            method: "connect",
+            params: {
+              minProtocol: PROTOCOL_VERSION,
+              maxProtocol: PROTOCOL_VERSION,
+              client: {
+                id: "gateway-client",
+                version: "dev",
+                platform: "test",
+                mode: "backend",
+              },
+              role: "node",
+              scopes: [],
+              caps: [],
             },
-            role: "node",
-            scopes: [],
-            caps: [],
-          },
-        }),
+          }),
+        ),
       ),
     sendWorkerConnect: () =>
       onMessage?.(
-        JSON.stringify({
-          type: "req",
-          id: "worker-connect",
-          method: "connect",
-          params: { role: "worker" },
-        }),
+        Buffer.from(
+          JSON.stringify({
+            type: "req",
+            id: "worker-connect",
+            method: "connect",
+            params: { role: "worker" },
+          }),
+        ),
       ),
     sendStartupNodeConnect: () =>
       onMessage?.(
-        JSON.stringify({
-          type: "req",
-          id: "startup-node-connect",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: "node-host",
-              version: "dev",
-              platform: "linux",
-              mode: "node",
+        Buffer.from(
+          JSON.stringify({
+            type: "req",
+            id: "startup-node-connect",
+            method: "connect",
+            params: {
+              minProtocol: PROTOCOL_VERSION,
+              maxProtocol: PROTOCOL_VERSION,
+              client: {
+                id: "node-host",
+                version: "dev",
+                platform: "linux",
+                mode: "node",
+              },
+              role: "node",
+              scopes: [],
+              caps: [],
+              commands: [],
+              auth: { bootstrapToken: "startup-bootstrap-token" },
+              device: {
+                id: "startup-node-device",
+                publicKey: "startup-node-public-key",
+                signature: "startup-node-signature",
+                signedAt: Date.now(),
+                nonce: "suspension-connect-nonce",
+              },
             },
-            role: "node",
-            scopes: [],
-            caps: [],
-            commands: [],
-            auth: { bootstrapToken: "startup-bootstrap-token" },
-            device: {
-              id: "startup-node-device",
-              publicKey: "startup-node-public-key",
-              signature: "startup-node-signature",
-              signedAt: Date.now(),
-              nonce: "suspension-connect-nonce",
-            },
-          },
-        }),
+          }),
+        ),
       ),
     send,
     setCloseCause,

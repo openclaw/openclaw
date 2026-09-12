@@ -1,4 +1,5 @@
 import type { RawData } from "ws";
+import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
 import {
   classifyGatewayStaleInstall,
@@ -9,7 +10,7 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 export function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHandlerParams): void {
   const queued: RawData[] = [];
   const queueMessage = (data: RawData) => {
-    if (queued.length >= 16) {
+    if (queued.length >= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES) {
       params.setCloseCause("message-handler-loading-overflow", { queuedFrames: queued.length });
       params.close(1008, "gateway message handler loading");
       return;

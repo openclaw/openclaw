@@ -410,7 +410,6 @@ export async function attachAuthenticatedGatewayConnect(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
     );
   }
-  clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
     connect: connectParams,
@@ -473,7 +472,6 @@ export async function attachAuthenticatedGatewayConnect(
       expiresAtMs: entry.expiresAtMs,
     });
   }
-
   // Only an exact cryptographic device match proves the same install; independent
   // SSH-tunneled or separate-state nodes are exempt even when they appear local.
   // Reject before registration/presence so supervisor restarts leave no phantom online state.
@@ -555,8 +553,10 @@ export async function attachAuthenticatedGatewayConnect(
     });
     return;
   }
-  // Only registered operators use bounded router starts. Node lifecycle traffic,
-  // workers and preauth retain native yielding and their existing queue/drain rules.
+  // Keep the preauth watchdog and receiver limits until this socket owns the client.
+  clearHandshakeTimer();
+  // Only registered operators use bounded router starts. Node lifecycle traffic and
+  // workers retain native yielding and their existing queue/drain rules.
   handoffReceiver();
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
