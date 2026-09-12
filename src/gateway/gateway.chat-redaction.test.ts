@@ -178,6 +178,10 @@ describe("registered Control UI chat redaction", () => {
     `https://example.test/${secret}`,
     `https://example.test/path-${secret}`,
     `https://${secret}.example.test`,
+    "https://x.com/@user/status/2097727549400871286",
+    `https://x.com/@user/status/${secret}`,
+    `data:application/octet-stream;base64,AAAA/${secret}@`,
+    `https://example.test:8080/path-${secret}`,
   ])(
     "chat.send preserves %s in chat.history and recorded model input",
     async (url) => {
@@ -220,6 +224,11 @@ describe("registered Control UI chat redaction", () => {
       `https://example.test/path-${secret}?foo=@`,
       `https://example.test/path-${masked}?foo=@`,
     ],
+    ...[")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"].map((punctuation) => [
+      `userinfo before ${punctuation}`,
+      `https://name-${secret}${punctuation}@example.test`,
+      `https://name-${masked}${punctuation}@example.test`,
+    ]),
     ["s3 password", `s3://user:${secret}@bucket`, `s3://user:${masked}@bucket`],
     ["s3 username", `s3://name-${secret}:pass@bucket`, `s3://name-${masked}:pass@bucket`],
     [
@@ -232,6 +241,7 @@ describe("registered Control UI chat redaction", () => {
       `s3://user:${numericSlashSecret}@bucket`,
       "s3://user:1234/A…QAb9@bucket",
     ],
+    ["s3 slash-prefixed key", `s3://user:1234/${secret}@bucket`, `s3://user:1234/${masked}@bucket`],
     ["dot-prefixed credential", `.${secret}`, `.${masked}`],
     ["credential after URL", `${publicUrl} ${secret}`, `${publicUrl} ${masked}`],
     ["credential before URL", `${secret} ${publicUrl}`, `${masked} ${publicUrl}`],
@@ -271,6 +281,10 @@ describe("registered Control UI chat redaction", () => {
       `https://example.test/${secret}`,
       `https://example.test/path-${secret}`,
       `https://${secret}.example.test`,
+      "https://x.com/@user/status/2097727549400871286",
+      `https://x.com/@user/status/${secret}`,
+      `data:application/octet-stream;base64,AAAA/${secret}@`,
+      `https://example.test:8080/path-${secret}`,
     ];
     // A separate spliced token forces the approval sanitizer's bitmap-union display.
     const command = [
@@ -279,8 +293,12 @@ describe("registered Control UI chat redaction", () => {
       JSON.stringify(`${publicUrl} ${secret}`),
       JSON.stringify(`.${secret}`),
       JSON.stringify(`s3://user:${secret}@bucket`),
+      JSON.stringify(`s3://user:1234/${secret}@bucket`),
       ...["#", "?foo=.", "[", "(", "{"].map((prefix) =>
         JSON.stringify(`https://example.test/${prefix}${secret}`),
+      ),
+      ...[")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"].map((punctuation) =>
+        JSON.stringify(`https://name-${secret}${punctuation}@example.test`),
       ),
       JSON.stringify("sk-abc123\u200B456789012345678"),
     ].join(" ");
@@ -306,9 +324,15 @@ describe("registered Control UI chat redaction", () => {
       expect(display.commandText).toContain(`"${publicUrl} ***"`);
       expect(display.commandText).toContain('".***"');
       expect(display.commandText).toContain('"s3://user:***@bucket"');
+      expect(display.commandText).toContain('"s3://user:1234/***@bucket"');
       expect(display.commandText).not.toContain("sk-abc123");
       for (const prefix of ["#", "?foo=.", "[", "(", "{"]) {
         expect(display.commandText).toContain(`"https://example.test/${prefix}***"`);
+      }
+      for (const punctuation of [")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"]) {
+        expect(display.commandText).toContain(
+          JSON.stringify(`https://name-***${punctuation}@example.test`),
+        );
       }
       expect(display.commandText).not.toContain("456789012345678");
     } finally {

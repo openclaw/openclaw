@@ -19,6 +19,26 @@ describe("tool-card redaction", () => {
       `https://example.test/path-${secret}`,
     ],
     ["long URL hostname", `https://${secret}.example.test`, `https://${secret}.example.test`],
+    [
+      "at-sign in URL path",
+      "https://x.com/@user/status/2097727549400871286",
+      "https://x.com/@user/status/2097727549400871286",
+    ],
+    [
+      "numeric URL port",
+      `https://example.test:8080/path-${secret}`,
+      `https://example.test:8080/path-${secret}`,
+    ],
+    [
+      "key-shaped status after at-sign path",
+      `https://x.com/@user/status/${secret}`,
+      `https://x.com/@user/status/${secret}`,
+    ],
+    [
+      "base64 payload with key-shaped suffix",
+      `data:application/octet-stream;base64,AAAA/${secret}@`,
+      `data:application/octet-stream;base64,AAAA/${secret}@`,
+    ],
     ["bare credential", secret, masked],
     ["URL fragment", `https://example.test/#${secret}`, `https://example.test/#${masked}`],
     [
@@ -52,6 +72,11 @@ describe("tool-card redaction", () => {
       `https://example.test/path-${secret}?foo=@`,
       `https://example.test/path-${masked}?foo=@`,
     ],
+    ...[")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"].map((punctuation) => [
+      `userinfo before ${punctuation}`,
+      `https://name-${secret}${punctuation}@example.test`,
+      `https://name-${masked}${punctuation}@example.test`,
+    ]),
     ["s3 password", `s3://user:${secret}@bucket`, `s3://user:${masked}@bucket`],
     ["s3 username", `s3://name-${secret}:pass@bucket`, `s3://name-${masked}:pass@bucket`],
     [
@@ -64,6 +89,7 @@ describe("tool-card redaction", () => {
       `s3://user:${numericSlashSecret}@bucket`,
       "s3://user:1234/A...QAb9@bucket",
     ],
+    ["s3 slash-prefixed key", `s3://user:1234/${secret}@bucket`, `s3://user:1234/${masked}@bucket`],
     ["dot-prefixed credential", `.${secret}`, `.${masked}`],
     ["credential after URL", `${publicUrl} ${secret}`, `${publicUrl} ${masked}`],
     ["credential before URL", `${secret} ${publicUrl}`, `${masked} ${publicUrl}`],
