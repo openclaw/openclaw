@@ -545,6 +545,8 @@ export async function runCodexAppServerSideQuestion(
       pluginConfig,
       sessionAgentId,
       nativeToolSurfaceEnabled,
+      nativeImageInspectionEnabled:
+        nativeToolSurfaceEnabled && sideRunParams.pluginHarnessToolPolicyRestricted !== true,
       nativeProviderWebSearchSupport,
       sessionPermissionPolicy,
       runId,
@@ -1216,6 +1218,7 @@ async function createCodexSideToolBridge(input: {
   pluginConfig: ReturnType<typeof readCodexPluginConfig>;
   sessionAgentId: string;
   nativeToolSurfaceEnabled: boolean;
+  nativeImageInspectionEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
   runId: string;
@@ -1343,7 +1346,7 @@ async function createCodexSideToolBridge(input: {
     const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
     tools = filterCodexVisionTools(codexFilteredTools, {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
-      nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled,
+      nativeImageInspectionEnabled: input.nativeImageInspectionEnabled,
     });
   }
   const requestedWebSearchPlan = resolveCodexWebSearchPlan({

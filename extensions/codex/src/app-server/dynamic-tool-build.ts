@@ -434,7 +434,8 @@ export async function buildDynamicTools(
   toolBuildStages.mark("codex-filtering");
   const visionFilteredTools = filterCodexVisionTools(codexFilteredTools, {
     modelHasVision,
-    nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled === true,
+    nativeImageInspectionEnabled:
+      input.nativeToolSurfaceEnabled === true && params.pluginHarnessToolPolicyRestricted !== true,
   });
   toolBuildStages.mark("vision-filtering");
   const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
@@ -618,7 +619,10 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
-  if (params.pluginHarnessToolPolicyRestricted === true) {
+  if (
+    (params.pluginHarnessNativeCodeToolPolicyRestricted ??
+      params.pluginHarnessToolPolicyRestricted) === true
+  ) {
     return false;
   }
   if (isCodexMemoryFlushRun(params)) {

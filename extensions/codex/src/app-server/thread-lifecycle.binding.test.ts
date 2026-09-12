@@ -51,6 +51,7 @@ import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import {
   buildThreadResumeParams,
+  buildThreadStartParams,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
 import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
@@ -3285,6 +3286,59 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
+  it("keeps native coding tools while isolating denied ambient tools and inherited MCP", () => {
+    const params = createParams(
+      path.join(tempDir, "sandbox-policy-session.jsonl"),
+      path.join(tempDir, "sandbox-policy-workspace"),
+    );
+    params.pluginHarnessToolPolicyRestricted = true;
+    params.pluginHarnessNativeCodeToolPolicyRestricted = false;
+    const environmentSelection = [{ environmentId: "sandbox", cwd: "/workspace" }];
+    const threadOptions = {
+      cwd: "/workspace",
+      appServer: createThreadLifecycleAppServerOptions(),
+      dynamicTools: [],
+      config: {
+        "features.apps": true,
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+        "features.hooks": true,
+        "features.plugins": true,
+        "features.shell_tool": true,
+        "features.unified_exec": true,
+        "features.view_image": true,
+        "orchestrator.mcp.enabled": true,
+        mcp_servers: { inherited: { command: "unsafe" } },
+      },
+      nativeCodeModeEnabled: true,
+      nativeCodeModeOnlyEnabled: true,
+      environmentSelection,
+      hostSystemAgentActive: false,
+      restrictedToolSurfaceInheritedMcpServerNames: ["inherited"],
+    };
+    const startRequest = buildThreadStartParams(params, threadOptions);
+    const resumeRequest = buildThreadResumeParams(params, {
+      ...threadOptions,
+      threadId: "existing-thread-after-policy-tightening",
+    });
+
+    expect(startRequest.environments).toEqual(environmentSelection);
+    for (const request of [startRequest, resumeRequest]) {
+      expect(request.config).toMatchObject({
+        "features.code_mode": expect.anything(),
+        "features.code_mode_only": true,
+        "features.shell_tool": true,
+        "features.unified_exec": true,
+        "features.view_image": false,
+        "features.apps": false,
+        "features.hooks": false,
+        "features.plugins": false,
+        "orchestrator.mcp.enabled": false,
+        mcp_servers: { inherited: { command: "unsafe", enabled: false } },
+      });
+    }
+  });
+
   it("starts a fresh restricted OpenClaw thread for a new app-server client", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -3650,6 +3704,40 @@ describe("Codex app-server thread lifecycle bindings", () => {
         hostSystemAgentActive: true,
       }),
     ).rejects.toThrow("cannot override required feature hooks");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+    ]);
+  });
+
+  it("rejects required view_image while native coding remains enabled", async () => {
+    const sessionFile = path.join(tempDir, "plugin-native-code-session.jsonl");
+    const workspaceDir = path.join(tempDir, "plugin-native-code-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.pluginHarnessToolPolicyRestricted = true;
+    params.pluginHarnessNativeCodeToolPolicyRestricted = false;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: { featureRequirements: { view_image: true } } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: true,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: false,
+      }),
+    ).rejects.toThrow("cannot override required feature view_image");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
       "configRequirements/read",

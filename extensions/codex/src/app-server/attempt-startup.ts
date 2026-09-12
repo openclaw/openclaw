@@ -496,9 +496,10 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled: params.configuredMcpDynamicSurface
-                  ? false
-                  : params.nativeToolSurfaceEnabled,
+                userMcpServersEnabled:
+                  !params.configuredMcpDynamicSurface &&
+                  params.nativeToolSurfaceEnabled &&
+                  attemptParams.pluginHarnessToolPolicyRestricted !== true,
                 mcpServersFingerprint: params.configuredMcpDynamicSurface
                   ? undefined
                   : params.bundleMcpThreadConfig.fingerprint,

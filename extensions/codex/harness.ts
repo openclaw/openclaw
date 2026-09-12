@@ -116,6 +116,14 @@ export function createCodexAppServerAgentHarness(
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+    conversationToolPolicyNativeCodeToolNames: [
+      "exec",
+      "process",
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+    ],
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },

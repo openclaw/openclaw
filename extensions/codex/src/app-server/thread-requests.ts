@@ -119,6 +119,15 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
   "workspace_dependencies",
 ]);
 
+// These features own only the declared native coding surface. A sandbox policy
+// may permit them while the broader native and inherited surfaces remain isolated.
+const CODEX_NATIVE_CODE_MODE_FEATURES = new Set([
+  "code_mode",
+  "code_mode_only",
+  "shell_tool",
+  "unified_exec",
+]);
+
 const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
   ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,
   ...Object.fromEntries(
@@ -461,6 +470,10 @@ export function buildCodexRuntimeThreadConfigForRun(
         ? buildRestrictedToolConfigPatch(
             restrictedToolSurfaceMcpServerNames,
             Boolean(params.scheduledRuntimeAuthority),
+            {
+              preserveNativeCodeMode:
+                !messageOnlySourceReply && options.nativeCodeModeEnabled === true,
+            },
           )
         : buildCodexRingZeroThreadConfigPatch(
             params,
@@ -500,6 +513,7 @@ export function buildCodexRingZeroThreadConfigPatch(
 function buildRestrictedToolConfigPatch(
   inheritedMcpServerNames: readonly string[],
   scheduledAppAuthorityActive = false,
+  options: { preserveNativeCodeMode?: boolean } = {},
 ): JsonObject {
   // Restricted turns already send environments: [] and disable native code mode.
   // Remove Codex-owned tool sources here; project-document suppression belongs to
@@ -507,8 +521,14 @@ function buildRestrictedToolConfigPatch(
   const mcpServers = Object.fromEntries(
     [...new Set(inheritedMcpServerNames)].toSorted().map((name) => [name, { enabled: false }]),
   );
+  const restrictedConfig = { ...CODEX_RING_ZERO_THREAD_CONFIG };
+  if (options.preserveNativeCodeMode) {
+    for (const feature of CODEX_NATIVE_CODE_MODE_FEATURES) {
+      delete restrictedConfig[`features.${feature}`];
+    }
+  }
   return {
-    ...CODEX_RING_ZERO_THREAD_CONFIG,
+    ...restrictedConfig,
     ...(scheduledAppAuthorityActive
       ? {
           "features.apps": true,
@@ -566,6 +586,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   options: {
     restrictedToolSurface: boolean;
     requiredNativeShell?: boolean;
+    nativeCodeModeEnabled?: boolean;
     additionalDeniedFeatures?: readonly string[];
     allowedManagedRequirementsFingerprint?: string;
     allowConfiguredManagedHooks?: boolean;
@@ -622,7 +643,11 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
       }
       const deniedByToolPolicy =
         (options.restrictedToolSurface &&
-          CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||
+          CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature) &&
+          !(
+            options.nativeCodeModeEnabled === true &&
+            CODEX_NATIVE_CODE_MODE_FEATURES.has(canonicalFeature)
+          )) ||
         additionalDeniedFeatures.has(canonicalFeature);
       if (canonicalFeature === "hooks" && managedHooksAllowed) {
         continue;
@@ -650,7 +675,7 @@ export async function readCodexManagedRequirementsFingerprint(
   );
 }
 
-async function readCodexManagedRequirements(
+export async function readCodexManagedRequirements(
   client: Pick<CodexAppServerClient, "request">,
   signal?: AbortSignal,
 ): Promise<JsonObject | null> {

@@ -391,6 +391,10 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
     params.pluginHarnessToolPolicyRestricted = true;
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    params.pluginHarnessNativeCodeToolPolicyRestricted = false;
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    params.pluginHarnessNativeCodeToolPolicyRestricted = true;
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
   it("keeps policy-filterable OpenClaw coding replacements when native tools are disabled", () => {
@@ -680,14 +684,29 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it.each([
-    { nativeToolSurfaceEnabled: true, expected: ["message"] },
-    { nativeToolSurfaceEnabled: false, expected: ["view_image", "message"] },
+    {
+      nativeToolSurfaceEnabled: true,
+      pluginHarnessToolPolicyRestricted: false,
+      expected: ["message"],
+    },
+    {
+      nativeToolSurfaceEnabled: false,
+      pluginHarnessToolPolicyRestricted: false,
+      expected: ["view_image", "message"],
+    },
+    {
+      nativeToolSurfaceEnabled: true,
+      pluginHarnessToolPolicyRestricted: true,
+      expected: ["view_image", "message"],
+    },
   ])(
-    "uses the active native image loader when native tools are $nativeToolSurfaceEnabled",
-    async ({ nativeToolSurfaceEnabled, expected }) => {
+    "uses the active native image loader when native=$nativeToolSurfaceEnabled restricted=$pluginHarnessToolPolicyRestricted",
+    async ({ nativeToolSurfaceEnabled, pluginHarnessToolPolicyRestricted, expected }) => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
       params.disableTools = false;
+      params.pluginHarnessToolPolicyRestricted = pluginHarnessToolPolicyRestricted;
+      params.pluginHarnessNativeCodeToolPolicyRestricted = false;
       params.model = createCodexTestModel("codex", ["text", "image"]);
       params.runtimePlan = createCodexRuntimePlanFixture();
       setOpenClawCodingToolsFactoryForTests(() => [
