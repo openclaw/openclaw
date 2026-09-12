@@ -572,7 +572,7 @@ export function mergeImportedChatHistoryMessages(params: {
   const exactExternalIdentityIndex = new Map<string, ComparableHistoryMessage>();
   const allMessageRoleTextIndex: RoleTextIndex = new Map();
   const identitylessRoleTextIndex: RoleTextIndex = new Map();
-  const roleTextMinimumOrder = new Map<string, number>();
+  const roleTextMinimumOrder = new Map<string, Map<string, number>>();
   const localImageMediaCandidates = new Map<string, ConsumableCandidates>();
   const consumedLocalCandidates = new Set<ComparableHistoryMessage>();
   const advanceRoleTextMinimumOrder = (
@@ -589,11 +589,12 @@ export function mergeImportedChatHistoryMessages(params: {
       if (!text) {
         continue;
       }
-      const key = JSON.stringify([entry.role, text]);
-      roleTextMinimumOrder.set(
-        key,
-        Math.max(roleTextMinimumOrder.get(key) ?? 0, matched.order + 1),
-      );
+      let byText = roleTextMinimumOrder.get(entry.role);
+      if (!byText) {
+        byText = new Map();
+        roleTextMinimumOrder.set(entry.role, byText);
+      }
+      byText.set(text, Math.max(byText.get(text) ?? 0, matched.order + 1));
     }
   };
   const indexEntry = (entry: ComparableHistoryMessage) => {
@@ -675,18 +676,15 @@ export function mergeImportedChatHistoryMessages(params: {
       const index = imported.externalIdentityKey
         ? identitylessRoleTextIndex
         : allMessageRoleTextIndex;
-      const importedMinimumOrder =
-        roleTextMinimumOrder.get(JSON.stringify([imported.role, imported.text])) ?? 0;
+      const byText = imported.role ? roleTextMinimumOrder.get(imported.role) : undefined;
+      const importedMinimumOrder = imported.text ? (byText?.get(imported.text) ?? 0) : 0;
       // A user can quote the complete note. Prefer that literal local turn
       // before comparing the text after an OpenClaw-generated note.
       for (const text of [imported.text, imported.driftNoteText]) {
         if (!imported.role || !text) {
           continue;
         }
-        const minimumOrder = Math.max(
-          importedMinimumOrder,
-          roleTextMinimumOrder.get(JSON.stringify([imported.role, text])) ?? 0,
-        );
+        const minimumOrder = Math.max(importedMinimumOrder, byText?.get(text) ?? 0);
         duplicate = findRoleTextCandidate(
           index,
           { ...imported, text },
