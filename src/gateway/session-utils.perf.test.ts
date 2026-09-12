@@ -23,7 +23,10 @@ import * as usageFormat from "../utils/usage-format.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import * as titleReader from "./session-transcript-title-reader.js";
 import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
-import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
+import {
+  projectSessionPatchResult,
+  resolveGatewaySessionThinkingProjectionInternal,
+} from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
 
@@ -39,6 +42,125 @@ import * as rowProjection from "./session-utils-row.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test("bounds catalog lookups per response while preserving each agent's model metadata", async () => {
+    await withStateDirEnv("openclaw-perf-catalog-", async ({ stateDir }) => {
+      resetPluginRuntimeStateForTest();
+      const pluginRegistry = createEmptyPluginRegistry();
+      setActivePluginRegistry(pluginRegistry);
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {}, research: {} },
+          defaults: { model: { primary: "example/model-hit" } },
+        },
+      };
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      const modelCatalog = new Map(
+        ["main", "research"].map((agentId, index) => [
+          agentId,
+          {
+            entries: ["model-hit", "Model-Hit"].map((id, modelIndex) => {
+              const contextTokens = (index + 1) * (modelIndex + 1) * 10_000;
+              return {
+                provider: "example",
+                id,
+                name: "Example model",
+                contextTokens,
+                contextWindows: [{ id: "full", label: "Full", contextWindow: contextTokens }],
+                contextWindowDefault: "full",
+              };
+            }),
+            pluginRegistry,
+          },
+        ]),
+      );
+      const store = Object.fromEntries(
+        Array.from({ length: 80 }, (_, index) => {
+          const agentId = index % 2 ? "research" : "main";
+          return [
+            `agent:${agentId}:dashboard:catalog-${index}`,
+            {
+              sessionId: `catalog-${index}`,
+              updatedAt: index,
+              providerOverride: "example",
+              modelOverride:
+                index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
+              ...(index % 8 < 2
+                ? {
+                    acp: {
+                      backend: "acpx",
+                      agent: agentId,
+                      runtimeSessionName: `catalog-${index}`,
+                      mode: "persistent" as const,
+                      state: "idle" as const,
+                      lastActivityAt: index,
+                    },
+                  }
+                : {}),
+            } satisfies SessionEntry,
+          ];
+        }),
+      );
+      const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
+      try {
+        for (const revision of [1, 2]) {
+          for (const [agentId, catalog] of modelCatalog) {
+            catalog.entries.forEach((entry, index) => {
+              const contextTokens = revision * (index + 1) * (agentId === "main" ? 10_000 : 20_000);
+              catalog.entries[index] = {
+                ...entry,
+                contextTokens,
+                contextWindows: [{ id: "full", label: "Full", contextWindow: contextTokens }],
+              };
+            });
+          }
+          catalogSpy.mockClear();
+          const result = await listSessionFixture({
+            cfg,
+            store,
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+            modelCatalog,
+            opts: { limit: 80 },
+          });
+          expect(result.count).toBe(80);
+          const catalogRows = result.sessions.filter(
+            (row) => row.model?.toLowerCase() === "model-hit",
+          );
+          expect(catalogRows).toHaveLength(40);
+          for (const row of catalogRows) {
+            expect(row.contextTokens).toBe(
+              revision *
+                (row.model === "Model-Hit" ? 2 : 1) *
+                (row.agentId === "main" ? 10_000 : 20_000),
+            );
+            expect(row).not.toHaveProperty("catalogEntry");
+          }
+          // Hits and misses are shared within a response, including runtime/context projection.
+          // Defaults can make a few additional lookups outside the row context.
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
+          catalogSpy.mockClear();
+          const key = "agent:main:dashboard:catalog-0";
+          const patch = projectSessionPatchResult({
+            cfg,
+            canonicalKey: key,
+            targetAgentId: "main",
+            entry: store[key]!,
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+            modelCatalog: modelCatalog.get("main")!.entries,
+          });
+          expect(patch.resolved).toMatchObject({
+            contextWindow: "full",
+            contextWindows: [{ id: "full", label: "Full", contextWindow: revision * 10_000 }],
+          });
+          expect(patch.resolved).not.toHaveProperty("catalogEntry");
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(2);
+        }
+      } finally {
+        catalogSpy.mockRestore();
+      }
+    });
+  });
+
   test.each([
     {
       name: "cheap rows",
