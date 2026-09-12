@@ -4,22 +4,36 @@ import { buildChannelInboundEventContext } from "../channels/inbound-event/conte
 import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
+  copyChannelParticipantAdmissionEvidence,
+  readChannelContextGatewayContextResolver,
   readChannelContextAdmissionEvidence,
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
 import { resolveStableChannelMessageIngress } from "../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
+import {
+  bindGatewayContextResolver,
+  getCanonicalGatewayContextResolver,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
+function createRuntimeBuilder(params: {
+  origin: PluginOrigin;
+  id?: string;
+  gatewayResolver?: GatewayContextResolver;
+}) {
+  const subagent = {};
+  bindGatewayContextResolver(subagent, params.gatewayResolver);
   const registryBuilder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {
+      subagent,
       channel: { inbound: { buildContext: buildChannelInboundEventContext } },
     } as PluginRuntime,
     activateGlobalSideEffects: false,
@@ -135,6 +149,39 @@ function inspect(context: object) {
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  it.each(["retired", "replaced"] as const)(
+    "revokes copied Gateway resolution when the channel is %s while Gateway remains live",
+    async (lifecycle) => {
+      // A typed sentinel observes callback invocation without a fabricated Gateway context.
+      const gatewayReached = new Error("Live Gateway resolver reached");
+      const gatewayResolver: GatewayContextResolver = () => {
+        throw gatewayReached;
+      };
+      const first = createRuntimeBuilder({
+        origin: "bundled",
+        id: "gateway-channel-owner",
+        gatewayResolver,
+      });
+      const ingress = await resolveIngress("person-a", { channelId: first.record.id });
+      const context = first.buildContext(contextParams({ ingress, channelId: first.record.id }));
+      const copied = { ...context };
+      copyChannelParticipantAdmissionEvidence(context, copied);
+      const retained = readChannelContextGatewayContextResolver(copied);
+      expect(() => retained?.()).toThrow(gatewayReached);
+      if (!retained) {
+        throw new Error("Expected registered channel Gateway resolution");
+      }
+      expect(getCanonicalGatewayContextResolver(retained)).toBe(gatewayResolver);
+      if (lifecycle === "retired") {
+        markPluginRegistryRetired(first.registryBuilder.registry);
+      } else {
+        createRuntimeBuilder({ origin: "bundled", id: first.record.id, gatewayResolver });
+      }
+      expect(gatewayResolver).toThrow(gatewayReached);
+      expect(retained()).toBeUndefined();
+    },
+  );
+
   it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
     const runtime = createPluginRuntime();
     const command = vi.fn(async () => ({ payloads: [] }));
