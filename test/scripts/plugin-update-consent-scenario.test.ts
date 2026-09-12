@@ -155,7 +155,7 @@ function cliReply(args: string[], child: FixtureChild): string {
   const coreVersion: string | undefined = repair
     ? JSON.parse(fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"))
         .version
-    : coreVersions.get(args[args.indexOf("--tag") + 1]);
+    : coreVersions.get(args[args.indexOf("--tag") + 1] ?? "");
   if (!coreVersion) {
     throw new Error("unprepared core update");
   }
