@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   runGitUpdate: vi.fn(),
   runPackageUpdate: vi.fn(),
   runtimeError: vi.fn(),
+  repair: vi.fn(),
   revalidateSchemaContext:
     vi.fn<typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext>(),
   validateCanary: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => ({
 }));
 
 afterEach(() => vi.restoreAllMocks());
+vi.mock("./update-command-repair.js", () => ({ runUpdateCommandRepair: mocks.repair }));
 
 vi.mock("../../infra/update-global.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
@@ -213,6 +215,7 @@ function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreMana
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.serviceStopped = false;
+  mocks.repair.mockResolvedValue({ status: "unavailable", reason: "No inference configured." });
   mocks.validateCanary.mockResolvedValue({
     status: "ok",
     phase: "readiness",
@@ -818,6 +821,43 @@ describe("mutable update execution", () => {
       reason: "update-failed",
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
     });
+  });
+
+  it("reports a failed Git update check once and keeps its actual diagnosis in the result", async () => {
+    const onStepComplete = vi.fn();
+    const failed = {
+      name: "Checking update health",
+      command: "doctor --lint --json",
+      cwd: "/opt/update",
+      durationMs: 10,
+      exitCode: 1,
+      failureSummary: "Configured plugin is unavailable.",
+      stderrTail: "raw diagnostic block that must not be replayed",
+    };
+    mocks.validateCanary.mockImplementation(async ({ onStep }) => {
+      onStep(failed);
+      return {
+        status: "error",
+        reason: "doctor-failed",
+        phase: "health",
+        steps: [failed],
+        durationMs: 10,
+        logTail: [failed.stderrTail],
+      };
+    });
+    mocks.runGitUpdate.mockImplementation(async (params) => {
+      await params.validateCandidate("/opt/update");
+      throw new Error("A failed update must not reach activation");
+    });
+    const execution = await executeMutableUpdate({
+      ...executionParams("git"),
+      progress: { onStepComplete },
+    });
+    expect(onStepComplete).toHaveBeenCalledOnce();
+    expect(mocks.runtimeError).not.toHaveBeenCalled();
+    expect(execution?.result).toMatchObject({ status: "error", reason: "doctor-failed" });
+    expect(execution?.result.steps[0]?.stderrTail).toBe("Configured plugin is unavailable.");
+    expect(mocks.serviceStopped).toBe(false);
   });
 
   it("keeps Git candidate selection online and delegates its later activation", async () => {

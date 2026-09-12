@@ -1293,7 +1293,7 @@ function createDeferredPluginSessionStoreRefusal(
   return endpoints.length > 0
     ? {
         code: "plugin-planning-deferred",
-        message: "Plugin-owned session migration targets are deferred to candidate validation.",
+        message: "Plugin session migrations will be checked with the update.",
       }
     : undefined;
 }
@@ -2681,7 +2681,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     channelPairingStep.requiredness = "conditional";
     channelPairingStep.refusal = {
       code: "plugin-planning-deferred",
-      message: "Channel pairing account discovery is deferred to candidate plugin validation.",
+      message: "Channel pairing accounts will be checked with the updated plugins.",
     };
   }
   const firstRefusalIndex = steps.findIndex((step) => step.refusal !== undefined);

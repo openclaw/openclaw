@@ -39,8 +39,8 @@ An explicit package artifact (for example, a tarball path or URL) is validated
 and installed even when its version matches; matching versions do not prove
 that two artifacts contain the same code.
 An explicit `--channel` choice still becomes the saved update channel.
-For targets that support candidate validation, Doctor lint, config and plugin planning, and a
-canary boot on copied state finish before the service stops. The stopped interval
+For versions that support checks before installation, health checks, config and plugin planning, and a
+test Gateway boot on copied state finish before the service stops. The stopped interval
 contains the swap, required migrations, plugin downloads and convergence, and
 service start. Plugin work uses the installed target without requiring a serving
 Gateway. A changed plugin snapshot runs fresh Doctor migrations before restart;

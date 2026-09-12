@@ -162,8 +162,8 @@ describe("container update recovery reporting", () => {
         env: {},
       });
       expect(action).toContain(redeploy);
-      expect(action).toContain("Candidate Doctor may have migrated state");
-      expect(action).toContain("keep the candidate installed and do not roll back code alone");
+      expect(action).toContain("Update Doctor may have migrated state");
+      expect(action).toContain("keep the update installed and do not roll back code alone");
       expect(action).toContain(
         serviceRunning ? "gateway is running 2.0.0" : "could not prove a runnable installation",
       );

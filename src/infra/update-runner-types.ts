@@ -24,6 +24,8 @@ export type UpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  /** Bounded, redacted failure from the validating command, separate from its raw logs. */
+  failureSummary?: string;
   signal?: NodeJS.Signals | null;
   killed?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";

@@ -5,8 +5,14 @@ import type { UpdateStepResult } from "./update-runner-types.js";
 
 /** A bounded diagnostic excerpt for a failed update step, never its command log or cwd. */
 export function summarizeUpdateStepFailure(
-  step: Pick<UpdateStepResult, "exitCode" | "termination" | "stdoutTail" | "stderrTail">,
+  step: Pick<
+    UpdateStepResult,
+    "exitCode" | "termination" | "stdoutTail" | "stderrTail" | "failureSummary"
+  >,
 ): string {
+  if (step.failureSummary) {
+    return truncateUtf16Safe(step.failureSummary, 300);
+  }
   return truncateUtf16Safe(
     [
       step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`,

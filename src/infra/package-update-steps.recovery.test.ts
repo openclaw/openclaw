@@ -640,7 +640,7 @@ describe("package update recovery safety", () => {
           ).toContain("restored previous openclaw package and affected launchers");
           expect(
             result.steps.find((step) => step.name === "global install swap")?.stdoutTail,
-          ).toContain("candidate Doctor may have changed persistent state");
+          ).toContain("Update Doctor may have changed persistent state");
         }
       });
     },

@@ -77,13 +77,16 @@ export type UpdateWizardOptions = {
 };
 
 export class UpdatePreMutationError extends Error {
+  readonly reported: boolean;
+
   constructor(
     readonly reason: string,
     message: string,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { reported?: boolean },
   ) {
     super(message, options);
     this.name = "UpdatePreMutationError";
+    this.reported = options?.reported ?? false;
   }
 }
 

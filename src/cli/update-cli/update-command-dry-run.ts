@@ -164,7 +164,7 @@ export function printUpdateDryRun(params: {
   }
   if (params.updateInstallKind === "git") {
     notes.push(
-      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each candidate.",
+      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each update.",
     );
   }
 

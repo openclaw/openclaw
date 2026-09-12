@@ -230,7 +230,7 @@ describe("verified package rollback", () => {
         env,
       });
       expect(renderUpdateRunReport(row, { nextAction }).markdown).toContain(
-        "Keep the candidate installed if its gateway is reachable; otherwise keep the gateway stopped.",
+        "Keep the update installed if its gateway is reachable; otherwise keep the gateway stopped.",
       );
     },
   );

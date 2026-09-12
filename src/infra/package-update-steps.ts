@@ -647,7 +647,7 @@ async function prepareStagedPackageInstall(
     const stagedInstall = await createStagedPackageInstall(installTarget, packageName);
     if (!stagedInstall && requireStaging) {
       throw new Error(
-        `The ${installTarget.manager} global install layout cannot stage a candidate. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
+        `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
       );
     }
     return { stagedInstall, failedStep: null };

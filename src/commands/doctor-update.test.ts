@@ -620,7 +620,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     );
     if (reason === "state-migration-started") {
       expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("keep the candidate installed and do not roll back code alone"),
+        expect.stringContaining("keep the update installed and do not roll back code alone"),
         "Update",
       );
     }

@@ -20,6 +20,7 @@ import {
 } from "../../infra/update-global.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -78,7 +79,9 @@ import { verifyPreviousGatewayForUpdate } from "./update-command-verification.js
 export async function executeMutableUpdate(
   params: MutableUpdateExecutionParams,
 ): Promise<MutableUpdateExecutionResult | null> {
-  const { opts, updateStepTimeoutMs } = params;
+  const { opts, updateStepTimeoutMs, updateInstallKind } = params;
+  const mode =
+    updateInstallKind === "git" ? "git" : (params.packageInstallTarget?.manager ?? "unknown");
   const originalRun = opts.run;
   const requesterAuthority = originalRun?.requesterAuthority;
   const assertRequesterCurrent = () => {
@@ -213,10 +216,7 @@ export async function executeMutableUpdate(
                 params.updateInstallKind === "package" && params.channel !== "extended-stable"
                   ? (normalizeTag(params.packageInstallSpec) ?? undefined)
                   : undefined,
-              mode:
-                params.updateInstallKind === "git"
-                  ? "git"
-                  : (params.packageInstallTarget?.manager ?? "unknown"),
+              mode,
               timeoutMs: updateStepTimeoutMs,
               devTarget: params.devTarget,
               nodeRunner: params.packageUpdateNodeRunner,
@@ -433,10 +433,7 @@ export async function executeMutableUpdate(
         nodeRunner: params.packageUpdateNodeRunner,
         result: {
           status: "error",
-          mode:
-            params.updateInstallKind === "git"
-              ? "git"
-              : (params.packageInstallTarget?.manager ?? "unknown"),
+          mode,
           root,
           reason: validation.reason,
           before: { version: await readPackageVersion(params.root) },
@@ -446,13 +443,18 @@ export async function executeMutableUpdate(
         },
         validate: async (signal, assertCurrent, rehearsal) => {
           const repairValidation = await validate(signal, rehearsal, assertCurrent);
+          const failedStep = repairValidation.steps.find(
+            (step) => step.exitCode !== 0 && !step.advisory,
+          );
           return {
             ok: repairValidation.status === "ok",
             score: repairValidation.steps.filter((step) => step.exitCode === 0).length,
             summary:
               repairValidation.status === "ok"
-                ? "Candidate validation passed."
-                : repairValidation.logTail.join("\n"),
+                ? "Update checks passed."
+                : failedStep
+                  ? summarizeUpdateStepFailure(failedStep)
+                  : "Update checks failed.",
           };
         },
       });
@@ -485,7 +487,7 @@ export async function executeMutableUpdate(
     ) {
       throw new UpdatePreMutationError(
         "invalid-config",
-        "Config changed during candidate validation; rerun the update before activating.",
+        "Configuration changed during update checks. Rerun the update.",
       );
     }
     const config = snapshot.config;
@@ -628,10 +630,9 @@ export async function executeMutableUpdate(
           const steps = await validateCandidate(candidateRoot);
           const failed = steps.find((step) => step.exitCode !== 0 && !step.advisory);
           if (failed) {
-            throw new UpdatePreMutationError(
-              failed.name,
-              failed.stderrTail ?? "Candidate validation failed.",
-            );
+            throw new UpdatePreMutationError(failed.name, summarizeUpdateStepFailure(failed), {
+              reported: Boolean(params.progress?.onStepComplete),
+            });
           }
         },
         beforeGitMutation:
@@ -662,16 +663,15 @@ export async function executeMutableUpdate(
     const preMutationFailure = err instanceof UpdatePreMutationError;
     const message = formatErrorMessage(err);
     failure = { cause: err, detail: message };
-    defaultRuntime.error(message);
+    if (!(err instanceof UpdatePreMutationError && err.reported)) {
+      defaultRuntime.error(message);
+    }
     const durationMs = Date.now() - params.startedAt;
     // Only explicit pre-mutation refusal permits original-runtime recovery.
     // Mutable exceptions retain an unsafe outcome through cleanup/reporting.
     result = {
       status: "error",
-      mode:
-        params.updateInstallKind === "git"
-          ? "git"
-          : (params.packageInstallTarget?.manager ?? "unknown"),
+      mode,
       root: params.root,
       reason:
         err instanceof UpdateRequesterRevokedError

@@ -181,7 +181,7 @@ export async function rollbackFailedUpdate(params: {
       const supported = params.previousSchemaVersions?.[kind];
       if (supported === undefined || version > supported) {
         throw new Error(
-          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the candidate installed.`,
+          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the update installed.`,
         );
       }
     }
@@ -262,7 +262,7 @@ export async function rollbackFailedUpdate(params: {
       stopped.serviceMutationAllowed === false ||
       (stopped.running && !stopped.stopped)
     ) {
-      throw new Error(stopped.blockMessage ?? "Candidate service could not be stopped safely.");
+      throw new Error(stopped.blockMessage ?? "Update service could not be stopped safely.");
     }
     return stopped;
   };

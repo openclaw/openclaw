@@ -40,7 +40,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
     if (typeof finishUpdateRun !== "function") {
-      throw new Error("Candidate recovery writer is unavailable.");
+      throw new Error("Update recovery writer is unavailable.");
     }
     process.stdout.write(
       JSON.stringify({
@@ -178,7 +178,7 @@ async function finalizeInput(
       input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
-    throw new Error("Candidate finalization requires its migrated update run.");
+    throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
   executorFence?.assertCurrent();
@@ -249,7 +249,7 @@ async function finalizeInput(
   executorFence?.assertCurrent();
   const terminal = getUpdateRun(run.runId, { env: run.env });
   if (!terminal || terminal.status === "running") {
-    throw new Error("Candidate finalization left the update run nonterminal.");
+    throw new Error("Update finalization left the update run nonterminal.");
   }
   const response: MigratedUpdateFinalizationResult = {
     result,

@@ -81,6 +81,25 @@ describe("update progress", () => {
     expect(lines.join("\n")).toContain("Build type error");
   });
 
+  it("shows repeated validation failures without replaying their diagnostic block", () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    presentation = createUpdateProgress(true, context);
+    const failure = {
+      ...step,
+      name: "Checking update health",
+      durationMs: 1200,
+      exitCode: 1,
+      failureSummary: "Configured plugin is unavailable.",
+      stderrTail: "raw diagnostic block",
+    };
+    presentation.progress.onStepComplete?.(failure);
+    presentation.progress.onStepComplete?.({ ...failure, durationMs: 900 });
+    const output = log.mock.calls.flat().join("\n");
+    expect(output.match(/Configured plugin is unavailable\./g)).toHaveLength(1);
+    expect(output).not.toContain("raw diagnostic block");
+    expect(output).toContain("same failure");
+  });
+
   it("does not leave a phase observer after initial observation fails", () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.mocked(getUpdateRun).mockImplementationOnce(() => {

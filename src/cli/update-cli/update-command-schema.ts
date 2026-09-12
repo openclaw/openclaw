@@ -144,7 +144,7 @@ export async function preflightUpdateCommandSchemas(params: {
           !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec)
         ) {
           preflightNotes.push(
-            "Configured plugin availability will be checked against the staged package before rehearsal or activation; this preview does not stage the target.",
+            "Configured plugin availability will be checked against the staged package before update checks or activation; this preview does not stage the target.",
           );
         } else {
           const { preflightConfiguredNpmPluginTargets } =

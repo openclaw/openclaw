@@ -468,14 +468,14 @@ export async function updateGitCheckout(params: {
             timeoutMs,
           });
           if (candidate.code !== 0 || !candidate.stdout.trim()) {
-            throw new Error("Cannot inspect the validated Git candidate");
+            throw new Error("Cannot inspect the validated Git update");
           }
           await inspectTarget(candidate.stdout.trim(), root);
           if (opts.publishGitCheckout) {
             // A new checkout must settle its destination before runtime relocation
             // records absolute paths. Candidate build/validation has already finished.
             if ((await importCandidate(candidate.stdout.trim())).status !== "ok") {
-              throw new Error("Cannot import the admitted Git candidate");
+              throw new Error("Cannot import the admitted Git update");
             }
             gitRoot = await opts.publishGitCheckout();
             publishedCandidate = true;

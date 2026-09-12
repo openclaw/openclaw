@@ -63,6 +63,7 @@ export function createUpdateProgress(
   let currentPhase: UpdateRunPhase | undefined;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
+  const seenFailures = new Map<string, string>();
   const stop = () => {
     currentSpinner?.clear();
     currentSpinner = null;
@@ -132,7 +133,13 @@ export function createUpdateProgress(
     },
     onStepComplete: (step, record) => {
       flush(record ?? read());
-      printStep(step);
+      const previousFailure = seenFailures.get(step.name);
+      printStep(step, Boolean(step.failureSummary && previousFailure === step.failureSummary));
+      if (step.failureSummary && step.exitCode !== 0) {
+        seenFailures.set(step.name, step.failureSummary);
+      } else {
+        seenFailures.delete(step.name);
+      }
     },
   };
 
@@ -175,11 +182,12 @@ type DisplayStep = Pick<
   | "advisory"
   | "stdoutTail"
   | "stderrTail"
+  | "failureSummary"
   | "termination"
   | "signal"
 >;
 
-function printStep(step: DisplayStep): void {
+function printStep(step: DisplayStep, repeatedFailure = false): void {
   const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
   const termination =
     step.termination === "timeout" || step.termination === "no-output-timeout"
@@ -187,8 +195,17 @@ function printStep(step: DisplayStep): void {
       : step.signal
         ? ` — interrupted (${step.signal})`
         : "";
-  defaultRuntime.log(`  ${formatStepStatus(step)} ${step.name}${termination} ${duration}`);
+  defaultRuntime.log(
+    `  ${formatStepStatus(step)} ${step.name}${termination}${repeatedFailure ? " — same failure" : ""} ${duration}`,
+  );
   if (!isAdvisoryStep(step) && step.exitCode === 0) {
+    return;
+  }
+  if (repeatedFailure) {
+    return;
+  }
+  if (step.failureSummary && !step.advisory) {
+    defaultRuntime.log(`    ${theme.error(step.failureSummary)}`);
     return;
   }
   // Build tools often report failures on stdout. Keep the final diagnostic from
