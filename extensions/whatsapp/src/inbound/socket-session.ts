@@ -1,12 +1,13 @@
 // Whatsapp plugin module owns one attached inbound socket session.
-import type {
-  AnyMessageContent,
-  ConnectionState,
-  MiscMessageGenerationOptions,
-  proto,
-  ReachoutTimelockState,
-  WAMessage,
-  WASocket,
+import {
+  generateMessageIDV2,
+  type AnyMessageContent,
+  type ConnectionState,
+  type MiscMessageGenerationOptions,
+  type proto,
+  type ReachoutTimelockState,
+  type WAMessage,
+  type WASocket,
 } from "baileys";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
@@ -343,6 +344,12 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
   ) => {
+    // A logical send can cross socket retries. Reuse one platform identity so an
+    // ambiguous first attempt cannot become a second recipient-visible message.
+    const trackedSendOptions: MiscMessageGenerationOptions = {
+      ...sendOptions,
+      messageId: sendOptions?.messageId ?? generateMessageIDV2(sock.user?.id),
+    };
     let lastError: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt += 1) {
       const currentSock = getCurrentSock();
@@ -357,7 +364,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
                 trackLateAcceptedSend(timedOutJid, promise);
               },
             },
-          ).sendMessage(jid, content, sendOptions);
+          ).sendMessage(jid, content, trackedSendOptions);
           rememberOutboundMessage(jid, result);
           return result;
         } catch (error) {

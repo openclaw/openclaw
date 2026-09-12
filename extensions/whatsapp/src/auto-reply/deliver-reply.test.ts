@@ -488,28 +488,26 @@ describe("deliverWebReply", () => {
   });
 
   it.each(["connection closed", "operation timed out"])(
-    "retries text send on transient failure: %s",
+    "leaves text retry ownership to the transport: %s",
     async (errorMessage) => {
       const { msg, params } = createDelivery({ text: "hi" });
-      vi.mocked(msg.platform.reply)
-        .mockRejectedValueOnce(new Error(errorMessage))
-        .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("text", "reply-retry-2"));
+      const error = new Error(errorMessage);
+      vi.mocked(msg.platform.reply).mockRejectedValueOnce(error);
 
-      await runWithFakeTimers(() => deliverWebReply(params));
+      await expect(deliverWebReply(params)).rejects.toBe(error);
 
-      expect(msg.platform.reply).toHaveBeenCalledTimes(2);
+      expect(msg.platform.reply).toHaveBeenCalledOnce();
     },
   );
 
-  it("retries text send on wrapped transient failure", async () => {
+  it("leaves wrapped text retry ownership to the transport", async () => {
     const { msg, params } = createDelivery({ text: "hi" });
-    vi.mocked(msg.platform.reply)
-      .mockRejectedValueOnce({ error: { message: "connection closed" } })
-      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("text", "reply-retry-2"));
+    const error = { error: { message: "connection closed" } };
+    vi.mocked(msg.platform.reply).mockRejectedValueOnce(error);
 
-    await runWithFakeTimers(() => deliverWebReply(params));
+    await expect(deliverWebReply(params)).rejects.toBe(error);
 
-    expect(msg.platform.reply).toHaveBeenCalledTimes(2);
+    expect(msg.platform.reply).toHaveBeenCalledOnce();
   });
 
   it("does not retry terminal socket operation timeouts", async () => {
@@ -613,16 +611,14 @@ describe("deliverWebReply", () => {
     });
   });
 
-  it("retries media send on transient failure", async () => {
+  it("leaves media retry ownership to the transport before falling back", async () => {
     const { msg, params } = createImageDelivery("caption");
     vi.mocked(msg.platform.sendMedia).mockRejectedValueOnce(new Error("socket reset"));
-    vi.mocked(msg.platform.sendMedia).mockResolvedValueOnce(
-      createAcceptedWhatsAppSendResult("media", "media-retry-2"),
-    );
 
-    await runWithFakeTimers(() => deliverWebReply(params));
+    await deliverWebReply(params);
 
-    expect(msg.platform.sendMedia).toHaveBeenCalledTimes(2);
+    expect(msg.platform.sendMedia).toHaveBeenCalledOnce();
+    expect(replyText(msg)).toContain("Media failed");
   });
 
   it("falls back to text-only when the first media send fails", async () => {

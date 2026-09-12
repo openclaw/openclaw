@@ -1,4 +1,10 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import {
+  generateWAMessage,
+  type AnyMessageContent,
+  type MiscMessageGenerationOptions,
+  type WAMessage,
+} from "baileys";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
@@ -25,6 +31,8 @@ import {
 } from "./monitor-inbox.test-harness.js";
 import { lookupInboundMessageMeta } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
+
+const WHATSAPP_MESSAGE_ID_PATTERN = /^3EB0[A-F0-9]{18}$/;
 
 function createAcceptedSendMessageMock() {
   let sequence = 0;
@@ -156,12 +164,22 @@ describe("web monitor inbox socket lifecycle", () => {
     await inbound.platform.sendMedia({ text: "after-reconnect" });
     await inbound.platform.sendComposing();
 
-    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "after-reconnect",
-    });
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "999@s.whatsapp.net",
+      {
+        text: "pong",
+      },
+      expect.objectContaining({ messageId: expect.stringMatching(WHATSAPP_MESSAGE_ID_PATTERN) }),
+    );
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "999@s.whatsapp.net",
+      {
+        text: "after-reconnect",
+      },
+      expect.objectContaining({ messageId: expect.stringMatching(WHATSAPP_MESSAGE_ID_PATTERN) }),
+    );
     expect(replacementSock.sendPresenceUpdate).toHaveBeenCalledWith(
       "composing",
       "999@s.whatsapp.net",
@@ -201,15 +219,19 @@ describe("web monitor inbox socket lifecycle", () => {
     await inbound?.platform.reply("pong");
 
     expect(sleepWithAbortMock).toHaveBeenCalledWith(10, undefined);
-    expect(replacementSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
+    expect(replacementSock.sendMessage).toHaveBeenCalledWith(
+      "999@s.whatsapp.net",
+      {
+        text: "pong",
+      },
+      expect.objectContaining({ messageId: expect.stringMatching(WHATSAPP_MESSAGE_ID_PATTERN) }),
+    );
     expect(sock.sendMessage).not.toHaveBeenCalled();
 
     await listener.close();
   });
 
-  it("socket session retries timed-out sends without clearing the socket ref", async () => {
+  it("propagates stable Baileys identity through an ambiguous transport retry", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const { listener, sock, inbound } = await primeInboundReplyHandle({
@@ -219,19 +241,66 @@ describe("web monitor inbox socket lifecycle", () => {
       retryPolicy: fastReconnectPolicy(2),
     });
 
-    sock.sendMessage
-      .mockRejectedValueOnce(new Error("operation timed out"))
-      .mockResolvedValueOnce({ key: { id: "after-timeout" } });
+    const transportAttempts: WAMessage[] = [];
+    const sendThroughBaileys = async (
+      jid: string,
+      content: AnyMessageContent,
+      sendOptions?: MiscMessageGenerationOptions,
+    ) => {
+      // Exercise Baileys' production message construction, where messageId becomes
+      // the generated message key later supplied to relayMessage.
+      const generated = await generateWAMessage(jid, content, {
+        ...sendOptions,
+        userJid: sock.user.id,
+        upload: async () => {
+          throw new Error("unexpected media upload");
+        },
+      });
+      const messageId = generated.key.id;
+      if (!messageId) {
+        throw new Error("Baileys generated a message without an id");
+      }
+      transportAttempts.push(generated);
+      return generated;
+    };
 
-    await inbound?.platform.reply("pong");
+    // The first transport accepts the message, then loses the connection before
+    // OpenClaw can observe success. The retry therefore crosses to a new socket.
+    sock.sendMessage.mockImplementationOnce(
+      async (
+        jid: string,
+        content: AnyMessageContent,
+        sendOptions?: MiscMessageGenerationOptions,
+      ) => {
+        await sendThroughBaileys(jid, content, sendOptions);
+        throw new Error("connection closed after relay acceptance");
+      },
+    );
+    const replacementSendMessage = vi.fn(sendThroughBaileys);
+    const replacementSock = { ...sock, sendMessage: replacementSendMessage };
+    sleepWithAbortMock.mockImplementationOnce(async () => {
+      expect(socketRef.current).toBeNull();
+      socketRef.current = replacementSock as unknown as typeof socketRef.current;
+    });
 
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(socketRef.current).toBe(sock);
+    const recoveredSend = await inbound?.platform.reply("pong");
+    const nextSend = await inbound?.platform.reply("next");
+
+    const [firstMessageId, retryMessageId, nextLogicalMessageId] = transportAttempts.map(
+      (message) => message.key.id,
+    );
+    expect(firstMessageId).toMatch(WHATSAPP_MESSAGE_ID_PATTERN);
+    expect(retryMessageId).toBe(firstMessageId);
+    expect(nextLogicalMessageId).toMatch(WHATSAPP_MESSAGE_ID_PATTERN);
+    expect(nextLogicalMessageId).not.toBe(firstMessageId);
+    expect(new Set([firstMessageId, retryMessageId, nextLogicalMessageId]).size).toBe(2);
+    expect(recoveredSend?.messageId).toBe(firstMessageId);
+    expect(nextSend?.messageId).toBe(nextLogicalMessageId);
+    expect(
+      transportAttempts.map((message) => message.message?.extendedTextMessage?.text?.toString()),
+    ).toEqual(["pong", "pong", "next"]);
+    expect(replacementSendMessage).toHaveBeenCalledTimes(2);
+    expect(socketRef.current).toBe(replacementSock);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
 
     await listener.close();
@@ -351,7 +420,13 @@ describe("web monitor inbox socket lifecycle", () => {
         } else {
           await expect(sendPromise).resolves.toBeDefined();
           if (target.endsWith("@g.us")) {
-            expect(sock.sendMessage).toHaveBeenCalledWith(target, { text: send.text });
+            expect(sock.sendMessage).toHaveBeenCalledWith(
+              target,
+              { text: send.text },
+              expect.objectContaining({
+                messageId: expect.stringMatching(WHATSAPP_MESSAGE_ID_PATTERN),
+              }),
+            );
           }
         }
       }
@@ -629,12 +704,22 @@ describe("web monitor inbox socket lifecycle", () => {
       await inbound.platform.sendMedia({ text: "media after restart" });
 
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(2);
-      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-        text: "media after restart",
-      });
+      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.stringMatching(WHATSAPP_MESSAGE_ID_PATTERN) }),
+      );
+      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        "999@s.whatsapp.net",
+        {
+          text: "media after restart",
+        },
+        expect.objectContaining({ messageId: expect.stringMatching(WHATSAPP_MESSAGE_ID_PATTERN) }),
+      );
     } finally {
       await close();
     }
@@ -652,9 +737,13 @@ describe("web monitor inbox socket lifecycle", () => {
     try {
       await inbound.platform.reply("pong");
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(1);
-      expect(successorSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-        text: "pong",
-      });
+      expect(successorSock.sendMessage).toHaveBeenCalledWith(
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.stringMatching(WHATSAPP_MESSAGE_ID_PATTERN) }),
+      );
     } finally {
       await close();
     }
