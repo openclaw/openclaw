@@ -180,7 +180,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestId = (params as { requestId: string }).requestId;
+    const requestId = (params as { requestId: string }).requestId.trim();
     const result = await context.scopeUpgradeCoordinator?.wait(requestId, owner);
     if (!result) {
       respond(
