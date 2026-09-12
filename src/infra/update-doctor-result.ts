@@ -135,6 +135,23 @@ export function assertUpdateDoctorConfigInputHash(configPath: string, inputHash:
   }
 }
 
+/** Include publication retains its legacy writer until fs-safe supports final-effect authority. */
+export async function runUpdateDoctorIncludeWrite<T>(
+  configPath: string,
+  inputHash: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const context = doctorConfigWrites.getStore();
+  if (!context?.authority) {
+    return await run();
+  }
+  context.authority.assertCurrent();
+  assertUpdateDoctorConfigInputHash(configPath, inputHash);
+  const result = await doctorConfigWrites.run({ capture: context.capture }, run);
+  context.authority.assertCurrent();
+  return result;
+}
+
 /** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
 export function recordUpdateDoctorConfigWrite(
   configPath: string,

@@ -273,6 +273,14 @@ Older candidates without guarded Doctor support continue through their normal
 activation Doctor. When candidate validation changes config, the ledger and
 summary warn with the changed keys that promotion receipts are unavailable for
 that candidate version.
+Repairs owned entirely by one internal include file use the existing include
+writer after requester and captured-root checks. The ledger, summary, and warning
+log name the affected keys and report `promotion unavailable for include-owned
+configuration`: the filesystem API does not yet support authority checks at each
+final include-file effect. Guarded authority resumes for later Doctor writes.
+Doctor retains the include values used to prepare each repair and refuses the
+write if those inputs change before publication.
+Mixed-ownership and external-include restrictions remain unchanged.
 Ledger entries and summaries retain their existing diagnostic limits; the warning
 log retains full migration messages.
 

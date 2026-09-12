@@ -8384,86 +8384,107 @@ describe("update-cli", () => {
     },
   );
 
-  it("continues package post-core work for explicit post-update doctor advisories", async () => {
-    const tempDir = tempDirs.make("openclaw-update-package-doctor-warning-");
-    const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
-      tempDir,
-      "2026.4.20",
-    );
-    readPackageVersion.mockImplementation(async (root: string) => {
-      const manifest: { version: string } = JSON.parse(
-        await fs.readFile(path.join(root, "package.json"), "utf8"),
+  it.each([0, UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE])(
+    "continues package post-core work for explicit post-update doctor advisories (exit=%s)",
+    async (exitCode) => {
+      const warning =
+        exitCode === 0
+          ? "Doctor include-owned keys agents: promotion unavailable for include-owned configuration."
+          : "deferred configured plugin repair";
+      const tempDir = tempDirs.make("openclaw-update-package-doctor-warning-");
+      const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
+        tempDir,
+        "2026.4.20",
       );
-      return manifest.version;
-    });
-    primeNpmChannelTag("latest", VERSION);
-    mockFileBackedPathExists();
-    mockNpmGlobalCommands(nodeModules, async (argv, options) => {
-      if (argv[1] === entryPath && argv[2] === "doctor") {
-        const env = options && typeof options !== "number" ? options.env : undefined;
-        const resultPath = env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
-        if (!resultPath) {
-          throw new Error("missing doctor result path");
+      readPackageVersion.mockImplementation(async (root: string) => {
+        const manifest: { version: string } = JSON.parse(
+          await fs.readFile(path.join(root, "package.json"), "utf8"),
+        );
+        return manifest.version;
+      });
+      primeNpmChannelTag("latest", VERSION);
+      mockFileBackedPathExists();
+      mockNpmGlobalCommands(nodeModules, async (argv, options) => {
+        if (argv[1] === entryPath && argv[2] === "doctor") {
+          const env = options && typeof options !== "number" ? options.env : undefined;
+          const resultPath = env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+          if (!resultPath) {
+            throw new Error("missing doctor result path");
+          }
+          await writeUpdatePostInstallDoctorResult({
+            resultPath,
+            result:
+              exitCode === 0
+                ? { status: "ok", warnings: [warning] }
+                : createDeferredConfiguredPluginRepairDoctorResult([warning]),
+          });
+          return commandResult({
+            stderr: warning,
+            code: exitCode,
+          });
         }
-        await writeUpdatePostInstallDoctorResult({
-          resultPath,
-          result: createDeferredConfiguredPluginRepairDoctorResult([
-            "deferred configured plugin repair",
-          ]),
-        });
-        return commandResult({
-          stderr: "doctor deferred configured plugin repair",
-          code: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-        });
-      }
-      if (argv[0] === "npm" && argv[1] === "i") {
-        await writeNpmPackageInstall(argv, pkgRoot, VERSION);
-      }
-      return undefined;
-    });
+        if (argv[0] === "npm" && argv[1] === "i") {
+          await writeNpmPackageInstall(argv, pkgRoot, VERSION);
+        }
+        return undefined;
+      });
 
-    await withEnvAsync({ OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "1" }, async () => {
-      await updateCommand({ yes: true, restart: false, json: true });
-    });
+      await withEnvAsync({ OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "1" }, async () => {
+        await updateCommand({ yes: true, restart: false, json: true });
+      });
 
-    const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
-    ).toBe("1");
-    const postCoreCall = spawnCall();
-    expect(postCoreCall?.[0]).toMatch(/node/);
-    expect(postCoreCall?.[1]).toEqual([entryPath, "update", "--json", "--no-restart", "--yes"]);
-    expect(postCoreCall?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
-    const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
-    expect(jsonOutput?.status).toBe("ok");
-    expect(doctorStep?.exitCode).toBe(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
-    // Keep the established advisory shape; complete ledger warnings travel on the step.
-    expect(doctorStep?.advisory).toEqual({
-      kind: "package-post-install-doctor",
-      message: expect.stringContaining("recoverable update-time repair warning"),
-    });
-    expect(doctorStep).toMatchObject({
-      warnings: [
-        "deferred configured plugin repair\nRun openclaw doctor --fix to finish deferred repairs.",
-      ],
-    });
-    expect(doctorStep?.advisory?.message).not.toContain("gateway restart");
-    expect(doctorStep?.stderrTail).toContain("doctor deferred configured plugin repair");
-    expect(doctorStep?.stderrTail).toContain("deferred configured plugin repair");
-  });
+      const doctorCall = doctorCommandCall();
+      expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
+      expect(
+        (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+          ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
+      ).toBe("0");
+      expect(
+        (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+          ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
+      ).toBe("0");
+      expect(
+        (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+          ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
+      ).toBe("1");
+      const postCoreCall = spawnCall();
+      expect(postCoreCall?.[0]).toMatch(/node/);
+      expect(postCoreCall?.[1]).toEqual([entryPath, "update", "--json", "--no-restart", "--yes"]);
+      expect(postCoreCall?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
+      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+      const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
+      expect(jsonOutput?.status).toBe("ok");
+      expect(doctorStep?.exitCode).toBe(exitCode);
+      // Keep the established advisory shape; complete ledger warnings travel on the step.
+      expect(doctorStep?.advisory).toEqual({
+        kind: "package-post-install-doctor",
+        message: expect.stringContaining("recoverable update-time repair warning"),
+      });
+      expect(doctorStep).toMatchObject({
+        warnings: [
+          exitCode === 0
+            ? warning
+            : `${warning}\nRun openclaw doctor --fix to finish deferred repairs.`,
+        ],
+      });
+      expect(doctorStep?.advisory?.message).not.toContain("gateway restart");
+      expect(doctorStep?.stderrTail).toContain(warning);
+      const record = requireValue(
+        getUpdateRun(requireValue(jsonOutput?.runId, "updated run id")),
+        "update run",
+      );
+      expect(record.status).toBe("succeeded");
+      expect(record.steps).toContainEqual(
+        expect.objectContaining({
+          step: expect.stringMatching(/^warning:/),
+          detail: expect.stringContaining(warning),
+        }),
+      );
+      expect(renderUpdateRunReport(record).lines.join("\n")).toContain(warning);
+    },
+  );
 
   it("fails package updates when the post-update doctor is killed after verification", async () => {
     const tempDir = tempDirs.make("openclaw-update-package-doctor-timeout-");
