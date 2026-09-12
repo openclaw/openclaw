@@ -1,6 +1,7 @@
 // SQLite sessions/transcripts flip proof runner exercises an isolated live gateway lifecycle.
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +11,10 @@ import { fileURLToPath } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+} from "../../scripts/lib/managed-child-process.mts";
 import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
@@ -53,6 +58,7 @@ type BusyContentionEvidence = Awaited<ReturnType<typeof runSqliteBusyContentionP
 type SecondStartupAfterResetEvidence = Awaited<ReturnType<typeof runSecondStartupAfterResetProof>>;
 type RollbackRestoreEvidence = Awaited<ReturnType<typeof runRollbackRestoreProof>>;
 type StartupRefusalEvidence = Awaited<ReturnType<typeof requireLegacyStartupRefusal>>;
+type AbruptRestartEvidence = Awaited<ReturnType<typeof runAbruptRestartProof>>;
 
 type ProofContext = ReturnType<typeof buildProofContext>;
 type GatewayClient = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -133,6 +139,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   let scaleMigration: ScaleMigrationEvidence | undefined;
   let secondStartupAfterReset: SecondStartupAfterResetEvidence | undefined;
   let startupRefusal: StartupRefusalEvidence | undefined;
+  let abruptRestart: AbruptRestartEvidence | undefined;
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -273,7 +280,13 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
         await record("after-full-agent-turn");
 
-        await disconnectRestartedClient();
+        abruptRestart = await runAbruptRestartProof(
+          inst,
+          context,
+          restartedClient,
+          disconnectRestartedClient,
+          record,
+        );
         await inst.stopGateway();
         const idempotentImportDoctor = await runDoctorIdempotenceProof(inst, context);
         await record("after-doctor-import-idempotence", idempotentImportDoctor);
@@ -389,6 +402,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     mockOpenAiRequestLog: context.mockOpenAiRequestLog,
     oldStateSessionKeys: [...context.oldStateSessionKeys],
     resetSessionKey: context.resetSessionKey,
+    ...(abruptRestart ? { abruptRestart } : {}),
     ...(rollbackRestore ? { rollbackRestore } : {}),
     ...(busyContention ? { busyContention } : {}),
     ...(downgradeReupgrade ? { downgradeReupgrade } : {}),
@@ -1328,6 +1342,147 @@ async function runSqliteBusyContentionProof(context: ProofContext) {
     await proof;
   }, stop);
   return await proof;
+}
+
+async function runAbruptRestartProof(
+  inst: OpenClawTestInstance,
+  context: ProofContext,
+  client: GatewayClient,
+  disconnect: () => Promise<void>,
+  record: (label: string) => Promise<ProofCheckpoint>,
+) {
+  const snapshot = async (activeClient: GatewayClient) => ({
+    selected: await readRecoverySession(context, activeClient, context.fullTurnSessionKey),
+    sibling: await readRecoverySession(context, activeClient, context.deleteSessionKey),
+  });
+  // The caller has joined agent.wait and observed both committed messages. This
+  // covers completed-turn durability, not an interrupted transaction or active run.
+  const before = await snapshot(client);
+  const child = expectDefined(inst.child, "running Gateway before abrupt restart");
+  await disconnect();
+  const forcedExit = await forceGatewayExit(child);
+  await record("after-abrupt-gateway-exit");
+  // Release the existing owner only after forced exit and tree closure are proven;
+  // its graceful stop must not turn a failed kill into a passing recovery test.
+  await inst.stopGateway();
+  await inst.startGateway();
+  await record("after-abrupt-gateway-restart");
+  const restarted = await connectProofClient(inst, context, "sqlite-abrupt-restart");
+  const appendText = `sqlite committed turn after abrupt restart ${randomUUID()}`;
+  const proof = (async () => {
+    const afterRestart = await snapshot(restarted.client);
+    const runId = await sendGatewayUserMessage(
+      restarted.client,
+      context.fullTurnSessionKey,
+      appendText,
+    );
+    await waitForAgentRunOk(restarted.client, runId);
+    await waitForSqliteMessageContains(
+      context.agentDbPath,
+      before.selected.sessionId,
+      "user",
+      appendText,
+    );
+    // The provider repeats its assistant text. Counts and identities distinguish
+    // the newly committed answer from the one observed before the process died.
+    const afterAppend = await pollUntil(
+      () => snapshot(restarted.client),
+      (current) =>
+        current.selected.messages.length >= before.selected.messages.length + 2 &&
+        current.selected.history.messages.length >= before.selected.history.messages.length + 2,
+      () => new Error("post-restart turn did not commit and appear in chat.history"),
+    );
+    await record("after-abrupt-restart-chat-send");
+    return { appendText, before, forcedExit, afterRestart, afterAppend };
+  })();
+  await runQaGatewayFixture(async () => {
+    await proof;
+  }, restarted.disconnect);
+  return await proof;
+}
+
+async function forceGatewayExit(child: ProofChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    throw new Error("Gateway already exited before the abrupt-restart proof");
+  }
+  const abort = new AbortController();
+  // Register both observers before signaling: exit can precede stdio closure.
+  const observed = Promise.all([
+    once(child, "exit", { signal: abort.signal }),
+    once(child, "close", { signal: abort.signal }),
+  ]);
+  try {
+    const termination = terminateManagedChild(child, "SIGKILL");
+    const [[code, signal], [closeCode, closeSignal]] = await withTimeout(
+      observed,
+      SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+      { createError: () => new Error("Gateway did not exit and close after SIGKILL") },
+    );
+    if (
+      (process.platform === "win32"
+        ? termination?.processTreeState !== "terminated" || code === null || code === 0
+        : code !== null || signal !== "SIGKILL") ||
+      closeCode !== code ||
+      closeSignal !== signal
+    ) {
+      throw new Error(
+        `Gateway did not exit forcibly: ${JSON.stringify({ code, signal, termination })}`,
+      );
+    }
+    const processTreeState = await pollUntil(
+      () => inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }),
+      (state) => state === "dead",
+      () => new Error("Gateway process tree remained alive after SIGKILL"),
+    );
+    return { code, signal, closeCode, closeSignal, platform: process.platform, processTreeState };
+  } finally {
+    abort.abort();
+    await Promise.allSettled([observed]);
+  }
+}
+
+async function readRecoverySession(
+  context: ProofContext,
+  client: GatewayClient,
+  sessionKey: string,
+) {
+  const sessionId = expectDefined(
+    readSqliteEvidence(context.agentDbPath, [sessionKey]).trackedEntries.find(
+      (entry) => entry.sessionKey === sessionKey,
+    )?.sessionId,
+    `selected SQLite session for ${sessionKey}`,
+  );
+  const events = withReadOnlyDatabase(
+    context.agentDbPath,
+    [],
+    (db) =>
+      db
+        .prepare(
+          "SELECT seq, event_json AS eventJson FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
+        )
+        .all(sessionId) as Array<{ seq: number; eventJson: string }>,
+  );
+  const messages = events.flatMap(({ seq, eventJson }) => {
+    const event = parseJsonObject(eventJson);
+    const message = asRecord(event?.message);
+    return event?.type === "message"
+      ? [{ seq, id: event.id, role: message?.role, content: message?.content }]
+      : [];
+  });
+  const history: { sessionId?: string; messages: unknown[] } = await client.request(
+    "chat.history",
+    { agentId: context.agentId, sessionKey, limit: 50 },
+  );
+  return {
+    sessionKey,
+    sessionId,
+    events,
+    messages,
+    history: {
+      sessionId: history.sessionId,
+      messages: history.messages,
+    },
+  };
 }
 
 async function runSecondStartupAfterResetProof(
