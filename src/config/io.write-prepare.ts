@@ -246,7 +246,7 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
   const index = parseConfigPathArrayIndex(head);
-  if (Array.isArray(value) || index !== undefined) {
+  if (Array.isArray(value) || (!isRecord(value) && index !== undefined)) {
     if (index === undefined) {
       return value;
     }
