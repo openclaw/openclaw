@@ -1,4 +1,4 @@
-import path from "node:path";
+import nodePath from "node:path";
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -1406,7 +1406,7 @@ describe("searchVector sqlite-vec KNN", () => {
   });
 
   it("reads contender payloads from the scored batch snapshot during external writes", async () => {
-    const filename = path.join(tempDirs.make("memory-search-snapshot-"), "memory.sqlite");
+    const filename = nodePath.join(tempDirs.make("memory-search-snapshot-"), "memory.sqlite");
     const db = new DatabaseSync(filename);
     const writer = new DatabaseSync(filename);
     try {
