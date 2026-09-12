@@ -583,6 +583,29 @@ describe("config plugin validation", () => {
       expectNoMissingCodexPluginWarning(res.warnings);
     });
 
+    it("scopes request-parameter diagnostics to the affected keyed agent", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          entries: {
+            openclaw: {
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            work: {
+              model: { primary: "openai/gpt-5.6", fallbacks: [] },
+              subagents: { model: "openai/gpt-5.6" },
+              params: { temperature: 0.4 },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
     it("still warns when only one provider model route is pinned to OpenClaw", () => {
       const res = validateWithMissingCodexPlugin({
         models: {
