@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createReplyDispatcher,
+  finalizeInboundContext,
   type GetReplyOptions,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
@@ -21,10 +22,17 @@ const SAME_TEXT = "same reply";
 
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const createSlackDraftStreamMock = vi.fn();
+type DeliveryParams = Omit<
+  Parameters<typeof import("../replies.js").deliverReplies>[0],
+  "replies"
+> & {
+  replies: ReplyPayload[];
+};
 const deliverRepliesMock = vi.fn(
-  async (_params: { replies: ReplyPayload[] }) =>
+  async (_params: DeliveryParams) =>
     undefined as { messageId?: string; channelId?: string } | undefined,
 );
+const sendMessageSlackMock = vi.fn<typeof import("../send.runtime.js").sendMessageSlack>();
 const finalizeSlackPreviewEditMock = vi.fn(async (_input: { blocks?: unknown }) => {});
 const normalizeSlackOutboundTextMock = vi.fn((value: string) => value.trim());
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
@@ -109,6 +117,7 @@ let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final:
 let mockedAgentRunTerminalOutcome: "completed" | "failed" | undefined;
 let mockedSourceReplyDelivered = false;
 let mockedDispatchError: Error | undefined;
+let useRealChannelInboundTurn = false;
 
 let mockedProgressEvents: string[] = [];
 let mockedEmptyProgressToolName: string | undefined;
@@ -839,7 +848,8 @@ vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
+vi.mock("openclaw/plugin-sdk/reply-payload", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-payload")>()),
   resolveAskUserQuestionOptionIndices: () => undefined,
   isReplyPayloadNonTerminalToolErrorWarning: () => false,
   buildTtsSupplementMediaPayload: (payload: {
@@ -1005,6 +1015,8 @@ vi.mock("../replies.js", async (importOriginal) => ({
   resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
 
+vi.mock("../send.runtime.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
+
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
@@ -1012,6 +1024,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     readAgentRunTerminalOutcome: () => mockedAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (params: DispatchParams) => {
+      if (useRealChannelInboundTurn) {
+        return actual.dispatchChannelInboundTurn(params);
+      }
       capturedReplyOptions = params.replyOptions as typeof capturedReplyOptions;
       capturedDispatchReplyFromConfig = params.dispatchReplyFromConfig;
       if (mockedReplyOptionEvents.length > 0) {
@@ -1167,6 +1182,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
+    sendMessageSlackMock.mockReset();
+    useRealChannelInboundTurn = false;
     finalizeSlackPreviewEditMock.mockReset();
     normalizeSlackOutboundTextMock.mockClear();
     postMessageMock.mockClear();
@@ -1221,6 +1238,120 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   afterEach(() => resetPluginRuntimeStateForTest());
+
+  it.each([
+    { agents: ["alice"], withMedia: true },
+    { agents: ["alice", "bob"], withMedia: true },
+    { agents: ["alice", "bob"], withMedia: false },
+  ])(
+    "binds group-thread completion hooks and media to the participant: $agents (media: $withMedia)",
+    async ({ agents, withMedia }) => {
+      useRealChannelInboundTurn = true;
+      mockedNativeStreaming = true;
+      const { resolveGroupThreadMentionFacts } =
+        await import("openclaw/plugin-sdk/channel-inbound");
+      const { createMessageReceiptFromOutboundResults } =
+        await import("openclaw/plugin-sdk/channel-outbound");
+      const cfg = {
+        agents: {
+          entries: {
+            root: { workspace: "/tmp/.openclaw/workspace-root" },
+            alice: { workspace: "/tmp/.openclaw/workspace-alice" },
+            bob: { workspace: "/tmp/.openclaw/workspace-bob" },
+          },
+        },
+        broadcast: { "slack:C123": agents },
+      };
+      const rootSessionKey = `agent:root:slack:channel:c123:thread:${THREAD_TS}`;
+      const actualReplies = await vi.importActual<typeof import("../replies.js")>("../replies.js");
+      const { prepareSlackReply } = await import("../../reply-blocks.js");
+      deliverRepliesMock.mockImplementation(async (params) =>
+        actualReplies.deliverReplies({ ...params, replies: params.replies.map(prepareSlackReply) }),
+      );
+      sendMessageSlackMock.mockResolvedValue({
+        messageId: "sent-1",
+        channelId: "C123",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "slack", messageId: "sent-1", channelId: "C123" }],
+          kind: withMedia ? "media" : "text",
+        }),
+      });
+      const participantRuns: string[] = [];
+      const dispatchReplyFromConfig: NonNullable<
+        Parameters<typeof dispatchPreparedSlackMessage>[0]["ctx"]["dispatchReplyFromConfig"]
+      > = async ({ ctx, dispatcher }) => {
+        if (!ctx.AgentId) {
+          throw new Error("Expected participant agent identity");
+        }
+        participantRuns.push(ctx.AgentId);
+        return {
+          queuedFinal: dispatcher.sendFinalReply({
+            text: `Reply from ${ctx.AgentId}`,
+            ...(withMedia
+              ? { mediaUrl: `/tmp/.openclaw/workspace-${ctx.AgentId}/attachment.txt` }
+              : {}),
+          }),
+          counts: dispatcher.getQueuedCounts(),
+        };
+      };
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          cfg,
+          route: { agentId: "root", sessionKey: rootSessionKey },
+          ctxPayload: finalizeInboundContext({
+            AgentId: "root",
+            SessionKey: rootSessionKey,
+            ChatType: "channel",
+            Provider: "slack",
+            Surface: "slack",
+            OriginatingChannel: "slack",
+            OriginatingTo: "channel:C123",
+            NativeChannelId: "C123",
+            AccountId: "default",
+            From: "slack:C123",
+            To: "channel:C123",
+            SenderId: "U123",
+            MessageSid: "171234.111",
+            MessageThreadId: THREAD_TS,
+            Body: "Review the attachment.",
+            GroupThread: resolveGroupThreadMentionFacts({
+              cfg,
+              channel: "slack",
+              peerId: "C123",
+              text: "Review the attachment.",
+              sessionKey: rootSessionKey,
+            }),
+          }),
+          dispatchReplyFromConfig,
+        }),
+      );
+
+      expect(participantRuns.toSorted()).toEqual(agents.toSorted());
+      expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(agents.length);
+      expect(sendMessageSlackMock).toHaveBeenCalledTimes(agents.length);
+      for (const agentId of agents) {
+        expect(emitSlackMessageSentHooksMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKeyForInternalHooks: `agent:${agentId}:slack:channel:c123:thread:${THREAD_TS}`,
+            success: true,
+          }),
+        );
+        expect(sendMessageSlackMock).toHaveBeenCalledWith(
+          "channel:C123",
+          expect.stringContaining(`Reply from ${agentId}`),
+          expect.objectContaining({
+            ...(withMedia
+              ? { mediaUrl: `/tmp/.openclaw/workspace-${agentId}/attachment.txt` }
+              : {}),
+            mediaLocalRoots: expect.arrayContaining([`/tmp/.openclaw/workspace-${agentId}`]),
+          }),
+        );
+      }
+      expect(startSlackStreamMock).not.toHaveBeenCalled();
+      expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "delivers literal authored fallback normally with native streaming %s",
