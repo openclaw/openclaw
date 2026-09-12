@@ -8,7 +8,7 @@ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
-import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
+import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {
@@ -27,6 +27,7 @@ function createConfiguredModelCatalogSnapshot(params: {
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): ModelCatalogSnapshot {
+  const replace = params.agentFacts.input.config.models?.mode === "replace";
   const configuredEntries = dedupeByKey(
     [
       ...buildConfiguredModelCatalog({
@@ -37,15 +38,19 @@ function createConfiguredModelCatalogSnapshot(params: {
             : params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
         manifestPlugins: params.workspaceFacts.pluginMetadataSnapshot,
       }),
-      ...params.configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
-      ...params.agentFacts.configuredModelRefs.flatMap(({ provider, modelId }) => {
-        const model = params.templateModelRegistry.find(provider, modelId);
-        return model ? [modelCatalogRowToEntry(model)] : [];
-      }),
+      ...(replace
+        ? []
+        : params.configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model))),
+      ...(replace
+        ? []
+        : params.agentFacts.configuredModelRefs.flatMap(({ provider, modelId }) => {
+            const model = params.templateModelRegistry.find(provider, modelId);
+            return model ? [modelCatalogRowToEntry(model)] : [];
+          })),
     ],
     resolveModelCatalogIdentityKey,
   );
-  const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
+  const staticEntries = (replace ? [] : params.configuredRuntimeModels).map(({ model }) =>
     modelCatalogRowToEntry(model),
   );
   return {

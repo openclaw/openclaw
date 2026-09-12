@@ -165,11 +165,29 @@ export type GitHubIdentityPreparation = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
 };
+/** Release admission after starting the operation, before its asynchronous result settles. */
+export type GitHubReadIdentityStarter = <T>(start: () => T) => Promise<Awaited<T>>;
+
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
   getCurrentConfig: () => OpenClawConfig;
   assertActive: () => void;
+  startActive?: GitHubReadIdentityStarter;
   refresh: () => Promise<void>;
 };
+
+/** The caller's owner admits the operation; selection is checked inside that admission. */
+export function startGitHubIdentityOperation<T>(
+  operation: () => T,
+  authority: { assertCurrent?: () => void; startCurrent?: GitHubReadIdentityStarter },
+): T | Promise<Awaited<T>> {
+  authority.assertCurrent?.();
+  return authority.startCurrent
+    ? authority.startCurrent(() => {
+        authority.assertCurrent?.();
+        return operation();
+      })
+    : operation();
+}
 
 export class GitHubIdentityError extends Error {
   constructor(readonly reason: "unavailable" | "changed" | "rate_limited" | "unverified") {
@@ -194,6 +212,7 @@ type GitHubReadAuthority = {
   cacheScope: string;
   assertSelected: () => void;
   revalidate: () => Promise<void>;
+  start: GitHubReadIdentityStarter;
 };
 export type PreparedGitHubReadIdentity = GitHubReadAuthority & {
   token: string;
@@ -206,13 +225,24 @@ export type PreparedGitHubSourceReadIdentity =
 export function createGitHubReadIdentity(
   params: {
     assertSelected: () => void;
+    startActive?: GitHubReadIdentityStarter;
     readToken: () => Promise<string | undefined>;
   } & (
     | { token: string; selection: GitHubReadIdentitySelection }
     | { token: undefined; selection: Readonly<{ source: "anonymous" }> }
   ),
 ): PreparedGitHubSourceReadIdentity {
-  const { token, selection, assertSelected, readToken } = params;
+  const { token, selection, assertSelected, startActive, readToken } = params;
+  const caller = { assertCurrent: assertSelected, startCurrent: startActive };
+  const start = async <T>(operation: () => T): Promise<Awaited<T>> => {
+    const current = await startGitHubIdentityOperation(readToken, caller);
+    return await startGitHubIdentityOperation(() => {
+      if (current !== token) {
+        throw new GitHubIdentityError("changed");
+      }
+      return operation();
+    }, caller);
+  };
   const authority: GitHubReadAuthority = {
     cacheScope:
       selection.source === "anonymous"
@@ -223,14 +253,8 @@ export function createGitHubReadIdentity(
             )
             .digest("hex"),
     assertSelected,
-    revalidate: async () => {
-      assertSelected();
-      const current = await readToken();
-      assertSelected();
-      if (current !== token) {
-        throw new GitHubIdentityError("changed");
-      }
-    },
+    revalidate: () => start(() => undefined),
+    start,
   };
   // Durable selection excludes credentials; the in-process result cache still
   // separates rotations, and later native sign-in closes anonymous authority.

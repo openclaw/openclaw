@@ -23,6 +23,40 @@ interactively to review the findings and confirm supported cleanup. Cleanup
 reports what it removed or skipped; it does not guarantee a replacement service
 will be installed. Explicit repair maintenance skips this separate cleanup flow.
 
+When service inspection blocks repair, Doctor and `gateway status --deep` name
+the failed native probe:
+
+- **Linux user session bus unavailable:** check `XDG_RUNTIME_DIR` and
+  `DBUS_SESSION_BUS_ADDRESS` for the service account. A working `systemctl --user`
+  command alone is insufficient: effective service inspection also uses
+  `busctl --user`. On Debian/Ubuntu, install `dbus-user-session`, then run
+  `systemctl --user start dbus.socket` from that account's user session.
+- **Probe cannot start (`EACCES`/`EPERM`):** check executable permissions and
+  directory access as the service account. Native probes run from the filesystem
+  root so an inaccessible operator directory inherited through `sudo -u` does
+  not prevent inspection.
+- **macOS GUI domain unavailable:** sign in to the desktop as the target user
+  before managing its LaunchAgent. Error 125 for `gui/<uid>` does not establish
+  that a system LaunchDaemon exists.
+- **macOS system domain unavailable or system LaunchDaemon detected:** have root
+  inspect `sudo launchctl print system/<label>` and stop the custom daemon through
+  its deployment owner. To retain that supervisor, run Doctor as the state-owning
+  account with the existing `OPENCLAW_SERVICE_REPAIR_POLICY=external` policy.
+  Keep the same `HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_PATH` selectors
+  used by the service. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
+
+OpenClaw does not manage custom system LaunchDaemons. Running Doctor as root
+with another account's `HOME` does not add that capability and can create
+root-owned state files.
+
+For either platform, when an external supervisor owns the Gateway, have that
+owner stop it and run Doctor as the state-owning account with
+`OPENCLAW_SERVICE_REPAIR_POLICY=external`. This existing policy skips native
+maintenance inspection and service mutations; it retains Gateway/state
+coordinators and agent-database lease checks. Shutdown and restart remain with
+the deployment owner. A failed native probe is never treated as proof that the
+Gateway is stopped.
+
 ## Remote Gateway recovery
 
 With `gateway.mode: "remote"`, a failed Gateway health check does not trigger

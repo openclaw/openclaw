@@ -394,6 +394,7 @@ type ThinkingTracker = {
   // is deduped against its own index; a single global concatenation misfires
   // once a message carries more than one thinking block (re-emits or reorders).
   streamedByIndex: Map<number, string>;
+  highestStreamedIndex: number;
   // Full thinking already emitted for the message in block order. The callback
   // contract exposes this as the running snapshot text for downstream coalescing,
   // so it stays a message-level concatenation, not a per-index value.
@@ -406,6 +407,7 @@ type ThinkingTracker = {
 export function createThinkingTracker(): ThinkingTracker {
   return {
     streamedByIndex: new Map(),
+    highestStreamedIndex: Number.NEGATIVE_INFINITY,
     emittedText: "",
     nextSyntheticBlockIndex: 0,
     progressTokens: 0,
@@ -414,6 +416,7 @@ export function createThinkingTracker(): ThinkingTracker {
 
 function resetThinkingBlockState(tracker: ThinkingTracker): void {
   tracker.streamedByIndex.clear();
+  tracker.highestStreamedIndex = Number.NEGATIVE_INFINITY;
   tracker.emittedText = "";
   tracker.currentSyntheticBlockIndex = undefined;
   tracker.nextSyntheticBlockIndex = 0;
@@ -480,8 +483,12 @@ function emitClaudeThinking(
   delta: string,
   onThinkingDelta: (delta: CliThinkingDelta) => void,
 ): void {
+  const appendToAggregate = index >= tracker.highestStreamedIndex;
   tracker.streamedByIndex.set(index, `${streamed}${delta}`);
-  tracker.emittedText = assembleThinkingTextByIndex(tracker.streamedByIndex);
+  tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, index);
+  tracker.emittedText = appendToAggregate
+    ? `${tracker.emittedText}${delta}`
+    : assembleThinkingTextByIndex(tracker.streamedByIndex);
   onThinkingDelta({ text: tracker.emittedText, delta, isReasoningSnapshot: true });
 }
 
@@ -579,6 +586,7 @@ export function dispatchClaudeCliThinking(params: {
         continue;
       }
       tracker.streamedByIndex.set(index, block.thinking);
+      tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, index);
       const text = assembleThinkingTextByIndex(tracker.streamedByIndex);
       if (text === tracker.emittedText) {
         continue;

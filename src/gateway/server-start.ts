@@ -9,7 +9,7 @@ import {
 } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
-import { rethrowGatewayStartupError, runGatewayShutdownSteps } from "./server-shutdown.js";
+import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
@@ -58,17 +58,13 @@ async function startGatewayServerWithSdkHost(
     beginClosePrelude,
     closeOnStartupFailure,
     prepareClose,
-    sealAndJoinRegisteredSidecarStops,
-    runClosePrelude,
-    stopRegisteredGatewayLifetimeSidecars,
-    stopRegisteredPostReadySidecars,
-    stopConnectionDependentSidecars,
     terminalSessions,
     shutdownRuntime,
   } = gatewayKernel;
   try {
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
+      updateCanary: opts.updateCanary,
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {
@@ -128,40 +124,19 @@ async function startGatewayServerWithSdkHost(
           releasePostReadyWork();
           await prelude;
           const close = await prepareClose(optsLocal);
-          await runGatewayShutdownSteps({
-            steps: [
-              {
-                name: "connection-dependent sidecars",
-                run: stopConnectionDependentSidecars,
-                required: true,
-              },
-              {
-                name: "received connection work",
-                run: () => gatewayKernel.connectionWork.drain(),
-                required: true,
-              },
-              { name: "terminal sessions", run: () => terminalSessions.disposeAll() },
-              { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
-              { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
-              {
-                name: "gateway_stop plugin hooks",
-                run: async () => {
-                  await shutdownRuntime.runGlobalGatewayStopSafely({
-                    event: { reason: optsLocal?.reason ?? "gateway stopping" },
-                    ctx: { port },
-                    onError: (error) =>
-                      log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
-                  });
-                },
-              },
-              { name: "gateway close prelude", run: runClosePrelude },
-              {
-                name: "late sidecar cleanup",
-                run: sealAndJoinRegisteredSidecarStops,
-                required: true,
-              },
-              { name: "gateway close", run: close },
-            ],
+          await runGatewayCloseSteps({
+            owner: gatewayKernel,
+            close,
+            disposeTerminalSessions: () => terminalSessions.disposeAll(),
+            runStopHooks: async () => {
+              await shutdownRuntime.runGlobalGatewayStopSafely({
+                registry: gatewayKernel.pluginRuntime.registry,
+                event: { reason: optsLocal?.reason ?? "gateway stopping" },
+                ctx: { port },
+                onError: (error) =>
+                  log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
+              });
+            },
             onError: (message) => log.error(message),
           });
         });

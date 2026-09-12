@@ -373,8 +373,4 @@ export class SearchableSelectList implements Component, Focusable {
       this.updateFilter();
     }
   }
-
-  getSelectedItem(): SearchableSelectItem | null {
-    return this.filteredItems[this.selectedIndex] ?? null;
-  }
 }

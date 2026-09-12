@@ -3145,7 +3145,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("applies native Codex CLI OAuth when no OpenClaw auth profile exists", async () => {
+  it("does not inject native CLI OAuth without an OpenClaw profile", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "codex-cli");
@@ -3153,22 +3153,15 @@ describe("bridgeCodexAppServerStartOptions", () => {
     vi.stubEnv("CODEX_HOME", codexHome);
     try {
       await writeCodexCliAuthFile(codexHome);
+      const nativeBefore = await fs.readFile(path.join(codexHome, "auth.json"));
 
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
       });
 
-      expect(request).toHaveBeenCalledWith(
-        "account/login/start",
-        {
-          type: "chatgptAuthTokens",
-          accessToken: "cli-access-token",
-          chatgptAccountId: "account-cli",
-          chatgptPlanType: null,
-        },
-        { assertCurrent: undefined },
-      );
+      expect(request).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(codexHome, "auth.json"))).toEqual(nativeBefore);
       expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles).not.toHaveProperty(
         "openai:default",
       );
@@ -3177,7 +3170,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("finds native Codex OAuth in the OS home when OpenClaw uses an isolated home", async () => {
+  it("does not borrow OS-home native OAuth for an isolated OpenClaw home", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const osHome = path.join(root, "os-home");
     const openClawHome = path.join(root, "openclaw-home");
@@ -3188,69 +3181,51 @@ describe("bridgeCodexAppServerStartOptions", () => {
     vi.stubEnv("CODEX_HOME", undefined);
     try {
       await writeCodexCliAuthFile(path.join(osHome, ".codex"));
+      const nativeBefore = await fs.readFile(path.join(osHome, ".codex", "auth.json"));
 
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
       });
 
-      expect(request).toHaveBeenCalledWith(
-        "account/login/start",
-        {
-          type: "chatgptAuthTokens",
-          accessToken: "cli-access-token",
-          chatgptAccountId: "account-cli",
-          chatgptPlanType: null,
-        },
-        { assertCurrent: undefined },
-      );
+      expect(request).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(osHome, ".codex", "auth.json"))).toEqual(nativeBefore);
       await expectPathMissing(path.join(agentDir, "auth-profiles.json"));
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("answers refresh from native Codex CLI OAuth without persisting an OpenClaw profile", async () => {
+  it("requires an OpenClaw profile instead of refreshing the native CLI store", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "codex-cli");
     const authProfileStorePath = path.join(agentDir, "auth-profiles.json");
     vi.stubEnv("CODEX_HOME", codexHome);
-    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
-      access: "fresh-cli-access-token",
-      refresh: "fresh-cli-refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "account-cli",
-    });
     try {
       await writeCodexCliAuthFile(codexHome);
+      const nativeBefore = await fs.readFile(path.join(codexHome, "auth.json"));
 
-      await expect(refreshCodexAppServerAuthTokens({ agentDir })).resolves.toEqual({
-        accessToken: "fresh-cli-access-token",
-        chatgptAccountId: "account-cli",
-        chatgptPlanType: null,
-      });
+      await expect(refreshCodexAppServerAuthTokens({ agentDir })).rejects.toThrow(
+        "requires an OAuth auth profile",
+      );
 
       await expectPathMissing(authProfileStorePath);
-      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("cli-refresh-token");
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(codexHome, "auth.json"))).toEqual(nativeBefore);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("does not reuse a stale native Codex CLI token as a completed rotation", async () => {
+  it("does not let a cached handoff refresh native CLI OAuth without a profile", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "codex-cli");
     vi.stubEnv("CODEX_HOME", codexHome);
-    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
-      access: "next-cli-access-token",
-      refresh: "next-cli-refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "account-cli",
-    });
     try {
       await writeCodexCliAuthFile(codexHome);
+      const nativeBefore = await fs.readFile(path.join(codexHome, "auth.json"));
 
       await expect(
         refreshCodexAppServerAuthTokens({
@@ -3261,31 +3236,30 @@ describe("bridgeCodexAppServerStartOptions", () => {
           },
           previousAccountId: "account-cli",
         }),
-      ).resolves.toEqual({
-        accessToken: "next-cli-access-token",
-        chatgptAccountId: "account-cli",
-        chatgptPlanType: null,
-      });
+      ).rejects.toThrow("requires an OAuth auth profile");
 
-      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("cli-refresh-token");
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(codexHome, "auth.json"))).toEqual(nativeBefore);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("uses native Codex CLI OAuth when deriving cache keys without a supplied store", async () => {
+  it("does not derive host-profile cache keys from native CLI OAuth", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "codex-cli");
     vi.stubEnv("CODEX_HOME", codexHome);
     try {
       await writeCodexCliAuthFile(codexHome);
+      const nativeBefore = await fs.readFile(path.join(codexHome, "auth.json"));
 
       await expect(
         resolveCodexAppServerAuthAccountCacheKey({
           agentDir,
         }),
-      ).resolves.toBe("account-cli");
+      ).resolves.toBeUndefined();
+      expect(await fs.readFile(path.join(codexHome, "auth.json"))).toEqual(nativeBefore);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

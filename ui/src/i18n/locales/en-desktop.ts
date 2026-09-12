@@ -22,6 +22,10 @@ const enDesktop = {
     loading: "Loading desktop sources…",
     empty: "No desktop-capable sources are available.",
     sourceUnavailable: "The requested desktop is unavailable. Retry when the machine is ready.",
+    macLocked:
+      "This Mac is locked. Sign in through Screen Sharing or on the Mac to use computer control.",
+    macLockStateUnknown:
+      "This Mac’s lock state is unknown. Check the desktop before using computer control; Screen Sharing remains available for sign-in.",
     connect: "Connect",
     connecting: "Connecting to desktop…",
     takeControl: "Take control",

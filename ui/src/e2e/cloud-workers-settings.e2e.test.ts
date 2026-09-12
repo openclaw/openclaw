@@ -188,7 +188,12 @@ suite.define(() => {
       });
 
       await page.getByText("Advertised", { exact: true }).waitFor();
-      await page.getByText("Gateway restart required.", { exact: true }).waitFor();
+      await page
+        .getByText(
+          "Gateway restart required. After the Gateway restarts, build a snapshot from the Snapshots view.",
+          { exact: true },
+        )
+        .waitFor();
 
       await page.getByRole("button", { name: "Edit" }).click();
       await expect.poll(() => machineClass.inputValue()).toBe("standard");
@@ -545,7 +550,12 @@ suite.define(() => {
         hash: "cloud-workers-reconnect-3",
         config: { cloudWorkers: { profiles: { "reconnect-proof": savedProfile } } },
       });
-      await page.getByText("Gateway restart required.", { exact: true }).waitFor();
+      await page
+        .getByText(
+          "Gateway restart required. After the Gateway restarts, build a snapshot from the Snapshots view.",
+          { exact: true },
+        )
+        .waitFor();
       await expect.poll(() => page.getByLabel("Profile ID").count()).toBe(0);
     } finally {
       await context.close();

@@ -144,10 +144,9 @@ or invoke an external secret scanner. Never work around an isolation failure.
 
 ### Intentional scanner-free policy
 
-TruffleHog is intentionally excluded because enterprise security teams may flag
-or restrict it. Keep approved scanning outside autoreview; reviewer findings
-happen after transmission. Reintroducing a scanner requires an explicit maintainer
-decision. See [#240](https://github.com/openclaw/agent-skills/pull/240) for rationale and history.
+Keep approved secret scanning outside autoreview; reviewer findings happen after
+transmission. Reintroducing a scanner requires an explicit maintainer decision.
+See [#240](https://github.com/openclaw/agent-skills/pull/240) for rationale and history.
 
 ### Reviewer isolation
 

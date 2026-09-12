@@ -42,6 +42,10 @@ import type {
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "./service-update-authority.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
@@ -83,6 +87,7 @@ export async function removeStartupEntries(
 ): Promise<void> {
   for (const startupEntryPath of resolveStartupEntryPaths(env)) {
     try {
+      assertGatewayServiceUpdateCurrent();
       await fs.unlink(startupEntryPath);
       stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
     } catch (error) {
@@ -134,6 +139,11 @@ export async function launchFallbackTaskScript(
   installedCommand?: GatewayServiceCommandConfig | null,
   assertCurrent?: () => void,
 ): Promise<void> {
+  if (isUpdateOwnedGatewayServiceCommand()) {
+    throw new Error(
+      "UPDATE_NATIVE_AUTHORITY: update-owned native commands require Task Scheduler; standalone startup fallback is unsupported.",
+    );
+  }
   const scriptPath = resolveTaskScriptPath(env);
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;

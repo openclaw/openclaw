@@ -53,7 +53,13 @@ vi.mock("../../infra/update-run-ledger.js", () => ({
 vi.mock("../../infra/restart-sentinel.js", () => ({
   readRestartSentinelReadOnly: mocks.readRestartSentinelReadOnly,
 }));
-vi.mock("../../plugins/status.js", () => ({ buildPluginCompatibilityNotices: () => [] }));
+vi.mock("../../plugins/status.js", () => ({
+  buildPluginCompatibilityNotices: () => [],
+  withPluginDiagnosticsReport: async <T>(
+    _params: unknown,
+    consume: (report: object) => T | Promise<T>,
+  ) => consume({}),
+}));
 vi.mock("../../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
 }));

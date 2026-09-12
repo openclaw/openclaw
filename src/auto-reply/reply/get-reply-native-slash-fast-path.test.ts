@@ -23,6 +23,14 @@ const { handleCommandsMock, buildStatusReplyMock } = vi.hoisted(() => ({
   buildStatusReplyMock: vi.fn(),
 }));
 
+// Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
+vi.mock("../../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+    kind: "ready",
+    validate: () => undefined,
+  })),
+}));
+
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
 }));

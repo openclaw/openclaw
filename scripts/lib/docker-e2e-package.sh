@@ -284,6 +284,13 @@ docker_e2e_cleanup_package_tgz() {
   fi
 }
 
+docker_e2e_cleanup_package_run() {
+  docker_e2e_cleanup_package_tgz "${1:-}"
+  if [ -n "${2:-}" ]; then
+    rm -f "$2"
+  fi
+}
+
 docker_e2e_cleanup_package_mount_args() {
   local expect_volume_path=0
   local arg

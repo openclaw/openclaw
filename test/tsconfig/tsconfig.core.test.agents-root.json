@@ -17,6 +17,7 @@
     "../../src/agents/prepared-model-runtime*.test.tsx",
     "../../src/agents/code-mode*.test.ts",
     "../../src/agents/code-mode*.test.tsx",
+    "../../src/agents/model-catalog-view.test.ts",
     "../../src/agents/tool-search*.test.ts",
     "../../src/agents/tool-search*.test.tsx"
   ]

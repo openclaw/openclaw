@@ -1,7 +1,10 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { PluginPage } from "../pages/plugin/plugin-page.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -60,10 +63,13 @@ suite.define(() => {
   });
 
   it.each(["reports", "reports/"])(
-    "keeps a cold %s deep link until hello resolves the tab",
+    "keeps a cold %s deep link over the remembered session until hello resolves the tab",
     async (path) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installReports(page, true);
+        await page.addInitScript((settingsKey) => {
+          localStorage.setItem(settingsKey, JSON.stringify({ sessionKey: "agent:main:main" }));
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
         const paths: string[] = [];
         page.on("framenavigated", (frame) => {
           if (frame === page.mainFrame()) {
@@ -75,8 +81,13 @@ suite.define(() => {
         expect(new URL(page.url()).pathname).toBe(`/${path}`);
         expect(await page.locator("openclaw-plugin-page").count()).toBe(0);
         await gateway.resolveDeferred("connect");
-        await expectReports(page, `/${path}`);
+        await expectReports(page);
         expect(paths).not.toContain("/chat");
+        await page.reload();
+        await gateway.waitForRequest("connect");
+        expect(new URL(page.url()).pathname).toBe("/reports");
+        await gateway.resolveDeferred("connect");
+        await expectReports(page);
       });
     },
   );

@@ -18,6 +18,13 @@ const EnvironmentTrustSchema = Type.String({
   enum: ["persistent", "disposable"],
 });
 
+/** Operational desktop state reported by the current native node connection. */
+export const DesktopAvailabilitySchema = closedObject({
+  state: Type.Union([Type.Literal("locked"), Type.Literal("unlocked"), Type.Literal("unknown")]),
+});
+
+export type DesktopAvailability = Static<typeof DesktopAvailabilitySchema>;
+
 /** Durable lifecycle states for plugin-provisioned worker environments. */
 export const WorkerEnvironmentStateSchema = Type.Union([
   Type.Literal("requested"),
@@ -85,6 +92,7 @@ export const RequiredNodeCommandSchema = closedObject({
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
+  profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
@@ -122,6 +130,7 @@ function createEnvironmentSummaryProperties() {
       }),
     ),
     desktop: Type.Optional(Type.Boolean()),
+    desktopAvailability: Type.Optional(DesktopAvailabilitySchema),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
     preparation: Type.Optional(

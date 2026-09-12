@@ -7,7 +7,7 @@ import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinato
 import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -108,10 +108,15 @@ module.exports = {
     plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: true } } },
   };
   fs.writeFileSync(configPath, JSON.stringify(config));
-  writePersistedInstalledPluginIndexInstallRecordsSync(
-    { [pluginId]: { source: "npm", spec: `${packageName}@1.0.0`, installPath: pluginDir } },
-    { stateDir, env: process.env, config },
-  );
+  refreshPersistedInstalledPluginIndex({
+    stateDir,
+    env: process.env,
+    config,
+    reason: "source-changed",
+    installRecords: {
+      [pluginId]: { source: "npm", spec: `${packageName}@1.0.0`, installPath: pluginDir },
+    },
+  });
   clearPluginMetadataLifecycleCaches();
   const markers = () =>
     ["setup", "doctor", "session-agent", "migrated"].map((name) => fs.existsSync(marker(name)));

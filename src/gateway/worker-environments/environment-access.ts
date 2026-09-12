@@ -162,9 +162,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           ? () => ({ project: projectSnapshot, setupRecipe: preparedIdentity.setupRecipe })
           : undefined,
       });
-      if (!repository) {
-        throw new Error("Prepared repository is no longer public");
-      }
     }
     const assertBindingCurrent = () => {
       assertCurrent();

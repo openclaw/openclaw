@@ -8,6 +8,7 @@ const SETTLED_EMPTY_RESPONSE_SCENARIO = "telegram-empty-response-after-write-rec
 const PROGRESS_TOOL_VISIBILITY_SCENARIO = "telegram-progress-tool-visibility";
 const PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO = "telegram-provider-failure-before-output";
 const QUEUE_INVALID_MODE_SCENARIO = "telegram-queue-invalid-mode";
+const RICH_INLINE_COMPOSITION_SCENARIO = "telegram-rich-inline-composition";
 
 function readSource(sourceRoot: string, relativePath: string): string | undefined {
   try {
@@ -59,6 +60,13 @@ export function isPreQueueInvalidModeTarget(sourceRoot: string): boolean {
   );
 }
 
+export function isPreRichInlineCompositionTarget(sourceRoot: string): boolean {
+  return (
+    readSource(sourceRoot, "qa/scenarios/channels/telegram-rich-inline-composition.yaml") ===
+    undefined
+  );
+}
+
 export function resolveFrozenTelegramScenarioOmissions(sourceRoot: string): string[] {
   return [
     ...(isPrePartialFailureRecoveryTarget(sourceRoot) ? [PARTIAL_FAILURE_RECOVERY_SCENARIO] : []),
@@ -68,6 +76,7 @@ export function resolveFrozenTelegramScenarioOmissions(sourceRoot: string): stri
       ? [PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO]
       : []),
     ...(isPreQueueInvalidModeTarget(sourceRoot) ? [QUEUE_INVALID_MODE_SCENARIO] : []),
+    ...(isPreRichInlineCompositionTarget(sourceRoot) ? [RICH_INLINE_COMPOSITION_SCENARIO] : []),
   ];
 }
 

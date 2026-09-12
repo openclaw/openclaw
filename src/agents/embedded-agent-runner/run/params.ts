@@ -292,6 +292,8 @@ export type RunEmbeddedAgentParams = {
   expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  /** Disable fallback from the user-selected auth profile for a verification run. */
+  allowAuthProfileFallback?: boolean;
   thinkLevel?: ThinkLevel;
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */

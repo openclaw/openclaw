@@ -277,6 +277,14 @@ it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package
 The standalone build runs the selected package's asset build command and copies
 its declared `openclaw.build.staticAssets` into `dist`, including for new packages
 that are not yet tracked by Git. Missing declared source files fail the build.
+
+Declare private worker source files in `openclaw.build.workerEntries`, using
+package-relative paths such as `./src/store.worker.ts`. The standalone build
+emits them at matching paths under `dist`, such as `dist/src/store.worker.js`
+(`.cjs` for CommonJS packages). These entries are also included when the plugin
+is selected for the root bundled build. Declaring a worker does not register it
+as a plugin entrypoint or add a public package export.
+
 The preparation command does not rebuild either output or execute plugin code.
 It only links the checkout as `node_modules/openclaw` for a real immediate
 source package that declares `openclaw` in `peerDependencies` or `dependencies`.
@@ -305,7 +313,7 @@ installation or profile. Since 2026.9.2 the deprecated
 `core/doctor/legacy-plugin-dependencies` selector is informational only; it no
 longer scans shared roots for removal.
 
-Older npm installs also used a shared `~/.openclaw/npm/node_modules` root.
-Current install, update, uninstall, and doctor flows still recognize that
-legacy flat root for recovery and cleanup only. New npm installs create
-per-plugin project roots instead.
+A shared `~/.openclaw/npm/node_modules` root was the npm install layout before
+2026.5.28. Install, update, uninstall, and doctor flows still recognize that
+legacy flat root for recovery and cleanup only. Installs from 2026.5.28 onward
+create per-plugin project roots instead.

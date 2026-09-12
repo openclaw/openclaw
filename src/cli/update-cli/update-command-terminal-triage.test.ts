@@ -9,6 +9,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { hasErrnoCode } from "../../infra/errno.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
@@ -75,12 +79,16 @@ it.each([
       meta: { runId: run.runId, handoffId: owner, root, triageContextPath: artifact },
     }),
   );
+  const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
+  const existingIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+  );
   stageManagedHandoffRuntime(root);
   const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-  const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
   const leaseOptions = {
     databasePath,
     serviceManagerEnv: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+    existingIdentity,
   };
   // The helper really acquires and assigns the lease; no borrowed-owner method is mocked.
   const helper = spawn(
@@ -143,8 +151,9 @@ it.each([
     let pendingAtPublication = false;
     let exit: unknown;
     await withUpdateFailureTriage(opts, target, () =>
-      withUpdateCommandTerminalResult(run, () =>
-        withUpdateCommandExecutor(run.runId, async (executor) => {
+      withUpdateCommandTerminalResult((registerRun) => {
+        registerRun(run);
+        return withUpdateCommandExecutor(run.runId, async (executor) => {
           run.executorFence = await executor.enter(root);
           await withUpdateCommandRecoveryUnwind(opts, { triageTarget: target }, async () => {
             expect(
@@ -174,8 +183,8 @@ it.each([
             }
             throw new UpdateCommandFailure(result, 7, "fixture package failure");
           });
-        }),
-      ),
+        });
+      }),
     ).catch((error: unknown) => {
       exit = error;
     });

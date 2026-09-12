@@ -35,6 +35,7 @@ export async function probeMattermost(
     return { ok: false, error: "baseUrl missing" };
   }
   const url = `${normalized}/api/v4/users/me`;
+  const headers = { Authorization: `Bearer ${botToken}` };
   return await runChannelProbe(
     undefined,
     async ({ elapsedMs }) => {
@@ -43,7 +44,7 @@ export async function probeMattermost(
       const { response: res, release } = await fetchWithSsrFGuard({
         url,
         init: {
-          headers: { Authorization: `Bearer ${botToken}` },
+          headers,
         },
         auditContext: "mattermost-probe",
         policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
@@ -54,7 +55,7 @@ export async function probeMattermost(
       const requestElapsedMs = elapsedMs();
       try {
         if (!res.ok) {
-          const detail = await readMattermostError(res);
+          const detail = await readMattermostError(res, headers);
           return {
             ok: false,
             status: res.status,

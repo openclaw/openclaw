@@ -18,6 +18,7 @@ type QuestionPanelViewModel = {
   sessionKey?: string;
   secretStoreAllowedHostsDraft?: string;
   collapsed: boolean;
+  autoFocus?: boolean;
   disabled: boolean;
   submitting?: boolean;
   answersById?: Record<string, string[]>;
@@ -211,7 +212,7 @@ class ChatQuestionPanel extends LitElement {
       this.pendingAction = null;
       this.syncedAnswersSignature = null;
       this.collapsed = nextCollapsed;
-      this.focusAfterUpdate = !nextCollapsed;
+      this.focusAfterUpdate = !nextCollapsed && model?.autoFocus !== false;
     } else if (this.props?.onCollapsedChange) {
       if (this.collapsed && !nextCollapsed) {
         this.focusAfterUpdate = true;

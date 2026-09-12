@@ -3,6 +3,24 @@ import type { DesktopCredentials } from "./desktop-panel-connection.ts";
 
 const DESKTOP_CREDENTIALS_REQUIRED_CODE = "DESKTOP_CREDENTIALS_REQUIRED";
 
+export function fromForm(
+  formData: FormData,
+  auth: "vnc-password" | "ard-account" | undefined,
+): DesktopCredentials | undefined {
+  const password = formData.get("password");
+  if (typeof password !== "string" || password.length === 0) {
+    return undefined;
+  }
+  const username = formData.get("username");
+  if (auth === "ard-account" && (typeof username !== "string" || username.trim().length === 0)) {
+    return undefined;
+  }
+  return {
+    ...(typeof username === "string" && username.trim() ? { username: username.trim() } : {}),
+    password,
+  };
+}
+
 export function forObserve(
   source: DesktopSource,
   auth: "vnc-password" | "ard-account" | undefined,

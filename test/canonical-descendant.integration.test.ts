@@ -44,8 +44,8 @@ import {
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
 import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
 import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
+import { bindPluginRuntimeArtifactSelection } from "../src/plugins/plugin-runtime-artifact-binding.js";
 import {
-  bindPluginRuntimeArtifactSelection,
   resolvePluginRuntimeArtifactSelection,
   resolvePluginRuntimeExecutionArtifact,
 } from "../src/plugins/plugin-runtime-artifact-selection.js";

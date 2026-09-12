@@ -1740,7 +1740,7 @@ describe("slackPlugin outbound", () => {
 
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U123");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe(
-      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target",
+      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target\nCanary\nProduction",
     );
     const blocks = requireArray(requireMockCallArg(sendSlack, 0, 2).blocks, "Slack blocks");
     expectRecordFields(blocks[0], "text block", { type: "section" });

@@ -285,4 +285,40 @@ describe("update failure triage diagnostics", () => {
 
     await expect(readTriageUpdateFailure(inputPath, { env: {}, stateDir })).rejects.toThrow(error);
   });
+
+  it("keeps the leading diagnostic of a failed step beside the outcome tail", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const result: UpdateRunResult = {
+      status: "error",
+      mode: "npm",
+      root: "openclaw",
+      reason: "Package install failed",
+      before: { version: "2026.9.3" },
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      durationMs: 10,
+      steps: [
+        {
+          name: "global install swap",
+          command: "swap staged package",
+          cwd: ".",
+          durationMs: 1,
+          exitCode: 1,
+          stdoutTail: null,
+          stderrTail: [
+            "PackageUpdateSwapError: retained package tree changed after a copy fallback",
+            ...Array.from({ length: 30 }, (_, index) => `rollback detail line ${index}`),
+            "Installation recovery is unverified.",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const outputPath = await writeTriageUpdateFailure({ result }, { env });
+    const raw = await fs.readFile(outputPath, "utf8");
+
+    expect(raw).toContain("PackageUpdateSwapError");
+    expect(raw).toContain("recovery is unverified");
+    expect(raw).toContain("...");
+  });
 });

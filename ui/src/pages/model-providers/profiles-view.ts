@@ -1,5 +1,7 @@
 import { html, nothing, svg } from "lit";
+import "./account-usage.ts";
 import { repeat } from "lit/directives/repeat.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
@@ -26,10 +28,10 @@ export function showProfileActionError(error: unknown): void {
   });
 }
 
-export function showProfileLogoutSuccess(): void {
+export function showProfileLogoutSuccess(warning?: string): void {
   showToast({
     placement: "bottom",
-    message: t("modelProviders.logout.done"),
+    message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
     icon: icons.check,
   });
 }
@@ -37,11 +39,14 @@ export function showProfileLogoutSuccess(): void {
 type ProviderProfile = ModelProviderCard["profiles"][number];
 
 export type ProviderProfilesViewProps = {
+  usageClient?: GatewayBrowserClient | null;
+  usageAgentId?: string;
   busy: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
-  onOpenModelSetup: () => void;
+  onAddAccount: (() => void) | undefined;
+  addAccountDisabled: boolean;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
 };
@@ -94,7 +99,7 @@ function profileOrderLockMessage(lock: ModelProviderProfileOrderLock): string {
 function profileMeta(profile: ProviderProfile): string {
   const parts: string[] = [];
   const source = profileSource(profile);
-  if (source) {
+  if (source && profile.source !== "saved") {
     parts.push(source);
   }
   if (profile.email && profile.displayName && profile.displayName !== source) {
@@ -389,9 +394,18 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
               ${t("modelProviders.profiles.resetOrder")}
             </button>`,
           )}
-          <button type="button" class="btn btn--sm" @click=${props.onOpenModelSetup}>
-            ${t("modelProviders.profiles.addAccount")}
-          </button>
+          ${
+            props.onAddAccount
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm"
+                  ?disabled=${props.addAccountDisabled}
+                  @click=${props.onAddAccount}
+                >
+                  ${t("modelProviders.profiles.addAccount")}
+                </button>`
+              : nothing
+          }
         </div>
       </div>
       <div class="model-providers__profile-list" role="list">
@@ -404,6 +418,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
             const canMove = props.canMutate && !lock && complete && order.length > 1 && index >= 0;
             const showMoves = !lock && (complete || stored) && order.length > 1;
             const identity = profileIdentity(profile);
+            const meta = profileMeta(profile);
             const logoutProvider = logoutProviderForProfile(card, profile.profileId);
             const logoutLabel = t("modelProviders.logout.actionFor", { account: identity });
             const logoutBlocked = !props.canMutate
@@ -447,36 +462,28 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                 data-profile-id=${profile.profileId}
                 data-profile-provider=${provider}
               >
-                ${
-                  showMoves
-                    ? html`<button
-                        type="button"
-                        class="model-providers__profile-grip"
-                        ?disabled=${!canMove}
-                        aria-label=${t("modelProviders.profiles.reorder", { account: identity, position: String(index + 1) })}
-                        aria-keyshortcuts=${canMove ? "ArrowUp ArrowDown" : nothing}
-                        title=${reorderBlocked || t("modelProviders.profiles.reorderHint")}
-                        @pointerdown=${(event: PointerEvent) => startPointerDrag({ event, canMove, provider, move: reorder })}
-                        @keydown=${(event: KeyboardEvent) => {
-                          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                            event.preventDefault();
-                            move(event, event.key === "ArrowUp" ? -1 : 1);
-                          }
-                        }}
-                      >
-                        ${icons.gripVertical}
-                      </button>`
-                    : html`<span aria-hidden="true"></span>`
-                }
-                <span class="model-providers__profile-avatar" aria-hidden="true"
-                  >${profileInitials(profile)}</span
-                >
-                <span class="model-providers__profile-copy">
-                  <strong>${identity}</strong>
-                  <span>${profileMeta(profile)}</span>
-                </span>
-                <span class="model-providers__profile-status">${profileStatus(profile)}</span>
-                <span class="model-providers__profile-actions">
+                <span class="model-providers__profile-order">
+                  ${
+                    showMoves
+                      ? html`<button
+                          type="button"
+                          class="model-providers__profile-grip"
+                          ?disabled=${!canMove}
+                          aria-label=${t("modelProviders.profiles.reorder", { account: identity, position: String(index + 1) })}
+                          aria-keyshortcuts=${canMove ? "ArrowUp ArrowDown" : nothing}
+                          title=${reorderBlocked || t("modelProviders.profiles.reorderHint")}
+                          @pointerdown=${(event: PointerEvent) => startPointerDrag({ event, canMove, provider, move: reorder })}
+                          @keydown=${(event: KeyboardEvent) => {
+                            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                              event.preventDefault();
+                              move(event, event.key === "ArrowUp" ? -1 : 1);
+                            }
+                          }}
+                        >
+                          ${icons.gripVertical}
+                        </button>`
+                      : html`<span aria-hidden="true"></span>`
+                  }
                   ${
                     explicit && complete && index >= 0
                       ? html`<span
@@ -491,6 +498,25 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                         >`
                       : nothing
                   }
+                </span>
+                <span class="model-providers__profile-avatar" aria-hidden="true"
+                  >${profileInitials(profile)}</span
+                >
+                <span class="model-providers__profile-copy">
+                  <strong>${identity}</strong>
+                  ${meta ? html`<span>${meta}</span>` : nothing}
+                </span>
+                ${
+                  provider === "openai" && profile.type !== "api_key"
+                    ? html`<openclaw-model-account-usage
+                        .client=${props.usageClient ?? null}
+                        .agentId=${props.usageAgentId ?? ""}
+                        .profileId=${profile.profileId}
+                      ></openclaw-model-account-usage>`
+                    : nothing
+                }
+                <span class="model-providers__profile-status">${profileStatus(profile)}</span>
+                <span class="model-providers__profile-actions">
                   ${
                     profile.logoutSupported === true && logoutProvider
                       ? html`<button

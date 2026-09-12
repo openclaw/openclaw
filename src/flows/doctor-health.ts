@@ -213,7 +213,7 @@ async function runDoctorHealthFlowWithResult(
       });
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
-      assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg, operation: "doctor" });
+      await assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg, operation: "doctor" });
       const { assertNoPendingLegacyExecApprovals } =
         await import("../infra/exec-approvals-migration-gate.js");
       assertNoPendingLegacyExecApprovals({ operation: "doctor" });
@@ -224,7 +224,7 @@ async function runDoctorHealthFlowWithResult(
     await maintenance?.finish(ctx.cfg);
     const warnings = normalizeUpdatePostInstallDoctorWarnings([
       ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
-        receipt.outcome === "warning" ? receipt.warnings : [],
+        receipt.outcome === "warning" || receipt.outcome === "skipped" ? receipt.warnings : [],
       ),
       ...(ctx.postInstallDoctorResult?.warnings ?? []),
       ...(ctx.updateWarnings ?? []),

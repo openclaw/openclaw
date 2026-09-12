@@ -16,21 +16,11 @@ exact Validation SHA + Tooling SHA tuple and rejects an `expected_sha` mismatch
 before child dispatch. Validation SHA maps to the Code SHA for product
 validation or the Release SHA for changelog-only validation; it is not a third
 release identity. Beta-publish maps to `release_profile=beta` with
-`run_release_soak=false`. A canonical beta's `all` run records `npm-beta-v1`:
-it retains Node and Control UI CI, Plugin Prerelease, package/install/cross-OS
-checks, and QA parity, while deferring native apps, performance, and Telegram
-confidence. Broad live/E2E and QA-live remain outside that bounded gate.
-Postpublish-confidence uses the exact published package with soak or explicit
-focused groups. Regular stable releases use `release_profile=stable` and
-`npm-stable-v1`: only native apps are deferred; stable soak, blocking performance,
-Node on all three OS families, Control UI, package acceptance, and QA remain.
-Both npm scopes require an exact release version and validated matching branch
-or tag context. Numeric regular corrections are supported; extended-stable,
-uncontextualized `main`, full profiles, and explicit `ci` groups retain full CI.
+`run_release_soak=false`. Regular stable releases use `release_profile=stable`.
 
 See [Full release validation](/reference/full-release-validation) for the
-stage matrix, exact workflow job names, profile differences, artifacts, and
-focused rerun handles.
+stage matrix, exact workflow job names, profile differences, the `npm-beta-v1`
+and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 
 The live/E2E selected-ref validator fetches the complete commit and ref history
 with a sparse checkout. Ancestry and release-ref checks remain unchanged, while

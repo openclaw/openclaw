@@ -478,6 +478,7 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
 ): Promise<boolean> {
   let candidate = coercePreflightRefresh(params.preflightResult, params.sourceConfig);
   for (;;) {
+    params.assertCurrent?.();
     candidate ??= await prepareActiveSecretsRuntimeRefresh(
       params.sourceConfig,
       params.includeAuthStoreRefs,
@@ -498,6 +499,8 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
       candidate.snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
       setPreparedSecretsRuntimeSnapshotRefreshContext(candidate.snapshot, activeRefreshContext);
     }
+    // Preparation may yield; keep the admitting write owner at the activation boundary.
+    params.assertCurrent?.();
     if (activateSecretsRuntimeSnapshotIfCurrent(candidate.snapshot, candidate.expectedRevision)) {
       return true;
     }

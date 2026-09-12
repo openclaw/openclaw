@@ -590,12 +590,15 @@ jobs:
     runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     outputs:
-      fs_safe_native_contract: ${{ steps.validate.outputs.fs_safe_native_contract }}
+      fs_safe_native_contract: ${{ steps.frozen_admission.outputs.fs_safe_native_contract }}
       package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
       workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
       workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
+      upgrade_baseline: ${{ steps.upgrade_baselines.outputs.baseline }}
+      upgrade_baselines: ${{ steps.upgrade_baselines.outputs.baselines }}
+      upgrade_baseline_scope: ${{ steps.upgrade_baselines.outputs.baseline_scope }}
     steps:
       # github.workflow_sha identifies the caller during workflow_call. Resolve the called
       # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
@@ -637,6 +640,7 @@ jobs:
           filter: blob:none
           sparse-checkout: package.json
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Materialize selected-source contract resolver
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -646,8 +650,14 @@ jobs:
           path: .release-harness
           fetch-depth: 1
           persist-credentials: false
-          sparse-checkout: scripts/resolve-fs-safe-native-contract.mjs
-          sparse-checkout-cone-mode: false
+
+      - name: Setup admission Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source .release-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Validate selected ref
         id: validate
@@ -835,24 +845,36 @@ jobs:
               ;;
           esac
 
-          fs_safe_native_contract="$(node .release-harness/scripts/resolve-fs-safe-native-contract.mjs \
-            "$selected_sha" "$TRUSTED_WORKFLOW_SHA" "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS")"
-          echo "fs_safe_native_contract=$fs_safe_native_contract" >> "$GITHUB_OUTPUT"
           echo "selected_sha=$selected_sha" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
           {
             echo "Validated ref: \`${INPUT_REF}\`"
             echo "Resolved SHA: \`$selected_sha\`"
             echo "Trust reason: \`$trusted_reason\`"
-            echo "fs-safe native proof: \`$fs_safe_native_contract\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  validate_live_suite_filter:
-    runs-on: ubuntu-24.04
-    if: inputs.live_suite_filter != ''
-    timeout-minutes: 10
-    steps:
+      - name: Plan frozen source admission
+        id: frozen_selection
+        env:
+          ADMISSION_WORKFLOW: reusable
+          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}
+          ADMISSION_SELECTED_SHA: ${{ steps.validate.outputs.selected_sha }}
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/.release-harness
+          ADMISSION_TOOLING_SHA: ${{ steps.workflow.outputs.workflow_sha }}
+          ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/openclaw-live-and-e2e-checks-reusable.yml@{1}', steps.workflow.outputs.workflow_repository, steps.workflow.outputs.workflow_sha) }}
+          ADMISSION_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
+          ADMISSION_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          ADMISSION_PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --workflow-request > "$RUNNER_TEMP/frozen-admission-request.json"
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
+          printf 'parser_required=%s\n' "$(jq -er '.parserRequired | tostring' "$RUNNER_TEMP/frozen-admission-selection.json")" >> "$GITHUB_OUTPUT"
+
       - name: Validate focused live suite filter
+        if: inputs.live_suite_filter != ''
         shell: bash
         env:
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
@@ -861,6 +883,7 @@ jobs:
           INCLUDE_LIVE_SUITES: ${{ inputs.include_live_suites }}
           LIVE_MODELS_ONLY: ${{ inputs.live_models_only }}
           LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/.release-harness
         run: |
           set -euo pipefail
 
@@ -927,24 +950,16 @@ jobs:
               add_profile_suite native-live-extensions-o-z-other "full"
               add_profile_suite native-live-extensions-xai "full"
 
-              add_profile_suite live-gateway-docker "beta minimum stable full"
-              add_profile_suite live-gateway-anthropic-docker "stable full"
-              add_profile_suite live-gateway-anthropic-docker-full "full"
-              add_profile_suite live-gateway-google-docker "stable full"
-              add_profile_suite live-gateway-minimax-docker "stable full"
-              add_profile_suite live-gateway-advisory-docker "full"
-              add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"
-              add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"
-              add_profile_suite live-gateway-advisory-docker-xai-zai "full"
-              add_profile_suite live-cli-backend-docker "stable full"
-              add_profile_suite live-cli-cache-docker "stable full"
-              add_profile_suite live-acp-bind-docker "stable full"
-              add_profile_suite live-codex-harness-docker "stable full"
-              add_profile_suite live-codex-harness-gpt56-sol-docker "stable full"
-              add_profile_suite live-codex-harness-gpt56-terra-docker "stable full"
-              add_profile_suite live-codex-harness-gpt56-luna-docker "stable full"
-              add_profile_suite live-codex-harness-gpt56-docker "stable full"
-              add_profile_suite live-subagent-announce-docker "stable full"
+              docker_suites="$(node --input-type=module <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const { createReleaseWorkflowMatrixPlan } = await import(pathToFileURL(`${process.env.ADMISSION_TOOLING_ROOT}/scripts/plan-release-workflow-matrix.mjs`));
+          const rows = createReleaseWorkflowMatrixPlan({
+            releaseProfile: process.env.RELEASE_TEST_PROFILE, includeLiveSuites: true,
+          }).liveDocker.matrix.include;
+          console.log([...new Set(rows.flatMap(row => [row.suite_id, row.suite_group].filter(Boolean)))].join('\n'));
+          NODE
+              )"
+              while IFS= read -r suite; do [[ -z "$suite" ]] || add_suite "$suite"; done <<< "$docker_suites"
 
               add_profile_suite native-live-extensions-a-k "full"
               add_profile_suite native-live-extensions-media-audio "full"
@@ -973,11 +988,118 @@ jobs:
           fi
           exit 1
 
+      - name: Resolve selected upgrade baseline versions
+        id: upgrade_baselines
+        env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/.release-harness
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { pathToFileURL } from 'node:url';
+          const helper = path => pathToFileURL(`${process.env.ADMISSION_TOOLING_ROOT}/scripts/${path}`);
+          const { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } = await import(helper('lib/upgrade-survivor-policy.mjs'));
+          const { resolveNpmJsonString } = await import(helper('lib/npm-json-output.mts'));
+          const requestPath = `${process.env.RUNNER_TEMP}/frozen-admission-request.json`;
+          const request = JSON.parse(readFileSync(requestPath, 'utf8'));
+          const plan = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/frozen-admission-selection.json`, 'utf8'));
+          const options = request.options;
+          if (plan.obligations.some(entry => entry.kind === 'upgrade-baselines')) {
+            const captured = new Map();
+            const exact = raw => {
+              const spec = normalizeUpgradeSurvivorBaselineSpec(raw);
+              if (!spec) throw new Error('missing upgrade baseline');
+              if (!captured.has(spec)) {
+                const value = /^openclaw@[0-9]/u.test(spec) ? spec :
+                  normalizeUpgradeSurvivorBaselineSpec(resolveNpmJsonString(JSON.parse(execFileSync('npm',
+                    ['view', spec, 'version', '--json', '--silent', '--prefer-online'],
+                    { encoding: 'utf8', timeout: 60000, maxBuffer: 1024 * 1024 }))));
+                if (!/^openclaw@[0-9]/u.test(value ?? '')) throw new Error('upgrade baseline did not resolve to an exact version');
+                captured.set(spec, value);
+              }
+              return captured.get(spec);
+            };
+            options.upgradeSurvivorBaseline = exact(options.upgradeSurvivorBaseline);
+            const requested = parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines);
+            options.upgradeSurvivorBaselines = (requested.length ? requested.map(exact) : [options.upgradeSurvivorBaseline]).join(' ');
+            options.baselinesResolved = true;
+            writeFileSync(requestPath, `${JSON.stringify(request)}\n`, { mode: 0o600 });
+          }
+          for (const [key, value] of Object.entries({
+            baseline: options.upgradeSurvivorBaseline,
+            baselines: options.upgradeSurvivorBaselines,
+            baseline_scope: options.upgradeSurvivorBaselineScope,
+          })) {
+            if (/[\r\n]/u.test(value)) {
+              let delimiter = 'OPENCLAW_ADMISSION_OUTPUT';
+              const lines = value.split(/\r\n|\r|\n/u);
+              while (lines.includes(delimiter)) delimiter += '_';
+              appendFileSync(process.env.GITHUB_OUTPUT, `${key}<<${delimiter}\n${value}\n${delimiter}\n`);
+            } else {
+              appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+            }
+          }
+          NODE
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
+            --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
+
+      - name: Provision trusted admission parser
+        if: steps.frozen_selection.outputs.parser_required == 'true'
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Acquire selected contract objects
+        env:
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}
+          ADMISSION_SELECTED_SHA: ${{ steps.validate.outputs.selected_sha }}
+        run: |
+          set -euo pipefail
+          git -C "$ADMISSION_SELECTED_ROOT" checkout --detach "$ADMISSION_SELECTED_SHA"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const paths = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/frozen-admission-selection.json`, 'utf8')).sourcePaths;
+          const git = (...args) => execFileSync('git', ['-C', process.env.ADMISSION_SELECTED_ROOT, ...args], { timeout: 120000, maxBuffer: 64 * 1024 * 1024 });
+          if (!paths.length) process.exit(0);
+          const objects = git('ls-tree', '-r', '--format=%(objectname)', process.env.ADMISSION_SELECTED_SHA, '--', ...paths).toString().trim().split('\n').filter(Boolean);
+          if (objects.length > 4096) throw new Error('selected contract closure exceeds limit');
+          let bytes = 0;
+          for (const oid of new Set(objects)) {
+            const size = Number(git('cat-file', '-s', oid).toString());
+            if (size > 16 * 1024 * 1024 || (bytes += size) > 64 * 1024 * 1024) throw new Error('selected contract bytes exceed limit');
+            git('cat-file', 'blob', oid);
+          }
+          NODE
+
+      - name: Admit frozen source contracts
+        id: frozen_admission
+        env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/.release-harness
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" LANG=C.UTF-8 \
+            node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
+            "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission.json"
+          printf 'digest=%s\n' "$(jq -er '.digest' "$RUNNER_TEMP/frozen-admission.json")" >> "$GITHUB_OUTPUT"
+          printf 'fs_safe_native_contract=%s\n' "$(jq -r '[.evaluations[].contracts[] | select(.consumer == "fs-safe-native") | .mode][0] // "required"' "$RUNNER_TEMP/frozen-admission.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload frozen admission diagnostic
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: frozen-source-admission-reusable-${{ inputs.shared_image_artifact_namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/frozen-admission.json
+          if-no-files-found: error
+          retention-days: 7
+
   plan_release_workflow_matrices:
     needs: validate_selected_ref
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
+      live_docker_count: ${{ steps.plan.outputs.live_docker_count }}
+      live_docker_matrix: ${{ steps.plan.outputs.live_docker_matrix }}
       docker_e2e_count: ${{ steps.plan.outputs.docker_e2e_count }}
       docker_e2e_matrix: ${{ steps.plan.outputs.docker_e2e_matrix }}
       docker_e2e_omitted_json: ${{ steps.plan.outputs.docker_e2e_omitted_json }}
@@ -993,6 +1115,14 @@ jobs:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
+
+      - name: Setup admission Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Checkout selected live plugin metadata
         if: inputs.include_live_suites
@@ -1024,12 +1154,14 @@ jobs:
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
           LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          LIVE_MODELS_ONLY: ${{ inputs.live_models_only }}
           RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
+          PREPARE_ONLY: ${{ inputs.prepare_only }}
         run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
 
   validate_release_live_cache:
     needs: validate_selected_ref
-    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
+    if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
@@ -1081,7 +1213,7 @@ jobs:
   validate_repo_e2e_gateway:
     name: Gateway E2E
     needs: validate_selected_ref
-    if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
+    if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
@@ -1101,7 +1233,7 @@ jobs:
   validate_repo_e2e_runtime:
     name: UI and plugin E2E
     needs: validate_selected_ref
-    if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
+    if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
@@ -1121,7 +1253,7 @@ jobs:
 
   validate_special_e2e:
     needs: validate_selected_ref
-    if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
+    if: (!inputs.prepare_only) && inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -1274,7 +1406,7 @@ jobs:
 
   validate_docker_e2e:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
-    if: inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
+    if: (!inputs.prepare_only) && inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -1343,8 +1475,8 @@ jobs:
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -1635,7 +1767,7 @@ jobs:
 
   plan_docker_lane_groups:
     needs: validate_selected_ref
-    if: inputs.docker_lanes != ''
+    if: (!inputs.prepare_only) && inputs.docker_lanes != ''
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
@@ -1656,9 +1788,9 @@ jobs:
         env:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ inputs.published_upgrade_survivor_baseline_scope || 'all-scenarios' }}
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ needs.validate_selected_ref.outputs.upgrade_baseline_scope }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
           set -euo pipefail
@@ -1667,7 +1799,7 @@ jobs:
 
   validate_docker_lanes:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
-    if: inputs.docker_lanes != ''
+    if: (!inputs.prepare_only) && inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -1737,8 +1869,8 @@ jobs:
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || needs.validate_selected_ref.outputs.upgrade_baselines }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -2028,7 +2160,7 @@ jobs:
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
+    if: (!inputs.prepare_only) && inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -2401,8 +2533,8 @@ jobs:
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
           RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
           set -euo pipefail
@@ -2465,8 +2597,8 @@ jobs:
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           TARGET_REPOSITORY: ${{ github.repository }}
           TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
-          UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
-          UPGRADE_SURVIVOR_BASELINES: ${{ inputs.published_upgrade_survivor_baselines }}
+          UPGRADE_SURVIVOR_BASELINE: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
+          UPGRADE_SURVIVOR_BASELINES: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
           UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         shell: bash
         run: |
@@ -3642,7 +3774,7 @@ jobs:
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
-    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
+    if: (!inputs.prepare_only) && inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
@@ -3818,7 +3950,7 @@ jobs:
   validate_live_models_docker_targeted:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
+    if: (!inputs.prepare_only) && inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
@@ -4042,7 +4174,7 @@ jobs:
 
   validate_live_provider_suites:
     needs: validate_selected_ref
-    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
+    if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -4202,7 +4334,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-infra
             label: Native live infra
-            command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra
+            command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable full
@@ -4414,123 +4546,14 @@ jobs:
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
-    needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
+    needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
+    if: (!inputs.prepare_only) && needs.plan_release_workflow_matrices.outputs.live_docker_count != '0'
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - suite_id: live-gateway-docker
-            label: Docker live gateway OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: beta minimum stable full
-          - suite_id: live-gateway-anthropic-docker
-            suite_group: live-gateway-anthropic-docker
-            label: Docker live gateway Anthropic
-            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: stable
-          - suite_id: live-gateway-anthropic-docker-full
-            suite_group: live-gateway-anthropic-docker
-            label: Docker live gateway Anthropic (full advisory)
-            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            advisory: true
-            profiles: full
-          - suite_id: live-gateway-google-docker
-            label: Docker live gateway Google
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-gateway-minimax-docker
-            label: Docker live gateway MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-gateway-advisory-docker-deepseek-fireworks
-            suite_group: live-gateway-advisory-docker
-            label: Docker live gateway advisory DeepSeek/Fireworks
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            advisory: true
-            profiles: full
-          - suite_id: live-gateway-advisory-docker-opencode-openrouter
-            suite_group: live-gateway-advisory-docker
-            label: Docker live gateway advisory OpenCode/OpenRouter
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            advisory: true
-            profiles: full
-          - suite_id: live-gateway-advisory-docker-xai-zai
-            suite_group: live-gateway-advisory-docker
-            label: Docker live gateway advisory xAI/Z.ai
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            advisory: true
-            profiles: full
-          - suite_id: live-cli-backend-docker
-            label: Docker live CLI backend
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh
-            timeout_minutes: 50
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-cli-cache-docker
-            label: Docker live Claude CLI prompt cache
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh
-            timeout_minutes: 50
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-acp-bind-docker
-            label: Docker live ACP bind
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh
-            timeout_minutes: 50
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-codex-harness-docker
-            label: Docker live Codex harness
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-codex-harness-gpt56-sol-docker
-            suite_group: live-codex-harness-gpt56-docker
-            label: Docker live Codex GPT-5.6 Sol Ultra
-            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-sol=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-codex-harness-gpt56-terra-docker
-            suite_group: live-codex-harness-gpt56-docker
-            label: Docker live Codex GPT-5.6 Terra Ultra
-            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-terra=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-codex-harness-gpt56-luna-docker
-            suite_group: live-codex-harness-gpt56-docker
-            label: Docker live Codex GPT-5.6 Luna Max
-            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-luna=max OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
-            timeout_minutes: 40
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: live-subagent-announce-docker
-            label: Docker live subagent announce
-            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh
-            timeout_minutes: 25
-            profile_env_only: false
-            profiles: stable full
+      matrix: ${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_docker_matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -4678,16 +4701,19 @@ jobs:
 
       - name: Configure suite-specific env
         if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        env:
+          LIVE_PROFILE_ENV_ONLY: ${{ matrix.profile_env_only }}
+          LIVE_SUITE_ID: ${{ matrix.suite_id }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ matrix.profile_env_only }}" == "true" ]]; then
+          if [[ "$LIVE_PROFILE_ENV_ONLY" == "true" ]]; then
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
-          case "${{ matrix.suite_id }}" in
+          case "$LIVE_SUITE_ID" in
             live-cli-backend-docker | live-cli-cache-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
-              if [[ "${{ matrix.suite_id }}" == "live-cli-cache-docker" ]]; then
+              if [[ "$LIVE_SUITE_ID" == "live-cli-cache-docker" ]]; then
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
                 echo "OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1" >> "$GITHUB_ENV"
               elif [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
@@ -4724,6 +4750,7 @@ jobs:
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+          LIVE_SUITE_ID: ${{ matrix.suite_id }}
         shell: bash
         run: |
           set +e
@@ -4734,7 +4761,7 @@ jobs:
             exit 0
           fi
           if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
-            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
+            echo "::warning::Advisory live suite failed with exit code ${status}: $LIVE_SUITE_ID"
             exit 0
           fi
           exit "$status"
@@ -4742,7 +4769,7 @@ jobs:
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
-    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
+    if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:

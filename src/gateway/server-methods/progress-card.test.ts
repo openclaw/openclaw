@@ -6,6 +6,7 @@ import {
   type ProgressCard,
   type ProgressCardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import type { ProgressCardStore } from "../progress-card-store.js";
 import { createProgressCardHandlers } from "./progress-card.js";
@@ -13,8 +14,8 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 function createHarness() {
   const cards = new Map<string, ProgressCard>();
-  const get = vi.fn<ProgressCardStore["get"]>((sessionKey) => cards.get(sessionKey) ?? null);
-  const put = vi.fn<ProgressCardStore["put"]>((sessionKey, input) => {
+  const get = vi.fn<ProgressCardStore["get"]>(async (sessionKey) => cards.get(sessionKey) ?? null);
+  const put = vi.fn<ProgressCardStore["put"]>(async (sessionKey, input) => {
     const current = cards.get(sessionKey);
     if (!input.markdown && !input.steps?.length) {
       if (input.expectedRevision !== undefined && current?.revision !== input.expectedRevision) {
@@ -35,8 +36,11 @@ function createHarness() {
   });
   const handlers = createProgressCardHandlers({ get, put });
   const broadcast = vi.fn();
-  const invoke = async (method: "progressCard.get" | "progressCard.put", params: unknown) => {
-    const respond = vi.fn<RespondFn>();
+  const invoke = async (
+    method: "progressCard.get" | "progressCard.put",
+    params: unknown,
+    respond = vi.fn<RespondFn>(),
+  ) => {
     await handlers[method]!({
       params,
       respond,
@@ -51,6 +55,88 @@ function createHarness() {
 }
 
 describe("progress card gateway methods", () => {
+  it.each(["get", "put"] as const)(
+    "waits for %s before responding or broadcasting",
+    async (operation) => {
+      const harness = createHarness();
+      const card: ProgressCard = {
+        sessionKey: "agent:main:main",
+        markdown: "Saved",
+        revision: 3,
+        updatedAt: 1,
+      };
+      const release = createDeferredCore();
+      harness.get.mockImplementationOnce(async () => {
+        await release.promise;
+        return card;
+      });
+      harness.put.mockImplementationOnce(async () => {
+        await release.promise;
+        return { card };
+      });
+      const respond = vi.fn<RespondFn>();
+      const pending = harness.invoke(
+        `progressCard.${operation}`,
+        {
+          sessionKey: card.sessionKey,
+          ...(operation === "put" ? { markdown: card.markdown } : {}),
+        },
+        respond,
+      );
+      try {
+        expect(harness[operation]).toHaveBeenCalledOnce();
+        expect(respond).not.toHaveBeenCalled();
+        expect(harness.broadcast).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending;
+      }
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { card }, undefined);
+      expect(harness.broadcast).toHaveBeenCalledTimes(operation === "put" ? 1 : 0);
+      if (operation === "put") {
+        expect(harness.broadcast).toHaveBeenCalledWith(
+          "progressCard.changed",
+          { sessionKey: card.sessionKey, revision: 3 },
+          { sessionKeys: [card.sessionKey], agentId: "main" },
+        );
+      }
+    },
+  );
+
+  it.each(["get", "put"] as const)(
+    "reports rejected %s without publishing or retrying",
+    async (operation) => {
+      const harness = createHarness();
+      const release = createDeferredCore();
+      harness.get.mockImplementationOnce(async () => {
+        await release.promise;
+        return null;
+      });
+      harness.put.mockImplementationOnce(async () => {
+        await release.promise;
+        return { card: null };
+      });
+      const respond = vi.fn<RespondFn>();
+      const pending = harness.invoke(
+        `progressCard.${operation}`,
+        { sessionKey: "agent:main:main" },
+        respond,
+      );
+      release.reject(new Error("storage unavailable"));
+      await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("storage unavailable"),
+        }),
+      );
+      expect(harness.broadcast).not.toHaveBeenCalled();
+      expect(harness[operation]).toHaveBeenCalledOnce();
+    },
+  );
+
   it("registers read and write scopes", () => {
     expect(resolveCoreOperatorGatewayMethodScope("progressCard.get")).toBe("operator.read");
     expect(resolveCoreOperatorGatewayMethodScope("progressCard.put")).toBe("operator.write");

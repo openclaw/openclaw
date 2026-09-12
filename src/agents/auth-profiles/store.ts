@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 import { projectModelProviderConfig } from "../../config/model-provider-config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readUserModelAuthProfile } from "../../state/user-model-accounts.js";
 import { isRecord } from "../../utils.js";

@@ -35,6 +35,10 @@ export type CreateSandboxBackendParams = {
   scopeKey: string;
   /** Runtime IDs already registered for this backend and scope, newest first. */
   registeredRuntimeIds?: readonly string[];
+  /** Durable runtime generation selected by core for a reserving backend. */
+  runtimeId?: string;
+  /** Synchronously recheck this generation immediately before runtime side effects. */
+  assertRuntimeCurrent?: () => void;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
@@ -47,24 +51,34 @@ export type SandboxBackendFactory = (
   params: CreateSandboxBackendParams,
 ) => Promise<SandboxBackendHandle>;
 
+/** Version 1 of the reserved-runtime capability, with required live owner authority. */
+export type CreateReservedSandboxBackendParamsV1 = CreateSandboxBackendParams & {
+  runtimeId: string;
+  assertRuntimeCurrent: () => void;
+};
+
+export type ReservedSandboxBackendFactoryV1 = (
+  params: CreateReservedSandboxBackendParamsV1,
+) => Promise<SandboxBackendHandle>;
+
 /** Resolve the runtime workdir without creating or starting the backend. */
 export type SandboxBackendWorkdirResolver = (params: CreateSandboxBackendParams) => string;
 
 /** Registry input accepted for sandbox backend registration. */
-export type SandboxBackendRegistration =
-  | SandboxBackendFactory
-  | {
-      factory: SandboxBackendFactory;
-      manager?: SandboxBackendManager;
-      resolveWorkdir?: SandboxBackendWorkdirResolver;
-    };
+export type SandboxBackendRegistration = SandboxBackendFactory | RegisteredSandboxBackend;
 
 /** Normalized backend registration stored in the sandbox backend registry. */
 export type RegisteredSandboxBackend = {
-  factory: SandboxBackendFactory;
   manager?: SandboxBackendManager;
   resolveWorkdir?: SandboxBackendWorkdirResolver;
-};
+} & (
+  | { factory: SandboxBackendFactory; reserveRuntimeId?: undefined }
+  | {
+      factory: ReservedSandboxBackendFactoryV1;
+      /** Generate a fresh candidate ID without allocating provider resources. */
+      reserveRuntimeId: (params: CreateSandboxBackendParams) => string;
+    }
+);
 
 export type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 export type { SandboxBackendWorkdirValidation } from "./backend-handle.types.js";

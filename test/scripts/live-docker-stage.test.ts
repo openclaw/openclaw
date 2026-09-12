@@ -2,6 +2,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -11,7 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -30,11 +32,26 @@ function committedSourceFixture(files: Record<string, string | null>) {
     writeFileSync(path.join(root, relative), content);
   }
   const git = (...args: string[]) =>
-    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    // Corruption controls own loose objects; automatic packing would move the target first.
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
+        ...args,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ).trim();
   git("init", "-q");
   git("config", "user.email", "test@example.invalid");
   git("config", "user.name", "Test");
@@ -265,6 +282,29 @@ describe("frozen committed source errors", () => {
     return objectPath;
   }
 
+  it("preserves real read-failure injection under inherited automatic Git maintenance", () => {
+    const config = { "gc.auto": "1", "gc.autoDetach": "false", "maintenance.strategy": "gc" };
+    vi.stubEnv("GIT_CONFIG_COUNT", String(Object.keys(config).length));
+    for (const [index, [key, value]] of Object.entries(config).entries()) {
+      vi.stubEnv(`GIT_CONFIG_KEY_${index}`, key);
+      vi.stubEnv(`GIT_CONFIG_VALUE_${index}`, value);
+    }
+    try {
+      const source = committedSourceFixture({
+        [metadata]: "unavailable source bytes",
+        // Git samples directory 17/ for its loose-object auto-GC threshold.
+        "gc-sample-a": "gc sample 376\n",
+        "gc-sample-b": "gc sample 568\n",
+        "gc-sample-c": "gc sample 675\n",
+      });
+      removeObject(source, `${source.sha}:${metadata}`);
+      const reader = createFrozenTargetSource(source.root, source.sha);
+      expect(() => reader.readText(metadata)).toThrow("unable to read selected source");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
     const committedText = "selected committed text\n";
     const source = committedSourceFixture({ [metadata]: committedText });
@@ -274,6 +314,7 @@ describe("frozen committed source errors", () => {
     expect(reader.readText("scripts/absent.ts")).toBeNull();
 
     removeObject(source, `${source.sha}:${metadata}`);
+    expect(() => reader.readText(metadata)).toThrow();
     const freshReader = createFrozenTargetSource(source.root, source.sha);
     expect(() => freshReader.readText(metadata)).toThrow();
   });
@@ -580,6 +621,7 @@ describe("frozen bundle committed contract", () => {
     source: { root: string; sha: string },
     env: Record<string, string> = {},
     cwd = repoRoot,
+    helper = stageScriptPath,
   ) {
     return spawnSync(
       "bash",
@@ -587,7 +629,7 @@ describe("frozen bundle committed contract", () => {
         "-c",
         'set -euo pipefail; source "$1"; status=0; openclaw_resolve_frozen_agent_bundle_mcp_contract "$2" || status=$?; printf "%s:%s\\n" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_CLIENT_PATH"; exit "$status"',
         "test",
-        stageScriptPath,
+        helper,
         source.root,
       ],
       {
@@ -652,6 +694,84 @@ describe("frozen bundle committed contract", () => {
     const result = resolve(source, {}, source.root);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`legacy:${julyClient}\n`);
+  });
+
+  it.each([
+    "ancestor",
+    "NODE_PATH",
+    "donor link",
+    "wrong version",
+    "owned pnpm",
+    "missing",
+    "authorization off",
+  ])("validates the trusted parser before execution: %s", (shape) => {
+    const outer = tempDirs.make("openclaw-parser-origin-");
+    const tooling = path.join(outer, ".release-harness");
+    const lib = path.join(tooling, "scripts/lib");
+    mkdirSync(lib, { recursive: true });
+    for (const file of ["frozen-target-compat.sh", "frozen-target-source.mjs"]) {
+      copyFileSync(path.join(repoRoot, "scripts/lib", file), path.join(lib, file));
+    }
+    for (const file of ["package.json", "pnpm-lock.yaml"]) {
+      copyFileSync(path.join(repoRoot, file), path.join(tooling, file));
+    }
+    const pin = JSON.parse(readFileSync(path.join(tooling, "package.json"), "utf8")).dependencies
+      .typescript;
+    const poison = path.join(outer, "poison-executed");
+    const parser =
+      shape === "ancestor"
+        ? path.join(outer, "node_modules/typescript")
+        : shape === "NODE_PATH"
+          ? path.join(outer, "global/typescript")
+          : shape === "donor link"
+            ? path.join(outer, "donor/typescript")
+            : shape === "owned pnpm"
+              ? path.join(tooling, `node_modules/.pnpm/typescript@${pin}/node_modules/typescript`)
+              : path.join(tooling, "node_modules/typescript");
+    if (shape !== "missing" && shape !== "authorization off") {
+      if (shape === "owned pnpm") {
+        cpSync(path.join(repoRoot, "node_modules/typescript"), parser, {
+          recursive: true,
+          dereference: true,
+        });
+      } else {
+        mkdirSync(parser, { recursive: true });
+        writeFileSync(
+          path.join(parser, "package.json"),
+          JSON.stringify({
+            name: "typescript",
+            version: shape === "wrong version" ? "0.0.0" : pin,
+            main: "index.js",
+          }),
+        );
+        writeFileSync(
+          path.join(parser, "index.js"),
+          `require("node:fs").writeFileSync(${JSON.stringify(poison)}, "executed"); throw new Error("poison parser executed");`,
+        );
+      }
+      if (shape === "donor link" || shape === "owned pnpm") {
+        mkdirSync(path.join(tooling, "node_modules"), { recursive: true });
+        symlinkSync(parser, path.join(tooling, "node_modules/typescript"), "dir");
+      }
+    }
+    const result = resolve(
+      fixture(),
+      {
+        NODE_PATH: shape === "NODE_PATH" ? path.join(outer, "global") : "",
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: shape === "authorization off" ? "0" : "1",
+      },
+      tooling,
+      path.join(lib, "frozen-target-compat.sh"),
+    );
+    expect(existsSync(poison), result.stderr).toBe(false);
+    if (shape === "owned pnpm" || shape === "authorization off") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `${shape === "owned pnpm" ? "legacy" : "current"}:${julyClient}\n`,
+      );
+    } else {
+      expectRejected(result, "trusted TypeScript parser");
+    }
   });
 
   it.each<{ env: Record<string, string>; error: string }>([

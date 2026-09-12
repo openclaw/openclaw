@@ -189,6 +189,26 @@ describe("device.pair.setupCode", () => {
     expect(respond.mock.calls[0]?.[1]?.urlSource).toBe("request.publicUrl");
   });
 
+  it.each([false, true])(
+    "pairs the hosted Gateway unless a remote URL is explicitly requested (%s)",
+    async (preferRemoteUrl) => {
+      mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+      mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+      const { options } = createOptions(
+        { preferRemoteUrl, includeQr: false },
+        { gateway: { mode: "remote", remote: { url: "wss://primary.example" } } },
+      );
+      await expectDefined(
+        devicePairSetupHandlers["device.pair.setupCode"],
+        "device pairing handler is registered",
+      )(options);
+      expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ useLocalGateway: !preferRemoteUrl, preferRemoteUrl }),
+      );
+    },
+  );
+
   it("prefers the remote URL over the configured device-pair fallback", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");

@@ -42,7 +42,7 @@ require the `node` role.
 
 Personal GitHub connection management is a narrowly self-scoped exception to
 read-only behavior: `users.github.*` requires `operator.read` plus the exact
-authenticated durable profile. An identified reader can connect, poll, cancel,
+authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`. Publication remains
@@ -309,7 +309,7 @@ grants nor removes session mutation authority.
 `audit.run.inspect` intentionally uses `operator.read`. Every client with that
 scope in a Gateway operator domain may receive the retained execution-identity
 context, including bounded pseudonymized references and secret-redacted display
-labels. `operator.read` is not a per-user or hostile multi-tenant privacy
+labels. `operator.read` is not a per-person or hostile multi-tenant privacy
 boundary. Operators who must keep this data separate need separate Gateway
 trust domains.
 

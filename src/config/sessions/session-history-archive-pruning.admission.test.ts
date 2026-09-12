@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
+import * as logging from "../../logging/logger.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -76,7 +77,91 @@ function own<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
+function observePruningFailures() {
+  const warnings: unknown[] = [];
+  const getChildLogger = logging.getChildLogger;
+  vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
+    const logger = getChildLogger(...args);
+    vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
+      if (message === "SQLite session write failed") {
+        assert(fields && typeof fields === "object");
+        warnings.push("archivePruning" in fields ? fields.archivePruning : undefined);
+      }
+      return undefined;
+    });
+    return logger;
+  });
+  return warnings;
+}
+
+it("does not invent an admission mode when a warm database rejects a different owner", async () => {
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  const before = database.db.prepare("SELECT total_changes() AS changes").get();
+  const checkpoint = vi.spyOn(database.walMaintenance, "checkpoint");
+  const warnings = observePruningFailures();
+  const archivePruning = { trigger: "initial" as const };
+  const wrongOwner = { ...options, agentId: "other", path: database.path };
+  await expect(
+    runExclusiveSqliteSessionWrite(
+      wrongOwner,
+      async () =>
+        pruneAllSessionTranscriptArchivesToHighWater({
+          archiveDirectory: state.sessionsDir(),
+          databaseOptions: wrongOwner,
+          diagnostics: archivePruning,
+          highWaterBytes: 0,
+          storePath: path.join(state.sessionsDir(), "sessions.json"),
+        }),
+      "session.history.archive-prune",
+      { archivePruning },
+    ),
+  ).rejects.toThrow("already open for agent main; requested agent other");
+  expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(database);
+  expect(checkpoint).not.toHaveBeenCalled();
+  expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
+  expect(warnings).toEqual([
+    expect.objectContaining({
+      trigger: "initial",
+      completed: false,
+      admissionMs: expect.any(Number),
+      cachedAdmissions: undefined,
+      asyncAdmissions: undefined,
+      checkpointCalls: undefined,
+    }),
+  ]);
+});
+
 const boundaries = ["drain", "presence", "row", "unpublished", "removed-file"] as const;
+
+it("bounds background page reclamation and checks authority before resuming it", async () => {
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  database.db
+    .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
+    .run("cold-proof", "padding", Buffer.alloc(4 * 1024 * 1024), 1);
+  database.db.prepare("DELETE FROM cache_entries WHERE scope = ?").run("cold-proof");
+  const freePages = () =>
+    Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+  const before = freePages();
+  expect(before).toBeGreaterThan(512);
+  await reclaimSqliteFreePages(options, undefined, { maxPasses: 1 });
+  const remaining = freePages();
+  expect(remaining).toBeGreaterThan(0);
+  expect(remaining).toBeLessThan(before);
+  expect(before - remaining).toBeLessThanOrEqual(512);
+  await expect(
+    reclaimSqliteFreePages(options, undefined, {
+      maxPasses: 1,
+      assertCurrent: () => {
+        throw new Error("maintenance stopped");
+      },
+    }),
+  ).rejects.toThrow("maintenance stopped");
+  expect(freePages()).toBe(remaining);
+  await reclaimSqliteFreePages(options);
+  expect(freePages()).toBe(0);
+});
 
 it.each([
   ...boundaries.flatMap((boundary) =>
@@ -255,6 +340,8 @@ it.each([
       ),
     );
     await blockerEntered.promise;
+    const archivePruning = { trigger: "initial" as const };
+    const warnings = observePruningFailures();
     const work = own(
       runExclusiveSqliteSessionWrite(
         options,
@@ -263,9 +350,10 @@ it.each([
           events.push("maintenance-entered");
           try {
             return boundary === "drain"
-              ? await reclaimSqliteFreePages(options)
+              ? await reclaimSqliteFreePages(options, archivePruning)
               : await pruneAllSessionTranscriptArchivesToHighWater({
                   archiveDirectory: path.dirname(archivePath),
+                  diagnostics: archivePruning,
                   databaseOptions: options,
                   highWaterBytes: 1,
                   storePath,
@@ -276,6 +364,7 @@ it.each([
           }
         },
         "session.history.archive-prune",
+        { archivePruning },
       ),
     );
     const later = own(
@@ -319,6 +408,16 @@ it.each([
     if (outcome === "revoked") {
       await expect(work).rejects.toThrow(/revoked/);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          trigger: "initial",
+          completed: false,
+          asyncAdmissions: 1,
+          admissionMs: expect.any(Number),
+          checkpointCalls: expect.any(Number),
+          checkpointMs: expect.any(Number),
+        }),
+      ]);
     } else if (boundary === "drain") {
       await work;
     } else {
@@ -350,6 +449,11 @@ it.each([
       expect(fs.existsSync(archivePath)).toBe(false);
     }
     if (boundary === "drain") {
+      expect(archivePruning).toMatchObject({
+        vacuumMs: expect.any(Number),
+        vacuumPasses: expect.any(Number),
+        vacuumPagesRequested: outcome === "revoked" ? firstDrainedPages : initialFreePages,
+      });
       expect(firstDrainedPages).toBeGreaterThan(0);
       expect(firstDrainedPages).toBeLessThanOrEqual(512);
       expect(readFreePages(reopened.db)).toBe(

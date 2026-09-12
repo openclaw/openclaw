@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  errorShape,
+  ErrorCodes,
+  type BoardSnapshot,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerPluginDashboardCapabilities } from "../../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -11,7 +15,7 @@ import {
 } from "../../plugins/runtime.js";
 import { createPluginGatewayMethodDescriptor } from "../methods/descriptor.js";
 import { createBoardHarness } from "./board.test-support.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function createWorkboardCapabilityRegistry(params: {
   readHandler: GatewayRequestHandlers[string];
@@ -69,16 +73,117 @@ function createWorkboardCapabilityRegistry(params: {
 }
 
 describe("board plugin capabilities", () => {
-  it.each(["read", "action"] as const)(
-    "rejects an awaited plugin %s after its widget is removed or replaced",
-    async (operation) => {
+  it.each([
+    { operation: "read", phase: "start" },
+    { operation: "action", phase: "start" },
+    { operation: "read", phase: "publish" },
+    { operation: "action", phase: "publish" },
+  ] as const)(
+    "keeps $operation $phase in the authorized read turn",
+    async ({ operation, phase }) => {
+      const previousRegistry = getActivePluginRegistry();
+      const order: string[] = [];
+      let started = false;
+      const handler: GatewayRequestHandlers[string] = ({ respond }) => {
+        started = true;
+        order.push("started");
+        respond(true, { ok: true });
+      };
+      setActivePluginRegistry(
+        createWorkboardCapabilityRegistry({ readHandler: handler, actionHandler: handler }),
+      );
+      try {
+        const { invoke, store, handlers, context } = createBoardHarness(undefined, {}, undefined, {
+          getRuntimeConfig: () => ({
+            agents: { list: [{ id: "main" }] },
+            tools: { exec: { mode: "full" } },
+          }),
+        });
+        await invoke("board.widget.put", {
+          sessionKey: "session",
+          name: "handoff",
+          content: { kind: "html", html: "handoff" },
+          declared: { tools: ["workboard.cards.list", "workboard.dispatch"] },
+        });
+        const board = await invoke("board.get", { sessionKey: "session" });
+        const ticket = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.viewTicket;
+        const removed = createDeferred();
+        let removalScheduled = false;
+        const read = store.useWidgetDocument.bind(store);
+        vi.spyOn(store, "useWidgetDocument").mockImplementation((target, name, consume) =>
+          read(target, name, (document) => {
+            if (!removalScheduled && (phase === "start" || started)) {
+              removalScheduled = true;
+              queueMicrotask(() => {
+                order.push("removal");
+                void store
+                  .applyOps(target, [{ kind: "widget_remove", name }])
+                  .then(() => removed.resolve(), removed.reject);
+              });
+            }
+            return consume(document);
+          }),
+        );
+        const method = operation === "read" ? "board.data.read" : "board.action";
+        const params =
+          operation === "read"
+            ? { ticket, bindingId: "workboard.cards.list" }
+            : { ticket, action: "workboard.dispatch", params: { force: true } };
+        const respond = vi.fn<RespondFn>((ok) => {
+          if (ok) {
+            order.push("published");
+          }
+        });
+        await handlers[method]!({
+          req: { type: "req", id: "handoff", method, params },
+          params,
+          respond,
+          context,
+          client: null,
+          isWebchatConnect: () => false,
+        });
+        expect(removalScheduled).toBe(true);
+        await removed.promise;
+        expect(order).toEqual(
+          phase === "start" ? ["started", "removal"] : ["started", "published", "removal"],
+        );
+        expect(respond.mock.calls[0]?.[0]).toBe(phase === "publish");
+      } finally {
+        resetPluginRuntimeStateForTest();
+        if (previousRegistry) {
+          setActivePluginRegistry(previousRegistry);
+        }
+      }
+    },
+  );
+
+  it.each([
+    { operation: "read", outcome: "success", scope: "retired" },
+    { operation: "read", outcome: "failure", scope: "retired" },
+    { operation: "read", outcome: "throw", scope: "retired" },
+    { operation: "action", outcome: "success", scope: "retired" },
+    { operation: "action", outcome: "failure", scope: "retired" },
+    { operation: "action", outcome: "throw", scope: "retired" },
+    { operation: "read", outcome: "failure", scope: "current" },
+    { operation: "action", outcome: "throw", scope: "current" },
+  ] as const)(
+    "$scope widget authority controls plugin $operation $outcome publication",
+    async ({ operation, outcome, scope }) => {
       const previousRegistry = getActivePluginRegistry();
       const started = createDeferred();
       const release = createDeferred();
+      const privateDetail = "private plugin result detail";
       const handler: GatewayRequestHandlers[string] = async ({ respond }) => {
         started.resolve();
         await release.promise;
-        respond(true, { ok: true });
+        if (outcome === "throw") {
+          throw new Error(privateDetail);
+        }
+        if (outcome === "failure") {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, privateDetail));
+        } else {
+          respond(true, { detail: privateDetail });
+        }
       };
       setActivePluginRegistry(
         createWorkboardCapabilityRegistry({ readHandler: handler, actionHandler: handler }),
@@ -108,19 +213,28 @@ describe("board plugin capabilities", () => {
                 params: { force: true },
               });
         await started.promise;
-        if (operation === "read") {
+        if (scope === "retired" && operation === "read") {
           await invoke("board.widget.put", {
             ...widget,
             content: { kind: "html", html: "replacement" },
           });
-        } else {
+        } else if (scope === "retired") {
           await invoke("board.update", {
             sessionKey: "session",
             ops: [{ kind: "widget_remove", name: "plugin-widget" }],
           });
         }
         release.resolve();
-        expect((await pending).mock.calls[0]?.[0]).toBe(false);
+        const response = await pending;
+        expect(response.mock.calls[0]?.[0]).toBe(false);
+        if (scope === "retired") {
+          expect(JSON.stringify(response.mock.calls)).not.toContain(privateDetail);
+        } else {
+          expect(response.mock.calls[0]?.[2]).toMatchObject({
+            code: outcome === "throw" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            message: expect.stringContaining(privateDetail),
+          });
+        }
       } finally {
         release.resolve();
         if (previousRegistry) {
@@ -165,7 +279,7 @@ describe("board plugin capabilities", () => {
         name: "plugin-widget",
         decision: "granted",
         revision: 1,
-        instanceId: store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets[0]
+        instanceId: (await store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets[0]
           ?.instanceId,
       });
       const board = await invoke("board.get", { sessionKey: "session" });

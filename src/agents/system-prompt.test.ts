@@ -1331,7 +1331,7 @@ describe("buildAgentSystemPrompt", () => {
       );
       expect(prompt).not.toContain("System controls unavailable");
       expect(prompt).toContain(
-        "`visible:true` for work the user follows or asked for; else hidden.",
+        "Default to subagents for internal work; use `visible:true` only for a separate session the user requests or needs to revisit and steer independently.",
       );
     },
   );
@@ -1764,7 +1764,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(preferPrompt).toContain("Multi-step or slow work");
     expect(preferPrompt).toContain("objective, output, write scope, verification");
     expect(preferPrompt).toContain("spawn `sessions_spawn` with `visible=true`");
-    expect(preferPrompt).toContain("Hidden children are invisible to the user");
+    expect(preferPrompt).toContain(
+      "Use subagents for internal QA, research, coding, review, and test lanes",
+    );
+    expect(preferPrompt).toContain(
+      "A request to use subagents does not request separate sessions.",
+    );
     expect(preferPrompt).toContain("Child output is evidence");
     expect(preferPrompt).toContain("`subagents(action=list)` only for requested status");
     expect(preferPrompt).not.toContain("- Subagents: `sessions_spawn`");

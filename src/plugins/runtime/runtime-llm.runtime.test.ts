@@ -5,7 +5,7 @@ import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-ru
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
 
@@ -39,7 +39,7 @@ function createPreparedModel(
   { model: unknown }
 > {
   return {
-    release: vi.fn(),
+    async [Symbol.asyncDispose]() {},
     selection: {
       provider: "openai",
       modelId,
@@ -137,6 +137,8 @@ function primeCompletionMocks() {
   );
   hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
     content: [{ type: "text", text: "done" }],
+    responseModel: "gpt-5.5-2026-08-01",
+    stopReason: "stop",
     usage: {
       input: 11,
       output: 7,
@@ -212,7 +214,7 @@ describe("runtime.llm.complete", () => {
       purpose: "context-engine.after-turn",
     });
 
-    const result = await withPluginRuntimePluginIdScope("memory-core", () =>
+    const result = await withPluginRuntimePluginScope({ pluginId: "memory-core" }, () =>
       runtimeContext.llm!.complete({
         messages: [{ role: "user", content: "summarize" }],
         purpose: "memory-maintenance",
@@ -508,7 +510,7 @@ describe("runtime.llm.complete", () => {
       purpose: "context-engine.compaction",
     });
 
-    const result = await withPluginRuntimePluginIdScope("spoofed-plugin", () =>
+    const result = await withPluginRuntimePluginScope({ pluginId: "spoofed-plugin" }, () =>
       runtimeContext.llm!.complete({
         model: "openai/gpt-5.4-mini",
         messages: [{ role: "user", content: "summarize" }],
@@ -643,7 +645,7 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.5",
           messages: [{ role: "user", content: "Ping" }],
@@ -674,6 +676,10 @@ describe("runtime.llm.complete", () => {
       temperature: 0.2,
       maxTokens: 64,
       reasoning: "ultra",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+      },
       purpose: "test-purpose",
     });
 
@@ -698,11 +704,17 @@ describe("runtime.llm.complete", () => {
       maxTokens: 64,
       temperature: 0.2,
       reasoning: "ultra",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+      },
     });
     expectFields(requireRecord(result, "completion result"), {
       text: "done",
       provider: "openai",
       model: "gpt-5.5",
+      responseModel: "gpt-5.5-2026-08-01",
+      stopReason: "stop",
     });
     expectFields(requireRecord(result.usage, "completion usage"), {
       inputTokens: 11,
@@ -753,7 +765,7 @@ describe("runtime.llm.complete", () => {
       },
     });
 
-    const result = await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+    const result = await withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
       llm.complete({
         messages: [{ role: "user", content: "Ping" }],
         purpose: "identity-test",
@@ -777,7 +789,7 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("plain-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.4",
           messages: [{ role: "user", content: "Ping" }],
@@ -796,7 +808,7 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("plain-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
         denied.complete({
           agentId: "worker",
           messages: [{ role: "user", content: "Ping" }],
@@ -822,7 +834,7 @@ describe("runtime.llm.complete", () => {
       },
     });
 
-    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+    await withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
       allowed.complete({
         agentId: "worker",
         messages: [{ role: "user", content: "Ping" }],
@@ -853,7 +865,7 @@ describe("runtime.llm.complete", () => {
       },
     });
 
-    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+    await withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
       llm.complete({
         model: "openai/gpt-5.4",
         messages: [{ role: "user", content: "Ping" }],
@@ -865,51 +877,13 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.6",
           messages: [{ role: "user", content: "Ping" }],
         }),
       ),
     ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
-  });
-
-  it("preserves direct model-profile overrides under model authority", async () => {
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      profileId: "openai:work",
-      agentDir: "/tmp/main",
-    });
-    const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "trusted-plugin": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-      }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginIdScope("trusted-plugin", () =>
-        llm.complete({
-          model: "openai/gpt-5.4@openai:work",
-          messages: [{ role: "user", content: "Ping" }],
-        }),
-      ),
-    ).resolves.toMatchObject({ text: "done" });
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      agentId: "main",
-      modelRef: "openai/gpt-5.4@openai:work",
-    });
   });
 
   it("keeps the shipped model allowlist scoped to explicit overrides", async () => {
@@ -928,7 +902,7 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
         llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
       ),
     ).resolves.toMatchObject({ text: "done" });
@@ -950,7 +924,7 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
         llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
       ),
     ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
@@ -977,7 +951,7 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
         llm.complete({
           model: "openai/gpt-5.6",
           messages: [{ role: "user", content: "Ping" }],
@@ -1003,7 +977,7 @@ describe("runtime.llm.complete", () => {
       });
 
       await expect(
-        withPluginRuntimePluginIdScope("restricted-plugin", () =>
+        withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
           llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
         ),
       ).rejects.toThrow("completion model allowlist has no valid models");
@@ -1025,7 +999,7 @@ describe("runtime.llm.complete", () => {
     });
 
     await expect(
-      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
         llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
       ),
     ).resolves.toMatchObject({ text: "done" });

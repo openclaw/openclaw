@@ -14,6 +14,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -21,6 +22,8 @@ import {
   selectAgentFileWorkspace,
 } from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle with a real Gateway",
@@ -158,7 +161,7 @@ catalogSuite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1000, width: 1440 },
-          recordVideo: { dir: catalogSuite.artifactDir },
+          ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
@@ -240,7 +243,9 @@ catalogSuite.define(() => {
             })
             .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
           const writesBeforePublication = [...mutations];
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          }
 
           await publish("published");
           await expect
@@ -249,7 +254,9 @@ catalogSuite.define(() => {
           expect(
             await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
           ).toBe(0);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          }
 
           inventoryModel = "inventory-after";
           const refreshed = await owner.cli(refreshInventoryArgs);
@@ -280,9 +287,22 @@ catalogSuite.define(() => {
           for (const release of heldCatalogs) {
             release();
           }
-          await page.screenshot({
-            path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
+          // Fence the released replies on this connection before checking that stale data was ignored.
+          await page.evaluate(async () => {
+            // SAFETY: Gateway readiness above establishes this app's connected runtime.
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
+            };
+            await app.runtime.context.gateway.snapshot.client.request("health", {});
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
           });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
+            });
+          }
           expect(
             await picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
           ).toBe(1);
@@ -299,7 +319,11 @@ catalogSuite.define(() => {
           expect(
             await picker.locator('[role="option"][data-value="fixture/published"]').count(),
           ).toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "read-failure.png"),
+            });
+          }
 
           rejectCatalog = false;
           await publish("recovered");
@@ -335,7 +359,9 @@ catalogSuite.define(() => {
           commands.push(persisted);
           expect(persisted.code, persisted.stderr).toBe(0);
           expect(JSON.parse(persisted.stdout)).toBe("fixture/anchor");
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          }
         },
       );
     } finally {

@@ -3,6 +3,7 @@ import { extractErrorCode } from "../infra/errors.js";
 import { createSanitizedCommandError } from "../process/exec-result.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   code: number;
@@ -22,12 +23,14 @@ export async function execFileUtf8(
     windowsHide?: boolean;
   } = {},
 ): Promise<ExecResult> {
+  assertGatewayServiceUpdateCurrent();
   try {
     const { stdout, stderr, code, termination, signal } = await runCommandWithTimeout(
       [command, ...args],
       {
         baseEnv: resolveServiceManagerEnv(options.env),
-        cwd: options.cwd,
+        // sudo -u can inherit an operator directory the service account cannot enter.
+        cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
         killSignal: options.killSignal,
         maxOutputBytes: 1024 * 1024,
         timeoutMs: options.timeout,

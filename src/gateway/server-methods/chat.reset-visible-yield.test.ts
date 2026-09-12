@@ -513,6 +513,7 @@ describe("visible yielded session reset", () => {
               defaults: {
                 workspace,
                 skipBootstrap: true,
+                heartbeat: { every: "0m" },
                 model: { primary: provider.modelRef },
                 models: {
                   [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },

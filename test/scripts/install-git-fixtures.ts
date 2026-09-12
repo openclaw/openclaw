@@ -52,3 +52,70 @@ export function createInstallGitCommitFixtureScript(source: "bundle" | "remote")
     done
   `;
 }
+
+export function createInstallGitTagPreferenceFixtureScript(scriptPath: string, setup = "") {
+  return `
+      set -euo pipefail
+      source "${scriptPath}"${setup}
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2026.5.12
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'tag\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm tag
+      tag_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" tag "$ref"
+      git -C "$seed" push -q origin "refs/tags/$ref"
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s tag=%s branch=%s kind=%s\n' "$selected" "$tag_head" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$tag_head" && "$selected" != "$branch_head" && "$GIT_REF_KIND" == "immutable" ]]
+    `;
+}
+
+export function createInstallGitBranchFallbackFixtureScript(scriptPath: string, setup = "") {
+  return `
+      set -euo pipefail
+      source "${scriptPath}"${setup}
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2-hotfix
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s branch=%s kind=%s\\n' "$selected" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$branch_head" && "$GIT_REF_KIND" == "moving" ]]
+    `;
+}

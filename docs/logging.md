@@ -332,6 +332,48 @@ for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
 retention, principal attribution or admission authority.
 
+### Slow worktree cleanup
+
+With process diagnostics and info-level logging enabled, two subsystems log
+operations lasting at least one second after they return or throw:
+
+- `agents/worktrees`: `slow managed worktree removal` measures removal through
+  allocation-lease settlement. `admissionMs` covers acquisition attempts,
+  backoff, setup, and scheduling before the removal callback starts. `bodyMs`
+  covers that callback; `finalizeMs` covers drainage, final authority checks,
+  lease release, and completion delivery. Create and restore operations do not
+  emit this record.
+- `git/ref-mutation`: `slow Git ref mutation` measures shared Git-ref queue
+  operations. `resolveMs` covers common-directory resolution; `queueWaitMs`
+  covers time from enqueue to callback entry; `queuedOperationMs` covers the
+  callback and delivery of its settlement. It can include multiple Git commands
+  and does not identify a queue holder or every predecessor.
+
+Both records include `durationMs` in integer milliseconds, `callbackEntered`, and
+`outcome` (`returned` or `threw`). Removal that never enters its callback reports
+all elapsed time as `admissionMs` and omits `bodyMs` and `finalizeMs`. Git directory
+resolution failure reports `resolveMs` and omits unreached queue and operation
+durations. Phase durations partition each record's interval before rounding.
+These intervals include asynchronous waits: admission is not pure lock wait,
+and queued operation time is not child-process CPU time. They nest within
+broader operations such as session-patch `worktreeCleanup`; do not add nested
+durations to the enclosing total.
+
+Each subsystem has a separate fixed budget of 60 records per 60-second window
+per JavaScript runtime isolate. Bursts across window boundaries remain possible.
+`omittedObservations` reports suppressed records on the next emitted record,
+then resets. Pending operations emit nothing until they settle; disabled
+diagnostics, log levels, thresholds, and budgets can also leave no record.
+Missing records never prove there was no delay.
+
+The added fields are fixed scalar timings, outcomes, counts, `pid`, `threadId`,
+and `isMainThread`. They omit repository paths, refs, arguments, raw errors, and
+command output. Records preserve an existing valid diagnostic trace when
+available; they create no trace, operation identity, or private-identity hash.
+Use the trace to associate nested records, without treating elapsed time as CPU
+attribution. These diagnostics measure cleanup without changing its ordering or
+completion behavior.
+
 ### Slow agent database opens
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
@@ -360,6 +402,16 @@ integrity check; resumed validation and repair can still run on the opener.
 Correlate the process ID with the log timestamp and current process; PIDs can be
 reused after exit.
 
+`integrityGateMs` covers the initial integrity check through admission
+revalidation and resumption. When the driver measures its synchronous integrity
+and foreign-key callback, `integrityCheckSyncMs` reports that callback's elapsed
+time and `integrityOutsideCheckMs` reports the remaining gate time. The two
+integer fields partition `integrityGateMs`; the remainder includes admission,
+IPC, scheduling, and revalidation, not just a parent queue wait. These are wall
+durations, not CPU time. A reclamation Worker can report this synchronous check
+while its `admissionMode` is `async`. An asynchronous child-process check leaves
+both fields absent because its parent cannot measure the callback itself.
+
 SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
 at `warn` when their joined operation takes at least one second. The record is
 emitted after Worker exit and parent admission settlement. It includes the
@@ -387,6 +439,19 @@ It excludes database opening and the separately timed begin and commit steps.
 These elapsed durations do not measure SQL CPU time or establish a causal link
 to a nearby request.
 
+Immediate `BEGIN` warnings also include `beginAdmission`: `nativeAttempts` counts
+actual native `BEGIN IMMEDIATE` calls and `nativeMs` measures those calls;
+`serviceCalls` counts synchronous admission-service callbacks and `serviceMs`
+measures them. A service callback may find no work, so its count does not mean
+that reclamation was authorized. Failed attempts and throwing callbacks retain
+their partial measurements. Deferred `BEGIN` and `COMMIT` have no breakdown.
+
+These fields use the same wall clock as the unchanged `elapsedMs` total. Native
+time excludes busy-timeout configuration and restoration; other bookkeeping can
+leave a remainder. A service can synchronously join another transaction, whose
+time is already included in the outer `serviceMs`; do not add nested warnings
+together. The breakdown does not identify CPU time or a physical lock holder.
+
 ### SQLite session writes
 
 The `session-sqlite` subsystem emits `slow SQLite session write` when total
@@ -409,6 +474,13 @@ SQL statement, measure CPU time or lock contention, or establish that a nearby
 RPC caused the delay. Older records may lack `operation`; do not infer it from
 adjacent log messages.
 
+`session.reclamation.worker-commit` labels every numbered Worker write admission,
+not only its final commit. `reclamationAdmissionId` is the actual request ID,
+scoped to that Worker and process. `reclamationAdmissionReleaseCause` records the
+observed `worker-release` message or `worker-exit` event. It does not infer an
+initial/final phase or prove successful commit or cleanup. An early failure can
+leave the release cause absent because neither event has been observed yet.
+
 For `session.lifecycle.artifacts-prepare`, the same warning includes a bounded
 `artifactPreparation` object. `admissionMode` distinguishes an existing cached
 handle from asynchronous acquisition; `admissionMs` stops when the planner
@@ -427,6 +499,51 @@ preparation failed; absent fields were not completed. These fields do not change
 the warning threshold or prove that a nearby request caused the work. Rounding
 and work outside the measured subphases can leave a difference from
 `writerExecutionMs`; do not assign that remainder to a specific phase.
+
+For `session.history.archive-prune`, the same slow or failure warning can include
+one bounded `archivePruning` object. Its `trigger` is recorded at the call site:
+`initial`, `after-eviction`, or `final`. It distinguishes pruning passes within
+the maintenance flow; it does not identify the request that caused maintenance.
+
+The object aggregates observations across the pruning pass:
+
+- `admissionMs`, `cachedAdmissions`, and `asyncAdmissions` measure database
+  acquisition and count its observed modes. Admission time ends at callback entry
+  or acquisition failure and can include shared admission and integrity-check waits.
+  A refusal before mode selection adds admission time without incrementing either mode count.
+- `checkpointMs`, `checkpointMaxMs`, and `checkpointCalls` report total time,
+  longest call, and calls entered. `checkpointIncomplete` counts calls returning
+  false, which can mean a busy checkpoint or an error; it does not identify a lock
+  holder or distinguish those outcomes. A thrown checkpoint contributes to call
+  count and time without incrementing `checkpointIncomplete`.
+- `vacuumMs`, `vacuumPasses`, and `vacuumPagesRequested` measure incremental vacuum
+  calls and their requested page counts. Requested pages are not confirmed
+  reclaimed pages.
+- `queryMs` covers existing archive-presence, candidate, unpublished-name, and
+  freelist reads. `rowDeletionMs` covers the canonical archive row-deletion
+  transaction.
+- `fileRemovalMs`, `removedFiles`, `missingFiles`, and `failedRemovals` report
+  existing file-removal outcomes. `removedFiles` counts successful canonical and
+  legacy removals. `missingFiles` counts canonical removal attempts that return
+  `ENOENT`. Other canonical failures and all unsuccessful legacy removals count
+  under `failedRemovals`; the legacy count includes missing paths, non-files,
+  and stat or removal failures.
+- `measurementMs` and `measurements` cover awaited disk-usage measurement attempts,
+  including failures and time queued for the measurement Worker, scanning, and
+  returning the result. `legacyInventoryMs` covers legacy file inventory,
+  filtering, and sorting.
+
+All durations are wall time, including asynchronous waits, rather than CPU
+measurements. `completed: false` retains partial observations when pruning
+throws; an absent stage timing field means that stage was not entered.
+`completed: true` means the pruning pass returned normally. It does not prove
+that every checkpoint completed, every removal succeeded, or the high-water
+target was reached. Rounding and unmeasured work can leave a remainder relative
+to `writerExecutionMs`; `checkpointMaxMs` is already included in `checkpointMs`.
+
+These fields reuse existing operations without additional store reads, per-file
+records, paths, names, or content. They do not change the warning threshold,
+checkpoint mode or timeout, or archive-retention behavior.
 
 ### Slow reply preparation
 

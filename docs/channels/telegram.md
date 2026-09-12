@@ -123,6 +123,9 @@ Multi-account precedence: with two or more account IDs configured, set `channels
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Pair a Telegram user to the gateway.
   </Card>
+  <Card title="Reactions" icon="thumbs-up" href="/tools/reactions">
+    Emoji reaction semantics for the `message` tool.
+  </Card>
   <Card title="Groups" icon="users" href="/channels/groups">
     Group and topic allowlist behavior.
   </Card>

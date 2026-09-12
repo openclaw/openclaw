@@ -10,33 +10,6 @@ type MergedModelProviderEntry = {
   providerConfig: ModelProviderConfig;
 };
 
-export function matchesProviderScopedModelId(params: {
-  candidateId?: string;
-  provider: string;
-  modelId: string;
-  normalizeModelId?: (modelId: string) => string;
-}): boolean {
-  const { candidateId, provider, modelId } = params;
-  if (candidateId === modelId) {
-    return true;
-  }
-  const slashIndex = candidateId?.indexOf("/") ?? -1;
-  if (!candidateId) {
-    return false;
-  }
-  if (
-    slashIndex > 0 &&
-    candidateId.slice(slashIndex + 1) === modelId &&
-    normalizeProviderId(candidateId.slice(0, slashIndex)) === normalizeProviderId(provider)
-  ) {
-    return true;
-  }
-  return params.normalizeModelId
-    ? params.normalizeModelId(stripSelfProviderModelPrefix(provider, candidateId)) ===
-        params.normalizeModelId(stripSelfProviderModelPrefix(provider, modelId))
-    : false;
-}
-
 /** Uses the same authored row for transport materialization and early auth selection. */
 export function findConfiguredProviderModel<T extends { id: string }>(
   providerConfig: { models?: readonly T[] } | undefined,

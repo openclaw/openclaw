@@ -59,6 +59,7 @@ const BOOTSTRAP_PATH = "scripts/release-plan-producer.mts",
 const TOOLING_MODULE_PATHS = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
+  "packages/plugin-package-contract/src/categories.ts",
   "packages/plugin-package-contract/src/index.ts",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",

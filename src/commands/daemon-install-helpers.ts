@@ -808,6 +808,7 @@ async function buildGatewayInstallEnvironment(params: {
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
+  allowUnconfigured?: boolean;
   runtime: GatewayDaemonRuntime;
   existingEnvironment?: Record<string, string | undefined>;
   existingCommand?: GatewayServiceCommandConfig | null;
@@ -852,6 +853,12 @@ export async function buildGatewayInstallPlan(params: {
       : params.env;
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
+    allowUnconfigured:
+      params.allowUnconfigured ??
+      (params.config?.gateway?.mode === "remote" &&
+        resolveManagedGatewayServiceCommand(params.existingCommand)?.programArguments.includes(
+          "--allow-unconfigured",
+        ) === true),
     dev: devMode,
     runtime: params.runtime,
     runtimePath,

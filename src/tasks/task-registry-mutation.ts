@@ -15,6 +15,7 @@ import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-que
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
+  cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
@@ -225,54 +226,9 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   }
   emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
-    task: cloneTaskRecord(next),
-    previous: cloneTaskRecord(current),
+    task: cloneTaskRecordForObserver(next),
+    previous: cloneTaskRecordForObserver(current),
   }));
-  return cloneTaskRecord(next);
-}
-
-/** Publishes a record already committed by a cross-owner shared-state transaction. */
-export function publishTaskRecordAfterAtomicStore(
-  record: TaskRecord,
-  options?: { syncTaskFlow?: boolean; deferredObserverEvents?: Array<() => void> },
-): TaskRecord {
-  const next = normalizeTaskTimestamps(cloneTaskRecord(record));
-  const current = tasks.get(next.taskId);
-  const becomesTerminal =
-    current !== undefined &&
-    !isTerminalTaskStatus(current.status) &&
-    isTerminalTaskStatus(next.status);
-  if (becomesTerminal) {
-    flushTaskActivity(next.taskId);
-  }
-  if (current) {
-    deleteOwnerKeyIndex(next.taskId, current);
-    deleteParentFlowIdIndex(next.taskId, current);
-    deleteRelatedSessionKeyIndex(next.taskId, current);
-  }
-  tasks.set(next.taskId, next);
-  bumpTaskRegistryRevision();
-  if (becomesTerminal) {
-    clearTaskActivity(next.taskId);
-  }
-  addOwnerKeyIndex(next.taskId, next);
-  addParentFlowIdIndex(next.taskId, next);
-  addRelatedSessionKeyIndex(next.taskId, next);
-  rebuildRunIdIndex();
-  if (options?.syncTaskFlow !== false) {
-    syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
-  }
-  const emit = () =>
-    emitTaskRegistryObserverEvent(() => ({
-      kind: "upserted",
-      task: cloneTaskRecord(next),
-      ...(current ? { previous: cloneTaskRecord(current) } : {}),
-    }));
-  if (options?.deferredObserverEvents) {
-    options.deferredObserverEvents.push(emit);
-  } else {
-    emit();
-  }
   return cloneTaskRecord(next);
 }
 

@@ -76,6 +76,11 @@ final class MacControlRequestHandler {
             }
             let profiles = try await self.owner.gateways()
             let profile = try Self.resolve(query, in: profiles)
+            guard profile.kind != "local" else {
+                throw MacControlError(
+                    code: "invalid_request",
+                    message: "Manage the hosted local Gateway in the Connection window.")
+            }
             try Task.checkCancellation()
             if request.operation == "gateway.remove" {
                 try await self.owner.removeGateway(id: profile.id)

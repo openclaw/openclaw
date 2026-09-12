@@ -51,6 +51,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user" | "user-link";
+  allowAuthProfileFallback?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";
@@ -305,7 +306,8 @@ export function prepareAgentRuntimeAuth(
   // Explicit auth owns the physical route; apiKey is only its bearer material.
   const selectedConfiguredAuthMode =
     configuredAuthMode ?? (providerHasDirectMaterial ? "api-key" : undefined);
-  const selectedProfileId = boundProfileId;
+  const selectedProfileId =
+    boundProfileId ?? (params.allowAuthProfileFallback === false ? userPinnedProfileId : undefined);
   const resolvedAutomaticOrder =
     !harnessAllowsAuthProfileForwarding ||
     selectedProfileId ||
@@ -414,7 +416,10 @@ export function prepareAgentRuntimeAuth(
       : selectedConfiguredAuthMode;
   const ownership = selectedProfileId
     ? {
-        reason: "provider-binding" as const,
+        reason:
+          selectedProfileId === userPinnedProfileId
+            ? ("runtime-binding" as const)
+            : ("provider-binding" as const),
         source: resolveProfile(params, selectedProfileId, { ignoreCooldown: true }),
       }
     : configuredAwsSdkAuth

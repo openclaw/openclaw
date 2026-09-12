@@ -15,11 +15,13 @@ import {
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
+  type ConfigFileSnapshot,
   readConfigFileSnapshot,
   transformConfigFile,
 } from "../../config/config.js";
 import { restoreEnvVarRefs } from "../../config/env-preserve.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import {
   mergeAgentModelEntryForConfig,
@@ -27,6 +29,7 @@ import {
   toAgentModelListLike,
 } from "../../config/model-input.js";
 import { resolveIncludeRoots } from "../../config/paths.js";
+import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -37,7 +40,13 @@ import {
 } from "./provider-aliases.js";
 
 export { formatTokenK } from "./list.format.js";
-export { ensureFlagCompatibility } from "./list.options.js";
+
+/** Rejects conflicting machine-readable output modes. */
+export function ensureFlagCompatibility(opts: { json?: boolean; plain?: boolean }): void {
+  if (opts.json && opts.plain) {
+    throw new Error("Choose either --json or --plain, not both.");
+  }
+}
 
 /** Formats millisecond durations for model command output. */
 export const formatMs = (value?: number | null) => {
@@ -54,13 +63,13 @@ export const formatMs = (value?: number | null) => {
 };
 
 /** Loads config from disk and throws a formatted error when validation fails. */
-export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
+export async function loadValidConfigSnapshotOrThrow(): Promise<ConfigFileSnapshot> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  return snapshot.runtimeConfig ?? snapshot.config;
+  return snapshot;
 }
 
 /** Runtime config snapshot supplied to model config mutators. */
@@ -88,11 +97,17 @@ export async function updateConfig(
     cfg: OpenClawConfig,
     context: UpdateConfigContext,
   ) => readonly (ModelRef | undefined)[],
+  beforeCommit?: () => void,
+  writeOptions?: ConfigWriteOptions,
 ): Promise<OpenClawConfig> {
   const explicitSetPaths: string[][] = [];
   const result = await transformConfigFile({
     base: "source",
-    writeOptions: { explicitSetPaths },
+    writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
+      ...writeOptions,
+      explicitSetPaths,
+      beforeCommit,
+    }),
     transform: async (currentConfig, { snapshot }, { envSnapshotForRestore }) => {
       if (!snapshot.valid) {
         const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");

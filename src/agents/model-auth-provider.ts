@@ -249,6 +249,9 @@ export async function resolveApiKeyForProviderCore(input: {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const resolvedProfileId = resolved.profileId ?? profileId;
+    if (params.lockedProfile && resolvedProfileId !== profileId) {
+      throw new Error("Locked auth profile resolution returned a different profile.");
+    }
     const credential = store.profiles[resolvedProfileId];
     if (
       changedAuthProvider &&

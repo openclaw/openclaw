@@ -12,7 +12,6 @@ import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
-import { peekChatRouteStartup } from "./route-startup.ts";
 
 type ChatHistoryLoadRequest = {
   sessionKey: string;
@@ -106,7 +105,6 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
   }
   if (
     !hydration.startedBeforeReady ||
-    (state.client && peekChatRouteStartup(state.client, state.sessionKey, state.sessions)) ||
     !areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)
   ) {
     retireInitialChatSnapshot(state);
@@ -208,6 +206,30 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     state.currentSessionId === accepted.sessionInfo.sessionId
     ? accepted.sessionInfo
     : undefined;
+}
+
+/** Cached identity alone cannot admit a send before the first authoritative history result. */
+export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
+  const requests = chatHistoryRequests(state);
+  const accepted = requests.acceptedHistory;
+  // Established panes retain their existing refresh and offline queue behavior.
+  if (
+    state.currentSessionId &&
+    accepted &&
+    state.client === accepted.client &&
+    state.sessions === accepted.sessions &&
+    (!state.connected || state.connectionEpoch === accepted.connectionEpoch) &&
+    accepted.sessionKey === state.sessionKey &&
+    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    accepted.sessionInfo?.sessionId === state.currentSessionId
+  ) {
+    return false;
+  }
+  const load = requests.historyLoad;
+  return load.phase === "idle"
+    ? state.chatLoading && (!state.currentSessionId || Boolean(requests.initialSnapshotHydration))
+    : load.phase !== "committed" && load.startup;
 }
 
 type ChatHistoryRequestOwnership = {

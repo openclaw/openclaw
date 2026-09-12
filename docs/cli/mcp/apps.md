@@ -6,9 +6,6 @@ read_when:
   - Reviewing the sandbox origin, listener port, and security boundaries for Apps
 ---
 
-OpenClaw can render tools that implement the MCP Apps extension. Apps are
-opt-in because their HTML comes from the configured MCP server.
-
 ## MCP Apps
 
 OpenClaw can render tools that implement the stable [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps). Apps are opt-in because their HTML comes from the configured MCP server. A view with current App-interaction authority can request app-visible tools and resources from that same server.

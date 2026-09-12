@@ -601,6 +601,7 @@ describe("plugin management Featured authority", () => {
   });
 
   it("preserves npm-only bundled curation outside the hosted producer identity", async () => {
+    mocks.bundledEntries = [compositionEntry("acpx", { npmSpec: "@openclaw/acpx" })];
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         id: "acpx",

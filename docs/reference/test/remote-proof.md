@@ -135,14 +135,20 @@ proof.
 
 The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
 then the sibling of the Git common checkout. Verify the selected binary and
-its source rather than trusting a directory name. If it needs repair or is
-missing, use a clean task-owned checkout of
-[Crabbox](https://github.com/openclaw/crabbox), build `./cmd/crabbox` into a
-task-owned binary directory, and leave other checkouts and the operator's
-installed binary untouched. The existing
+its source rather than trusting a directory name. The plugin installs a verified
+managed copy when the selected executable is missing or outdated. For an explicit
+[Crabbox](https://github.com/openclaw/crabbox) source repair, build `./cmd/crabbox`
+in a clean task-owned checkout and leave the operator's installation untouched. The existing
 `OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY=1` setting skips the first sibling
 candidate; a task binary on `PATH` then takes precedence over the common-checkout
 candidate. A dirty or occupied sibling is not a reason to stop and ask.
+
+Mantis uses the same plugin-owned discovery and managed installation. Relative
+executable overrides and `PATH` entries resolve from its requested `--repo-root`,
+and version probes run there with the same environment as lease commands. Its workflows
+prepare the executable with `node scripts/crabbox-setup.mjs`; the command prints
+the selected binary and verified version as JSON and, in GitHub Actions, adds its
+directory to `GITHUB_PATH`. Later QA and media commands reuse that executable.
 
 For a selected trusted Testbox lane:
 

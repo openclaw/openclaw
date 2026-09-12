@@ -301,13 +301,17 @@ describe("Crabbox durable allocation admission", () => {
     );
   });
 
-  it("carries configured profile and project labels through provisioning to inspection", async () => {
+  it("carries configured profile and project display facts through provisioning to inspection", async () => {
     const { options, observe } = createProjectOptions([]);
     const { provider } = createWarmProvider(observe);
     await provider.provision(PROFILE, "display-facts", {
       ...options,
       profileId: "linux-development",
-      project: { ...options.project, label: "github.com/example/project" },
+      project: {
+        ...options.project,
+        label: "github.com/example/project",
+        root: "/projects/example",
+      },
     });
     expect(listCrabboxWarmImages()).toEqual([
       expect.objectContaining({
@@ -316,6 +320,7 @@ describe("Crabbox durable allocation admission", () => {
         machineClass: "standard",
         os: "linux",
         projectLabel: "github.com/example/project",
+        projectRoot: "/projects/example",
         checkpointId: CHECKPOINT_ID,
       }),
     ]);
@@ -332,6 +337,7 @@ describe("Crabbox durable allocation admission", () => {
       id: "cbx_second",
       profileId: "second",
       projectLabel: "github.com/example/renamed",
+      projectRoot: "/projects/renamed",
     };
     await owner.allocate(next);
     expect(openWarmImageStore().entries()).toHaveLength(1);
@@ -339,11 +345,13 @@ describe("Crabbox durable allocation admission", () => {
       profileKey: original.key,
       profileId: "second",
       projectLabel: next.projectLabel,
+      projectRoot: next.projectRoot,
     });
     await owner.allocate(source);
     const replayed = listCrabboxWarmImages()[0]!;
     expect(replayed.profileId).toBe("first");
     expect(replayed.projectLabel).toBeUndefined();
+    expect(replayed.projectRoot).toBeUndefined();
     expect(replayed.allocations[source.id]).toEqual(original.value.allocations[source.id]);
     await owner.allocate({ ...source, profileId: undefined });
     expect(listCrabboxWarmImages()[0]?.profileId).toBeUndefined();

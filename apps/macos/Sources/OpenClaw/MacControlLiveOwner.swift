@@ -7,13 +7,22 @@ final class MacControlLiveOwner: MacControlOwner {
     func status() async throws -> MacControlStatus {
         let primary = try await self.primaryStatus()
         let gateways = try await self.gateways()
+        let state = AppStateStore.shared
+        let running = switch GatewayProcessManager.shared.status {
+        case .running, .attachedExisting: true
+        case .starting, .stopped, .failed: false
+        }
         return MacControlStatus(
             primary: primary,
             gateways: gateways,
             app: MacControlAppStatus(
                 version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
                 build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown",
-                profile: AppProfile.current.name ?? "default"))
+                profile: AppProfile.current.name ?? "default"),
+            localGateway: state.connectionMode == .remote ? MacControlLocalGatewayStatus(
+                hosting: state.hostsLocalGatewayWithRemotePrimary,
+                port: GatewayEnvironment.gatewayPort(),
+                running: running) : nil)
     }
 
     func primaryStatus() async throws -> MacControlPrimaryStatus {
@@ -90,6 +99,21 @@ final class MacControlLiveOwner: MacControlOwner {
     func gateways() async throws -> [MacControlGatewayStatus] {
         let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
         var result: [MacControlGatewayStatus] = []
+        let state = AppStateStore.shared
+        if state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary {
+            let endpoint = try? GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
+            let connection = await MacGatewayConnectionFleet.shared.existingLocalConnection()
+            let summary = await connection?.connectionSummary()
+            result.append(MacControlGatewayStatus(
+                id: "local",
+                name: "This Mac",
+                url: endpoint?.config.url.absoluteString ?? "ws://127.0.0.1:\(GatewayEnvironment.gatewayPort())",
+                auth: endpoint.map { $0.config.password == nil ? "token" : "password" } ?? "unavailable",
+                kind: "local",
+                connection: MacControlConnectionStatus(
+                    state: endpoint == nil ? "unavailable" : summary?.connected == true ? "connected" : "disconnected",
+                    gatewayVersion: summary?.gatewayVersion)))
+        }
         for profile in profiles {
             let connection = await MacGatewayConnectionFleet.shared.existingConnection(profileID: profile.profile.id)
             let summary = await connection?.connectionSummary()
@@ -171,24 +195,7 @@ final class MacControlLiveOwner: MacControlOwner {
     }
 
     func reconnectGateway(id: String) async throws -> MacControlGatewayStatus {
-        let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
-        guard let profile = profiles.first(where: { $0.profile.id == id }) else {
-            throw MacGatewayProfileError.profileNotFound
-        }
-        try Task.checkCancellation()
-        if profile.usesBrowserIdentity {
-            _ = try await GatewayBrowserSignInCoordinator.connect(
-                name: profile.profile.name,
-                address: profile.profile.url.absoluteString,
-                token: "",
-                password: "")
-        } else {
-            let binding = try await MacGatewayConnectionFleet.shared.binding(profileID: id)
-            try Task.checkCancellation()
-            await binding.connection.shutdown(ifCurrent: { !Task.isCancelled })
-            try Task.checkCancellation()
-            _ = try await binding.connection.acquireServerLease()
-        }
+        try await GatewayBrowserSignInCoordinator.reconnectGateway(id: id)
         return try await self.gateway(id: id)
     }
 

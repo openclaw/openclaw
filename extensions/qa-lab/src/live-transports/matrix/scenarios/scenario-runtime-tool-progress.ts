@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { QaSuiteScenarioSkipError } from "../../../errors.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
+import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
   advanceMatrixQaActorCursor,
   buildMatrixQaToken,
@@ -30,6 +31,13 @@ import {
 import { prepareMatrixMentionProgressGate } from "./scenario-runtime-tool-progress-gate.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
+function allowsMatrixQaTopLevelFinalAfterProgress(params: {
+  allowFinalBeforeProgress?: boolean;
+  allowTopLevelFinalWithProgress?: boolean;
+}) {
+  return params.allowTopLevelFinalWithProgress === true || params.allowFinalBeforeProgress === true;
+}
+
 async function runMatrixToolProgressScenario(
   context: MatrixQaScenarioContext,
   params: {
@@ -48,8 +56,13 @@ async function runMatrixToolProgressScenario(
     triggerBodyBuilder: (sutUserId: string, finalText: string) => string;
   },
 ) {
+  const allowTopLevelFinalWithProgress = allowsMatrixQaTopLevelFinalAfterProgress(params);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const startObservedIndex = context.observedEvents.length;
+  const isCurrentScenarioEvent = createCurrentScenarioEventPredicate(
+    context.observedEvents,
+    startObservedIndex,
+  );
   await writeMatrixToolProgressTaskFile(context, params.finalText);
   await using mentionProgressGate = params.mentionSafety
     ? await prepareMatrixMentionProgressGate(context)
@@ -66,6 +79,7 @@ async function runMatrixToolProgressScenario(
   const getPreviewRootEventId = (event: MatrixQaObservedEvent) =>
     event.replacesEventId ?? event.eventId;
   const isFinalReply = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     event.type === "m.room.message" &&
@@ -79,12 +93,14 @@ async function runMatrixToolProgressScenario(
       isMatrixQaMessageLikeKind(event.kind) &&
       matchesExpectedProgress(event.body));
   const isProgressEvent = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     isExpectedProgressKind(event) &&
     (matchesExpectedProgress(event.body) ||
       (event.replacesEventId === undefined && event.relatesTo === undefined));
   const isProgressProofEvent = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     isExpectedProgressKind(event) &&
@@ -243,7 +259,7 @@ async function runMatrixToolProgressScenario(
           isProgressProofForPreview(event) ||
           (params.allowFinalReplacementAsCompletion === true &&
             isFinalReplacement(event, previewRootEventId)) ||
-          (params.allowTopLevelFinalWithProgress === true && isFinalReply(event)),
+          (allowTopLevelFinalWithProgress && isFinalReply(event)),
         roomId: context.roomId,
         since: preview.since,
         timeoutMs: context.timeoutMs,
@@ -255,7 +271,7 @@ async function runMatrixToolProgressScenario(
     ) {
       finalReplacementBeforeProgress = progressOrFinal;
       progress = progressOrFinal;
-    } else if (isFinalReply(progressOrFinal.event)) {
+    } else if (allowTopLevelFinalWithProgress && isFinalReply(progressOrFinal.event)) {
       topLevelFinalBeforeProgress = progressOrFinal;
       progress = await client
         .waitForRoomEvent({
@@ -296,7 +312,7 @@ async function runMatrixToolProgressScenario(
           isMatrixQaMessageLikeKind(event.kind) &&
           doesMatrixQaReplyBodyMatchToken(event, params.finalText) &&
           (event.replacesEventId === previewRootEventId ||
-            (params.allowTopLevelFinalWithProgress === true &&
+            (allowTopLevelFinalWithProgress &&
               event.replacesEventId === undefined &&
               event.relatesTo === undefined)),
         roomId: context.roomId,

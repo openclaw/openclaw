@@ -520,7 +520,7 @@
       ]
     },
     {
-      "tab": "发布与 CI",
+      "tab": "发布",
       "groups": [
         {
           "group": "发布说明",
@@ -531,16 +531,21 @@
           ]
         },
         {
-          "group": "成熟度",
-          "pages": ["zh-CN/maturity/scorecard", "zh-CN/maturity/taxonomy"]
-        },
-        {
           "group": "发布流程",
           "pages": [
             "zh-CN/reference/RELEASING",
             "zh-CN/reference/full-release-validation",
             "zh-CN/reference/release-performance-sweep"
           ]
+        }
+      ]
+    },
+    {
+      "tab": "贡献",
+      "groups": [
+        {
+          "group": "成熟度",
+          "pages": ["zh-CN/maturity/scorecard", "zh-CN/maturity/taxonomy"]
         },
         {
           "group": "测试与 CI",

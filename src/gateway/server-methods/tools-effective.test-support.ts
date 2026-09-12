@@ -61,7 +61,7 @@ const acquireEffectiveToolInventoryRuntimeModelContext = vi.fn<
 >(async (params) => {
   const context =
     toolsEffectiveInventoryMocks.resolveEffectiveToolInventoryRuntimeModelContext(params);
-  return { run: (project) => project(context), release: () => {} };
+  return { run: (project) => project(context), [Symbol.asyncDispose]: async () => {} };
 });
 
 export const toolsEffectiveTestDependencies: ToolsEffectiveDependencies = {

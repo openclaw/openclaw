@@ -4,7 +4,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { icons, type IconName } from "../../../components/icons.ts";
+import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -28,11 +28,13 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { isPendingSendMessage } from "../chat-thread-items.ts";
 import "../../../styles/chat/reply-preview.css";
 import "./chat-clawhub-card.ts";
-import { isPendingSendMessage } from "../chat-thread-items.ts";
+import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -58,6 +60,7 @@ import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderToolApprovalReviews,
   renderToolCard,
+  renderToolIcon,
   renderPluginToolResult,
   renderToolPreview,
   resolveCollapsedToolDetail,
@@ -70,10 +73,6 @@ import {
   renderToolOutcome,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
-
-function renderChatIcon(name: string) {
-  return icons[name as IconName] ?? icons.zap;
-}
 
 function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
@@ -226,6 +225,7 @@ export function renderGroupedMessage(
     showReasoning: boolean;
     showToolCalls?: boolean;
     runActive?: boolean;
+    asyncQuestions?: AsyncQuestionPresentation;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -248,6 +248,7 @@ export function renderGroupedMessage(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     fetchLinkFavicon?: LinkFaviconFetcher;
+    pluginToolIcons?: PluginToolIcons;
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     avatar?: TemplateResult | typeof nothing;
@@ -264,6 +265,7 @@ export function renderGroupedMessage(
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const sourceRole = normalizeRoleForGrouping(role);
+  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
   const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
   if (workspaceConflict) {
@@ -349,6 +351,7 @@ export function renderGroupedMessage(
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   if (
     !markdown &&
+    !asyncQuestions &&
     !reasoningMarkdown &&
     !hasToolCards &&
     !hasImages &&
@@ -409,7 +412,9 @@ export function renderGroupedMessage(
     toolSummaryLabelRaw,
     toolMessageLabel,
   );
-  const toolMessageIcon = singleToolDisplay ? renderChatIcon(singleToolDisplay.icon) : icons.zap;
+  const toolMessageIcon = singleToolDisplay
+    ? renderToolIcon(singleToolDisplay.icon, opts.pluginToolIcons?.get(singleToolDisplay.name))
+    : icons.zap;
   const assistantViewContent =
     sourceRole === "assistant" && assistantViewBlocks.length > 0
       ? html`${assistantViewBlocks.map(
@@ -458,17 +463,25 @@ export function renderGroupedMessage(
 
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   const renderText = () =>
-    jsonResult
-      ? renderMessageJson(jsonResult, isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls))
-      : bodyMarkdown
-        ? renderMessageMarkdown(
-            bodyMarkdown,
-            messageKey,
-            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
-            markdownRenderOptions,
-            duplicateSuffix,
+    asyncQuestions
+      ? html`<openclaw-chat-async-question
+          .questions=${asyncQuestions}
+          .presentation=${opts.asyncQuestions}
+        ></openclaw-chat-async-question>`
+      : jsonResult
+        ? renderMessageJson(
+            jsonResult,
+            isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls),
           )
-        : nothing;
+        : bodyMarkdown
+          ? renderMessageMarkdown(
+              bodyMarkdown,
+              messageKey,
+              { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+              markdownRenderOptions,
+              duplicateSuffix,
+            )
+          : nothing;
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`

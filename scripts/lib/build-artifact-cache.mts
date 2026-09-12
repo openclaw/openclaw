@@ -403,7 +403,8 @@ export function resolveBuildStepCacheState(
     const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(artifactRoot, file));
     const stampedOutputs = Object.keys(stamp?.outputs ?? {});
     const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
-    const actualOutputsPresent =
+    const actualOutputsAcceptable =
+      step.cache.restore !== "always" &&
       artifactRecordMismatch(artifactRoot, stamp, signature, requiredOutputs) === undefined;
     const cachedOutputMismatch = artifactRecordMismatch(
       outputRoot,
@@ -414,10 +415,7 @@ export function resolveBuildStepCacheState(
     const cachedOutputsPresent = cachedOutputMismatch === undefined;
     const stampMatches =
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
-    const alwaysRestore = step.cache.restore === "always";
-    const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
-    const restorable =
-      stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+    const restorable = stampMatches && cachedOutputsPresent && !actualOutputsAcceptable;
     const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
     return {
       cacheable: true,

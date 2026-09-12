@@ -100,7 +100,9 @@ export function registerBrowserActionObserveCommands(
       await runBrowserObserve(async () => {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const maxChars = Number.isFinite(opts.maxChars) ? opts.maxChars : undefined;
-        const result = await callBrowserRequest<{ response: { body: string } }>(
+        const result = await callBrowserRequest<{
+          response: { body: string; truncated?: boolean };
+        }>(
           parent,
           {
             method: "POST",
@@ -119,6 +121,11 @@ export function registerBrowserActionObserveCommands(
           return;
         }
         defaultRuntime.log(result.response.body);
+        if (result.response.truncated === true) {
+          defaultRuntime.error(
+            "Warning: response body is a truncated prefix. Use --json to inspect response metadata.",
+          );
+        }
       });
     });
 }

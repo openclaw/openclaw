@@ -26,7 +26,7 @@ function catalogDiscoveryRequests(
 }
 
 suite.define(() => {
-  it("starts with a usable retained account despite a refresh warning and leaves the default cleared", async () => {
+  it("starts with a usable retained account despite a refresh failure and leaves the default cleared", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -36,25 +36,15 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    const accountHintFitsMenu = () =>
-      page.locator(".chat-model-account__hint").evaluate((hint) => {
-        const menu = hint.closest(".chat-controls__model-menu");
-        if (!menu) {
-          return false;
-        }
+    const accountFitsMenu = () =>
+      page.locator("[data-chat-account-selection]").evaluate((section) => {
+        const menu = section.closest(".chat-controls__model-menu")!;
         const bounds = menu.getBoundingClientRect();
-        const range = document.createRange();
-        range.selectNodeContents(hint);
-        const textRects = Array.from(range.getClientRects());
+        const accountBounds = section.getBoundingClientRect();
         return (
-          textRects.length > 0 &&
-          textRects.every(
-            (rect) =>
-              rect.left >= bounds.left - 1 &&
-              rect.right <= bounds.right + 1 &&
-              rect.top >= bounds.top - 1 &&
-              rect.bottom <= bounds.bottom + 1,
-          )
+          accountBounds.width > 0 &&
+          accountBounds.left >= bounds.left &&
+          accountBounds.right <= bounds.right
         );
       });
     const account = {
@@ -110,13 +100,13 @@ suite.define(() => {
       await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
       const modelTrigger = page.locator('[data-chat-model-select="true"]');
       await modelTrigger.click();
-      const picker = page.locator(".chat-model-account__picker");
-      const accountTrigger = picker.locator("[data-chat-account-trigger]");
+      const picker = page.locator("[data-chat-account-selection]");
+      const accountTrigger = picker.locator("[data-chat-account-group-toggle]");
       await expect.poll(() => accountTrigger.isEnabled()).toBe(true);
       await expect
         .poll(() => page.locator(".chat-controls__model-picker").textContent())
         .toContain("No models available");
-      await expect.poll(accountHintFitsMenu).toBe(true);
+      await expect.poll(accountFitsMenu).toBe(true);
       if (captureUiProof) {
         await page.screenshot({
           animations: "disabled",
@@ -125,7 +115,7 @@ suite.define(() => {
       }
       await accountTrigger.click();
       await gateway.deferNext("models.list", { authProfileId: account.authProfileId });
-      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
       await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
       expect(await start.getAttribute("aria-disabled")).toBe("true");
       await gateway.rejectDeferred("models.list", { code: "UNAVAILABLE", message: "Try again" });
@@ -136,16 +126,8 @@ suite.define(() => {
       await modelTrigger.click();
       await expect.poll(() => accountTrigger.textContent()).toContain(account.label);
       await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
-      await expect
-        .poll(() =>
-          page
-            .getByText("Some models could not be refreshed. Open Models to try again.", {
-              exact: true,
-            })
-            .isVisible(),
-        )
-        .toBe(true);
-      await expect.poll(accountHintFitsMenu).toBe(true);
+      await expect.poll(() => page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      await expect.poll(accountFitsMenu).toBe(true);
       if (captureUiProof) {
         await page.screenshot({
           animations: "disabled",
@@ -158,13 +140,13 @@ suite.define(() => {
       await expect.poll(() => accountTrigger.textContent()).toContain("Automatic");
       await accountTrigger.click();
       await gateway.deferNext("models.list", { authProfileId: account.authProfileId });
-      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
       await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
       await gateway.rejectDeferred("models.list", { code: "UNAVAILABLE", message: "Try again" });
       await expect.poll(() => startHint.getAttribute("content")).toBe("Models unavailable");
       expect(await start.getAttribute("aria-disabled")).toBe("true");
       await accountTrigger.click();
-      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
       await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
       await page.keyboard.press("Escape");
       await start.click();

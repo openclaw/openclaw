@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
@@ -9,6 +10,7 @@ import {
   getRemoteCommandEntries,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
+  isModelIndependentChatCommand,
   parseSlashCommand,
   replaceSlashCommands,
   SLASH_COMMANDS,
@@ -17,6 +19,118 @@ import {
 
 afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+describe("model-independent commands", () => {
+  it.each([
+    "/models",
+    "/models xai",
+    "/status",
+    "/help",
+    "/help explain this",
+    "/id",
+    "/login xai",
+    "/model",
+    "/model example/model",
+    "/model default",
+    "/model list",
+    "/model status",
+    "/model example/model -a",
+    "/model example/model --runtime native",
+    "/model example/model /think high",
+    "/clear",
+    "/export-session",
+    "/export",
+    "/new",
+    "/think high",
+    "/thinking default",
+    "/verbose full",
+    "/fast off",
+    "/usage cost",
+    "/agents",
+    "/tools verbose",
+    "/commands",
+    "/tasks",
+    "/context detail",
+    "/diagnostics",
+    "/openclaw status",
+    "/name A useful title",
+    "/allowlist",
+    "/approve sample allow-once",
+    "/export-trajectory",
+    "/subagents log 1",
+    "/session idle 1h",
+    "/config show",
+    "/debug reset",
+    "/mcp show",
+    "/plugins list",
+    "/activation mention",
+    "/send inherit",
+    "/bash echo hello",
+    "/restart",
+    "/update",
+    "/trace raw",
+    "/reasoning stream",
+    "/elevated ask",
+    "/exec host=node",
+    "/queue collect",
+    "/goal",
+    "/goal edit revised objective",
+    "/goal pause waiting",
+    "/goal done",
+    "/goal clear",
+    "/goal start",
+    "/loop",
+    "/loop help",
+    "/skill",
+    "/steer",
+    "/redirect",
+    "/btw",
+    "/acp status",
+    "/acp spawn worker",
+    "/acp cancel",
+    "/acp steer",
+    "/tts audio hello",
+  ])("admits %s without model access", (command) =>
+    expect(isModelIndependentChatCommand(command)).toBe(true),
+  );
+
+  it.each([
+    "Hello",
+    "/compact",
+    "/reset",
+    "/reset soft",
+    "/unknown",
+    "Please /models",
+    "/model example/model explain this",
+    "/model example/model -a explain this",
+    "/model example/model /think high explain this",
+    "/trace raw explain this",
+    "/reasoning on explain this",
+    "/elevated ask explain this",
+    "/exec host=node explain this",
+    "/queue collect explain this",
+    "/activation mention explain this",
+    "/send on explain this",
+    "/commands explain this",
+    "/whoami explain this",
+    "/restart explain this",
+    "/goal build something",
+    "/goal start build something",
+    "/goal resume",
+    "/loop status",
+    "/loop stop",
+    "/loop 5m check status",
+    "/skill research",
+    "/dashboard",
+    "/learn",
+    "/steer continue",
+    "/redirect continue",
+    "/btw explain this",
+    "/acp steer continue",
+  ])("requires model access for %s", (command) =>
+    expect(isModelIndependentChatCommand(command)).toBe(false),
+  );
 });
 
 describe("findInlineSlashCompletion", () => {
@@ -118,10 +232,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 function requireCommandByName(name: string): Record<string, unknown> {
@@ -535,7 +646,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(requireCommandByName("safe-name"), "safe-name command", {
       name: "safe-name",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose now")).toBeUndefined();
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "draft now")).toBeUndefined();
     expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
     expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });

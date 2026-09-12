@@ -75,10 +75,11 @@ an explicit boolean.
 
 ### Quiet progress presentation
 
-Native progress renderers must retain approval and failure lines when ordinary
-tool rows are disabled. The shared progress compositor retains those lines in
-its snapshots; native renderers must preserve them alongside plan rows and
-ordinary activity.
+Native progress renderers must retain approval requests when tool rows are
+disabled, alongside authored progress text and plan rows. Intermediate tool
+failures and nonzero command exits follow the tool-row visibility setting;
+they must not bypass quiet mode. Terminal task errors still use normal error
+delivery. The shared progress compositor applies this policy to its snapshots.
 
 `resolveChannelStreamingPreviewToolProgress(entry, defaultValue?, mode?)` keeps
 its shipped default of `true` when the second argument is omitted or

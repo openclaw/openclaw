@@ -26,6 +26,10 @@ import {
   assertServiceDefinitionWritable,
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "../../daemon/service-update-authority.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
@@ -332,6 +336,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   if (loaded && !opts.force) {
     autoRefreshMessage ??= await getGatewayServiceAutoRefreshMessage({
+      allowUnconfigured: opts.allowUnconfigured,
       currentCommand: existingServiceCommand,
       env: process.env,
       installEnv,
@@ -366,6 +371,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       writeOptions: {
         baseSnapshot: configSnapshot,
         ...configWriteOptions,
+        ...(isUpdateOwnedGatewayServiceCommand()
+          ? {
+              beforeCommit: async () => {
+                await configWriteOptions.beforeCommit?.();
+                assertGatewayServiceUpdateCurrent();
+              },
+            }
+          : {}),
         skipRuntimeSnapshotRefresh: true,
       },
       afterWrite: { mode: "auto" },
@@ -410,6 +423,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildGatewayInstallPlan({
+      allowUnconfigured: opts.allowUnconfigured,
       env: installEnv,
       port,
       runtime: runtimeRaw,
@@ -443,6 +457,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 }
 
 async function getGatewayServiceAutoRefreshMessage(params: {
+  allowUnconfigured?: boolean;
   currentCommand: GatewayServiceCommandConfig | null;
   env: Record<string, string | undefined>;
   installEnv: NodeJS.ProcessEnv;
@@ -460,6 +475,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
     }
     const getPlannedInstall = createLazyPromise(() =>
       buildGatewayInstallPlan({
+        allowUnconfigured: params.allowUnconfigured,
         env: params.installEnv,
         port: params.port,
         runtime: params.runtime,
@@ -471,6 +487,17 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         config: params.config,
       }),
     );
+    const currentAllowsUnconfigured =
+      currentCommand.programArguments.includes("--allow-unconfigured");
+    if (currentAllowsUnconfigured || params.allowUnconfigured) {
+      const plannedInstall = await getPlannedInstall();
+      if (
+        currentAllowsUnconfigured !==
+        plannedInstall.programArguments.includes("--allow-unconfigured")
+      ) {
+        return "Gateway service start-mode argument differs from the current install plan; refreshing the install.";
+      }
+    }
     const currentEmbeddedToken = readEmbeddedGatewayToken(currentCommand);
     if (currentEmbeddedToken) {
       const plannedInstall = await getPlannedInstall();

@@ -65,6 +65,7 @@ type ResolvePairingSetupOptions = {
   env?: NodeJS.ProcessEnv;
   publicUrl?: string;
   preferRemoteUrl?: boolean;
+  useLocalGateway?: boolean;
   forceSecure?: boolean;
   bootstrapProfile?: DeviceBootstrapProfileInput;
   issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
@@ -322,6 +323,11 @@ function resolvePairingSetupAuthLabel(
   if (password) {
     return { label: "password" };
   }
+  if (mode === "none" || mode === "trusted-proxy") {
+    return {
+      error: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
+    };
+  }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
@@ -331,6 +337,7 @@ export async function resolvePairingGatewayUrl(
     env: NodeJS.ProcessEnv;
     publicUrl?: string;
     preferRemoteUrl?: boolean;
+    useLocalGateway?: boolean;
     forceSecure?: boolean;
     runCommandWithTimeout?: PairingSetupCommandRunner;
     networkInterfaces: () => ReturnType<typeof os.networkInterfaces>;
@@ -347,7 +354,7 @@ export async function resolvePairingGatewayUrl(
     return { error: "Configured publicUrl is invalid." };
   }
 
-  const remoteUrlRaw = cfg.gateway?.remote?.url;
+  const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
   const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
   const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
   if (hasRemoteUrl && !remoteUrl) {
@@ -504,6 +511,7 @@ export async function resolvePairingSetupFromConfig(
     env,
     publicUrl: options.publicUrl,
     preferRemoteUrl: options.preferRemoteUrl,
+    useLocalGateway: options.useLocalGateway,
     forceSecure: options.forceSecure,
     runCommandWithTimeout: options.runCommandWithTimeout,
     networkInterfaces: options.networkInterfaces ?? os.networkInterfaces,

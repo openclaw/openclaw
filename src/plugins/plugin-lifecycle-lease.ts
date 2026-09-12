@@ -7,7 +7,12 @@ import {
   withOpenClawStateLease,
   type OpenClawStateLeaseContext,
 } from "../state/openclaw-state-lease.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  retirePluginCache,
+  waitForPluginCacheRetirement,
+  withPluginCache,
+} from "./plugin-cache.js";
 
 const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
 const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
@@ -108,9 +113,34 @@ export async function withPluginLifecycleLease<T>(
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
       };
       // Capture fresh facts only after ownership: another process may have committed while we waited.
-      return await activePluginLifecycleLease.run({ databasePath, lease: pluginLease }, () =>
-        withPluginCache(createPluginCache(), () => run(pluginLease)),
-      );
+      const cache = createPluginCache();
+      const failures: unknown[] = [];
+      let result!: T;
+      try {
+        result = await activePluginLifecycleLease.run({ databasePath, lease: pluginLease }, () =>
+          withPluginCache(cache, () => run(pluginLease)),
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+      // Both owners must settle before releasing the lease, even when the operation or cleanup fails.
+      for (const cleanup of [
+        () => (cache.kind === "operation" ? retirePluginCache(cache) : undefined),
+        waitForPluginCacheRetirement,
+      ]) {
+        try {
+          await cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Plugin lifecycle work failed");
+      }
+      return result;
     },
   );
 }

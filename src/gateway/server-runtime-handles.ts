@@ -23,7 +23,7 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach
 // active" instead of guessing.
 export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
-  hotReloadStatus?: () => GatewayHotReloadStatus;
+  hotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
   notifyPluginMetadataChanged: () => void;
   isConfigReloadSettled: () => boolean;

@@ -15,7 +15,6 @@ import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   assertUpdateCommandPackageFinalization,
   createUpdateCommandFinalizationFence,
@@ -30,6 +29,7 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -340,6 +340,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
         recovery: result.recovery,
+        updateRun: params.opts.run,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
         nodeRunner: params.packageUpdateNodeRunner,
@@ -437,7 +438,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
 
     const postUpdateRoot = params.result.root ?? params.root;
     const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
+      const pluginParams = { ...params, beforeDoctor, beforePersistentEffect: assertCurrent };
+      const convergence = await convergeUpdatePlugins(pluginParams);
       if (convergence.resultWithPostUpdate.status === "error") {
         triageAllowed = !convergence.cancelled;
         const reported = await reportResult(convergence.resultWithPostUpdate);
@@ -467,6 +469,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       postUpdateConfigSnapshot ??
       (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
         readConfigFileSnapshot({
+          observe: false,
           skipPluginValidation: true,
           suppressFutureVersionWarning: true,
         }),
@@ -549,14 +552,13 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         reason: verificationFailure,
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       };
-      const canRepairService =
-        restartContext.serviceMutationAllowed &&
-        !restartContext.skipLegacyServiceRestart &&
-        !postVerificationRepairAttempted;
       const recovered = await recoverFailedResult(
         failure,
         false,
-        verificationFailure !== "service-runtime-refresh-failed" && canRepairService
+        verificationFailure !== "service-runtime-refresh-failed" &&
+          restartContext.serviceMutationAllowed &&
+          !restartContext.skipLegacyServiceRestart &&
+          !postVerificationRepairAttempted
           ? (result) =>
               repairUpdateService({
                 result,
@@ -661,10 +663,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
     } catch (err) {
       if (!params.opts.json) {
-        const completionCacheRefreshCommand = formatCliCommand("openclaw completion --write-state");
         defaultRuntime.log(
           theme.warn(
-            `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`,
+            `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${formatCliCommand("openclaw completion --write-state")}`,
           ),
         );
       }

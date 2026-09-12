@@ -163,6 +163,9 @@ Disable the feature entirely under **Dashboard → Settings → This Mac → App
 
 ## Launch and debugging
 
+Run the commands below from the repository root in a POSIX shell such as `zsh`
+or `bash`, after `./scripts/package-mac-app.sh` has produced `dist/OpenClaw.app`.
+
 - Manual: Lobster menu -> "Open Chat".
 - Auto-open for testing:
 

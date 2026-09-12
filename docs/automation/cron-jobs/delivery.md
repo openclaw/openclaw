@@ -28,6 +28,8 @@ open the run's session.
 
 For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the canonical transcript writer with cron job/run provenance and a job/run idempotency key. A retry cannot append the same result twice.
 
+If the run is canceled while waiting for the conversation, it stops waiting without interrupting the active turn or appending a result.
+
 WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
 
 If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
@@ -80,7 +82,7 @@ Execution failures use one scheduler-owned threshold and cooldown policy. A job 
 Failure notification routes resolve in this order:
 
 1. Route fields in the job's `failureAlert` object.
-2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). A `cron.failureDestination` block is no longer read directly; `openclaw doctor --fix` merges it into the global object.
+2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
 3. The job's primary announce target.
 
 - `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.

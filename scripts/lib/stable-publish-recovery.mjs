@@ -113,7 +113,10 @@ export function requireRecoveryJob(jobs, run, name) {
 
 // This publisher’s historical Actions archives can contain only whole-job logs.
 // These hashes bind exact canonical shell bodies, not arbitrary stdout patterns.
-const HISTORICAL_PUBLISH_TOOLING = "01403169248346f2a6d6dd02955fc956fa9e1fe9";
+const HISTORICAL_PUBLISH_TOOLING = new Set([
+  "01403169248346f2a6d6dd02955fc956fa9e1fe9",
+  "458f9980c2bfdcc4f15279d20db400815406f2e8",
+]);
 const HISTORICAL_PUBLISH_STEPS = {
   Publish: {
     job: "publish_openclaw_npm",
@@ -134,7 +137,7 @@ const HISTORICAL_PUBLISH_STEPS = {
 function historicalPublishStepLog(logs, job, step) {
   const contract = HISTORICAL_PUBLISH_STEPS[step.name];
   requireValue(
-    job.head_sha === HISTORICAL_PUBLISH_TOOLING &&
+    HISTORICAL_PUBLISH_TOOLING.has(job.head_sha) &&
       job.name === contract?.job &&
       contract?.number === step.number,
     "no historical runner-header contract for missing step log.",

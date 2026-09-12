@@ -116,7 +116,7 @@ The gateway writes a rolling log file (printed on startup as `gateway log file: 
 - `bonjour: suppressing ciao netmask assertion ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 
-OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log.
+OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log, as are transient `ENODEV` MDNS socket warnings that occur when a network interface (for example a short-lived Docker bridge) is removed between the responder's interface polls.
 
 When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution.
 
@@ -241,3 +241,4 @@ macOS hosts auto-start the bundled LAN discovery plugin by default. When the Bon
 
 - Discovery policy and transport selection: [Discovery](/gateway/discovery)
 - Node pairing + approvals: [Gateway pairing](/gateway/pairing)
+- Wide-area DNS-SD setup helper: [`openclaw dns`](/cli/dns)

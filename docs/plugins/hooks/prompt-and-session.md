@@ -67,6 +67,22 @@ families and independent turns remain available.
 
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
 
+### Handler lifetime
+
+Each `before_prompt_build` handler receives a read-only
+`ctx.hookInvocation.assertActive()` capability in both ordinary and authorized
+prompt phases. It throws after the runner stops awaiting that individual
+handler, including timeout, return, or error, before the next handler starts.
+Call it after awaited work and immediately before a synchronous side effect
+whose result must still be eligible for this hook invocation. Other handlers
+have independent capabilities, even within the same prompt dispatch.
+
+This capability checks only the handler's result-acceptance lifetime. It grants
+no tool authorization, does not cancel underlying work, and does not guarantee
+that a later model call consumes the context. The field is optional for SDK
+compatibility; a plugin that requires it must handle an unsupported host
+explicitly instead of substituting its own copy of the timeout budget.
+
 ### Authorized prompt enrichment
 
 Register `before_prompt_build` with `requiresToolAuthority: true` when a plugin
@@ -143,6 +159,23 @@ runs can also expose `ctx.jobId` (the originating cron job id) when supplied
 by the emitter, so hooks can scope metrics, side effects, or state to a specific
 scheduled job. Do not assume every agent event carries it. `ctx.jobId` is not
 part of the `before_tool_call` tool context.
+
+For `before_prompt_build`, `ctx.inputProvenance` carries the host-classified
+origin of the turn's user-role input on the embedded, CLI, Codex, and Copilot
+prompt paths. Its `kind` is `external_user`, `inter_session`, or
+`internal_system`. Optional source fields are `originSessionId`,
+`sourceSessionKey`, `sourceChannel`, and `sourceTool`.
+
+The field is optional. It is absent when the producer does not supply a
+classification, including ordinary human turns on some paths. Absence does
+not prove human origin. Other hook events may omit it even when prompt hooks
+receive it.
+
+`ctx.trigger === "user"` is a run trigger, not an origin classification.
+Inter-session deliveries such as `sessions_send`, `subagent_settle`, and
+`subagent_announce` can retain that trigger. Use typed provenance to
+distinguish those inputs; do not parse prompt prefixes. Provenance describes
+origin and does not grant authority to use tools or access another session.
 
 For channel-originated runs, `ctx.channel` and `ctx.messageProvider` identify
 the provider surface such as `discord` or `telegram`, while `ctx.channelId` is

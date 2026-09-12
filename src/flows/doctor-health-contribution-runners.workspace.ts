@@ -132,7 +132,7 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
 export async function runWorkspaceAliasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { collectRepointedWorkspaceAliasFindings } =
     await import("../commands/doctor-workspace-alias.js");
-  const findings = collectRepointedWorkspaceAliasFindings(ctx.cfg);
+  const findings = await collectRepointedWorkspaceAliasFindings(ctx.cfg);
   if (findings.length > 0) {
     const { note } = await import("../../packages/terminal-core/src/note.js");
     note(

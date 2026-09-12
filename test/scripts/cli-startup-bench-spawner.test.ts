@@ -106,9 +106,10 @@ describe("CLI startup benchmark script spawners", () => {
     const tmpDir = tempDirs.make("openclaw-bench-rss-contract-");
     const baselinePath = path.join(tmpDir, "baseline.json");
     const reportPath = path.join(tmpDir, "current.json");
-    const makeReport = (rss: number, memoryMetric?: string) => ({
+    const makeReport = (rss: number, memoryMetric?: string, executionMode?: unknown) => ({
       primary: {
         memoryMetric,
+        executionMode,
         cases: [
           {
             id: "version",
@@ -119,7 +120,7 @@ describe("CLI startup benchmark script spawners", () => {
         ],
       },
     });
-    const run = () =>
+    const run = (skipBaseline = false) =>
       spawnSync(
         process.execPath,
         [
@@ -132,6 +133,7 @@ describe("CLI startup benchmark script spawners", () => {
           reportPath,
           "--preset",
           "startup",
+          ...(skipBaseline ? ["--skip-baseline"] : []),
         ],
         {
           cwd: process.cwd(),
@@ -158,6 +160,34 @@ describe("CLI startup benchmark script spawners", () => {
 
     fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, "unknown-metric")));
     expect(run().stderr).toContain("Unknown CLI RSS metric");
+
+    for (const [before, after, error] of [
+      [undefined, "native", null],
+      ["native", undefined, null],
+      ["native", "native", null],
+      ["transport", "transport", null],
+      [undefined, "transport", "Incompatible CLI execution modes"],
+      ["transport", "native", "Incompatible CLI execution modes"],
+      ["unknown", "unknown", "Unknown CLI execution mode"],
+      [null, "native", "Unknown CLI execution mode"],
+      ["native", 1, "Unknown CLI execution mode"],
+    ] satisfies Array<[unknown, unknown, string | null]>) {
+      fs.writeFileSync(baselinePath, JSON.stringify(makeReport(10, undefined, before)));
+      fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, undefined, after)));
+      const result = run();
+      expect(result.status, result.stderr).toBe(error ? 1 : 0);
+      if (error) {
+        expect(result.stderr).toContain(error);
+      }
+    }
+    for (const mode of [null, "unknown", 1]) {
+      fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, undefined, mode)));
+      const result = run(true);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Unknown CLI execution mode");
+    }
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, undefined, "transport")));
+    expect(run(true).status).toBe(0);
   });
 
   it("use the active Node executable for benchmark child processes", () => {

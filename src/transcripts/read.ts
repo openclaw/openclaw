@@ -82,7 +82,12 @@ export async function readTranscriptNotes(
   session: TranscriptSessionDescriptor,
   purpose: TranscriptReadPurpose = "page",
 ): Promise<TranscriptsGetResult["summary"]> {
-  const stored = store.readNotes(session, purpose);
+  return projectTranscriptNotes(await store.readNotes(session, purpose));
+}
+
+export function projectTranscriptNotes(
+  stored: Awaited<ReturnType<TranscriptsStore["readNotes"]>>,
+): TranscriptsGetResult["summary"] {
   if (stored.markdown === undefined) {
     return undefined;
   }

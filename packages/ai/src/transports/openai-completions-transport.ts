@@ -37,8 +37,11 @@ import {
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { resolveProviderTransportTurnState } from "./provider-transport-turn-state.js";
-import { hasOpencodeSessionHeader, resolveOpencodeSessionHeaders } from "./session-affinity.js";
+import {
+  filterProviderTurnHeadersForExplicitOpencodeSession,
+  resolveProviderTransportTurnState,
+} from "./provider-transport-turn-state.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
@@ -210,9 +213,11 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           transport: "stream",
         });
         const optionHeaders = resolveOpencodeSessionHeaders(model, options);
-        const turnHeaders = hasOpencodeSessionHeader(model, options)
-          ? undefined
-          : turnState?.headers;
+        const turnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+          model,
+          options,
+          turnState?.headers,
+        );
         // The OpenAI SDK consumes the SSE terminal without yielding it. Observe
         // the raw body so native tool calls can distinguish clean DONE from EOF.
         const doneDetector = createSseDoneDetector();

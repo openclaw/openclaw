@@ -2924,7 +2924,10 @@ function installControlUiMockGateway(
           method === "chat.abort" &&
           isRecord(frame.params) &&
           typeof frame.params.runId === "string" &&
-          typeof frame.params.sessionKey === "string"
+          typeof frame.params.sessionKey === "string" &&
+          // No accepted abort emits no synthetic terminal event. The run may
+          // have finished or may still be finalizing.
+          !(isRecord(payload) && payload.aborted === false)
         ) {
           this.deliver({
             event: "chat",

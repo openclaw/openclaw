@@ -35,6 +35,7 @@ export type GatewayRestartSnapshot = {
   };
   waitOutcome?: GatewayRestartWaitOutcome;
   elapsedMs?: number;
+  startupPhase?: string;
 };
 
 export type GatewayPortHealthSnapshot = {

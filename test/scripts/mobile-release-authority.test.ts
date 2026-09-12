@@ -1957,8 +1957,15 @@ describe("mobile release authority", () => {
     expect(JSON.stringify(steps)).not.toContain("candidate/");
 
     const tooling = steps[toolingIndex]?.run ?? "";
+    expect(tooling).toContain('apt_source="/etc/apt/sources.list.d/ubuntu.sources"');
     expect(tooling).toContain(
-      "/usr/bin/apt-get install -y --no-install-recommends acl imagemagick",
+      'apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"',
+    );
+    expect(tooling).toContain('test -s "$apt_source"');
+    expect(tooling).toContain('[[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]');
+    expect(tooling).toContain('/usr/bin/apt-get "${apt_options[@]}" update');
+    expect(tooling).toMatch(
+      /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends acl imagemagick/u,
     );
     expect(tooling).toContain(
       'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
@@ -2598,6 +2605,322 @@ fi
     expect(source).not.toMatch(/apps-signing|MATCH_PASSWORD|GOOGLE_PLAY|upload-and-record/iu);
   });
 
+  it("generates two-axis varied-color Android conversion smoke inputs", () => {
+    const workflow = parse(
+      fs.readFileSync(".github/workflows/android-emulator-diagnostic.yml", "utf8"),
+    ) as {
+      jobs: Record<string, { steps?: Array<{ name: string; run?: string }> }>;
+    };
+    const tooling = Object.values(workflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .find((step) => step.name === "Prepare trusted Linux Android tooling")?.run;
+
+    expect(tooling).toMatch(
+      /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel/u,
+    );
+    expect(tooling).not.toContain("'xc:");
+    expect(tooling).toMatch(
+      /\/usr\/bin\/identify \+ping \\\n\s+-format 'format=%m width=%w height=%h colorspace=%\[colorspace\] type=%\[type\] channels=%\[channels\] quality=%Q\\n'/u,
+    );
+    expect(tooling).not.toContain("/usr/bin/identify -ping");
+  });
+
+  it("fully decodes Android JPEGs before enforcing true-color metadata", () => {
+    const adapter = fs.readFileSync("scripts/android-sips-linux.sh", "utf8");
+
+    expect(adapter).toContain(
+      "\"$identify_bin\" +ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
+    );
+    expect(adapter).not.toContain(
+      "\"$identify_bin\" -ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
+    );
+    expect(adapter).toContain('[[ "$output_type" == "TrueColor" ]]');
+  });
+
+  it("isolates Ubuntu APT sources before Android tooling setup", () => {
+    const workflowFiles = [
+      ".github/workflows/android-emulator-diagnostic.yml",
+      ".github/workflows/android-beta-release.yml",
+    ] as const;
+
+    const readToolingBody = (file: string): string => {
+      const workflow = parse(fs.readFileSync(file, "utf8")) as {
+        jobs: Record<string, { steps?: Array<{ name: string; run?: string }> }>;
+      };
+      const matches = Object.values(workflow.jobs)
+        .flatMap((job) => job.steps ?? [])
+        .filter((step) => step.name === "Prepare trusted Linux Android tooling");
+      if (matches.length !== 1 || !matches[0]?.run) {
+        throw new Error(`${file}: missing unique Linux Android tooling step`);
+      }
+      return matches[0].run;
+    };
+
+    const diagnosticTooling = readToolingBody(".github/workflows/android-emulator-diagnostic.yml");
+    expect(diagnosticTooling).toMatch(
+      /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel \\\n\s+"\$smoke_dir\/input-\$\{dimensions\}\.png"/u,
+    );
+    expect(diagnosticTooling).not.toContain("gradient:rgba(");
+
+    const pathExists = (target: string): boolean => {
+      try {
+        fs.lstatSync(target);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return false;
+        }
+        throw error;
+      }
+    };
+
+    const runToolingFixture = (
+      file: string,
+      options: {
+        broadSource?: boolean;
+        sourceState?: "empty" | "missing" | "nonempty";
+        sourcePartsState?: "absent" | "directory" | "symlink";
+        updateExit?: number;
+      } = {},
+    ) => {
+      const root = tempRoots.make("openclaw-android-apt-source-");
+      const bin = path.join(root, "bin");
+      const runnerTemp = path.join(root, "runner-temp");
+      const diagnosticDir = path.join(root, "diagnostic");
+      const aptSource = path.join(root, "ubuntu.sources");
+      const aptSourceParts = path.join(runnerTemp, "openclaw-android-apt-sourceparts-disabled");
+      const aptLog = path.join(root, "apt.log");
+      const installSentinel = path.join(root, "install-ran");
+      const adapterSentinel = path.join(root, "adapter-ran");
+      const kvmSentinel = path.join(root, "kvm-ran");
+      const adapterSource = [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        'output=""',
+        "while (( $# > 0 )); do",
+        '  if [[ "$1" == "--out" ]]; then output="$2"; shift 2; else shift; fi',
+        "done",
+        'test -n "$output"',
+        'printf "jpeg\\n" >"$output"',
+        'printf "adapter\\n" >"$ADAPTER_SENTINEL"',
+        "",
+      ].join("\n");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(runnerTemp);
+      fs.mkdirSync(diagnosticDir);
+      if ((options.sourceState ?? "nonempty") !== "missing") {
+        fs.writeFileSync(
+          aptSource,
+          options.sourceState === "empty" ? "" : "Types: deb\nURIs: fixture.invalid\n",
+        );
+      }
+      if (options.sourcePartsState === "directory") {
+        fs.mkdirSync(aptSourceParts);
+      } else if (options.sourcePartsState === "symlink") {
+        fs.symlinkSync(path.join(root, "missing-sourceparts"), aptSourceParts);
+      }
+
+      const writeExecutable = (name: string, source: string): string => {
+        const executable = path.join(bin, name);
+        fs.writeFileSync(executable, source, { mode: 0o755 });
+        return executable;
+      };
+      const timeout = writeExecutable(
+        "timeout",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          "while (( $# > 0 )); do",
+          '  case "$1" in',
+          "    --signal=*|--kill-after=*) shift ;;",
+          "    300s) shift; break ;;",
+          "    *) exit 91 ;;",
+          "  esac",
+          "done",
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      const sudo = writeExecutable(
+        "sudo",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'test "$1" = "env"',
+          "shift",
+          'while (( $# > 0 )) && [[ "$1" == *=* ]]; do export "$1"; shift; done',
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      const aptGet = writeExecutable(
+        "apt-get",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >>"$APT_LOG"',
+          'if (( $# < 5 )) || [[ "$1" != "-o" || "$2" != "Dir::Etc::sourcelist=$APT_SOURCE" ||',
+          '  "$3" != "-o" || "$4" != "Dir::Etc::sourceparts=$APT_SOURCE_PARTS" ]]; then',
+          "  exit 100",
+          "fi",
+          'if [[ "$5" == "update" ]]; then exit "${APT_UPDATE_EXIT:-0}"; fi',
+          'test "$5" = "install"',
+          'test "$6" = "-y"',
+          'test "$7" = "--no-install-recommends"',
+          'test "$8" = "acl"',
+          'test "$9" = "imagemagick"',
+          'printf "install\\n" >"$INSTALL_SENTINEL"',
+          "",
+        ].join("\n"),
+      );
+      const convert = writeExecutable(
+        "convert",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'output="${!#}"',
+          'printf "png\\n" >"$output"',
+          "",
+        ].join("\n"),
+      );
+      const identify = writeExecutable(
+        "identify",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          "printf 'format=JPEG width=1 height=1 colorspace=sRGB type=TrueColor channels=3.0 quality=95\\n'",
+          "",
+        ].join("\n"),
+      );
+      writeExecutable(
+        "git",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'test "$1" = "-C"',
+          "shift 2",
+          'case "$1 $2" in',
+          '  "rev-parse HEAD") printf "%s\\n" "$GITHUB_WORKFLOW_SHA" ;;',
+          '  "ls-tree HEAD") printf "100755 blob fixtureoid scripts/android-sips-linux.sh\\n" ;;',
+          '  "cat-file blob")',
+          '    printf "adapter\\n" >"$ADAPTER_SENTINEL"',
+          '    cat "$ADAPTER_SOURCE"',
+          "    ;;",
+          "  *) exit 92 ;;",
+          "esac",
+          "",
+        ].join("\n"),
+      );
+
+      for (const trustedRoot of [
+        path.join(root, ".mobile-release-tooling"),
+        path.join(root, "apps/android/build/mobile-release-ci/authority"),
+      ]) {
+        writeFile(trustedRoot, "scripts/android-sips-linux.sh", adapterSource);
+        fs.chmodSync(path.join(trustedRoot, "scripts/android-sips-linux.sh"), 0o755);
+      }
+      fs.writeFileSync(path.join(root, "adapter-source.sh"), adapterSource, { mode: 0o755 });
+
+      let body = readToolingBody(file);
+      if (options.broadSource) {
+        body = body
+          .replace('/usr/bin/apt-get "${apt_options[@]}" update', "/usr/bin/apt-get update")
+          .replace('/usr/bin/apt-get "${apt_options[@]}" install', "/usr/bin/apt-get install");
+      }
+      body = body
+        .replaceAll("/usr/bin/timeout", timeout)
+        .replaceAll("/usr/bin/sudo", sudo)
+        .replaceAll("/usr/bin/apt-get", aptGet)
+        .replaceAll("/usr/bin/convert", convert)
+        .replaceAll("/usr/bin/identify", identify)
+        .replaceAll("/etc/apt/sources.list.d/ubuntu.sources", aptSource);
+
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", [body, 'printf "kvm\\n" >"$KVM_SENTINEL"'].join("\n")],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ADAPTER_SENTINEL: adapterSentinel,
+            ADAPTER_SOURCE: path.join(root, "adapter-source.sh"),
+            APT_LOG: aptLog,
+            APT_SOURCE: aptSource,
+            APT_SOURCE_PARTS: aptSourceParts,
+            APT_UPDATE_EXIT: String(options.updateExit ?? 0),
+            DIAGNOSTIC_DIR: diagnosticDir,
+            GITHUB_WORKFLOW_SHA: "a".repeat(40),
+            INSTALL_SENTINEL: installSentinel,
+            KVM_SENTINEL: kvmSentinel,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            RUNNER_ARCH: "X64",
+            RUNNER_OS: "Linux",
+            RUNNER_TEMP: runnerTemp,
+          },
+          timeout: 5_000,
+        },
+      );
+      return {
+        adapterSentinel,
+        aptSource,
+        aptSourceParts,
+        calls: fs.existsSync(aptLog)
+          ? fs.readFileSync(aptLog, "utf8").trim().split("\n").filter(Boolean)
+          : [],
+        installSentinel,
+        kvmSentinel,
+        result,
+      };
+    };
+
+    for (const file of workflowFiles) {
+      const broad = runToolingFixture(file, { broadSource: true });
+      expect(broad.result.status, `${file}: broad source should fail`).toBe(100);
+      expect(fs.existsSync(broad.installSentinel)).toBe(false);
+      expect(fs.existsSync(broad.adapterSentinel)).toBe(false);
+      expect(fs.existsSync(broad.kvmSentinel)).toBe(false);
+
+      const restricted = runToolingFixture(file);
+      expect(
+        restricted.result.status,
+        `${file}: signal=${restricted.result.signal ?? "none"}\n${restricted.result.stderr}`,
+      ).toBe(0);
+      expect(restricted.calls).toEqual([
+        `-o Dir::Etc::sourcelist=${restricted.aptSource} -o Dir::Etc::sourceparts=${restricted.aptSourceParts} update`,
+        `-o Dir::Etc::sourcelist=${restricted.aptSource} -o Dir::Etc::sourceparts=${restricted.aptSourceParts} install -y --no-install-recommends acl imagemagick`,
+      ]);
+      expect(pathExists(restricted.aptSourceParts)).toBe(false);
+      expect(fs.existsSync(restricted.installSentinel)).toBe(true);
+      expect(fs.existsSync(restricted.adapterSentinel)).toBe(true);
+      expect(fs.existsSync(restricted.kvmSentinel)).toBe(true);
+
+      const failedUpdate = runToolingFixture(file, { updateExit: 100 });
+      expect(failedUpdate.result.status).toBe(100);
+      expect(failedUpdate.calls).toHaveLength(1);
+      expect(fs.existsSync(failedUpdate.installSentinel)).toBe(false);
+      expect(fs.existsSync(failedUpdate.adapterSentinel)).toBe(false);
+      expect(fs.existsSync(failedUpdate.kvmSentinel)).toBe(false);
+
+      for (const sourceState of ["missing", "empty"] as const) {
+        const guarded = runToolingFixture(file, { sourceState });
+        expect(guarded.result.status, `${file}: ${sourceState} source`).not.toBe(0);
+        expect(guarded.calls).toEqual([]);
+        expect(fs.existsSync(guarded.adapterSentinel)).toBe(false);
+        expect(fs.existsSync(guarded.kvmSentinel)).toBe(false);
+      }
+
+      for (const sourcePartsState of ["directory", "symlink"] as const) {
+        const guarded = runToolingFixture(file, { sourcePartsState });
+        expect(guarded.result.status, `${file}: ${sourcePartsState} source parts`).not.toBe(0);
+        expect(guarded.calls).toEqual([]);
+        expect(pathExists(guarded.aptSourceParts)).toBe(true);
+        expect(fs.existsSync(guarded.adapterSentinel)).toBe(false);
+        expect(fs.existsSync(guarded.kvmSentinel)).toBe(false);
+      }
+    }
+  });
+
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
       {
@@ -2846,8 +3169,17 @@ fi
         expect(androidSetupIndex).toBeGreaterThanOrEqual(0);
         expect(accelerationCheckIndex).toBe(androidSetupIndex + 1);
         expect(accelerationCheckIndex).toBeLessThan(signingRevalidateIndex);
+        expect(toolingStep?.run).toContain('apt_source="/etc/apt/sources.list.d/ubuntu.sources"');
         expect(toolingStep?.run).toContain(
-          "/usr/bin/apt-get install -y --no-install-recommends acl imagemagick",
+          'apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"',
+        );
+        expect(toolingStep?.run).toContain('test -s "$apt_source"');
+        expect(toolingStep?.run).toContain(
+          '[[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]',
+        );
+        expect(toolingStep?.run).toContain('/usr/bin/apt-get "${apt_options[@]}" update');
+        expect(toolingStep?.run).toMatch(
+          /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends acl imagemagick/u,
         );
         expect(toolingStep?.run).toContain(
           'trusted_root="apps/android/build/mobile-release-ci/authority"',

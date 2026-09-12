@@ -34,6 +34,7 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -41,6 +42,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
@@ -57,6 +59,7 @@ import { renderChat } from "./chat-view.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
+import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import {
   resetThreadPresentation,
@@ -1085,6 +1088,10 @@ describe("chat run error", () => {
       const onQueueRetry = vi.fn();
       const container = renderChatView({
         canSend: false,
+        messages: [
+          { role: "user", content: "[System] Gateway restarted", timestamp: 3 },
+          { role: "assistant", content: "Worker recovery is pending", timestamp: 4 },
+        ],
         queue: [
           {
             id: "ordinary",
@@ -1104,6 +1111,7 @@ describe("chat run error", () => {
           error: "Retained initial turn",
           initialTurn: {
             id: "initial",
+            sendRunId: "initial",
             text: "original prompt",
             createdAt: 1,
             sendAttempts: 1,
@@ -1115,6 +1123,13 @@ describe("chat run error", () => {
       });
       expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt");
       expect(container.querySelector(".chat-thread")?.textContent).toContain("later draft");
+      const transcript = container.querySelector(".chat-thread")?.textContent ?? "";
+      expect(transcript.indexOf("original prompt")).toBeLessThan(
+        transcript.indexOf("Gateway restarted"),
+      );
+      expect(transcript.indexOf("Worker recovery is pending")).toBeLessThan(
+        transcript.indexOf("later draft"),
+      );
       const buttons = container.querySelectorAll<HTMLButtonElement>(".chat-send-status__retry");
       expect(buttons).toHaveLength(1);
       expect(buttons[0]?.textContent?.trim()).toBe(action === "retry" ? "Retry" : "Check delivery");
@@ -4712,6 +4727,36 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { args: "example/model", allowed: true },
+    { args: "example/model explain this", allowed: false },
+  ])("checks the complete inline model command before sending $args", ({ args, allowed }) => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const onSlashCommand = vi.fn();
+    const { container } = createReactiveDraftHarness({
+      onDraftChange,
+      onSend,
+      onSlashCommand,
+      modelRequiredReason: "Connect a provider to send messages.",
+    });
+    inputDraftAtEnd(container, "retained draft /model");
+    keydownComposer(container, "Enter");
+    inputDraftAtEnd(container, `retained draft /model ${args}`);
+    keydownComposer(container, "Enter");
+    if (allowed) {
+      expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(`/model ${args}`);
+      expect(draft).toBe("retained draft ");
+    } else {
+      expect(onSlashCommand).not.toHaveBeenCalled();
+      expect(draft).toBe(`retained draft /model ${args}`);
+    }
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("preserves a typed inline command alias when dispatching its argument", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
@@ -6879,20 +6924,68 @@ describe("chat welcome", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("omits the composer footer behind the empty model setup splash", () => {
+  it.each([
+    "/models",
+    "/model",
+    "/model example/model",
+    "/clear",
+    "/export-session",
+    "/new",
+    "/think high",
+  ])("keeps %s usable beside empty model setup", (draft) => {
+    const onModelSetup = vi.fn();
+    const onSend = vi.fn();
     const container = renderChatView({
-      canSend: false,
-      disabledBanner: {
-        kind: "composer-replacement",
-        text: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
-        actionLabel: "Connect an AI provider",
-        onAction: () => undefined,
-      },
+      draft,
+      modelRequiredReason: "Connect a provider to send messages.",
+      disabledBanner: createChatModelSetupBanner(onModelSetup),
       modelSetupRequired: true,
+      onSend,
     });
 
     expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__composer-shell")).toBeNull();
+    expect(getComposerTextarea(container).disabled).toBe(false);
+    const send = expectDefined(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+      "model-free command send button",
+    );
+    expect(send.disabled).toBe(false);
+    send.click();
+    expect(onSend).toHaveBeenCalledOnce();
+    container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it.each(["Hello", "/compact", "/reset", "/model example/model explain this"])(
+    "keeps %s editable but prevents submission without model access",
+    (draft) => {
+      const onSend = vi.fn();
+      const container = renderChatView({
+        draft,
+        modelRequiredReason: "Connect a provider to send messages.",
+        onSend,
+      });
+      const textarea = getComposerTextarea(container);
+      expect(textarea.disabled).toBe(false);
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+      ).toBe(true);
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps model-free commands blocked in a read-only conversation", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      draft: "/models",
+      canSend: false,
+      modelRequiredReason: "Connect a provider to send messages.",
+      onSend,
+    });
+    expect(getComposerTextarea(container).disabled).toBe(true);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("teases and catches file drags with the welcome mascot", () => {
@@ -7002,6 +7095,311 @@ describe("chat welcome", () => {
 });
 
 describe("chat model controls", () => {
+  const subscriptionProfiles = [
+    { profileId: "openai:work", type: "oauth", status: "ok", email: "work@example.com" },
+    { profileId: "openai:personal", type: "oauth", status: "ok", email: "peter@steipete.me" },
+  ] satisfies ModelAuthStatusResult["providers"][number]["profiles"];
+  const authStatus: ModelAuthStatusResult = {
+    ts: 1,
+    providers: [
+      {
+        provider: "openai-codex",
+        displayName: "OpenAI",
+        status: "ok",
+        profiles: subscriptionProfiles,
+        profileOrder: ["openai:personal", "openai:work"],
+        usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
+      },
+      {
+        provider: "anthropic",
+        displayName: "Anthropic",
+        status: "ok",
+        profiles: [
+          {
+            profileId: "anthropic:personal",
+            type: "oauth",
+            status: "ok",
+            email: "claude@example.com",
+          },
+        ],
+        usage: { providerId: "anthropic", windows: [], plan: "Claude Max" },
+      },
+      {
+        provider: "google",
+        displayName: "Google",
+        status: "static",
+        profiles: [{ profileId: "google:key", type: "api_key", status: "static" }],
+      },
+    ],
+  };
+
+  it.each([true, false])(
+    "shows provider auth kinds only with loaded auth status (%s)",
+    (loaded) => {
+      const { state } = createChatHeaderState({
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+          { id: "claude-sonnet-4-5", name: "Claude Sonnet", provider: "anthropic" },
+          { id: "gemini", name: "Gemini", provider: "google" },
+          { id: "unknown", name: "Unknown", provider: "example" },
+        ],
+      });
+      const container = renderModelControls(state, {
+        modelAuthStatusResult: loaded ? authStatus : undefined,
+        accountSelection: { kind: "personal", label: "Personal", authProfileId: "openai:personal" },
+      });
+      for (const [provider, expected] of [
+        ["openai", "Subscription · peter@steipete.me"],
+        ["anthropic", "Claude Max"],
+        ["google", "API"],
+        ["example", ""],
+      ]) {
+        const heading = container.querySelector(`[data-chat-model-provider="${provider}"]`)!;
+        expect(heading.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
+          loaded ? expected : "",
+        );
+        expect(heading.getAttribute("title")).toBe(loaded && expected ? expected : null);
+        expect(heading.textContent).not.toContain("claude@example.com");
+      }
+    },
+  );
+
+  it.each([
+    {
+      kind: "personal",
+      selected: "openai:work",
+      order: ["openai:personal"],
+      expected: "Subscription · work@example.com",
+    },
+    {
+      kind: "shared",
+      selected: "openai:personal",
+      order: ["openai:work"],
+      expected: "Subscription · peter@steipete.me",
+    },
+    {
+      kind: "automatic",
+      selected: undefined,
+      order: ["openai:personal"],
+      expected: "Subscription",
+    },
+    {
+      kind: "personal",
+      selected: "anthropic:personal",
+      order: ["openai:personal"],
+      expected: "Subscription",
+    },
+    { kind: "personal", selected: undefined, order: undefined, expected: "Subscription" },
+    { kind: undefined, selected: undefined, order: ["openai:personal"], expected: "Subscription" },
+    { kind: "personal", selected: "openai:key", order: ["openai:personal"], expected: "API" },
+    { kind: "automatic", selected: undefined, order: ["openai:key"], expected: "Subscription" },
+  ] as const)(
+    "derives $kind identity from $selected without borrowing the provider plan or order $order",
+    ({ kind, selected, order, expected }) => {
+      const { state } = createChatHeaderState({
+        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      });
+      const container = renderModelControls(state, {
+        accountSelection:
+          kind === undefined
+            ? undefined
+            : kind === "automatic"
+              ? { kind, label: "Automatic" }
+              : kind === "shared"
+                ? { kind, label: "Shared account", authProfileId: selected }
+                : { kind, label: "Personal account", authProfileId: selected },
+        modelAuthStatusResult: {
+          ts: 1,
+          providers: [
+            {
+              ...authStatus.providers[0]!,
+              profileOrder: order ? [...order] : undefined,
+              profiles: [
+                ...subscriptionProfiles,
+                { profileId: "openai:key", type: "api_key", status: "static" },
+              ],
+            },
+          ],
+        },
+      });
+      expect(
+        container
+          .querySelector('[data-chat-model-provider="openai"] .chat-controls__auth-meta')
+          ?.textContent?.trim(),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
+    { selected: "google:key", expected: "API" },
+    { selected: undefined, expected: "Gemini Pro" },
+  ])("merges alias auth records into one heading ($selected)", ({ selected, expected }) => {
+    const { state } = createChatHeaderState({
+      models: [{ id: "gemini", name: "Gemini", provider: "google" }],
+    });
+    const container = renderModelControls(state, {
+      accountSelection: selected
+        ? { kind: "personal", label: "Key", authProfileId: selected }
+        : { kind: "automatic", label: "Automatic" },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "google",
+            displayName: "Google",
+            status: "static",
+            profiles: [{ profileId: "google:key", type: "api_key", status: "static" }],
+            apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
+          },
+          {
+            provider: "google-gemini-cli",
+            displayName: "Gemini CLI",
+            status: "ok",
+            profiles: [{ profileId: "google:oauth", type: "oauth", status: "ok" }],
+            usage: { providerId: "google", windows: [], plan: "Gemini Pro" },
+          },
+        ],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="google"] .chat-controls__auth-meta')
+        ?.textContent?.trim(),
+    ).toBe(expected);
+  });
+
+  it("keeps an env API key visible when a CLI alias is missing", () => {
+    const { state } = createChatHeaderState({
+      models: [{ id: "gemini", name: "Gemini", provider: "google" }],
+    });
+    const container = renderModelControls(state, {
+      accountSelection: { kind: "automatic", label: "Automatic" },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "google",
+            displayName: "Google",
+            status: "static",
+            profiles: [],
+            apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
+          },
+          {
+            provider: "google-gemini-cli",
+            displayName: "Gemini CLI",
+            status: "missing",
+            profiles: [],
+          },
+        ],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="google"] .chat-controls__auth-meta')
+        ?.textContent?.trim(),
+    ).toBe("API");
+  });
+
+  it.each([false, true])("does not duplicate a row sign-in warning (%s)", (rowWarning) => {
+    const { state } = createChatHeaderState({
+      models: [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          ...(rowWarning ? { available: false, unavailableReason: "missing-auth" as const } : {}),
+        },
+      ],
+    });
+    const container = renderModelControls(state, {
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "expired",
+            profiles: [{ profileId: "openai:expired", type: "oauth", status: "expired" }],
+          },
+        ],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="openai"]')
+        ?.textContent?.includes("Sign-in needed"),
+    ).toBe(!rowWarning);
+    expect(container.querySelectorAll("[data-chat-model-auth-warning]").length > 0).toBe(
+      rowWarning,
+    );
+  });
+
+  it.each([1, 2])(
+    "shows account emails only for multiple subscription profiles (%i)",
+    async (count) => {
+      const profiles = subscriptionProfiles.slice(0, count);
+      const accounts = profiles.map((profile) => ({
+        authProfileId: profile.profileId,
+        provider: "openai",
+        label: "Workspace",
+        authType: profile.type,
+        selected: false,
+      }));
+      const { state } = createChatHeaderState({
+        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      });
+      const request = vi.fn().mockResolvedValue({ profileId: "test", accounts, links: [] });
+      const client = createTestGatewayClient(request);
+      const container = document.createElement("div");
+      const status: ModelAuthStatusResult = {
+        ts: 1,
+        providers: [{ ...authStatus.providers[0]!, profiles }],
+      };
+      const selection = {
+        kind: "personal" as const,
+        label: "Workspace",
+        authProfileId: profiles[0]!.profileId,
+      };
+      const draw = () =>
+        renderModelControls(
+          state,
+          {
+            modelAuthStatusResult: status,
+            renderAccountSection: (model) =>
+              renderChatModelAccountControl({
+                owner: state,
+                client,
+                selection,
+                model,
+                modelAuthStatusResult: status,
+                disabled: false,
+                ownsSelection: () => true,
+                onSelect: vi.fn(),
+                onRequestUpdate: draw,
+              }),
+          },
+          container,
+        );
+      draw();
+      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(container.querySelectorAll("[data-chat-account-option]")).toHaveLength(count),
+      );
+      for (const [index, row] of [
+        ...container.querySelectorAll("[data-chat-account-option]"),
+      ].entries()) {
+        expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
+          "Workspace",
+        );
+        expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
+          count > 1 ? profiles[index]!.email : "",
+        );
+        expect(row.textContent).not.toContain(profiles[index]!.profileId);
+      }
+    },
+  );
+
   it.each([100, 400])("prepares %i catalog rows without per-option catalog rescans", (size) => {
     let idReads = 0;
     const models: ModelCatalogEntry[] = Array.from({ length: size }, (_, index) => ({
@@ -7248,6 +7646,15 @@ describe("chat model controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
+  it("keeps a non-empty model list free of refresh failure chrome", () => {
+    const { state } = createOpenAiHeaderState();
+    const container = renderModelControls(state, {
+      modelCatalogState: { hasSnapshot: true, status: "ready", refreshFailed: true },
+    });
+    expect(container.querySelector("[data-chat-model-option]")).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+  });
+
   it("shows a successful empty catalog without authentication guidance", () => {
     const { state } = createChatHeaderState({ models: [] });
     const onModelSetup = vi.fn();
@@ -7312,7 +7719,9 @@ describe("chat model controls", () => {
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state, { onModelSelect });
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-chat-model-option]:not([data-chat-model-default="true"])',
+      ),
     ).find((button) => button.getAttribute("aria-selected") === "false");
     expect(modelOption).toBeInstanceOf(HTMLButtonElement);
     modelOption?.click();
@@ -7344,7 +7753,9 @@ describe("chat model controls", () => {
       expect(trigger.getAttribute("aria-label")).toContain(scopeDescription);
       expect(container.querySelector("[data-chat-model-selection-scope]")).toBeNull();
       const modelOption = Array.from(
-        container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+        container.querySelectorAll<HTMLButtonElement>(
+          '[data-chat-model-option]:not([data-chat-model-default="true"])',
+        ),
       ).find((button) => button.getAttribute("aria-selected") === "false");
       modelOption?.click();
 
@@ -7529,7 +7940,9 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("false");
     expect(modelSelect.getAttribute("title")).not.toBe(reason);
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-chat-model-option]:not([data-chat-model-default="true"])',
+      ),
     ).find((button) => button.getAttribute("aria-selected") === "false");
     modelOption?.click();
     container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")?.click();
@@ -7540,7 +7953,7 @@ describe("chat model controls", () => {
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("hides the provenance footer for the configured default and resets a recorded pin", () => {
+  it("clears a recorded pin through the Default row and restores trigger focus", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5",
       modelProvider: "openai",
@@ -7550,8 +7963,7 @@ describe("chat model controls", () => {
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state);
 
-    expect(container.querySelector(".chat-controls__model-provenance")).toBeNull();
-    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+    expect(container.querySelector('[data-chat-model-default="true"]')).not.toBeNull();
 
     state.sessionsResult = createSessionsListResult({
       model: "gpt-5.4",
@@ -7560,7 +7972,7 @@ describe("chat model controls", () => {
     });
     renderModelControls(state, { onModelSelect }, container);
 
-    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    const reset = container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]');
     const modelSelect = getChatModelSelect(container);
     const details = modelSelect.closest<HTMLDetailsElement>("details");
     document.body.append(container);
@@ -7568,14 +7980,93 @@ describe("chat model controls", () => {
       details.open = true;
     }
     expect(reset).toBeInstanceOf(HTMLButtonElement);
-    expect(reset?.textContent?.trim()).toBe("Reset session model");
-    expect(reset?.title).toBe("Use default (GPT-5) for this session");
+    expect(reset?.textContent).toContain("Default");
     reset?.focus();
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
     expect(details?.open).toBe(false);
     expect(document.activeElement).toBe(modelSelect);
     container.remove();
+  });
+
+  it("renders a Default row when the configured default is missing from the catalog", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+      models: createOpenAiModelCatalog(),
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const container = renderModelControls(state, { onModelSelect });
+    const defaultRow = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
+    );
+    expect(defaultRow?.dataset.chatModelOption).toBe("openai/gpt-5");
+    expect(defaultRow?.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
+      "gpt-5 · openai",
+    );
+    expect(defaultRow?.getAttribute("aria-selected")).toBe("false");
+    expect(defaultRow?.parentElement?.querySelector("[data-chat-model-option]")).toBe(defaultRow);
+    defaultRow?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+  });
+
+  it("keeps the Default row selectable when the default model needs sign-in", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+      models: [
+        {
+          id: "gpt-5",
+          name: "GPT-5",
+          provider: "openai",
+          available: false,
+          unavailableReason: "missing-auth",
+        },
+        ...createOpenAiModelCatalog(),
+      ],
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, { onModelSelect, onModelSetup });
+    const defaultRow = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
+    );
+    expect(defaultRow?.disabled).toBe(false);
+    expect(defaultRow?.querySelector("[data-chat-model-auth-warning]")).not.toBeNull();
+    defaultRow?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    expect(onModelSetup).not.toHaveBeenCalled();
+  });
+
+  it("clears a pin matching an unavailable default through the Default row", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+      models: [
+        {
+          id: "gpt-5",
+          name: "GPT-5",
+          provider: "openai",
+          available: false,
+          unavailableReason: "missing-auth",
+        },
+        ...createOpenAiModelCatalog(),
+      ],
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, { onModelSelect, onModelSetup });
+    const defaultRow = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
+    );
+    expect(defaultRow?.getAttribute("aria-selected")).toBe("true");
+    expect(defaultRow?.disabled).toBe(false);
+    defaultRow?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    expect(onModelSetup).not.toHaveBeenCalled();
   });
 
   it("allows an inherited parent model to be reset to Default", () => {
@@ -7625,9 +8116,8 @@ describe("chat model controls", () => {
       const container = renderModelControls(state, { onModelSelect });
 
       expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
-      const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
-      expect(reset?.textContent?.trim()).toBe("Reset session model");
-      expect(reset?.title).toContain("for this session");
+      const reset = container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]');
+      expect(reset?.textContent).toContain("Default");
       reset?.click();
 
       expect(onModelSelect).toHaveBeenCalledWith("", "main");
@@ -7657,7 +8147,6 @@ describe("chat model controls", () => {
     const container = renderModelControls(state, { onModelSelect });
     document.body.append(container);
 
-    expect(container.querySelector("[data-chat-model-reset]")).not.toBeNull();
     const defaultRow = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="openai/gpt-5.4"]',
     );
@@ -7678,7 +8167,8 @@ describe("chat model controls", () => {
       },
     };
     renderModelControls(state, { onModelSelect }, container);
-    expect(container.querySelector("[data-chat-model-reset]")).not.toBeNull();
+    container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]')?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
     container.remove();
   });
 
@@ -7714,7 +8204,6 @@ describe("chat model controls", () => {
     );
     expect(container.querySelectorAll("[data-chat-model-provider]")).toHaveLength(0);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
-    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     picker!.open = true;
     picker!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
@@ -7857,14 +8346,21 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("groups models and filters them with keyboard selection", () => {
+  it("groups models and preserves ranked keyboard selection through catalog replacement", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
+        { id: "gemini-2.5-pro", name: "Anth model", provider: "google" },
+        {
+          id: "unavailable",
+          name: "Anth unavailable",
+          provider: "google",
+          available: false,
+          unavailableReason: "cooldown",
+        },
       ],
     });
     const onModelSelect = vi.fn(async () => true);
@@ -7912,10 +8408,13 @@ describe("chat model controls", () => {
     ).filter((option) => !option.hidden);
     expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
       "anthropic/claude-sonnet-4-6",
+      "google/gemini-2.5-pro",
+      "google/unavailable",
     ]);
-    expect(visibleOptions[0]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
+    expect(visibleOptions[1]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
+    expect(visibleOptions[2]?.disabled).toBe(true);
     expect(
-      visibleOptions[0]
+      visibleOptions[1]
         ?.querySelector("[data-chat-model-shortcut]")
         ?.getAttribute("data-chat-model-shortcut-number"),
     ).toBe("1");
@@ -7925,7 +8424,19 @@ describe("chat model controls", () => {
 
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     const highlighted = container.querySelector<HTMLButtonElement>("[data-chat-model-highlighted]");
+    expect(highlighted).toBe(visibleOptions[0]);
     expect(highlighted?.id).not.toBe("");
+    expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
+
+    state.chatModelCatalog = [
+      ...state.chatModelCatalog,
+      { id: "new-match", name: "Anth new", provider: "openai" },
+    ];
+    renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
+    await Promise.resolve();
+    expect(container.querySelector("[data-chat-model-search]")).toBe(search);
+    expect(search?.value).toBe("anth");
+    expect(container.querySelector("[data-chat-model-highlighted]")).toBe(highlighted);
     expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
 
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -8082,9 +8593,11 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
 
-    expect(container.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
-      "Kimi K2.5",
-    );
+    expect(
+      container.querySelector(
+        '[data-chat-model-option="nvidia/kimi-k2.5"] .chat-controls__model-option-name',
+      )?.textContent,
+    ).toBe("Kimi K2.5");
   });
 
   it("keeps active context in picker details without crowding the compact trigger", () => {

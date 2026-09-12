@@ -20,6 +20,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
       "extensions/codex/src/app-server/run-attempt.generation-finalization.test.ts",
       "extensions/codex/src/app-server/run-attempt.hooks.test.ts",
       "extensions/codex/src/app-server/run-attempt.media-lifetime.test.ts",
+      "extensions/codex/src/app-server/run-attempt.native-hook-fallback.test.ts",
       "extensions/codex/src/app-server/run-attempt.native-hook-relay.test.ts",
       "extensions/codex/src/app-server/run-attempt.native-hook-relay-retention.test.ts",
       "extensions/codex/src/app-server/run-attempt.notification-burst.test.ts",

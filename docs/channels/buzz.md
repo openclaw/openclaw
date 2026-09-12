@@ -109,6 +109,16 @@ exit setup.
 Every target room must contain the bot identity with the **Bot** role. An
 existing human member or ordinary room member role is not sufficient.
 
+At startup, OpenClaw skips active configured rooms where the bot lacks the Bot
+role and logs a warning for each skipped room. Other eligible rooms stay online.
+If active configured rooms remain but none has the Bot role, the account cannot
+start.
+
+When the relay reports a membership change for a skipped room, OpenClaw checks
+its signed roster again. A confirmed Bot role starts that room without restarting
+healthy rooms. A live Bot-role downgrade in a subscribed room still cancels the
+account's active work and reconnects with fresh memberships.
+
 Buzz desktop cannot reliably assign the Bot role to an externally managed
 OpenClaw identity. Use the Buzz CLI as the existing human room owner or admin:
 

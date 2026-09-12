@@ -222,6 +222,34 @@ describe("runtime auth profile snapshots", () => {
     }
   });
 
+  it("publishes an agent-local credential mutation without publishing usage bookkeeping", () => {
+    const agentDir = "/tmp/openclaw-auth-local-mutation";
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+        credentialsChanged: false,
+        stateChanged: true,
+        profileIds: ["openai:default"],
+      });
+      expect(listener).not.toHaveBeenCalled();
+      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+        credentialsChanged: true,
+        profileSetChanged: true,
+        stateChanged: false,
+        profileIds: ["openai:default"],
+      });
+      expect(listener).toHaveBeenCalledExactlyOnceWith({
+        agentDir,
+        affectsInheritedStores: false,
+        profileSetChanged: true,
+      });
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
   it.each([
     { change: "provider priority", state: { order: { openai: [] } } },
     { change: "provider priority ownership", state: { runtimeLocalOrderProviderIds: [] } },

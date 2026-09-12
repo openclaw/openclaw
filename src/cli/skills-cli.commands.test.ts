@@ -8,6 +8,11 @@ import {
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import {
+  expectObjectFields,
+  mockCall,
+  mockFirstObjectArg,
+} from "../test-utils/mock-call-assertions.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -188,33 +193,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function mockCall(mock: unknown, index = 0): Array<unknown> {
-  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  const call = calls.at(index);
-  if (!call) {
-    throw new Error(`Expected mock call ${index + 1}`);
-  }
-  return call;
-}
-
-function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
-  const [arg] = mockCall(mock);
-  if (!arg || typeof arg !== "object") {
-    throw new Error("expected first mock argument object");
-  }
-  return arg as Record<string, unknown>;
-}
-
-function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected object fields");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
-
 function expectLogger(value: unknown): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected logger object");
@@ -261,6 +239,11 @@ function primeCalendarUpdate(workspaceDir = "/tmp/workspace"): void {
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
+}));
+
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
 }));
 
 vi.mock("../gateway/call.js", () => ({

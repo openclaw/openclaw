@@ -162,7 +162,7 @@ export async function startOrResumeThread(
             params.pluginThreadConfig?.build(),
           )
         : undefined;
-      const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
+      const finalConfigPatch = (await params.buildFinalConfigPatch?.({ action: "start" })) ?? {
         configPatch: params.finalConfigPatch,
         nativeHookRelayGeneration: params.nativeHookRelayGeneration,
       };

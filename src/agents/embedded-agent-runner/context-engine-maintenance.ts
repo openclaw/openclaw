@@ -53,6 +53,7 @@ import {
   disposeDeferredMaintenanceContextEngine,
   mergeContextEngineFactoryWork,
   runContextEngineMaintenanceWork,
+  type ContextEngineMaintenanceResources,
 } from "./context-engine-maintenance-work.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
@@ -85,7 +86,7 @@ type ContextEngineMaintenanceParams = {
   onDeferredMaintenanceFailure?: (error: unknown) => void;
   config?: OpenClawConfig;
   disposeDeferredContextEngineAfterMaintenance?: boolean;
-  closeFactoryWork?: () => Promise<void>;
+  factoryResources?: ContextEngineMaintenanceResources;
 };
 
 type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
@@ -94,7 +95,7 @@ type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
   runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   disposeContextEngineAfterMaintenance?: boolean;
   onScheduleFailure?: (error: unknown) => void;
-  factoryWorkClosers: Set<() => Promise<void>>;
+  factoryResourceOwners: Set<ContextEngineMaintenanceResources>;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -103,7 +104,7 @@ type DeferredTurnMaintenanceRunState = {
   promise: Promise<void>;
   rerunRequested: boolean;
   activeContextEngine: ContextEngine;
-  activeFactoryWorkClosers: Set<() => Promise<void>>;
+  activeFactoryResourceOwners: Set<ContextEngineMaintenanceResources>;
   disposeActiveContextEngineAfterMaintenance: boolean;
   latestParams: DeferredTurnMaintenanceScheduleParams;
 };
@@ -460,10 +461,10 @@ function scheduleDeferredTurnMaintenance(
   if (activeRun) {
     const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
     const latestParams = { ...params, sessionKey };
-    latestParams.factoryWorkClosers = mergeContextEngineFactoryWork(
+    latestParams.factoryResourceOwners = mergeContextEngineFactoryWork(
       latestParams,
       activeRun.activeContextEngine,
-      activeRun.activeFactoryWorkClosers,
+      activeRun.activeFactoryResourceOwners,
       supersededParams,
     );
     // Coalesced resolutions may wrap one shared factory instance. Carry disposal
@@ -674,7 +675,7 @@ function scheduleDeferredTurnMaintenance(
     promise: trackedPromise,
     rerunRequested: false,
     activeContextEngine: params.contextEngine,
-    activeFactoryWorkClosers: params.factoryWorkClosers,
+    activeFactoryResourceOwners: params.factoryResourceOwners,
     disposeActiveContextEngineAfterMaintenance:
       params.disposeContextEngineAfterMaintenance === true,
     latestParams: { ...params, sessionKey },
@@ -717,12 +718,13 @@ export async function runContextEngineMaintenance(
         );
         return undefined;
       }
+      // The scheduler takes resource custody synchronously before the foreground transfer callback.
       const deferred = scheduleDeferredTurnMaintenance({
         ...params,
         contextEngine,
         sessionKey,
         runInContext: AsyncLocalStorage.snapshot(),
-        factoryWorkClosers: new Set(params.closeFactoryWork ? [params.closeFactoryWork] : []),
+        factoryResourceOwners: new Set(params.factoryResources ? [params.factoryResources] : []),
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
         onScheduleFailure: params.onDeferredMaintenanceFailure,
       });

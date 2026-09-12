@@ -10,10 +10,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { readMemorySourceHash } from "./manager-source-index-kernel.js";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -120,12 +120,5 @@ export function resolveMemorySourceExistingHash(params: {
   if (params.existingHashes) {
     return params.existingHashes.get(params.path);
   }
-  return executeSqliteQueryTakeFirstSync(
-    params.db,
-    getNodeSqliteKysely<MemorySourceDatabase>(params.db)
-      .selectFrom("memory_index_sources")
-      .select("hash")
-      .where("path", "=", params.path)
-      .where("source", "=", params.source),
-  )?.hash;
+  return readMemorySourceHash(params.db, params.source, params.path);
 }

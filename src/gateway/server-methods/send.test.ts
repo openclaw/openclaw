@@ -324,6 +324,21 @@ async function runPollWithClient(
   return { respond };
 }
 
+function createTelegramSourceSendRequest(to: string, message: string, idempotencyKey: string) {
+  return {
+    channel: "telegram",
+    action: "send",
+    params: { to, message },
+    sessionKey: "agent:main:telegram:direct:chat-123",
+    agentId: "main",
+    toolContext: {
+      currentChannelProvider: "telegram",
+      currentChannelId: "chat-123",
+    },
+    idempotencyKey,
+  };
+}
+
 async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: {
@@ -3919,21 +3934,13 @@ describe("gateway send mirroring", () => {
       new Error("transcript unavailable"),
     );
 
-    const { respond } = await runMessageActionRequest({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "chat-123",
-        message: "visible source reply",
-      },
-      sessionKey: "agent:main:telegram:direct:chat-123",
-      agentId: "main",
-      toolContext: {
-        currentChannelProvider: "telegram",
-        currentChannelId: "chat-123",
-      },
-      idempotencyKey: "idem-source-message-action-mirror-failed",
-    });
+    const { respond } = await runMessageActionRequest(
+      createTelegramSourceSendRequest(
+        "chat-123",
+        "visible source reply",
+        "idem-source-message-action-mirror-failed",
+      ),
+    );
 
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(true);
@@ -3991,21 +3998,11 @@ describe("gateway send mirroring", () => {
       sendHandlers["message.action"],
       'sendHandlers["message.action"] test invariant',
     )({
-      params: {
-        channel: "telegram",
-        action: "send",
-        params: {
-          to: "chat-123",
-          message: "visible media caption",
-        },
-        sessionKey: "agent:main:telegram:direct:chat-123",
-        agentId: "main",
-        toolContext: {
-          currentChannelProvider: "telegram",
-          currentChannelId: "chat-123",
-        },
-        idempotencyKey: "idem-async-source-message-action",
-      } as never,
+      params: createTelegramSourceSendRequest(
+        "chat-123",
+        "visible media caption",
+        "idem-async-source-message-action",
+      ) as never,
       respond,
       context: makeContext(),
       req: { type: "req", id: "1", method: "message.action" },
@@ -4051,21 +4048,11 @@ describe("gateway send mirroring", () => {
       sendHandlers["message.action"],
       'sendHandlers["message.action"] test invariant',
     )({
-      params: {
-        channel: "telegram",
-        action: "send",
-        params: {
-          to: "chat-123",
-          message: "first visible reply",
-        },
-        sessionKey: "agent:main:telegram:direct:chat-123",
-        agentId: "main",
-        toolContext: {
-          currentChannelProvider: "telegram",
-          currentChannelId: "chat-123",
-        },
-        idempotencyKey: "idem-ordered-source-message-action-1",
-      } as never,
+      params: createTelegramSourceSendRequest(
+        "chat-123",
+        "first visible reply",
+        "idem-ordered-source-message-action-1",
+      ) as never,
       respond: firstRespond,
       context: makeContext(),
       req: { type: "req", id: "1", method: "message.action" },
@@ -4079,21 +4066,11 @@ describe("gateway send mirroring", () => {
       sendHandlers["message.action"],
       'sendHandlers["message.action"] test invariant',
     )({
-      params: {
-        channel: "telegram",
-        action: "send",
-        params: {
-          to: "chat-123",
-          message: "second visible reply",
-        },
-        sessionKey: "agent:main:telegram:direct:chat-123",
-        agentId: "main",
-        toolContext: {
-          currentChannelProvider: "telegram",
-          currentChannelId: "chat-123",
-        },
-        idempotencyKey: "idem-ordered-source-message-action-2",
-      } as never,
+      params: createTelegramSourceSendRequest(
+        "chat-123",
+        "second visible reply",
+        "idem-ordered-source-message-action-2",
+      ) as never,
       respond: secondRespond,
       context: makeContext(),
       req: { type: "req", id: "2", method: "message.action" },
@@ -4297,21 +4274,13 @@ describe("gateway send mirroring", () => {
       jsonResult({ ok: true, messageId: "tg-external" }),
     );
 
-    const { respond } = await runMessageActionRequest({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "other-chat",
-        message: "external visible reply",
-      },
-      sessionKey: "agent:main:telegram:direct:chat-123",
-      agentId: "main",
-      toolContext: {
-        currentChannelProvider: "telegram",
-        currentChannelId: "chat-123",
-      },
-      idempotencyKey: "idem-external-message-action",
-    });
+    const { respond } = await runMessageActionRequest(
+      createTelegramSourceSendRequest(
+        "other-chat",
+        "external visible reply",
+        "idem-external-message-action",
+      ),
+    );
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();

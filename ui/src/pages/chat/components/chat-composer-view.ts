@@ -295,8 +295,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     queue: props.queue,
     offline: props.offline,
     canAbort: showAbortableUi,
-    onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
-    onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+    onQueueRetry:
+      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueRetry : undefined,
+    onQueueSteer:
+      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueSteer : undefined,
     // Reordering is local bookkeeping, so it stays available while offline —
     // exactly when a queue is long enough to need it.
     onQueueMove: props.onQueueMove,
@@ -494,6 +496,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     @pointerup=${handleSelect}
                     @compositionstart=${(event: CompositionEvent) => {
                       state.mentionMenu.close();
+                      state.editRevision += 1;
                       state.composerComposing = true;
                       state.composingDraft = {
                         key: draftKey,

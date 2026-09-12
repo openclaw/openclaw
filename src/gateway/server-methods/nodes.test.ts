@@ -485,6 +485,7 @@ describe("nodeHandlers node.pair.approve", () => {
         }),
     );
     const client = createWorkerSupervisorNodeClient("conn-surface-reapproval");
+    const send = vi.spyOn(client.socket, "send");
     runtime.nodeRegistry.register(client, {
       pairingIdentity: previousState?.identity.key ?? "",
       pairingGeneration: previousState?.generation?.key,
@@ -531,6 +532,12 @@ describe("nodeHandlers node.pair.approve", () => {
       undefined,
     );
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    const message = send.mock.calls.at(-1)?.[0];
+    expect(typeof message === "string" && JSON.parse(message)).toMatchObject({
+      type: "event",
+      event: "node.pair.resolved",
+      payload: { requestId: pending.request.requestId, nodeId, decision: "approved" },
+    });
     const republish = createOptions(
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],

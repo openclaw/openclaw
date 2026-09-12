@@ -1,7 +1,12 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+} from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -608,6 +613,77 @@ describe("session list requests", () => {
         resolveRequest(listResult());
         unsubscribe();
         sessions.dispose();
+      }
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "absorbs only invalidations preceding a queued managed replacement (%s)",
+    async (eventTiming) => {
+      vi.useFakeTimers();
+      const first = createDeferred<SessionsListResult>();
+      const second = createDeferred<SessionsListResult>();
+      const secondStarted = createDeferred();
+      const row = (version: number) => ({
+        key: "agent:main:managed-refresh",
+        sessionId: "managed-refresh",
+        kind: "direct" as const,
+        archived: true,
+        updatedAt: version,
+        label: `Read ${version}`,
+      });
+      let managedCalls = 0;
+      const client = createTestGatewayClient((method, params) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        if (asNullableRecord(params)?.archived !== true) {
+          return sessionsResult([], 0);
+        }
+        managedCalls += 1;
+        if (managedCalls === 1) {
+          return first.promise;
+        }
+        if (managedCalls === 2) {
+          secondStarted.resolve();
+          return second.promise;
+        }
+        return sessionsResult([row(3)], 3);
+      });
+      const { gateway, emitEvent } = createGatewayHarness(client);
+      const sessions = createTestSessionCapability(gateway);
+      const query = { agentId: "main", archivedFilter: "archived" as const, limit: 17 };
+      const unsubscribe = sessions.subscribeList(query, () => undefined);
+      const event = {
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...row(1), sessionKey: row(1).key, agentId: "main", reason: "update" },
+      } as const satisfies GatewayEventFrame;
+      try {
+        const initial = sessions.refreshList(query);
+        const forced = sessions.refreshList({ ...query, force: true });
+        if (eventTiming === "before") {
+          emitEvent(event);
+        }
+        first.resolve(sessionsResult([row(1)], 1));
+        await secondStarted.promise;
+        expect(managedCalls).toBe(2);
+        if (eventTiming === "after") {
+          emitEvent(event);
+        }
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+        second.resolve(sessionsResult([row(2)], 2));
+        await Promise.all([initial, forced]);
+        expect.soft(managedCalls).toBe(eventTiming === "before" ? 2 : 3);
+        expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe(
+          eventTiming === "before" ? "Read 2" : "Read 3",
+        );
+      } finally {
+        first.resolve(sessionsResult([], 1));
+        second.resolve(sessionsResult([], 2));
+        unsubscribe();
+        sessions.dispose();
+        vi.useRealTimers();
       }
     },
   );

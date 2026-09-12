@@ -1,4 +1,5 @@
 // Public contracts shared by package activation and its existing callers.
+import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
 import type { NpmGlobalPrefixLayout, ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
@@ -32,6 +33,19 @@ export type StagedPackageInstall = {
   packageRoot: string;
   installTarget: ResolvedGlobalInstallTarget;
   native?: NativePackageStage;
+};
+
+export type StagedPackageSwapParams = {
+  stage: StagedPackageInstall;
+  installTarget: ResolvedGlobalInstallTarget;
+  packageName: string;
+  postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
+  beforeActivate?: () => Promise<void>;
+  onLiveMutation?: () => void;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  timeoutMs?: number;
+  localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
+  onLocalOverrides?: (result: LocalPackageOverridesResult) => void;
 };
 
 export type StagedPackageSwapResult =

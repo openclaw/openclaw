@@ -124,6 +124,12 @@ final class MacNodeModeCoordinator: NSObject {
     private let channelStatus: MacNodeChannelStatusStore
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let presenceReporter: MacNodePresenceReporter
+    private let desktopAvailability: MacDesktopAvailabilityCoordinator
+    private let workerHostingEnabled: @Sendable () async -> Bool
+    private var desktopRoute: GatewayNodeSessionRoute?
+    private var desktopRouteGeneration: UInt64 = 0
+    private var desktopRefreshGeneration: UInt64 = 0
+    private var desktopPublicationTask: Task<Void, Never>?
     private let notificationCenter: NotificationCenter
     private let nodeHostWorkerRetrySleep: @Sendable (UInt64) async throws -> Void
     private let refreshEvents: AsyncStream<Void>
@@ -146,6 +152,7 @@ final class MacNodeModeCoordinator: NSObject {
                 }),
             nodeHostWorker: nodeHostWorker,
             presenceReporter: MacNodePresenceReporter(),
+            workerHostingEnabled: { await nodeHostWorker.isWorkerHostingEnabled() },
             observeNotifications: true,
             initialPaused: nil,
             initialComputerControlEnabled: nil)
@@ -156,6 +163,8 @@ final class MacNodeModeCoordinator: NSObject {
         runtime: MacNodeRuntime,
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
+        desktopAvailability: MacDesktopAvailabilityCoordinator = .shared,
+        workerHostingEnabled: @escaping @Sendable () async -> Bool = { false },
         channelStatus: MacNodeChannelStatusStore = .shared,
         notificationCenter: NotificationCenter = .default,
         observeNotifications: Bool = false,
@@ -172,6 +181,8 @@ final class MacNodeModeCoordinator: NSObject {
         self.runtime = runtime
         self.nodeHostWorker = nodeHostWorker
         self.presenceReporter = presenceReporter
+        self.desktopAvailability = desktopAvailability
+        self.workerHostingEnabled = workerHostingEnabled
         self.channelStatus = channelStatus
         self.notificationCenter = notificationCenter
         self.nodeHostWorkerRetrySleep = nodeHostWorkerRetrySleep
@@ -187,6 +198,21 @@ final class MacNodeModeCoordinator: NSObject {
         super.init()
 
         guard observeNotifications else { return }
+        self.desktopAvailability.onStateChanged = { [weak self] state in
+            NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
+            self?.publishDesktopAvailability(state)
+        }
+        self.desktopAvailability.onExecutionsRevoked = { [weak self] permits, reason in
+            Task { [weak self] in
+                guard let self else { return }
+                await self.runtime.revokeDesktopExecutions(permits, reason: reason)
+            }
+        }
+        self.notificationCenter.addObserver(
+            self,
+            selector: #selector(self.desktopHostingChanged),
+            name: .openclawNodeHostHostingChanged,
+            object: nil)
         self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
@@ -373,6 +399,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private func revokeRouteAuthority() {
+        self.retireDesktopRoute(reason: "route-revoked")
         self.invalidateEndpointAttempt()
         self.routeAuthorityGeneration &+= 1
     }
@@ -679,6 +706,12 @@ final class MacNodeModeCoordinator: NSObject {
                 let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
                 let currentRoute = await self.session.currentRoute()
                 guard routeStillAuthoritative, currentRoute == installedRoute else { return }
+                let desktopCommands = ["desktop.stream", "screen.snapshot", "computer.act"]
+                if attempt.options.commands.contains(where: desktopCommands.contains) {
+                    await self.installDesktopRoute(
+                        installedRoute,
+                        authorityGeneration: attempt.routeAuthorityGeneration)
+                }
                 await self.runtime.updateMainSessionKey(mainSessionKey)
                 await self.presenceReporter.start(
                     sender: { [weak self] event, payload in
@@ -702,6 +735,8 @@ final class MacNodeModeCoordinator: NSObject {
             },
             onDisconnected: { [weak self] reason in
                 guard let self else { return }
+                await self.retireDesktopRoute(
+                    ifAuthorityGeneration: attempt.routeAuthorityGeneration, reason: "gateway-disconnect")
                 await self.channelStatus.record(.unavailable(
                     reason: reason,
                     diagnostic: attempt.workerUnavailable?.diagnostic))
@@ -767,6 +802,8 @@ final class MacNodeModeCoordinator: NSObject {
                 await self.nodeHostWorker?.cancel(invokeId: invokeId)
             },
             onRouteInvalidated: { [weak self] in
+                await self?.retireDesktopRoute(
+                    ifAuthorityGeneration: attempt.routeAuthorityGeneration, reason: "gateway-route-invalidated")
                 await self?.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
             })
     }
@@ -1352,5 +1389,67 @@ extension MacNodeModeCoordinator {
     nonisolated static func mergingUnique(_ primary: [String], _ additional: [String]) -> [String] {
         var seen = Set<String>()
         return (primary + additional).filter { seen.insert($0).inserted }
+    }
+}
+
+extension MacNodeModeCoordinator {
+    private func installDesktopRoute(_ route: GatewayNodeSessionRoute, authorityGeneration: UInt64) async {
+        guard self.routeAuthorityAllowsInvoke(authorityGeneration) else { return }
+        if self.desktopRoute != route {
+            self.desktopRouteGeneration &+= 1
+            self.desktopRoute = route
+        }
+        let desktopGeneration = self.desktopRouteGeneration
+        self.desktopRefreshGeneration &+= 1
+        let refreshGeneration = self.desktopRefreshGeneration
+        let hosting = await self.workerHostingEnabled()
+        let currentRoute = await self.session.currentRoute()
+        guard currentRoute == route, !Task.isCancelled,
+              desktopGeneration == self.desktopRouteGeneration,
+              refreshGeneration == self.desktopRefreshGeneration,
+              self.desktopRoute == route,
+              self.routeAuthorityAllowsInvoke(authorityGeneration)
+        else { return }
+        self.desktopAvailability.setRoute(
+            generation: self.desktopRouteGeneration, connected: true, hostingEnabled: hosting)
+        self.publishDesktopAvailability(self.desktopAvailability.state)
+    }
+
+    private func retireDesktopRoute(reason: String) {
+        self.desktopPublicationTask?.cancel()
+        self.desktopPublicationTask = nil
+        self.desktopRefreshGeneration &+= 1
+        self.desktopAvailability.revoke(generation: self.desktopRouteGeneration, reason: reason)
+        self.desktopRouteGeneration &+= 1
+        self.desktopRoute = nil
+    }
+
+    private func retireDesktopRoute(ifAuthorityGeneration generation: UInt64, reason: String) {
+        guard generation == self.routeAuthorityGeneration else { return }
+        self.retireDesktopRoute(reason: reason)
+    }
+
+    private func publishDesktopAvailability(_ state: MacDesktopAvailabilityCoordinator.State) {
+        guard let route = self.desktopRoute else { return }
+        let generation = self.desktopRouteGeneration
+        let previous = self.desktopPublicationTask
+        self.desktopPublicationTask = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled,
+                  self.desktopRoute == route, self.desktopRouteGeneration == generation,
+                  self.desktopAvailability.state == state,
+                  let data = try? JSONEncoder().encode(DeviceSettingsSnapshot.DesktopAvailability(state: state)),
+                  let payload = String(data: data, encoding: .utf8)
+            else { return }
+            _ = await self.session.sendEvent(
+                event: "node.desktop.availability", payloadJSON: payload, ifCurrentRoute: route)
+        }
+    }
+
+    @objc private nonisolated func desktopHostingChanged() {
+        Task { @MainActor [weak self] in
+            guard let self, let route = self.desktopRoute else { return }
+            await self.installDesktopRoute(route, authorityGeneration: self.routeAuthorityGeneration)
+        }
     }
 }

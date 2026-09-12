@@ -557,20 +557,19 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   }
   recordRuntimeAuthProfileStorePersistedMutation(ownerKey, mutation);
   const mainKey = owner?.sharedDatabasePath ?? resolveRuntimeStoreKey(undefined);
-  if (ownerKey !== mainKey || (!mutation.credentialsChanged && !mutation.profileSetChanged)) {
-    return;
-  }
-  let deletedDerivedSnapshot = false;
-  const sharedOwner = owner ?? captureRuntimeAuthSharedOwner();
-  for (const [key, entry] of runtimeAuthStoreSnapshots) {
-    if (key !== mainKey && runtimeAuthProfileSnapshotSharesOwner(entry.owner, sharedOwner)) {
-      runtimeAuthStoreSnapshots.delete(key);
-      runtimeAuthStoreSnapshotRevisions.delete(key);
-      deletedDerivedSnapshot = true;
+  if (ownerKey === mainKey && (mutation.credentialsChanged || mutation.profileSetChanged)) {
+    let deletedDerivedSnapshot = false;
+    const sharedOwner = owner ?? captureRuntimeAuthSharedOwner();
+    for (const [key, entry] of runtimeAuthStoreSnapshots) {
+      if (key !== mainKey && runtimeAuthProfileSnapshotSharesOwner(entry.owner, sharedOwner)) {
+        runtimeAuthStoreSnapshots.delete(key);
+        runtimeAuthStoreSnapshotRevisions.delete(key);
+        deletedDerivedSnapshot = true;
+      }
     }
-  }
-  if (deletedDerivedSnapshot) {
-    advanceRuntimeAuthStoreSnapshotsRevision();
+    if (deletedDerivedSnapshot) {
+      advanceRuntimeAuthStoreSnapshotsRevision();
+    }
   }
   if (mutation.credentialsChanged || mutation.profileSetChanged) {
     notifyRuntimeAuthStoreMutation(agentDir, mutation.profileSetChanged === true);

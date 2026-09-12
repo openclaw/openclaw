@@ -161,6 +161,9 @@ describe("diagnostic support redaction", () => {
       ["event $OPENCLAW_STATE_DIR1", "event <redacted-matrix-event>"],
       ["event $PREFIX_OPENCLAW_STATE_DIR", "event <redacted-matrix-event>"],
       ["notify @support_bot now", "notify <redacted-handle> now"],
+      ["notify @openclaw now", "notify <redacted-handle> now"],
+      ["package @private_team/codex", "package <redacted-handle>/codex"],
+      ["package @openclaw_private/codex", "package <redacted-handle>/codex"],
       ["phone 15555551212", "phone <redacted-id>"],
       [
         `config password = ${["support", "password", "1234567890"].join("-")}`,
@@ -190,6 +193,27 @@ describe("diagnostic support redaction", () => {
       expect(redactTextForSupport(input)).toBe(expected);
     }
   });
+
+  it.each(["@openclaw/codex", "@openclaw/codex@latest", "@openclaw/codex@2026.9.3"])(
+    "preserves install guidance for %s beside private diagnostics across support handoffs",
+    (packageSpec) => {
+      const redaction = { env: {}, stateDir: tempDir };
+      const command = `openclaw plugins install ${packageSpec}`;
+      const input =
+        `Unable to resolve Codex doctor health API: install the official Codex plugin with ${command}\n` +
+        `Config: ${tempDir}/openclaw.json; contact @support_bot or alice@example.com\n` +
+        "Endpoint: https://gateway.example/ws?token=synthetic-secret&ok=1";
+      const expected =
+        `Unable to resolve Codex doctor health API: install the official Codex plugin with ${command}\n` +
+        "Config: $OPENCLAW_STATE_DIR/openclaw.json; contact <redacted-handle> or <redacted-email>\n" +
+        "Endpoint: https://gateway.example/ws?token=<redacted>&ok=1";
+
+      const sanitized = redactSupportString(input, redaction);
+
+      expect(sanitized).toBe(expected);
+      expect(redactSupportString(sanitized, redaction)).toBe(expected);
+    },
+  );
 
   it("preserves canonical state path markers across repeated support handoffs", () => {
     const redaction = { env: {}, stateDir: tempDir };

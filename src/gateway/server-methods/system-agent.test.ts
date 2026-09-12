@@ -17,7 +17,7 @@ import { SystemAgentInferenceUnavailableError } from "../../system-agent/inferen
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
-import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
+import * as setupAdmission from "./setup-admission.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
@@ -131,10 +131,42 @@ describe("openclaw.setup", () => {
     },
   );
 
+  it("delivers activation completion only after setup admission settles", async () => {
+    const taskFinished = createDeferred();
+    const admissionSettled = createDeferred();
+    const admission = vi.spyOn(setupAdmission, "runExclusiveSystemAgentSetupActivation");
+    admission.mockImplementation(async <T>(task: () => Promise<T>) => {
+      const result = await task();
+      taskFinished.resolve();
+      await admissionSettled.promise;
+      return result;
+    });
+    const result = { ok: true, modelRef: "openai/fixture", latencyMs: 1, lines: [] };
+    setupInferenceMocks.activateSetupInference.mockResolvedValue(result);
+    const { calls, respond } = makeRespond();
+    const pending = systemAgentHandler("openclaw.setup.activate")({
+      req: { type: "req", id: "setup-completion", method: "openclaw.setup.activate" },
+      params: { kind: "claude-cli" },
+      client: null,
+      isWebchatConnect: () => false,
+      context: makeContext(new Map()),
+      respond,
+    });
+    try {
+      await taskFinished.promise;
+      expect(calls).toEqual([]);
+    } finally {
+      admissionSettled.resolve();
+      await pending;
+      admission.mockRestore();
+    }
+    expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
+  });
+
   it("returns a retryable busy error while another activation is running", async () => {
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
-    const first = runExclusiveSystemAgentSetupActivation(async () => {
+    const first = setupAdmission.runExclusiveSystemAgentSetupActivation(async () => {
       firstStarted.resolve();
       await releaseFirst.promise;
     });
@@ -175,7 +207,7 @@ describe("openclaw.setup", () => {
   ])("rejects %s before creating a wizard session when setup is busy", async (method, params) => {
     const ownerStarted = createDeferred();
     const releaseOwner = createDeferred();
-    const owner = runExclusiveSystemAgentSetupActivation(async () => {
+    const owner = setupAdmission.runExclusiveSystemAgentSetupActivation(async () => {
       ownerStarted.resolve();
       await releaseOwner.promise;
     });
@@ -586,6 +618,7 @@ describe("openclaw.chat", () => {
         surface: "gateway",
         runtime: expect.objectContaining({ exit: expect.any(Function) }),
         onRuntimeApplication: expect.any(Function),
+        onCredentialActivation: expect.any(Function),
       });
       expect(calls).toEqual(
         outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],

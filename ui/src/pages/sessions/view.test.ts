@@ -32,6 +32,7 @@ function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsLis
 function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    refreshing: false,
     agentId: "main",
     mainKey: "main",
     result,
@@ -376,6 +377,7 @@ describe("sessions view", () => {
           ],
           indexing: true,
           truncated: true,
+          archivedTranscriptsExcluded: 0,
         },
         onNavigateToChat,
       }),

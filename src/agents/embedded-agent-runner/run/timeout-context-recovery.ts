@@ -88,7 +88,7 @@ export async function recoverEmbeddedRunTimeout(
         restoreEmbeddedRunTimeoutAbandonment(recoveryMarker);
       }
       log.warn(
-        `[timeout-compaction] compaction did not reduce context for ${input.provider}/${input.modelId}; falling through to normal handling`,
+        `[timeout-compaction] compaction did not reduce context for ${input.modelSelection.provider}/${input.modelSelection.model}; falling through to normal handling`,
       );
       return false;
     }
@@ -114,7 +114,7 @@ export async function recoverEmbeddedRunTimeout(
       input.assertRecoveryActive();
     }
     log.info(
-      `[timeout-compaction] compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
+      `[timeout-compaction] compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
     );
     input.armPostCompactionGuard();
     await input.prepareCompactedTranscriptRetry(input.assertRecoveryActive);

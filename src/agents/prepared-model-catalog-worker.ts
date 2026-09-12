@@ -17,6 +17,7 @@ import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   setPreparedModelFullCatalogAuth,
@@ -34,6 +35,7 @@ import {
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
+import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -69,6 +71,7 @@ export type PreparedModelWorkerResult =
       snapshot: ModelCatalogSnapshot;
       configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
       credentials: Readonly<AuthStorageData>;
+      providerAuthLabels: ModelCatalogAuthLabels;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
@@ -299,7 +302,14 @@ export function createPreparedModelCatalogWorker(
                     ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
                     ...workerInput.providerIds,
                   ]
-                : [...workerInput.providerIds, ...command.providerIds],
+                : [
+                    ...workerInput.providerIds,
+                    ...command.providerIds,
+                    ...scopeSyntheticAuthProviderRefs(
+                      listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
+                      [...workerInput.providerIds, ...command.providerIds],
+                    ),
+                  ],
             signal: controller.signal,
           }),
       );
@@ -360,6 +370,7 @@ export function createPreparedModelCatalogWorker(
         authStore: message.authStore,
         authModes: message.authModes,
         credentials: message.credentials,
+        providerAuthLabels: message.providerAuthLabels,
       });
       return { modelCatalog, configuredRuntimeModels: message.configuredRuntimeModels };
     },

@@ -256,6 +256,10 @@ type LlmCompleteCommonParams = {
 
 type LlmDirectCompleteParams = LlmCompleteCommonParams & {
   messages: LlmCompleteMessage[];
+  /** Provider-native constrained-output request. Unsupported transports may ignore it. */
+  responseFormat?: Record<string, unknown>;
+  /** Fail before dispatch unless the exact selected credential has this host-resolved mode. */
+  requiredAuthMode?: "oauth";
   execution?: undefined;
 };
 
@@ -297,6 +301,10 @@ export type LlmCompleteResult = {
   text: string;
   provider: string;
   model: string;
+  /** Concrete model identity returned by the provider, when available. */
+  responseModel?: string;
+  /** Provider terminal reason for direct completions, when available. */
+  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   agentId: string;
   usage: LlmCompleteUsage;
   execution: LlmCompleteExecution;
@@ -502,6 +510,10 @@ export type PluginRuntimeCore = {
     openKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
+    /**
+     * @deprecated Use openKeyedStore and await its operations. The synchronous
+     * compatibility adapter remains through the next Plugin SDK major.
+     */
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
@@ -548,6 +560,8 @@ export type PluginRuntimeCore = {
     /** Read-only model selection; no session mutation or harness execution authority. */
     resolveDefaultModelForAgent: typeof import("../../agents/model-selection-config.js").resolveDefaultModelForAgent;
     resolveAllowedModelRef: typeof import("../../agents/model-selection-resolve.js").resolveAllowedModelRefCore;
+    /** Read authored model/provider runtime policy without projecting runtime availability. */
+    resolveModelRuntimePolicy: typeof import("../../agents/model-runtime-policy.js").resolveModelRuntimePolicy;
   };
   modelAuth: {
     /** Existing synchronous SDK operations, composed by the native host. */

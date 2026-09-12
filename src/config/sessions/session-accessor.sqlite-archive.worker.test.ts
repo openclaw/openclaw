@@ -16,6 +16,7 @@ import {
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
+import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
@@ -131,6 +132,13 @@ describe("SQLite transcript archive worker", () => {
           : index === 63
             ? `last: 🦞\n${randomBytes(576 * 1024).toString("base64")}`
             : `${index}:${randomBytes(576 * 1024).toString("base64")}`,
+      ),
+    );
+    events.splice(
+      1,
+      0,
+      ...Array.from({ length: 1_000 }, (_, index) =>
+        createTranscriptEvent(`small-${index}`, `你好 🦞\n${"small row ".repeat(16)}`),
       ),
     );
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
@@ -283,6 +291,35 @@ describe("SQLite transcript archive worker", () => {
         )
         .get(sessionId),
     ).toMatchObject({ published_at: expect.any(Number), session_key: sessionKey });
+  });
+
+  it("counts lifecycle archives for a custom store whose parent directory is named agent", async () => {
+    storePath = path.join(tempDir, "backup", "agent", "sessions.json");
+    const sessionId = "custom-directory-archive";
+    const sessionKey = "agent:main:custom-directory-archive";
+    const scope = { sessionKey, sessionId, storePath };
+    const event = createTranscriptEvent(sessionId, "retain the custom-store transcript");
+    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+    await replaceTranscriptEvents(scope, [event]);
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    expect(result.deleted).toBe(true);
+    const archivedPath = result.archivedTranscripts[0]?.archivedPath ?? "";
+    expect(path.dirname(archivedPath)).toBe(path.join(tempDir, "backup", "sessions"));
+    expect(readArchiveLines(archivedPath)).toEqual([JSON.stringify(event)]);
+    const archiveBytes = fs.statSync(archivedPath).size;
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+    for (const selector of [storePath, databasePath]) {
+      const usage = await measureSessionPhysicalDiskUsage(selector);
+      expect(usage.sessionFilesBytes).toBe(archiveBytes);
+      expect(usage.totalBytes).toBe(
+        usage.databaseMainBytes + usage.databaseWalBytes + archiveBytes,
+      );
+    }
   });
 
   it("retains distinct transcript generations after a physical session id is restored", async () => {

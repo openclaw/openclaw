@@ -9,18 +9,18 @@ title: "Talk mode"
 
 Talk mode covers these runtime shapes:
 
-- **Native macOS/iOS/Android Talk**: native speech recognition, Gateway chat, and `talk.speak` TTS. Apple Speech recognition on macOS/iOS may use network services; Android behavior depends on the installed speech service. Nodes advertise the `talk` capability and declare which `talk.*` commands they support.
-- **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport, including framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
-- **Apple Watch standalone Talk**: native WebRTC/Opus over UDP with Gateway-owned call control (`gateway-control-v1`). The Watch uses the Gateway's configured realtime provider and keeps tools and transcript ownership on the Gateway; unsupported configurations fail visibly without a relay fallback.
+- **Native macOS/iOS/Android Talk**: native speech recognition, Gateway chat, and `talk.speak` TTS. Apple Speech recognition on macOS/iOS may use network services. Android behavior depends on the installed speech service. Nodes advertise the `talk` capability and declare which `talk.*` commands they support.
+- **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport. This path includes framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay. Non-realtime configs use the native speech loop.
+- **Apple Watch standalone Talk**: native WebRTC/Opus over UDP with Gateway-owned call control (`gateway-control-v1`). The Watch uses the Gateway's configured realtime provider. It keeps tools and transcript ownership on the Gateway. Unsupported configurations fail visibly without a relay fallback.
 - **Browser Talk**: `talk.client.create` for client-owned `webrtc`/`provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
-- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready and the configured model passes the Android client gate; it never opens a client-owned WebRTC session. The Gateway now supports `gpt-live-*` relay sessions, but Android intentionally keeps those models on native speech recognition, Gateway chat, and `talk.speak` until the relay path is proven live from an Android device.
+- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready. The configured model must also pass the Android client gate. Android never opens a client-owned WebRTC session. The Gateway now supports `gpt-live-*` relay sessions. Android intentionally keeps those models on native speech recognition, Gateway chat, and `talk.speak`. That stays true until the relay path is proven live from an Android device.
 - **Transcription-only clients**: `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio` and `talk.session.close` for captions/dictation without an assistant voice response. One-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
-Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
+Native Talk is a continuous loop. It listens for speech. It sends the transcript to the model through the active session. It waits for the response. It then speaks the response through the configured Talk provider (`talk.speak`).
 
 For replies dominated by fenced code, `talk.speak` uses a short spoken message directing the listener to the screen. Inline code and ordinary prose remain part of the spoken reply.
 
-Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone): native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup; see [standalone voice setup](/platforms/ios#standalone-voice).
+Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone). That flow uses native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup. See [standalone voice setup](/platforms/ios#standalone-voice).
 
 ## Talk documentation pages
 
@@ -62,15 +62,15 @@ The assistant can prefix a reply with a single JSON line to control voice:
 
 Rules:
 
-- First non-empty line only; the JSON line is stripped before TTS playback.
+- First non-empty line only. The JSON line is stripped before TTS playback.
 - Unknown keys are ignored.
-- `once: true` applies to the current reply only; without it, the voice becomes the new Talk mode default.
+- `once: true` applies to the current reply only. Without it, the voice becomes the new Talk mode default.
 
 Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelId`, `speed`, `rate` (WPM), `stability`, `similarity`, `style`, `speakerBoost`, `seed`, `normalize`, `lang`, `output_format`, `latency_tier`, `once`.
 
 ## Config (`~/.openclaw/openclaw.json`)
 
-Angle-bracket values such as `<elevenlabs-api-key>` are placeholders; replace them
+Angle-bracket values such as `<elevenlabs-api-key>` are placeholders. Replace them
 with your own values.
 
 ```json5
@@ -124,7 +124,7 @@ consumers use the direct Platform-only transport.
 For browser and Gateway-relay Talk, the released route prefers an OpenClaw
 ChatGPT OAuth profile and falls back to Platform API-key authentication.
 Unlisted routes never use OAuth and require a Platform key. GPT-Live browser
-Talk also requires the bundled `openai` plugin registered in full mode; a
+Talk also requires the bundled `openai` plugin registered in full mode. A
 restrictive `plugins.allow` list fails session creation with "OpenAI GPT-Live
 browser session broker is unavailable".
 Runtime bounds: 8 concurrent sessions per Gateway and a 30-minute session TTL.
@@ -132,9 +132,9 @@ Browser sessions also use 60-second single-use offer tokens.
 
 The released route uses `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`,
 `sol`, `spruce`, and `vale`, with `cove` as the default. Unlisted routes use
-their account-issued voice contract; the current Platform profile accepts
+their account-issued voice contract. The current Platform profile accepts
 `marin` and `cedar`, with `marin` as the default. A rejected session does not
-identify the cause by itself; check the selected account, model, and voice.
+identify the cause by itself. Check the selected account, model, and voice.
 
 | Consumer                    | GPT-Live status                                                             |
 | --------------------------- | --------------------------------------------------------------------------- |
@@ -148,12 +148,12 @@ identify the cause by itself; check the selected account, model, and voice.
 
 These rows describe implemented transport paths, not account entitlement or a
 successful live call on every device. iOS implements frameless transcripts and
-the Gateway offer exchange; Android retains an explicit GPT-Live model gate.
+the Gateway offer exchange. Android retains an explicit GPT-Live model gate.
 For model capability limits, see [Discord voice policies](/channels/discord/voice-channels#voice-channels)
 and [Voice Call tools](/plugins/voice-call#realtime-voice-conversations).
 
 The Gateway-owned WebRTC route keeps OAuth and Platform credentials away from
-relay clients. Backend WebSocket paths keep the Platform key on the Gateway;
+relay clients. Backend WebSocket paths keep the Platform key on the Gateway.
 OpenClaw converts telephony G.711 u-law audio to and from GPT-Live's 24 kHz PCM
 contract.
 
@@ -168,9 +168,9 @@ through to OAuth.
 
 iOS client-owned WebRTC, GA Gateway relay, and Android realtime remain
 Platform-key-only. GA browser Talk keeps the existing client-owned data channel
-and `talk.client.toolCall` loop; only the credential owner and SDP exchange path
+and `talk.client.toolCall` loop. Only the credential owner and SDP exchange path
 change under OAuth. The released GPT-Live route remains OAuth-first with
-Platform fallback for browser and Gateway-owned WebRTC; direct backend sockets
+Platform fallback for browser and Gateway-owned WebRTC. Direct backend sockets
 and unlisted GPT-Live routes remain Platform-key-only.
 
 | Key                                      | Default                                     | Notes                                                                                                                                                                                                                                                          |
@@ -198,7 +198,7 @@ and unlisted GPT-Live routes remain Platform-key-only.
 | `realtime.consultRouting`                | -                                           | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                              |
 | `realtime.instructions`                  | -                                           | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                            |
 
-`talk.catalog` exposes canonical provider ids and registry aliases, each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags, and the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally; treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`; the current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
+`talk.catalog` exposes canonical provider ids and registry aliases. It exposes each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags. It exposes the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally. Treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
 
 ## Notes
 
@@ -206,7 +206,7 @@ and unlisted GPT-Live routes remain Platform-key-only.
 - Native Talk uses the active Gateway session and only falls back to history polling when response events are unavailable.
 - The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
 - macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development. The helper streams PCM, keeps one selected model resident, and supports Fish S2 Pro reference audio through `providers.mlx.referenceAudioPath` plus `referenceText`.
-- Voice directive value ranges (ElevenLabs): `stability`, `similarity`, and `style` accept `0..1`; `speed` accepts `0.5..2`; `latency_tier` accepts `0..4`.
+- Voice directive value ranges (ElevenLabs): the `stability`, `similarity`, and `style` keys accept `0..1`. The `speed` key accepts `0.5..2`. The `latency_tier` key accepts `0..4`.
 
 ## Related
 

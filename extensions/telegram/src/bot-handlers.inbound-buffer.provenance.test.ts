@@ -43,6 +43,7 @@ describe("Telegram inbound provenance buffering", () => {
       } as unknown as TelegramMessagePipeline;
       const { inboundDebouncer } = createTelegramInboundBuffers({
         params: {
+          accountId: "default",
           cfg,
           bot: { api: { sendMessage: vi.fn() } } as never,
           runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },

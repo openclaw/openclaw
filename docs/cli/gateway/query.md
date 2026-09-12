@@ -314,6 +314,18 @@ openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
+For `sessions.send` and `chat.send`, JSON `timeoutMs` is the receiving agent's
+execution budget, not an acknowledgment timeout. Omit it for ordinary
+coordination; `--timeout` independently limits how long this CLI waits:
+
+```bash
+openclaw gateway call sessions.send --params '{"key":"<session-key>","message":"Status update"}' --timeout 10000
+```
+
+A `started` response confirms acceptance, not a completed reply. Agents should
+normally use [`sessions_send` with `timeoutSeconds: 0`](/concepts/session-tool#sending-cross-session-messages)
+for nonblocking coordination.
+
 <ParamField path="--params <json>" type="string" default="{}">
   JSON object string for params.
 </ParamField>

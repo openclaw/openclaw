@@ -9,13 +9,13 @@ import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   materializeConfiguredProviderCatalogModels,
   normalizeProviderCatalogModelsForConfig,
-  normalizeProviders,
-} from "./models-config.providers.normalize.js";
+} from "./models-config.providers.catalog.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 

@@ -1354,7 +1354,9 @@
                   "start/why-openclaw/versioned-state-guarded-upgrades",
                   "start/why-openclaw/provenance",
                   "start/why-openclaw/openclaw-and-hermes-agent",
-                  "concepts/features"
+                  "concepts/features",
+                  "start/hubs",
+                  "start/docs-directory"
                 ]
               },
               {
@@ -2577,6 +2579,7 @@
                           "gateway/sandboxing/podman-backend",
                           "gateway/sandboxing/ssh-backend",
                           "gateway/sandboxing/openshell-backend",
+                          "gateway/sandboxing/crabbox-backend",
                           "gateway/sandboxing/workspace-access",
                           "gateway/sandboxing/multiple-folders-for-one-agent",
                           "gateway/sandboxing/images-and-setup",
@@ -2883,6 +2886,7 @@
                           "cli/plugins/marketplace"
                         ]
                       },
+                      "cli/file-transfer",
                       "cli/path",
                       "cli/policy",
                       {
@@ -3164,6 +3168,7 @@
                   },
                   "reference/rich-output-protocol",
                   "reference/secretref-credential-surface",
+                  "reference/secret-placeholder-conventions",
                   "date-time",
                   "concepts/timezone"
                 ]
@@ -3191,6 +3196,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.4",
                   "releases/2026.9.3",
                   "releases/2026.9.2",
                   "releases/2026.9.1",
@@ -3323,7 +3329,6 @@
                       "help/testing-live/media-providers"
                     ]
                   },
-                  "channels/qa-channel",
                   "concepts/mantis",
                   "concepts/mantis-slack-desktop-runbook"
                 ]
@@ -3384,9 +3389,7 @@
               {
                 "group": "Community and meta",
                 "pages": [
-                  "start/lore",
-                  "start/hubs",
-                  "start/docs-directory"
+                  "start/lore"
                 ]
               }
             ]
