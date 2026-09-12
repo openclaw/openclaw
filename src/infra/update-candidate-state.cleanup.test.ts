@@ -1,9 +1,11 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
+import * as commands from "../process/exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
@@ -20,6 +22,7 @@ beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cleanup-")));
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -255,6 +258,93 @@ it.each([false, true])(
     }
   },
 );
+
+function inspectionResult(
+  value: unknown,
+  error?: string,
+): Awaited<ReturnType<typeof runCommandBuffered>> {
+  return {
+    stdout: Buffer.from(error ? "" : JSON.stringify(value)),
+    stderr: Buffer.from(error ?? ""),
+    code: error ? 1 : 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  };
+}
+
+it.each([false, true])("budgets the discovered registry inventory (legacy=%s)", async (legacy) => {
+  const stateDir = path.join(root, "inspection-budget");
+  const shared = path.join(stateDir, "state", "openclaw.sqlite");
+  const external = path.join(root, "registry-only", "agent.sqlite");
+  await fs.mkdir(path.dirname(shared), { recursive: true });
+  await fs.mkdir(path.dirname(external), { recursive: true });
+  const database = openNodeSqliteDatabase(shared);
+  database.exec("PRAGMA user_version = 3; CREATE TABLE agent_databases (path TEXT);");
+  database.prepare("INSERT INTO agent_databases VALUES (?)").run(external);
+  database.close();
+  await fs.writeFile(external, "");
+  await fs.truncate(external, 3_489_660_928);
+  await fs.writeFile(`${external}-wal`, "");
+  await fs.truncate(`${external}-wal`, 64 * 1024 * 1024);
+  const sharedVersion = { path: shared, userVersion: 3, contentVersion: 3 };
+  const discovery = {
+    files: [
+      [shared, { spellings: [shared] }],
+      [external, { spellings: [external] }],
+    ],
+    sharedVersion,
+  };
+  const calls: Array<Parameters<typeof runCommandBuffered>> = [];
+  const run = commands.runCommandBuffered;
+  vi.spyOn(commands, "runCommandBuffered").mockImplementation(async (argv, options) => {
+    if (argv.includes("--eval")) {
+      return run(argv, options);
+    }
+    calls.push([argv, options]);
+    if (legacy && calls.length === 1) {
+      return inspectionResult(null, "Unknown update state inspection mode");
+    }
+    if (legacy && calls.length === 2) {
+      const location = path.join(String(options?.env?.XDG_CACHE_HOME), "database.sqlite");
+      fsSync.copyFileSync(shared, location);
+      return inspectionResult({ ok: true, location });
+    }
+    if (!legacy && calls.length === 1) {
+      return inspectionResult(discovery);
+    }
+    return inspectionResult([sharedVersion, { path: external, userVersion: 7 }]);
+  });
+
+  await expect(readUpdateStateSchemaVersions({ stateDir, config: {} })).resolves.toContainEqual({
+    path: external,
+    userVersion: 7,
+  });
+  expect(calls).toHaveLength(legacy ? 3 : 2);
+  expect(calls[0]?.[1]?.timeoutMs).toBe(31_000);
+  // 134 seconds for the database plus 2 for its WAL; legacy also recopies shared.
+  expect(calls.at(-1)?.[1]?.timeoutMs).toBe(legacy ? 167_000 : 136_000);
+  for (const [, options] of calls) {
+    expect(options).toMatchObject({ killGraceMs: 500 });
+    expect(fsSync.existsSync(String(options?.env?.XDG_CACHE_HOME))).toBe(false);
+  }
+});
+
+it("rejects a versions array as a discovery response", async () => {
+  const run = commands.runCommandBuffered;
+  const worker = vi
+    .spyOn(commands, "runCommandBuffered")
+    .mockImplementation((argv, options) =>
+      argv.includes("--eval") ? run(argv, options) : Promise.resolve(inspectionResult([])),
+    );
+  await expect(
+    readUpdateStateSchemaVersions({
+      stateDir: path.join(root, "invalid-discovery"),
+      config: {},
+    }),
+  ).rejects.toThrow();
+  expect(worker.mock.calls.filter(([argv]) => !argv.includes("--eval"))).toHaveLength(1);
+});
 
 it.runIf(process.platform !== "win32")(
   "kills a cancelled schema worker before removing its parent-owned staging root",
