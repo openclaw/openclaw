@@ -358,10 +358,13 @@ export function adoptConfigSetAck(
   ack: ConfigWriteAck,
 ) {
   const currentRaw = serializeFormForSubmit(state);
-  const preserveRawDraft = state.configFormMode === "raw" && currentRaw !== submittedRaw;
-  const draft = preserveRawDraft
-    ? null
-    : replayConfigDraftEdits(submittedRaw, currentRaw, ack.config);
+  let draft: Record<string, unknown> | null = cloneConfigObject(ack.config);
+  if (currentRaw !== submittedRaw) {
+    draft =
+      state.configFormMode === "raw"
+        ? null
+        : replayConfigDraftEdits(submittedRaw, currentRaw, ack.config);
+  }
   const acknowledgedRaw = serializeConfigForm(ack.config);
   state.configSnapshot = {
     ...state.configSnapshot,
