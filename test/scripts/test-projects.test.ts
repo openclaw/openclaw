@@ -3559,6 +3559,80 @@ describe("scripts/test-projects changed-target routing", () => {
       ...Object.fromEntries(workflowOwners.map((file) => [file, "export {};\n"])),
     };
 
+    describe("watch compatibility", () => {
+      describe.each(["changed", "explicit"])("%s", (mode) => {
+        it.each([
+          { name: "wrapper", paths: [wrapper], targets: [sibling] },
+          { name: "base", paths: [base], targets: [baseConsumer, sibling, wrapperConsumer] },
+          {
+            name: "both schemas",
+            paths: [wrapper, base],
+            targets: [baseConsumer, sibling, wrapperConsumer],
+          },
+        ])("keeps $name watch coverage in its existing suite", ({ paths, targets }) => {
+          withTinyGitRepo(files, (cwd) => {
+            const args = [
+              "--watch",
+              ...(mode === "explicit" ? paths : ["--changed", "origin/main"]),
+            ];
+            const plans = buildVitestRunPlans(args, cwd, () => paths);
+            expectSingleVitestRunPlan(plans, {
+              config: "test/vitest/vitest.runtime-config.config.ts",
+              includePatterns: expect.arrayContaining(targets),
+              watchMode: true,
+            });
+            expect(plans[0]?.includePatterns).toHaveLength(targets.length);
+            expect(findUnmatchedExplicitTestTargets(args, cwd)).toEqual([]);
+          });
+        });
+
+        it.each([
+          { flags: ["--watch=false"] },
+          { flags: ["--watch", "false"] },
+          { flags: ["--watch", "--no-watch"] },
+        ])("retains Kova for non-watch flags $flags", ({ flags }) => {
+          withTinyGitRepo(files, (cwd) => {
+            const paths = [wrapper, base];
+            const args = [
+              ...flags,
+              ...(mode === "explicit" ? paths : ["--changed", "origin/main"]),
+            ];
+            const plans = buildVitestRunPlans(args, cwd, () => paths);
+            expect(plans.every((plan) => !plan.watchMode)).toBe(true);
+            expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(
+              [baseConsumer, sibling, wrapperConsumer, kova].toSorted(),
+            );
+          });
+        });
+      });
+
+      it.each([wrapper, base])("still rejects explicitly mixed watch suites for %s", (schema) => {
+        withTinyGitRepo(files, (cwd) => {
+          expect(() => buildVitestRunPlans(["--watch", schema, kova], cwd)).toThrow(
+            "watch mode with mixed test suites is not supported",
+          );
+        });
+      });
+
+      it.each([wrapper, base])(
+        "does not admit unmatched watch source %s through Kova",
+        (schema) => {
+          withTinyGitRepo(
+            { [schema]: "export const defaults = {};\n", [kova]: "export {};\n" },
+            (cwd) => {
+              expect(findUnmatchedExplicitTestTargets([schema], cwd)).toEqual([]);
+              expect(findUnmatchedExplicitTestTargets(["--watch", schema], cwd)).toEqual([
+                expect.objectContaining({
+                  target: schema,
+                  reason: "target-matched-no-test-files",
+                }),
+              ]);
+            },
+          );
+        },
+      );
+    });
+
     it("keeps skipped import-graph paths visible with mixed broad changes", () => {
       withTinyGitRepo(files, (cwd) => {
         const paths = [base, "unknown/file.txt"];
