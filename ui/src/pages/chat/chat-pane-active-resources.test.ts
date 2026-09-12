@@ -64,8 +64,8 @@ function fixture() {
     if (method === "sessions.describe") {
       return { session };
     }
-    if (method === "environments.list") {
-      return { environments: [environment] };
+    if (method === "environments.status") {
+      return environment;
     }
     if (method === "browser.request") {
       return { running: true, tabs: [{ targetId: "target-1", url: "https://example.com" }] };
@@ -104,6 +104,21 @@ function fixture() {
 }
 
 describe("session active resource discovery", () => {
+  it("discovers only the exact target without waiting for unrelated inventory catalogs", async () => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    const respond = f.request.getMockImplementation()!;
+    const unrelated = createDeferred<unknown>();
+    f.request.mockImplementation((method, params) =>
+      method === "environments.list" ? unrelated.promise : respond(method, params),
+    );
+    f.controller.sync(f.owner);
+    await settle();
+    expect(f.slots()).toEqual(["desktop"]);
+    expect(f.request).toHaveBeenCalledWith("environments.status", { environmentId: "worker-1" });
+    expect(f.request.mock.calls.map(([method]) => method)).not.toContain("environments.list");
+  });
+
   it.each(["conversation-only", "after-resource-swap"])(
     "discovers resources in a saved %s layout",
     async (kind) => {
@@ -176,17 +191,17 @@ describe("session active resource discovery", () => {
       const f = fixture();
       f.owner.browserAvailable = false;
       f.owner.placement = activePlacement;
-      const inventoryRead = createDeferred<unknown>();
+      const statusRead = createDeferred<unknown>();
       const first = createDeferred<boolean>();
       const latest = createDeferred<boolean>();
       const respond = f.request.getMockImplementation()!;
       f.request.mockImplementation((method, params) =>
-        method === "environments.list" ? inventoryRead.promise : respond(method, params),
+        method === "environments.status" ? statusRead.promise : respond(method, params),
       );
       f.controller.sync(f.owner);
       await settle();
       f.controller.reconcile(() => first.promise);
-      inventoryRead.resolve({ environments: [environment] });
+      statusRead.resolve(environment);
       await settle();
       f.controller.reconcile(() => latest.promise);
       if (latestCompletesFirst) {
@@ -213,11 +228,11 @@ describe("session active resource discovery", () => {
       f.owner.browserAvailable = false;
       f.owner.placement = activePlacement;
       f.owner.requestUpdate = vi.fn(() => f.controller.sync(f.owner));
-      const inventoryRead = createDeferred<unknown>();
+      const statusRead = createDeferred<unknown>();
       const reconciled = createDeferred<boolean>();
       const respond = f.request.getMockImplementation()!;
       f.request.mockImplementation((method, params) =>
-        method === "environments.list" ? inventoryRead.promise : respond(method, params),
+        method === "environments.status" ? statusRead.promise : respond(method, params),
       );
       f.controller.sync(f.owner);
       await settle();
@@ -234,7 +249,7 @@ describe("session active resource discovery", () => {
         reconciled.resolve(false);
         await settle();
       }
-      inventoryRead.resolve({ environments: [environment] });
+      statusRead.resolve(environment);
       await settle();
       expect(f.commit).not.toHaveBeenCalled();
       f.request.mockResolvedValue({ session: undefined });
@@ -256,7 +271,7 @@ describe("session active resource discovery", () => {
     },
   );
 
-  it.each(["sessions.describe", "environments.list", "browser.request"])(
+  it.each(["sessions.describe", "environments.status", "browser.request"])(
     "keeps metadata-only placement updates out of discovery while %s is pending and after completion",
     async (heldMethod) => {
       const f = fixture();
@@ -387,10 +402,10 @@ describe("session active resource discovery", () => {
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.describe",
       "browser.request",
-      "environments.list",
+      "environments.status",
       "sessions.describe",
       "browser.request",
-      "environments.list",
+      "environments.status",
     ]);
     expect(f.request).toHaveBeenCalledWith("browser.request", {
       method: "GET",
@@ -452,6 +467,26 @@ describe("session active resource discovery", () => {
     expect(f.owner.requestUpdate).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves an existing manual desktop's reads to its presentation owner", async () => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    f.setLayout(openSlot(openSlot(f.owner.layout(), "desktop"), "workspace"));
+    f.controller.sync(f.owner);
+    await settle();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
+  });
+
+  it("does not read a worker target when its session attachment identity is missing", async () => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    f.request.mockResolvedValue({ session: { ...session, sessionId: undefined } });
+    f.controller.sync(f.owner);
+    await settle();
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual(["sessions.describe"]);
+    expect(f.commit).not.toHaveBeenCalled();
+  });
+
   it("does not override a manual desktop open while discovery is pending", async () => {
     const f = fixture();
     f.owner.browserAvailable = false;
@@ -483,7 +518,7 @@ describe("session active resource discovery", () => {
     expect(f.owner.layout().open).toBe(false);
   });
 
-  it("respects persisted dismissal on reentry and during a pending inventory read", async () => {
+  it("respects persisted dismissal on reentry and during a pending target-status read", async () => {
     const f = fixture();
     const pending = createDeferred<unknown>();
     f.request.mockImplementation(async () => pending.promise);
@@ -560,7 +595,7 @@ describe("session active resource discovery", () => {
     const f = fixture();
     f.owner.browserTab = undefined;
     f.request.mockImplementation(async (method) =>
-      method === "sessions.describe" ? { session: row } : { environments: [env ?? environment] },
+      method === "sessions.describe" ? { session: row } : (env ?? environment),
     );
     f.controller.sync(f.owner);
     await settle();

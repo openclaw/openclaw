@@ -635,13 +635,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       ? scopedAgentParamsForSession(state, state.sessionKey).agentId
       : undefined;
     const session = state ? selectedChatSessionRow(state) : undefined;
+    // Keyboard focus may move to another split pane without hiding this resource.
     this.activeSessionResources.sync(
       state &&
         client &&
         sessionKey &&
         state.connected &&
-        this.active &&
         this.presented &&
+        this.visuallyPresented &&
         !parseCatalogSessionKey(sessionKey)
         ? {
             client,
@@ -670,8 +671,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
               scopedAgentParamsForSession(state, state.sessionKey).agentId === agentId &&
               state.connectionEpoch === connectionEpoch &&
               state.connected &&
-              this.active &&
-              this.presented,
+              this.presented &&
+              this.visuallyPresented,
           }
         : null,
     );

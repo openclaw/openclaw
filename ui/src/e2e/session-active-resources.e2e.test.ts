@@ -73,6 +73,7 @@ const ready = async (page: Page) => {
 };
 async function assertNoProvisioning(gateway: MockGatewayControls) {
   const requests = await gateway.getRequests();
+  expect(requests.filter((request) => request.method === "environments.list")).toEqual([]);
   expect(
     requests.filter((request) =>
       ["environments.create", "desktop.launch", "sessions.dispatch"].includes(request.method),
@@ -221,11 +222,11 @@ suite.define(() => {
         await installScriptedRfbServer(page);
         const composer = pane(page).locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep my draft and focus");
-        await gateway.deferNext("environments.list");
+        await gateway.deferNext("environments.status");
         await gateway.setSessionsListResponse(list(true));
         await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
-        await gateway.waitForRequest("environments.list");
-        const pendingInventoryCount = (await gateway.getRequests("environments.list")).length;
+        await gateway.waitForRequest("environments.status");
+        const pendingInventoryCount = (await gateway.getRequests("environments.status")).length;
         for (const cursor of [1, 2, 3]) {
           await gateway.setSessionsListResponse({
             ...list(true),
@@ -259,9 +260,9 @@ suite.define(() => {
             )
             .toBe(cursor);
         }
-        await expectRequestCountStable(gateway, "environments.list", pendingInventoryCount);
+        await expectRequestCountStable(gateway, "environments.status", pendingInventoryCount);
         expect(await desktopTab(page).count()).toBe(0);
-        await gateway.resolveDeferred("environments.list", inventory);
+        await gateway.resolveDeferred("environments.status", inventory.environments[0]);
         await desktopTab(page).waitFor();
         await pane(page).locator(".desktop-surface canvas").waitFor();
         expect(await composer.inputValue()).toBe("Keep my draft and focus");
@@ -291,15 +292,19 @@ suite.define(() => {
             sessionKey: key,
             featureMethods,
             historyMessages: [{ role: "assistant", content: "Resource ownership proof." }],
-            methodResponses: { "sessions.list": list(false), "environments.list": inventory },
+            methodResponses: {
+              "sessions.list": list(false),
+              "environments.list": inventory,
+              "environments.status": inventory.environments[0],
+            },
           });
           await page.goto(`${suite.server.baseUrl}chat/main/resource-demo`);
           await ready(page);
           await gateway.waitForRequest("sessions.describe");
-          await gateway.deferNext("environments.list");
+          await gateway.deferNext("environments.status");
           await gateway.setSessionsListResponse(list(true));
           await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
-          await gateway.waitForRequest("environments.list");
+          await gateway.waitForRequest("environments.status");
           const listReads = (await gateway.getRequests("sessions.list", { includeGlobal: true }))
             .length;
           await gateway.deferNext("sessions.list", { includeGlobal: true });
@@ -311,7 +316,7 @@ suite.define(() => {
             after: listReads,
             match: { includeGlobal: true },
           });
-          await gateway.resolveDeferred("environments.list", inventory);
+          await gateway.resolveDeferred("environments.status", inventory.environments[0]);
           await expectRequestCountStable(gateway, "desktop.observe", 0);
           expect(await desktopTab(page).count()).toBe(0);
           await gateway.resolveDeferred("sessions.list");

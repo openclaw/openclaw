@@ -5,6 +5,7 @@ import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -263,6 +264,21 @@ suite.define(() => {
     async (initialState) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
         const sessionKey = "agent:main:cloud-desktop";
+        // This test exercises an explicit manual open, not automatic discovery.
+        await page.addInitScript(
+          ({ key, sessionKey: scopedSessionKey }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sessionKey: scopedSessionKey,
+                sidebarSessionLayouts: {
+                  [scopedSessionKey]: { columns: [], resourceAutoOpenDismissed: true },
+                },
+              }),
+            );
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), sessionKey },
+        );
         const session = {
           key: sessionKey,
           kind: "direct",

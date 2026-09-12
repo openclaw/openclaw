@@ -1,4 +1,3 @@
-import type { EnvironmentsListResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -6,6 +5,10 @@ import {
   listBrowserTabs,
 } from "../../components/browser/browser-client.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
+import {
+  desktopSourceForEnvironment,
+  loadDesktopEnvironments,
+} from "../../components/desktop/desktop-source.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
@@ -269,7 +272,11 @@ export class ChatPaneActiveResources {
     this.probeCurrent = current;
     this.requestProbeUpdate = owner.requestUpdate;
     // Independent probes: a broken browser route must not hide an available desktop.
-    if (owner.desktopAvailable) {
+    // Existing manual panels own their reads, including dormant retained tabs.
+    const desktopAlreadyPresent = owner
+      .layout()
+      .columns.some((column) => column.panels.some((panel) => panel.slot === "desktop"));
+    if (owner.desktopAvailable && (this.desktop || !desktopAlreadyPresent)) {
       this.trackProbe(this.discoverDesktop(owner, current), generation);
     }
     if (owner.browserAvailable && owner.browserTab) {
@@ -353,18 +360,23 @@ export class ChatPaneActiveResources {
       // The default gateway desktop is shared, not session-owned. Only an explicit
       // assignment can justify discovery; never infer ownership from global availability.
       const source = resolveChatPaneDesktopTarget(session);
-      if (!source || source === "gateway") {
+      if (
+        !source ||
+        source === "gateway" ||
+        (desktopSourceForEnvironment({ id: source }).kind === "environment" && !session.sessionId)
+      ) {
         this.publishDesktop(owner, null);
         return;
       }
-      const { environments } = await owner.client.request<EnvironmentsListResult>(
-        "environments.list",
-        {},
-      );
+      const target = await loadDesktopEnvironments(owner.client, {
+        target: Promise.resolve(source),
+        isCurrent: current,
+        recoverToPicker: false,
+      });
       if (!(await this.currentAfterReconciliation(current))) {
         return;
       }
-      const environment = environments.find((entry) => entry.id === source);
+      const environment = target?.environments.find((entry) => entry.id === source);
       if (!environment || environment.status !== "available" || environment.desktop !== true) {
         this.publishDesktop(owner, null);
         return;
