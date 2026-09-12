@@ -36,6 +36,14 @@ if (phase === "seed") {
   const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
   // Do not read history before chat.send: that would restore it ahead of the model path.
   await waitForArchives(context, [fixture.sessionId]);
+  // The HTTP case supplies get_weather externally; the agent recall uses no tools.
+  const config = await gatewayCall(context, "config.get", {});
+  const policy = await gatewayCall(context, "config.patch", {
+    raw: JSON.stringify({ tools: { allow: [], deny: ["*"] } }),
+    baseHash: config.hash,
+    replacePaths: ["tools.allow"],
+  });
+  assert.equal(policy.restart, undefined);
   assert.equal(readTranscriptRows(stateDir, fixture.sessionId).length, 0);
 
   const message =
