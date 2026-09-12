@@ -67,11 +67,92 @@ function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): st
   return resolved;
 }
 
-function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
-  const explicit = normalizeOptionalLowercaseString(spec.archive);
-  if (explicit) {
-    return explicit;
+function isWellFormedLanguageTag(value: string): boolean {
+  if (!value) {
+    return true;
   }
+  const tag = value.toLowerCase();
+  // RFC 5646 includes private-use and grandfathered forms that Intl.Locale rejects.
+  if (
+    /^(?:x(?:-[a-z0-9]{1,8})+|en-gb-oed|i-(?:ami|bnn|default|enochian|hak|klingon|lux|mingo|navajo|pwn|tao|tay|tsu)|sgn-(?:be-fr|be-nl|ch-de))$/u.test(
+      tag,
+    )
+  ) {
+    return true;
+  }
+  if (
+    !/^(?:[a-z]{2,3}(?:-[a-z]{3}){0,3}|[a-z]{4,8})(?:-[a-z]{4})?(?:-(?:[a-z]{2}|[0-9]{3}))?(?:-(?:[a-z0-9]{5,8}|[0-9][a-z0-9]{3}))*(?:-[0-9a-wy-z](?:-[a-z0-9]{2,8})+)*(?:-x(?:-[a-z0-9]{1,8})+)?$/u.test(
+      tag,
+    )
+  ) {
+    return false;
+  }
+  const subtags = tag.split("-");
+  const privateUse = subtags.indexOf("x");
+  const publicSubtags = privateUse < 0 ? subtags : subtags.slice(0, privateUse);
+  const extension = publicSubtags.findIndex((subtag) => subtag.length === 1);
+  const variants = publicSubtags
+    .slice(1, extension < 0 ? publicSubtags.length : extension)
+    .filter((subtag) => subtag.length >= 5 || /^[0-9][a-z0-9]{3}$/u.test(subtag));
+  const singletons = publicSubtags.filter((subtag) => subtag.length === 1);
+  return (
+    new Set(variants).size === variants.length && new Set(singletons).size === singletons.length
+  );
+}
+
+function archiveTypeFromContentDisposition(header: string | null): string | undefined {
+  if (!header || /\p{Cc}/u.test(header.replaceAll("\t", ""))) {
+    return undefined;
+  }
+  const disposition = /^[\t ]*[!#$%&'*+.^_`|~0-9A-Za-z-]+[\t ]*/u.exec(header);
+  if (!disposition) {
+    return undefined;
+  }
+  const parameter =
+    /;[\t ]*([!#$%&'*+.^_`|~0-9A-Za-z-]+)[\t ]*=[\t ]*(?:"((?:[^"\\]|\\.)*)"|([!#$%&'*+.^_`|~0-9A-Za-z-]+))[\t ]*(?=;|$)/uy;
+  const values = new Map<string, string>();
+  let offset = disposition[0].length;
+  // Validate the whole header before selecting a filename; later duplicates and
+  // unfinished quotes must leave the URL fallback available.
+  while (offset < header.length) {
+    parameter.lastIndex = offset;
+    const match = parameter.exec(header);
+    if (!match) {
+      return undefined;
+    }
+    const name = match[1]?.toLowerCase();
+    const value = match[2] ?? match[3];
+    if (
+      !name ||
+      value === undefined ||
+      values.has(name) ||
+      (name === "filename*" && match[2] !== undefined)
+    ) {
+      return undefined;
+    }
+    values.set(name, value.replace(/\\(.)/gu, "$1"));
+    offset = parameter.lastIndex;
+  }
+  let filename = values.get("filename");
+  const extended = values.get("filename*");
+  const extendedValue =
+    extended && /^utf-8'([^']*)'((?:[a-z0-9!#$&+.^_`|~-]|%[0-9a-f]{2})*)$/iu.exec(extended);
+  const language = extendedValue?.[1];
+  const encoded = extendedValue?.[2];
+  if (language !== undefined && encoded !== undefined && isWellFormedLanguageTag(language)) {
+    try {
+      const decoded = decodeURIComponent(encoded);
+      if (!/\p{Cc}/u.test(decoded)) {
+        filename = decoded;
+      }
+    } catch {
+      // Invalid extended values leave the ordinary filename available.
+    }
+  }
+  return filename && !/\p{Cc}/u.test(filename) ? detectArchiveType(filename) : undefined;
+}
+
+function detectArchiveType(filename: string | undefined): string | undefined {
   const lower = normalizeOptionalLowercaseString(filename);
   if (!lower) {
     return undefined;
@@ -88,6 +169,18 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
   return undefined;
 }
 
+function resolveArchiveType(
+  spec: SkillInstallSpec,
+  filename: string,
+  responseArchiveType?: string,
+): string | undefined {
+  const explicit = normalizeOptionalLowercaseString(spec.archive);
+  if (explicit) {
+    return explicit;
+  }
+  return responseArchiveType ?? detectArchiveType(filename);
+}
+
 async function downloadFile(params: {
   url: string;
   relativePath: string;
@@ -95,7 +188,7 @@ async function downloadFile(params: {
   tempPath: string;
   sha256?: string;
   timeoutMs: number;
-}): Promise<{ bytes: number }> {
+}): Promise<{ bytes: number; responseArchiveType: string | undefined }> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     timeoutMs: Math.max(1_000, params.timeoutMs),
@@ -105,6 +198,9 @@ async function downloadFile(params: {
       await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    const responseArchiveType = archiveTypeFromContentDisposition(
+      response.headers.get("content-disposition"),
+    );
     // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
     const contentEncoding = normalizeOptionalLowercaseString(
       response.headers.get("content-encoding"),
@@ -147,7 +243,7 @@ async function downloadFile(params: {
       }
     }
     await params.pinnedRoot.copyIn(params.relativePath, params.tempPath);
-    return { bytes: file.bytesWritten };
+    return { bytes: file.bytesWritten, responseArchiveType };
   } finally {
     await release();
   }
@@ -269,6 +365,7 @@ export async function installDownloadSpec(params: {
   }
   return await withTempDownloadPath({ prefix: "skill-download" }, async (tempArchivePath) => {
     let downloaded;
+    let responseArchiveType: string | undefined;
     try {
       const result = await downloadFile({
         url,
@@ -279,12 +376,13 @@ export async function installDownloadSpec(params: {
         timeoutMs,
       });
       downloaded = result.bytes;
+      responseArchiveType = result.responseArchiveType;
     } catch (err) {
       const message = formatErrorMessage(err);
       return { ok: false, message, stdout: "", stderr: message, code: null };
     }
 
-    const archiveType = resolveArchiveType(spec, filename);
+    const archiveType = resolveArchiveType(spec, filename, responseArchiveType);
     const shouldExtract = spec.extract ?? Boolean(archiveType);
     if (!shouldExtract) {
       return {
