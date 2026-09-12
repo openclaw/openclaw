@@ -704,6 +704,92 @@ describe("ModelProvidersPage catalog discovery", () => {
     },
   );
 
+  it.each(["completed", "pending"] as const)(
+    "keeps newer picker discovery %s when an older core refresh completes",
+    async (discoveryState) => {
+      const { context, request, discover, catalogRequest, runtimeConfig } = createCatalogHarness();
+      const refreshedConfig = {
+        ...savedModelConfig,
+        agents: {
+          defaults: {
+            ...savedModelConfig.agents.defaults,
+            model: {
+              ...savedModelConfig.agents.defaults.model,
+              primary: "openai/prepared-utility",
+            },
+          },
+        },
+      };
+      const coreConfig = deferred<{ config: typeof refreshedConfig; hash: string }>();
+      const pickerDiscovery = deferred<ModelCatalogResult>();
+      const newer: ModelCatalogResult = {
+        models: [
+          ...preparedCatalog.models,
+          { id: "newer", name: "Newer model", provider: "openai", available: true },
+        ],
+        providerOutcomes: [{ provider: "openai", status: "ready" }],
+      };
+      discover.mockResolvedValueOnce(preparedCatalog).mockReturnValueOnce(pickerDiscovery.promise);
+      const page = appendPage(context);
+      try {
+        await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+        await drainPageUpdates(page);
+        let configRequested = false;
+        request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
+          if (method === "config.get") {
+            configRequested = true;
+            return coreConfig.promise;
+          }
+          return catalogRequest(method, params);
+        });
+
+        page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+        await waitForFast(() => {
+          expect(configRequested).toBe(true);
+          expect(discover).toHaveBeenCalledOnce();
+        });
+        await drainPageUpdates(page);
+        expect(
+          modelPickers(page)[0]?.querySelector<HTMLButtonElement>(".picker-select__trigger")
+            ?.disabled,
+        ).toBe(false);
+        await openModelPicker(page);
+        expect(discover).toHaveBeenCalledTimes(2);
+        if (discoveryState === "completed") {
+          pickerDiscovery.resolve(newer);
+          await waitForFast(() => expect(page.data?.models).toEqual(newer.models));
+          await drainPageUpdates(page);
+          expect(page.querySelector('[role="option"][data-value="openai/newer"]')).not.toBeNull();
+        }
+
+        coreConfig.resolve({ config: refreshedConfig, hash: "refreshed-model-config" });
+        await waitForFast(() => expect(page.data?.config).toEqual(refreshedConfig));
+        await drainPageUpdates(page);
+        expect(
+          modelPickers(page)[0]
+            ?.querySelector('[role="option"][aria-selected="true"]')
+            ?.getAttribute("data-value"),
+        ).toBe("openai/prepared-utility");
+        if (discoveryState === "pending") {
+          expect(
+            page.querySelector('.model-providers__catalog-progress[role="status"]'),
+          ).not.toBeNull();
+          pickerDiscovery.resolve(newer);
+          await waitForFast(() => expect(page.data?.models).toEqual(newer.models));
+          await drainPageUpdates(page);
+        }
+        expect(page.querySelector('[role="option"][data-value="openai/newer"]')).not.toBeNull();
+        expect(page.data?.providerOutcomes).toEqual(newer.providerOutcomes);
+        expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+        expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      } finally {
+        coreConfig.resolve({ config: refreshedConfig, hash: "refreshed-model-config" });
+        pickerDiscovery.resolve(newer);
+        page.remove();
+      }
+    },
+  );
+
   it.each([
     { replacement: "core refresh", catalogRequests: 3, discoveries: 3, publicationReads: 1 },
     { replacement: "route data", catalogRequests: 2, discoveries: 2, publicationReads: 1 },
