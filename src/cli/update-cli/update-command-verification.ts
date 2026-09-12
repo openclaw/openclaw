@@ -82,6 +82,27 @@ export async function verifyPreviousGatewayForUpdate(params: {
   );
 }
 
+export function recordPreviousGatewayVerification(
+  run: UpdateCommandOptions["run"],
+  verified: boolean,
+): void {
+  if (!run) {
+    return;
+  }
+  recordUpdateRunStep(
+    run.runId,
+    {
+      step: "previous gateway verification",
+      status: "completed",
+      detail: verified
+        ? "Previous package is running and ready."
+        : "Previous gateway was not verified; automatic rollback cannot restart it.",
+      endedAtMs: Date.now(),
+    },
+    { env: run.env },
+  );
+}
+
 export function recordUpdateGatewayHealth(
   run: UpdateCommandOptions["run"],
   health: GatewayRestartSnapshot,
