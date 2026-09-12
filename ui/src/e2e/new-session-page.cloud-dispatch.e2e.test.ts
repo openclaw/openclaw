@@ -421,10 +421,9 @@ suite.define(() => {
       const retainedCloudProfile = place.locator('[data-value="cloud:aws"]');
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
       await retainedCloudProfile.click();
-      await expect.poll(() => place.locator('[data-value="machine:fast"]').isVisible()).toBe(true);
-      expect(await place.locator('[data-value="machine:fast"]').getAttribute("aria-pressed")).toBe(
-        "true",
-      );
+      const retainedMachine = place.locator('[data-value="machine:fast"]');
+      await expect.poll(() => retainedMachine.isVisible()).toBe(true);
+      expect(await retainedMachine.getAttribute("aria-pressed")).toBe("true");
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(

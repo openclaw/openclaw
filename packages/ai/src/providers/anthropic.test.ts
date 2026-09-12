@@ -1924,8 +1924,8 @@ describe("Anthropic provider", () => {
     },
   );
 
-  it.each(["low", "medium", "high", "xhigh", "max"] as const)(
-    "preserves pooled Fable %s effort and its routed model id",
+  it.each([undefined, "low", "medium", "high", "xhigh", "max"] as const)(
+    "sends pooled Fable %s effort and preserves its routed model id",
     async (reasoning) => {
       const id = "Claude Gateway/claude-fable-5-1";
       const { payload } = await captureSimpleAnthropicPayload(
@@ -1934,7 +1934,7 @@ describe("Anthropic provider", () => {
       );
       expect(payload.model).toBe(id);
       expect(payload.thinking).toMatchObject({ type: "adaptive" });
-      expect(payload.output_config).toEqual({ effort: reasoning });
+      expect(payload.output_config).toEqual({ effort: reasoning ?? "medium" });
     },
   );
 
@@ -1977,7 +1977,7 @@ describe("Anthropic provider", () => {
       options: { temperature: 0.2 },
       expected: {
         thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "high" },
+        output_config: { effort: "medium" },
       },
       absent: ["temperature"],
     },

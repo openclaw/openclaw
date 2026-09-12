@@ -241,8 +241,8 @@ For Claude CLI authentication, keep that same ref and select the CLI runtime:
 ```
 
 The API and Claude CLI catalogs expose a 1,000,000-token context window and
-128,000-token output limit. Fable 5.1 always uses adaptive thinking, defaults to
-`high`, and supports native `low`, `medium`, `high`, `xhigh`, and `max` effort.
+128,000-token output limit. Fable 5.1 always uses adaptive thinking. OpenClaw defaults to
+`medium`, with native `low`, `medium`, `high`, `xhigh`, and `max` effort available.
 For API-key billing, input and output remain `$10/$50` per million tokens;
 cache reads cost `$0.25` per million tokens, one quarter of Fable 5's rate.
 See Anthropic's [Fable 5.1 specifications](https://platform.claude.com/docs/en/models/fable-5-1/overview).
@@ -458,7 +458,7 @@ per million tokens. Anthropic canceled the previously scheduled September 2026
 increase; see [current model pricing](https://platform.claude.com/docs/en/about-claude/pricing#model-pricing).
 
 `anthropic/claude-fable-5-1` and `anthropic/claude-fable-5` always use adaptive
-thinking and default to `high` effort. Anthropic does not allow thinking to be
+thinking. OpenClaw defaults both versions to `medium` effort. Anthropic does not allow thinking to be
 disabled for these models, so stored `off` and `minimal` settings map to `low`
 effort instead. OpenClaw also omits caller-selected sampling parameters for
 both Fable versions.
@@ -466,7 +466,7 @@ both Fable versions.
 Fable effort controls offer `low`, `medium`, `high`, `xhigh`, and `max`, matching
 [Anthropic's effort levels](https://platform.claude.com/docs/en/build-with-claude/effort).
 Adaptive thinking is always on; it is not a separate effort choice. Existing
-stored `adaptive` selections resolve to the provider's `high` default. Custom
+stored `adaptive` selections resolve to OpenClaw's `medium` default. Custom
 `anthropic-messages` providers use the same profile, including model IDs with
 routing namespaces such as `Claude Gateway/claude-fable-5-1`.
 
@@ -477,8 +477,9 @@ The catalog publishes its 1,000,000-token context window, 128,000-token output
 limit, image input, and `$10/$50` input/output pricing.
 
 For Fable and Mythos, new `/think minimal` and `/think adaptive` directives are
-rejected with the supported choices. Use `/think low` and `/think high`,
-respectively; the remapping above applies to previously stored settings.
+rejected with the supported choices. Use `/think low` in place of `minimal`,
+and `/think default` to use the model's default effort. The remapping above
+applies to previously stored settings.
 
 Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly
 enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends
