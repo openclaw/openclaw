@@ -85,10 +85,9 @@ async function fixture() {
 
 async function publicationFixture(root: string, content = "working tree\n") {
   const normalized = Buffer.from(content);
-  const sha = createHash("sha1")
-    .update(`blob ${normalized.length}\0`)
-    .update(normalized)
-    .digest("hex");
+  const sha = await requireWorkspaceResultGit(root, ["hash-object", "--stdin"], {
+    input: normalized,
+  });
   const publicationStagingRoot = path.join(root, "publication");
   await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
   await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), normalized);
