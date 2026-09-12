@@ -5310,7 +5310,7 @@ describe("openclaw agent database", () => {
     {
       kind: "malformed ownership metadata",
       schema: "CREATE TABLE schema_meta (meta_key TEXT);",
-      expectedError: /no such column: role/,
+      expectedError: /no such column: (?:role\b|"role")/,
     },
   ])(
     "preserves the refusal for a populated v0 database with $kind",
