@@ -69,18 +69,9 @@ export async function buildStatusCommandReportData(params: {
     agents: AgentLocalStatus[];
   };
   channels: {
-    rows: Array<{
-      id: string;
-      label: string;
-      enabled: boolean;
-      state: "ok" | "warn" | "off" | "setup";
-      detail: string;
-    }>;
+    rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
   };
-  channelIssues: Array<{
-    channel: string;
-    message: string;
-  }>;
+  channelIssues: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
   pluginCompatibility: PluginCompatibilityNotice[];

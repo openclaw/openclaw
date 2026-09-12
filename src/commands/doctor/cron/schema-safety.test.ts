@@ -142,7 +142,8 @@ describe("future shared-state schema safety", () => {
     ],
     [
       "Codex cron migration commit",
-      async ({ cfg }) => await repairCronCodexModelRefsAfterConfigWrite({ cfg }),
+      async ({ cfg }) =>
+        await repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg }),
     ],
   ];
 

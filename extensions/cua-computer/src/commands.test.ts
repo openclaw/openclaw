@@ -183,81 +183,90 @@ describe("cua-computer provider", () => {
     expect(getDesktopState).toHaveBeenCalledWith(signal);
   });
 
-  it("mints opaque window and element references and maps background evidence", async () => {
-    const { session, callTool } = driver();
-    callTool.mockImplementation(async (name) => {
-      switch (name) {
-        case "list_windows":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-        case "get_window_state":
-          return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
-        case "click":
-          return cuaToolResult(
-            {},
-            {
-              action:
-                CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
-            },
-          );
-        default:
-          return cuaToolResult({});
-      }
-    });
-    const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
-    expect(windowRef).toMatch(/^cua:v2:window:/);
-
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ) as {
-      observation: {
-        observationId: string;
-        elements: Array<{ elementRef: string }>;
+  it.each([undefined, true, false])(
+    "mints opaque window and element refs with includeScreenshot=%s and maps background evidence",
+    async (includeScreenshot) => {
+      const { session, callTool } = driver();
+      callTool.mockImplementation(async (name, args) => {
+        switch (name) {
+          case "list_windows":
+            return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
+          case "get_window_state":
+            return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, {
+              image: args.include_screenshot !== false,
+            });
+          case "click":
+            return cuaToolResult(
+              {},
+              {
+                action:
+                  CUA_DRIVER_CONTRACT_FIXTURES.confirmedBackgroundAction as unknown as CuaToolResult["action"],
+              },
+            );
+          default:
+            return cuaToolResult({});
+        }
+      });
+      const computer = await execution(session);
+      const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
+        details: { windows: Array<{ windowRef: string }> };
       };
-    };
-    const { observationId } = observed.observation;
-    const elementRef = observed.observation.elements[0]!.elementRef;
-    expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
-    expect(observationId).toMatch(/^cua:v2:observation:/);
-    expect(elementRef).toMatch(/^cua:v2:element:/);
+      const windowRef = listed.details.windows[0]!.windowRef;
+      expect(windowRef).toMatch(/^cua:v2:window:/);
 
-    const clicked = JSON.parse(
-      await computer.act(
-        JSON.stringify({
-          action: "left_click",
-          windowRef,
-          elementRef,
-          observationId,
+      const observed = JSON.parse(
+        await computer.act(
+          JSON.stringify({ action: "get_window_state", windowRef, includeScreenshot }),
+        ),
+      ) as {
+        observation: {
+          base64?: string;
+          observationId: string;
+          elements: Array<{ elementRef: string }>;
+        };
+      };
+      expect(Boolean(observed.observation.base64)).toBe(includeScreenshot !== false);
+      const { observationId } = observed.observation;
+      const elementRef = observed.observation.elements[0]!.elementRef;
+      expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
+      expect(observationId).toMatch(/^cua:v2:observation:/);
+      expect(elementRef).toMatch(/^cua:v2:element:/);
+
+      const clicked = JSON.parse(
+        await computer.act(
+          JSON.stringify({
+            action: "left_click",
+            windowRef,
+            elementRef,
+            observationId,
+            deliveryMode: "background",
+          }),
+        ),
+      ) as { effect: string; details: Record<string, unknown> };
+      expect(clicked).toMatchObject({
+        ok: true,
+        effect: "confirmed",
+        details: {
+          route: "accessibility",
           deliveryMode: "background",
-        }),
-      ),
-    ) as { effect: string; details: Record<string, unknown> };
-    expect(clicked).toMatchObject({
-      ok: true,
-      effect: "confirmed",
-      details: {
-        route: "accessibility",
-        deliveryMode: "background",
-        deliveredCount: 1,
-        evidence: ["value_readback"],
-      },
-    });
-    expect(callTool).toHaveBeenLastCalledWith(
-      "click",
-      {
-        pid: 4242,
-        window_id: 99,
-        element_token: "native-element-token-7",
-        button: "left",
-        count: 1,
-        delivery_mode: "background",
-      },
-      undefined,
-    );
-  });
+          deliveredCount: 1,
+          evidence: ["value_readback"],
+        },
+      });
+      expect(callTool).toHaveBeenLastCalledWith(
+        "click",
+        {
+          pid: 4242,
+          window_id: 99,
+          element_token: "native-element-token-7",
+          button: "left",
+          count: 1,
+          delivery_mode: "background",
+        },
+        undefined,
+      );
+    },
+  );
 
   it("rejects forged window, observation, and element refs before native resolution", async () => {
     const { session, callTool } = driver();

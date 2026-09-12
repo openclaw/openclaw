@@ -371,6 +371,12 @@ export function* iterateTranscriptReadEntries(
   if (options.query) {
     const search = options.query;
     query = query.where((eb) => {
+      const matches = (field: Expression<unknown>): Expression<SqlBool> =>
+        eb(
+          eb.fn<number>("instr", [eb.fn("lower", [field]), eb.fn("lower", [eb.val(search)])]),
+          ">",
+          0,
+        );
       const fields = [
         eb.ref("title"),
         eb.ref("session_id"),
@@ -381,15 +387,35 @@ export function* iterateTranscriptReadEntries(
           eb.fn<string>("json_extract", [eb.ref("source_json"), eb.val(`$.${key}`)]),
         ),
       ];
-      return eb.or(
-        fields.map((field): Expression<SqlBool> =>
-          eb(
-            eb.fn<number>("instr", [eb.fn("lower", [field]), eb.fn("lower", [eb.val(search)])]),
-            ">",
-            0,
-          ),
+      return eb.or([
+        ...fields.map(matches),
+        eb.exists(
+          eb
+            .selectFrom("meeting_transcript_summaries as notes")
+            .select("notes.session_id")
+            .whereRef("notes.session_id", "=", "meeting_transcript_sessions.session_id")
+            .whereRef("notes.session_started_at", "=", "meeting_transcript_sessions.started_at")
+            .where((notes) =>
+              notes.or([
+                matches(notes.ref("notes.markdown")),
+                matches(
+                  notes.fn<string | null>("json_extract", [
+                    notes.ref("notes.summary_json"),
+                    notes.val("$.overview"),
+                  ]),
+                ),
+              ]),
+            ),
         ),
-      );
+        eb.exists(
+          eb
+            .selectFrom("meeting_transcript_utterances as utterance")
+            .select("utterance.session_id")
+            .whereRef("utterance.session_id", "=", "meeting_transcript_sessions.session_id")
+            .whereRef("utterance.session_started_at", "=", "meeting_transcript_sessions.started_at")
+            .where((utterance) => matches(utterance.ref("utterance.text"))),
+        ),
+      ]);
     });
   }
   const keys = query

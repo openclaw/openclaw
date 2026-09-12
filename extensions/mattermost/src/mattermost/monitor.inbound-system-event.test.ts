@@ -1509,6 +1509,10 @@ describe("mattermost inbound user posts", () => {
         },
       };
       mockState.runtimeCore = createRuntimeCore(progressConfig);
+      let firstPlanRetractionDeletes = 0;
+      let resumedProgress: string | undefined;
+      let retractedProgress: string | undefined;
+      let secondPlanRetractionDeletes = 0;
       mockState.dispatchInboundMessage.mockImplementation(async (params) => {
         if (label === false) {
           await params.replyOptions?.onPlanUpdate?.({
@@ -1516,7 +1520,7 @@ describe("mattermost inbound user posts", () => {
             steps: [{ step: "Inspect", status: "in_progress" }],
           });
           await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
-          expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+          firstPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
           await params.replyOptions?.onPlanUpdate?.({
             phase: "update",
             steps: [{ step: "Resume", status: "in_progress" }],
@@ -1535,18 +1539,11 @@ describe("mattermost inbound user posts", () => {
             name: "exec",
             phase: "start",
           });
-          const withActivity = draftStream.update.mock.calls.at(-1)?.[0];
-          expect(withActivity).toContain("▸ Resume");
-          expect(withActivity).toContain("blocked");
-          if (toolProgress) {
-            expect(withActivity).toContain("Exec");
-          }
+          resumedProgress = draftStream.update.mock.calls.at(-1)?.[0];
           params.replyOptions?.onAssistantMessageStart?.();
           await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
-          const afterClear = draftStream.update.mock.calls.at(-1)?.[0];
-          expect(afterClear).not.toContain("Resume");
-          expect(afterClear).toContain("blocked");
-          expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+          retractedProgress = draftStream.update.mock.calls.at(-1)?.[0];
+          secondPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
         }
         await params.replyOptions?.onToolStart?.({
           toolCallId: "read-1",
@@ -1634,16 +1631,32 @@ describe("mattermost inbound user posts", () => {
       const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
       expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       expect(draftStream.clear).toHaveBeenCalledTimes(1);
+      if (label === false) {
+        expect(firstPlanRetractionDeletes).toBe(1);
+        expect(resumedProgress).toContain("▸ Resume");
+        if (toolProgress) {
+          expect(resumedProgress).toContain("blocked");
+          expect(resumedProgress).toContain("Exec");
+          expect(retractedProgress).not.toContain("Resume");
+          expect(retractedProgress).toContain("blocked");
+          expect(secondPlanRetractionDeletes).toBe(1);
+        } else {
+          expect(resumedProgress).not.toContain("blocked");
+          expect(resumedProgress).not.toContain("Exec");
+          expect(secondPlanRetractionDeletes).toBe(2);
+        }
+      }
       const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
       if (toolProgress) {
         expect(updates.at(-1)).toContain("Read");
         expect(updates.at(-1)).toContain("done");
+        expect(updates.at(-1)).toContain("failed");
       } else {
         expect(updates[0]).toBe(label === false ? "▸ Inspect" : "Working");
         expect(updates.at(-1)).not.toContain("Read");
         expect(updates.at(-1)).not.toContain("done");
+        expect(updates.join("\n")).not.toContain("failed");
       }
-      expect(updates.at(-1)).toContain("failed");
       if (mode === "progress") {
         expect(updates.at(-1)).toContain("Checking");
       }

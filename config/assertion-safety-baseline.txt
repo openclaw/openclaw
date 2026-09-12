@@ -3414,7 +3414,6 @@ src/secrets/plan.ts	4
 src/secrets/private-plan-file.ts	1
 src/secrets/provider-env-vars.ts	1
 src/secrets/resolve.ts	1
-src/secrets/runtime-auth-collectors.ts	2
 src/secrets/runtime-command-secrets.ts	4
 src/secrets/runtime-config-collectors-core.ts	7
 src/secrets/runtime-config-collectors-memory.ts	1

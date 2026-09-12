@@ -3155,6 +3155,38 @@
   font-weight: 700;
 }
 
+.chat-controls__auth-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.chat-controls__auth-meta-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-controls__model-menu .chat-controls__auth-meta [aria-hidden] svg {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+.chat-controls__auth-meta[data-auth-kind="missing"] {
+  color: var(--warn);
+}
+
+.chat-controls__model-option-copy > .chat-controls__auth-meta {
+  margin-inline-start: 6px;
+}
+
 .chat-controls__provider-settings {
   display: inline-flex;
   align-items: center;

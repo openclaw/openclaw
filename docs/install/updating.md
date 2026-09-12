@@ -41,6 +41,11 @@ downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
+The canary uses a temporary loopback Gateway port and suppresses background
+listeners, including the MCP Apps sandbox, browser control, and channel services.
+This lets validation run while the serving Gateway keeps its configured ports.
+The activated Gateway retains your normal listener settings.
+
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets
 are checked early; explicit package artifacts are checked using the privately

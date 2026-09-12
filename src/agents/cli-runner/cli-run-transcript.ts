@@ -330,6 +330,9 @@ export async function persistCliRunBlock(
         // Skip only this stale blocked-message write; the outer runner still returns blocked.
         return;
       }
+      const { restoreSessionColdTranscript } =
+        await import("../../config/sessions/session-cold-storage.js");
+      await restoreSessionColdTranscript(sessionTarget);
       sessionManager = SessionManager.open(sessionTarget);
     }
     sessionManager.appendMessage(

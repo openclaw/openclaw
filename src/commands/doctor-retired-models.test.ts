@@ -318,9 +318,10 @@ describe("doctor retired model references", () => {
       state: { autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 } },
     };
     await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-    await repairCronCodexModelRefsAfterConfigWrite({ cfg });
+    await repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg });
     expect((await loadCronJobsStore(storePath)).jobs[0]?.payload).toEqual(job.payload);
     const result = await repairCronCodexModelRefsAfterConfigWrite({
+      migrateCodexModelRefs: true,
       cfg,
       repairRetiredModelRefs: true,
     });
@@ -391,6 +392,7 @@ describe("doctor retired model references", () => {
       };
       await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
       const result = await repairCronCodexModelRefsAfterConfigWrite({
+        migrateCodexModelRefs: true,
         cfg,
         blockedModelIdentities,
         repairRetiredModelRefs: true,

@@ -14,6 +14,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { hasUnclassifiedSessionTranscriptEvents } from "./session-transcript-projection-rebuild.js";
@@ -133,6 +134,7 @@ export function withCurrentProjectionSnapshot<T>(
   const result = runSqliteDeferredTransactionSync(
     database.db,
     () => {
+      assertSessionTranscriptHot(database.db, resolved.sessionId);
       const snapshot = readProjectionSnapshot(database, resolved.sessionId);
       if (!snapshot) {
         return {

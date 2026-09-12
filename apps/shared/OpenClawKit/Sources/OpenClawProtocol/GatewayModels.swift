@@ -16964,16 +16964,26 @@ public struct SessionsSearchParams: Codable, Sendable {
 public struct SessionsSearchResult: Codable, Sendable {
     public let results: [SessionsSearchHit]
     public let indexing: Bool?
+    public let archivedtranscriptsexcluded: Int?
     public let truncated: Bool?
 
     public init(
         results: [SessionsSearchHit],
         indexing: Bool? = nil,
+        archivedtranscriptsexcluded: Int? = nil,
         truncated: Bool? = nil)
     {
         self.results = results
         self.indexing = indexing
+        self.archivedtranscriptsexcluded = archivedtranscriptsexcluded
         self.truncated = truncated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case results
+        case indexing
+        case archivedtranscriptsexcluded = "archivedTranscriptsExcluded"
+        case truncated
     }
 }
 
@@ -17016,6 +17026,21 @@ public struct SessionsSendParams: Codable, Sendable {
         case attachments
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SessionsStorageParams: Codable, Sendable {}
+
+public struct SessionsStorageStatusResult: Codable, Sendable {
+    public let agents: [[String: AnyCodable]]
+    public let maintenance: [String: AnyCodable]
+
+    public init(
+        agents: [[String: AnyCodable]],
+        maintenance: [String: AnyCodable])
+    {
+        self.agents = agents
+        self.maintenance = maintenance
     }
 }
 

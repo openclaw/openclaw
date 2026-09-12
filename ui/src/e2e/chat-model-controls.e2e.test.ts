@@ -110,7 +110,7 @@ suite.define(() => {
     });
   });
 
-  it("shows and changes this chat's account without changing the default for new chats", async () => {
+  it.each(["pointer", "keyboard"])("changes only this chat's account (%s)", async (input) => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("chat-model-accounts", artifactRoot)
@@ -161,18 +161,37 @@ suite.define(() => {
             },
           ],
         };
-        const firstAccountPage = {
-          profileId: "test-person",
-          accounts: [personal],
-          nextCursor: "accounts-page-2",
-          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
-        };
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.5",
           models,
           deferredMethods: ["sessions.patch"],
           methodResponses: {
             "sessions.list": sessionList,
+            "models.authStatus": {
+              ts: 1,
+              providers: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: personal.authProfileId,
+                      type: "oauth",
+                      status: "ok",
+                      email: "personal@example.com",
+                    },
+                    {
+                      profileId: work.authProfileId,
+                      type: "oauth",
+                      status: "ok",
+                      email: "work@example.com",
+                    },
+                  ],
+                  usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
+                },
+              ],
+            },
             "models.list": {
               commands: [],
               models,
@@ -183,7 +202,12 @@ suite.define(() => {
                 source: "user",
               },
             },
-            "users.listModelAccounts": firstAccountPage,
+            "users.listModelAccounts": {
+              profileId: "test-person",
+              accounts: [personal],
+              nextCursor: "accounts-page-2",
+              links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+            },
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -191,12 +215,23 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         await model.click();
+        const heading = composer.locator('[data-chat-model-provider="openai"]');
+        await expect
+          .poll(() => heading.textContent())
+          .toContain("Subscription · personal@example.com");
         const account = composer.locator("[data-chat-account-selection]");
         const picker = account;
         const trigger = picker.locator("[data-chat-account-group-toggle]");
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         for (const width of [320, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
+          expect(await heading.getAttribute("title")).toBe("Subscription · personal@example.com");
+          expect(
+            await heading.locator(".chat-controls__auth-meta svg").evaluate((icon) => ({
+              width: getComputedStyle(icon).width,
+              height: getComputedStyle(icon).height,
+            })),
+          ).toEqual({ width: "13px", height: "13px" });
           await expect
             .poll(async () => {
               const box = await account.boundingBox();
@@ -213,32 +248,32 @@ suite.define(() => {
         await trigger.click();
         const more = picker.locator('[data-chat-account-option="more"]');
         await expect.poll(() => more.isVisible()).toBe(true);
+        expect(
+          await picker.locator('[data-chat-account-option="current"]').textContent(),
+        ).toContain("personal@example.com");
         await trigger.click();
         await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-        const beforeRefresh = await gateway.getRequests("users.listModelAccounts");
-        await gateway.deferNext("users.listModelAccounts");
+        const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
         await trigger.press("Enter");
-        const refresh = await gateway.waitForRequest("users.listModelAccounts", {
-          after: beforeRefresh.length,
-        });
-        expect(refresh.params).toEqual({});
         await expect.poll(() => more.isVisible()).toBe(true);
-        const pendingMoreTarget = await more.elementHandle();
-        expect(pendingMoreTarget).not.toBeNull();
-        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
-        await gateway.resolveDeferred("users.listModelAccounts", firstAccountPage);
-        await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("users.listModelAccounts")).toEqual(inventoryRequests);
         expect(
           await picker
             .locator('[data-chat-account-option="current"]')
             .getAttribute("aria-selected"),
         ).toBe("true");
-        const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
         await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
+        const pendingMoreTarget = await more.elementHandle();
+        expect(pendingMoreTarget).not.toBeNull();
         const beforePaginationUrl = page.url();
-        await pendingMoreTarget!.click();
+        if (input === "keyboard") {
+          await pendingMoreTarget!.focus();
+          await page.keyboard.press("Enter");
+        } else {
+          await pendingMoreTarget!.click();
+        }
         await expect
           .poll(async () => {
             const requests = await gateway.getRequests("users.listModelAccounts");
@@ -250,6 +285,9 @@ suite.define(() => {
           after: inventoryRequests.length,
         });
         expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
+        const loading = picker.locator('[data-chat-account-option="loading"]');
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",
@@ -260,6 +298,7 @@ suite.define(() => {
           `[data-chat-account-option="account:${work.authProfileId}"]`,
         );
         await expect.poll(() => workOption.isVisible()).toBe(true);
+        expect(await workOption.textContent()).toContain("work@example.com");
         if (artifactDir) {
           await page.screenshot({
             animations: "disabled",
@@ -299,6 +338,7 @@ suite.define(() => {
           reason: "patch",
         });
         await expect.poll(() => trigger.textContent()).toContain(work.label);
+        await expect.poll(() => heading.textContent()).toContain("Subscription · work@example.com");
         expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
         expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
         if (artifactDir) {
