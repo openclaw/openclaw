@@ -26,14 +26,15 @@ export function createGuardedConfigFileSystem(
   if (!assertCurrent && !publication) {
     return fsModule;
   }
+  let expectedPublication = publication;
   const assertPublication = () => {
     assertCurrent?.();
-    if (publication) {
+    if (expectedPublication) {
       assertBaseSnapshotStillCurrent(
-        publication.snapshot,
+        expectedPublication.snapshot,
         configPath,
         fsModule,
-        publication.includeGraph,
+        expectedPublication.includeGraph,
       );
     }
   };
@@ -62,15 +63,18 @@ export function createGuardedConfigFileSystem(
       if (filePath === configPath) {
         assertPublication();
       }
-      return fsModule.rmSync(filePath, options);
+      fsModule.rmSync(filePath, options);
+      if (filePath === configPath && expectedPublication) {
+        // Only this successful removal advances the captured root expectation.
+        expectedPublication = {
+          ...expectedPublication,
+          snapshot: { ...expectedPublication.snapshot, exists: false, raw: null },
+        };
+      }
     },
     openSync: (filePath, flags, mode) => {
       if (filePath === configPath) {
-        if (publication?.snapshot.exists === false) {
-          assertPublication();
-        } else {
-          assertCurrent?.();
-        }
+        assertPublication();
       }
       return fsModule.openSync(filePath, flags, mode);
     },

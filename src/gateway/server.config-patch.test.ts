@@ -522,13 +522,24 @@ describe("gateway config methods", () => {
     },
   );
 
-  it.each(
-    (["EPERM", "EEXIST"] as const).flatMap((code) =>
-      (["unchanged", "changed"] as const).map((includedContent) => ({ code, includedContent })),
+  it.each([
+    ...(["EPERM", "EEXIST"] as const).flatMap((code) =>
+      (["unchanged", "changed"] as const).flatMap((includedContent) =>
+        (["retained", "deleted"] as const).map((rootState) => ({
+          code,
+          includedContent,
+          rootState,
+        })),
+      ),
     ),
-  )(
-    "config.set handles $code copy fallback with $includedContent included content",
-    async ({ code, includedContent }) => {
+    ...(["EPERM", "EEXIST"] as const).map((code) => ({
+      code,
+      includedContent: "changed" as const,
+      rootState: "removed-by-writer" as const,
+    })),
+  ])(
+    "config.set handles $code copy fallback with $includedContent included content and $rootState root",
+    async ({ code, includedContent, rootState }) => {
       const original = await getCurrentConfigObject();
       const includePath = path.join(path.dirname(original.path), "logging.json");
       await writeJsonFile(includePath, { level: "info" });
@@ -547,11 +558,23 @@ describe("gateway config methods", () => {
           return rename(source, destination);
         }
         renameDenied = true;
-        if (includedContent === "changed") {
+        if (rootState === "deleted") {
+          fsNode.unlinkSync(original.path);
+        }
+        if (includedContent === "changed" && rootState !== "removed-by-writer") {
           fsNode.writeFileSync(includePath, JSON.stringify({ level: "debug" }));
         }
         throw Object.assign(new Error("rename denied"), { code });
       });
+      if (rootState === "removed-by-writer") {
+        const remove = fsNode.rmSync;
+        vi.spyOn(fsNode, "rmSync").mockImplementation((filePath, options) => {
+          remove(filePath, options);
+          if (filePath === original.path) {
+            fsNode.writeFileSync(includePath, JSON.stringify({ level: "debug" }));
+          }
+        });
+      }
 
       const result = await rpcReq(requireClient(), "config.set", {
         raw: JSON.stringify({ ...draft.config, ui: { prefs: { locale: "fr" } } }),
@@ -559,11 +582,20 @@ describe("gateway config methods", () => {
       });
 
       expect(renameDenied).toBe(true);
-      if (includedContent === "changed") {
+      if (includedContent === "changed" || rootState === "deleted") {
         expect(result.ok).toBe(false);
-        expect(result.error?.message).toContain("included config");
-        expect(await fs.readFile(original.path, "utf8")).toBe(rootBefore);
-        expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "debug" });
+        expect(result.error?.code).toBe("INVALID_REQUEST");
+        expect(result.error?.message).toContain(
+          includedContent === "changed" ? "included config" : "config changed since last load",
+        );
+        if (rootState !== "retained") {
+          await expect(fs.stat(original.path)).rejects.toMatchObject({ code: "ENOENT" });
+        } else {
+          expect(await fs.readFile(original.path, "utf8")).toBe(rootBefore);
+        }
+        expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
+          level: includedContent === "changed" ? "debug" : "info",
+        });
       } else {
         expect(result.ok, result.error?.message).toBe(true);
         invalidateConfigGetResponseCache();
