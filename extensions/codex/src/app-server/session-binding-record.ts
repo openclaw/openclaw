@@ -148,6 +148,9 @@ const threadBindingSchema = z
       .pipe(z.string().min(1))
       .optional()
       .catch(undefined),
+    // Native thread responses and settings notifications own this effective
+    // setting; turn requests remain free to use their own transient override.
+    reasoningEffort: z.string().nullable().optional().catch(undefined),
     // Legacy rows may contain the retired two-field permission overlay. Keep
     // parsing it so the rest of the binding survives; SessionEntry owns live policy.
     approvalPolicy: z

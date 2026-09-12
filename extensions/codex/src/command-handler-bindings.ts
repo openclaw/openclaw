@@ -441,6 +441,7 @@ export async function resumeThread(
                   pendingResumeConfiguration: pendingResumeConfiguration ? true : undefined,
                   authProfileId,
                   model: response.model,
+                  reasoningEffort: response.reasoningEffort,
                   modelProvider,
                   historyCoveredThrough: new Date().toISOString(),
                 },

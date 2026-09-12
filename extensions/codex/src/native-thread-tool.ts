@@ -467,6 +467,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                   ? response.thread.cwd
                   : (options.context.workspaceDir ?? ""),
               model: typeof response.model === "string" ? response.model : undefined,
+              reasoningEffort: response.reasoningEffort,
               modelProvider:
                 typeof response.modelProvider === "string" ? response.modelProvider : undefined,
               historyCoveredThrough: new Date().toISOString(),

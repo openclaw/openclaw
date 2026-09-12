@@ -238,7 +238,9 @@ export async function prepareCodexAttemptTurnRequest(
         phase: "turn_starting",
         threadId: resourceState.thread.threadId,
         model: params.modelId,
-        effort: turnStartParams.effort,
+        // Supervised turns leave the per-turn override unset. In that case the
+        // response-backed thread setting is the effective effort operators need.
+        effort: turnStartParams.effort ?? resourceState.thread.reasoningEffort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
         serviceTier: turnStartParams.serviceTier,
       },

@@ -1171,12 +1171,18 @@ function threadStartResult(threadId = "thread-1") {
   };
 }
 
-function nativeThreadResult(threadId: string, model: string, modelProvider: string) {
+function nativeThreadResult(
+  threadId: string,
+  model: string,
+  modelProvider: string,
+  reasoningEffort: string | null = null,
+) {
   const response = threadStartResult(threadId);
   return {
     ...response,
     model,
     modelProvider,
+    reasoningEffort,
     thread: { ...response.thread, modelProvider },
   };
 }
@@ -4244,10 +4250,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
         };
       }
       if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider", "low");
       }
-      if (method === "thread/start" || method === "thread/resume") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider", "high");
+      }
+      if (method === "thread/resume") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider", "high");
       }
       if (method === "thread/inject_items" || method === "thread/unsubscribe") {
         return {};
@@ -4356,6 +4365,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       threadId: finalThreadId,
       model: "native-effective",
       modelProvider: "native-provider",
+      reasoningEffort: "high",
       preserveNativeModel: true,
       agentWorkspaceDeveloperInstructions,
       conversationSourceTransferComplete: true,
@@ -4406,11 +4416,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     expect(resumed).toMatchObject({
       threadId: finalThreadId,
+      reasoningEffort: "high",
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
       lifecycle: { action: "resumed" },
     });
     expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+      reasoningEffort: "high",
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
         commonParams.appServer,
         attempt.agentDir,

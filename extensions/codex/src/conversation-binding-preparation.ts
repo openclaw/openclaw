@@ -384,6 +384,7 @@ async function writeThreadBindingFromResponse(
           cwd: resolved.workspaceDir,
           authProfileId: params.authProfileId,
           model: response.model ?? resolved.model ?? params.model,
+          reasoningEffort: response.reasoningEffort,
           modelProvider: normalizeCodexAppServerBindingModelProvider({
             authProfileId: params.authProfileId,
             modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,
