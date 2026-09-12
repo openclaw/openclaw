@@ -418,7 +418,7 @@ export function adoptConfigWriteAck(
   state: RuntimeConfigState,
   submitted: ConfigSubmittedDraft,
   ack: ConfigWriteAck,
-  options: { raw?: string } = {},
+  options: { raw?: ConfigSnapshot["raw"] } = {},
 ) {
   const acknowledgedRaw = options.raw ?? serializeConfigForm(ack.config);
   const currentRaw = serializeFormForSubmit(state);
@@ -468,7 +468,7 @@ export function adoptConfigWriteAck(
       state.lastError = "config changed since last load; re-run config.get and retry";
     }
     state.configFormDirty = true;
-    return;
+    return state.configAutoSaveStatus;
   }
   setConfigRawOriginal(state, acknowledgedRaw);
   state.configFormOriginal = cloneConfigObject(ack.config);
@@ -480,6 +480,7 @@ export function adoptConfigWriteAck(
     state.configRaw = acknowledgedRaw;
     clearConfigDraftTracking(state);
   }
+  return state.configAutoSaveStatus;
 }
 
 function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unknown>) {

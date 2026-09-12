@@ -560,7 +560,7 @@ export async function patchConfig(
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return false;
     }
-    adoptConfigWriteAck(state, submitted, receipt, {
+    const adoptedStatus = adoptConfigWriteAck(state, submitted, receipt, {
       raw: ack.noop === true ? currentSnapshot.raw : undefined,
     });
     if (ack.noop !== true) {
@@ -568,7 +568,7 @@ export async function patchConfig(
       state.configNeedsApply = true;
     }
     state.configAutoSaveStatus =
-      state.configAutoSaveStatus === "conflict"
+      adoptedStatus === "conflict"
         ? "conflict"
         : state.configFormDirty && draftStatus === "paused"
           ? "paused"
