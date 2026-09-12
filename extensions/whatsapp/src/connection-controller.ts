@@ -456,6 +456,7 @@ export class WhatsAppConnectionController {
   private readonly heartbeatSeconds: number;
   private readonly keepAlive: boolean;
   private readonly transportTimeoutMs: number;
+  private readonly messageTimeoutMs: number;
   private readonly appSilenceTimeoutMs: number;
   private readonly watchdogCheckMs: number;
   private readonly verbose: boolean;
@@ -501,6 +502,7 @@ export class WhatsAppConnectionController {
     this.keepAlive = params.keepAlive;
     this.heartbeatSeconds = params.heartbeatSeconds;
     this.transportTimeoutMs = params.transportTimeoutMs;
+    this.messageTimeoutMs = params.messageTimeoutMs;
     this.appSilenceTimeoutMs = params.messageTimeoutMs * 4;
     this.watchdogCheckMs = params.watchdogCheckMs;
     this.reconnectPolicy = params.reconnectPolicy;
@@ -1060,7 +1062,10 @@ export class WhatsAppConnectionController {
     connection.watchdogTimer = setInterval(() => {
       const now = Date.now();
       const transportStaleForMs = now - connection.lastTransportActivityAt;
-      if (transportStaleForMs <= this.transportTimeoutMs) {
+      const appBaselineAt = connection.lastInboundAt ?? connection.startedAt;
+      const appDeliveryStalledAfterReconnect =
+        connection.openedAfterRecentInbound && now - appBaselineAt > this.messageTimeoutMs;
+      if (transportStaleForMs <= this.transportTimeoutMs && !appDeliveryStalledAfterReconnect) {
         return;
       }
       const snapshot = this.getCurrentSnapshot(connection);
