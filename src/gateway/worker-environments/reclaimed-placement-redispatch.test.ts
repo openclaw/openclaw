@@ -6,6 +6,11 @@ import { createReclaimedPlacementRedispatch } from "./reclaimed-placement-redisp
 const placement = { ...ACTIVE_PLACEMENT, state: "reclaimed" as const };
 const dispatchOptions = { assertCurrent: () => {} };
 const { ready } = createDispatchEnvironmentFixtures();
+const profileSnapshot = {
+  machineClass: "large",
+  install: "bundle",
+  settings: { region: "parent", device: "paired-node" },
+} as const;
 
 describe("createReclaimedPlacementRedispatch", () => {
   it.each([
@@ -15,10 +20,11 @@ describe("createReclaimedPlacementRedispatch", () => {
   ] as const)(
     "preserves the $providerId profile and resolves its $executionMode destination",
     async ({ providerId, nodeDeviceId, executionMode }) => {
-      const environment = { ...ready, providerId, nodeDeviceId };
+      const profileId = `profile-${providerId}`;
+      const environment = { ...ready, providerId, nodeDeviceId, profileId, profileSnapshot };
       const requirement = {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
+        requiredNodeCommands: executionMode === "remote-exec" ? ["codex.exec-server.stdio.v1"] : [],
+        consumesWorkerSlot: executionMode === "worker-turn",
       };
       const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
       const dispatch = vi.fn(async () => ACTIVE_PLACEMENT);
@@ -40,8 +46,8 @@ describe("createReclaimedPlacementRedispatch", () => {
       expect(dispatch).toHaveBeenCalledExactlyOnceWith(
         {
           ...identity,
-          profileId: ready.profileId,
-          inheritedProfile: { providerId, profileSnapshot: ready.profileSnapshot },
+          profileId,
+          inheritedProfile: { providerId, profileSnapshot },
           ...(nodeDeviceId ? { devicePlacement: requirement } : {}),
           ...(providerId === "device" ? { deviceId: nodeDeviceId } : {}),
         },
