@@ -316,43 +316,81 @@ export function serializeFormForSubmit(state: RuntimeConfigState): string {
   return serializeConfigForm(sanitized);
 }
 
-/**
- * Adopts a successful write ack as the authoritative local snapshot BEFORE
- * any reload: the submitted bytes are on disk under the acked hash, so the
- * raw/hash/originals must never keep describing the pre-save file (a failed
- * best-effort reload would otherwise leave stale-bytes paths alive — e.g.
- * apply re-submitting the old raw, or a revert-during-reload comparing
- * clean). Server-resolved values (secret redaction) still refresh via the
- * follow-up reload, which is purely cosmetic from here on.
- */
+export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
+
+export function replayConfigDraftEdits(
+  submittedRaw: string,
+  currentRaw: string,
+  acknowledgedConfig: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const submitted = parseConfigRawDraft(submittedRaw);
+  const current = parseConfigRawDraft(currentRaw);
+  if (!submitted || !current) {
+    return null;
+  }
+  const draft = cloneConfigObject(acknowledgedConfig);
+  const replay = (
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+    canonical: Record<string, unknown>,
+    path: string[],
+  ) => {
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      const nextPath = [...path, key];
+      if (!Object.hasOwn(after, key)) {
+        removePathValue(draft, nextPath);
+      } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
+        replay(before[key], after[key], canonical[key], nextPath);
+      } else if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+        setPathValue(draft, nextPath, cloneConfigObject(after[key]));
+      }
+    }
+  };
+  replay(submitted, current, acknowledgedConfig, []);
+  return draft;
+}
+
+// The server owns the document belonging to this revision. Only edits made
+// after dispatch are replayed; a reload is not needed to repair the receipt.
 export function adoptConfigSetAck(
   state: RuntimeConfigState,
   submittedRaw: string,
-  ackHash: string,
+  ack: ConfigWriteAck,
 ) {
-  const parsed = parseConfigRawDraft(submittedRaw);
+  const currentRaw = serializeFormForSubmit(state);
+  let draft: Record<string, unknown> | null = cloneConfigObject(ack.config);
+  if (currentRaw !== submittedRaw) {
+    draft =
+      state.configFormMode === "raw"
+        ? null
+        : replayConfigDraftEdits(submittedRaw, currentRaw, ack.config);
+  }
+  const acknowledgedRaw = serializeConfigForm(ack.config);
   state.configSnapshot = {
     ...state.configSnapshot,
-    raw: submittedRaw,
-    hash: ackHash,
+    raw: acknowledgedRaw,
+    hash: ack.hash,
     valid: true,
     issues: [],
-    ...(parsed ? { config: parsed, sourceConfig: parsed } : {}),
+    config: ack.config,
+    sourceConfig: ack.config,
   };
   state.configValid = true;
   state.configIssues = [];
-  setConfigRawOriginal(state, submittedRaw);
-  if (parsed) {
-    state.configFormOriginal = cloneConfigObject(parsed);
+  // Replaying raw text would discard comments and formatting. Keep that buffer
+  // and its old base so manual submission cannot overwrite unseen server edits.
+  if (!draft) {
+    state.configFormDirty = true;
+    return;
   }
-  state.configDraftBaseHash = ackHash;
+  setConfigRawOriginal(state, acknowledgedRaw);
+  state.configFormOriginal = cloneConfigObject(ack.config);
+  state.configDraftBaseHash = ack.hash;
+  state.configForm = draft;
+  state.configRaw = serializeConfigForm(draft);
+  state.configFormDirty = state.configRaw !== acknowledgedRaw;
   if (!state.configFormDirty) {
-    // Clean drafts snap to the persisted bytes, mirroring what a reload's
-    // non-preserving snapshot application would do.
-    state.configRaw = submittedRaw;
-    if (parsed) {
-      state.configForm = cloneConfigObject(parsed);
-    }
+    clearConfigDraftTracking(state);
   }
 }
 

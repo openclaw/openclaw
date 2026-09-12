@@ -722,8 +722,9 @@ function getOpenClawStateDatabaseIfOpen(
 export {
   recordOpenClawStateDatabaseOpenFailure,
   clearOpenClawStateDatabaseOpenFailure,
-  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   isOpenClawStateDatabaseOpen,
   closeOpenClawStateDatabaseForTest,
   confirmOpenClawStateDatabaseIntegrity,

@@ -38,7 +38,6 @@ export class SidebarPeopleRuntime {
   } | null = null;
   private readonly portal = new PortaledHovercardController(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
-  private suppressFocus = false;
   private lastOpenAt = -Infinity;
   private readonly stopLocale: () => void;
 
@@ -60,12 +59,8 @@ export class SidebarPeopleRuntime {
         ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
     if (event.type === "keydown" && event instanceof KeyboardEvent) {
-      if (event.key === "Tab" && !event.shiftKey && event.target === this.active?.trigger) {
-        const first = this.portal.focusables()[0];
-        if (first) {
-          event.preventDefault();
-          first.focus();
-        }
+      if (event.key === "Tab") {
+        this.portal.handleTriggerKeyDown(event);
       }
       return;
     }
@@ -111,7 +106,7 @@ export class SidebarPeopleRuntime {
         return;
       }
       this.portal.schedulePointerExit();
-    } else if (event.type === "focusin" && !this.suppressFocus) {
+    } else if (event.type === "focusin" && !this.portal.restoringFocus) {
       this.activate(row, 0);
       this.portal.focusInside = true;
       this.portal.clearClose();
@@ -333,9 +328,7 @@ export class SidebarPeopleRuntime {
   }
 
   private returnFocus(): void {
-    this.suppressFocus = true;
-    this.active?.trigger.focus({ preventScroll: true });
-    this.suppressFocus = false;
+    this.portal.returnFocus(this.active?.trigger ?? null);
     this.portal.focusInside = document.activeElement === this.active?.trigger;
   }
 

@@ -595,7 +595,7 @@ suite.define(() => {
       replacePaths: ["cloudWorkers.profiles.pending.settings.setupEnv"],
     },
   ])(
-    "preserves Advanced edits after $name and deletes project defaults",
+    "config.set preserves Advanced edits after $name and deletes project defaults",
     async ({ replacement, description, replacePaths }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -710,7 +710,11 @@ suite.define(() => {
           "config.get",
           configResponse(savedConfig, "cloud-workers-raw-saved"),
         );
-        await gateway.resolveDeferred("config.set", { ok: true, hash: "cloud-workers-raw-saved" });
+        await gateway.resolveDeferred("config.set", {
+          ok: true,
+          hash: "cloud-workers-raw-saved",
+          config: savedConfig,
+        });
         await expect.poll(() => rawSave.isDisabled()).toBe(true);
         expect(await gateway.getRequests("config.set")).toHaveLength(1);
         await page.reload();

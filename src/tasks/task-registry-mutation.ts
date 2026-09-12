@@ -192,7 +192,10 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   ensureLinkedTaskFlowRegistryReady(current);
   ensureLinkedTaskFlowRegistryReady(next);
-  const equivalent = isEquivalentTaskRecord(current, next);
+  const equivalent =
+    isTerminalTaskStatus(current.status) &&
+    isTerminalTaskStatus(next.status) &&
+    isEquivalentTaskRecord(current, next);
   if (!equivalent) {
     if (becomesTerminal) {
       flushTaskActivity(taskId);

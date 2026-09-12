@@ -109,10 +109,21 @@ export function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   };
 }
 
-function omitUndefinedProperties<T extends object>(value: T): T {
+function omitUndefinedProperties(value: object): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(value).filter(([, field]) => field !== undefined),
-  ) as T;
+  );
+}
+
+function canonicalizeMirroredFlowProjection(flow: TaskFlowRecord): Record<string, unknown> {
+  const { revision: _revision, ...rest } = flow;
+  const canonical = omitUndefinedProperties(rest);
+  // Mirrored sync writes waitJson: null; older rows stored SQL NULL and restore
+  // without the field. Treat those as the same cleared wait state.
+  if (canonical.waitJson === null) {
+    delete canonical.waitJson;
+  }
+  return canonical;
 }
 
 /** Mirrored sync must not bump revision when the derived projection is unchanged. */
@@ -120,12 +131,9 @@ export function isEquivalentMirroredFlowProjection(
   current: TaskFlowRecord,
   next: TaskFlowRecord,
 ): boolean {
-  // SQLite restores omit NULL optionals; applyFlowPatch materializes them as
-  // undefined. Drop both revision and undefined keys so those shapes compare equal
-  // while JSON null payloads stay distinct.
   return isDeepStrictEqual(
-    omitUndefinedProperties({ ...current, revision: undefined }),
-    omitUndefinedProperties({ ...next, revision: undefined }),
+    canonicalizeMirroredFlowProjection(current),
+    canonicalizeMirroredFlowProjection(next),
   );
 }
 

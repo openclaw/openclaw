@@ -1,10 +1,28 @@
 // Clones and normalizes task registry records at persistence boundaries.
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   isTerminalTaskStatus,
   type TaskDeliveryState,
   type TaskRecord,
 } from "./task-registry.types.js";
+
+export function getTaskRelatedSessionIndexKeys(
+  task: Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "childSessionKey">,
+): string[] {
+  return uniqueStrings(
+    [task.requesterSessionKey, task.ownerKey, task.childSessionKey]
+      .map(normalizeOptionalString)
+      .filter((key): key is string => Boolean(key)),
+  );
+}
+
+export function compareTasksForRunIdLookup(left: TaskRecord, right: TaskRecord): number {
+  const leftPriority = left.runtime === "cli" ? 1 : 0;
+  const rightPriority = right.runtime === "cli" ? 1 : 0;
+  return leftPriority - rightPriority || left.createdAt - right.createdAt;
+}
 
 export function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return {
@@ -13,10 +31,10 @@ export function cloneTaskRecord(record: TaskRecord): TaskRecord {
   };
 }
 
-function omitUndefinedProperties<T extends object>(value: T): T {
+function omitUndefinedProperties(value: object): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(value).filter(([, field]) => field !== undefined),
-  ) as T;
+  );
 }
 
 /** Restored or replayed projections must not persist when they already match durable state. */

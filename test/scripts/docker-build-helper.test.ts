@@ -3159,12 +3159,17 @@ outer
   });
 
   it("keeps real-TTY onboarding drivers aligned with the guided prompt sequence", () => {
+    for (const script of [RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, ONBOARD_SCENARIO_PATH]) {
+      expect(readFileSync(script, "utf8")).toContain(
+        "source scripts/e2e/lib/onboard/first-agent-flow.sh",
+      );
+    }
     expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Continue?"',
       "send $'y\\r'",
       'wait_for_log "Help make OpenClaw better?"',
       "send $'\\r'",
-      'wait_for_log "What should we call your first agent?"',
+      "wait_for_first_agent_prompt onboarding_log_contains 60 0.4",
       "send $'\\r'",
       'wait_for_log "to search"',
       "send $'ollama\\r'",
@@ -3172,7 +3177,7 @@ outer
     expectOrderedScriptFragments(readFileSync(ONBOARD_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Help make OpenClaw better?"',
       "send $'\\r'",
-      'wait_for_log "What should we call your first agent?"',
+      "wait_for_first_agent_prompt log_contains 120 0.8",
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
       "send $'\\r'",
@@ -8346,6 +8351,89 @@ done
       definitionPaths: [unitPath],
       environment: { GREETING: "hello world", OPENCLAW_PROFILE: "fixture" },
     });
+
+    const definition = readFileSync(unitPath, "utf8");
+    const loadedEnv = {
+      HOME: home,
+      PATH: `${binDir}:${process.env.PATH}`,
+      OPENCLAW_SYSTEMD_UNIT: serviceName,
+      XDG_RUNTIME_DIR: join(home, "runtime"),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "runtime", "bus")}`,
+    };
+    const loadedCommand = await readSystemdServiceExecStart(loadedEnv, {
+      requireEffective: true,
+      requireLoaded: true,
+      timeoutMs: 30_000,
+    });
+    expect(loadedCommand?.programArguments).toEqual(programArguments);
+    const { readLoadedSystemdServiceRuntime } =
+      await import("../../src/daemon/systemd-loaded-runtime.js");
+    const runtime = await readLoadedSystemdServiceRuntime(loadedEnv, 30_000);
+    expect(runtime).toMatchObject({
+      status: "stopped",
+      systemd: { managerUid: process.getuid?.(), tasksCurrent: 0 },
+    });
+    const invalidQueries = [
+      ["list"],
+      [
+        "call",
+        ":1.99",
+        "/org/freedesktop/systemd1",
+        `${manager}.Manager`,
+        "GetUnit",
+        "s",
+        serviceName,
+      ],
+      [
+        "call",
+        manager,
+        "/org/freedesktop/systemd1",
+        `${manager}.Manager`,
+        "GetUnit",
+        "s",
+        "foreign.service",
+      ],
+      [
+        "call",
+        manager,
+        "/org/freedesktop/systemd1",
+        `${manager}.Manager`,
+        "StartUnit",
+        "s",
+        serviceName,
+      ],
+      ["get-property", ":1.42", objectPath, `${manager}.Service`, "UnrecognizedProperty"],
+      ["get-property", ":1.42", "/foreign/object", `${manager}.Service`, "MainPID"],
+      [
+        "get-property",
+        ":1.42",
+        objectPath,
+        `${manager}.Service`,
+        "Result NRestarts MainPID ExecMainStatus ExecMainCode KillMode TasksCurrent MemoryCurrent",
+      ],
+    ];
+    for (const query of invalidQueries) {
+      const invalid = spawnSync(
+        join(binDir, "busctl"),
+        ["--user", "--auto-start=no", "--json=short", ...query],
+        {
+          encoding: "utf8",
+          env: loadedEnv,
+        },
+      );
+      expect(invalid.status, JSON.stringify(query)).toBe(1);
+      expect(invalid.stderr).toContain("unexpected invocation");
+    }
+    expect(readFileSync(unitPath, "utf8")).toBe(definition);
+    rmSync(unitPath);
+    expect(
+      await readSystemdServiceExecStart(loadedEnv, {
+        requireEffective: true,
+        requireLoaded: true,
+        timeoutMs: 30_000,
+      }),
+    ).toBeNull();
+    expect((await readLoadedSystemdServiceRuntime(loadedEnv, 30_000)).status).toBe("unknown");
 
     const unexpected = spawnSync(
       DOCTOR_SWITCH_BUSCTL_SHIM_PATH,

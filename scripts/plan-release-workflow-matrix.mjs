@@ -275,6 +275,16 @@ const LIVE_DOCKER_SUITES = [
     profiles: "stable full",
   },
   {
+    suite_id: "live-codex-harness-gpt56-sol-docker",
+    suite_group: "live-codex-harness-gpt56-docker",
+    label: "Docker live Codex GPT-5.6 Sol Ultra",
+    command:
+      'OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-sol=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
+    timeout_minutes: 40,
+    profile_env_only: false,
+    profiles: "stable full",
+  },
+  {
     suite_id: "live-codex-harness-gpt56-terra-docker",
     suite_group: "live-codex-harness-gpt56-docker",
     label: "Docker live Codex GPT-5.6 Terra Ultra",

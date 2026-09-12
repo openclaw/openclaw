@@ -19,6 +19,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -239,20 +240,23 @@ export function projectSessionPeopleFacet(
   people: Iterable<SessionPerson>,
   selectedProfileId?: string,
 ) {
-  const sortedPeople = [...people].toSorted(
-    (a, b) =>
-      b.sessionCount - a.sessionCount ||
-      (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
-      a.identity.id.localeCompare(b.identity.id),
-  );
-  const visiblePeople = sortedPeople.slice(0, SESSIONS_LIST_OWNER_LIMIT);
+  const entries = [...people];
+  const compare = (a: SessionPerson, b: SessionPerson) =>
+    b.sessionCount - a.sessionCount ||
+    (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
+    a.identity.id.localeCompare(b.identity.id);
+  const visiblePeople = sortAndLimitBy(entries, SESSIONS_LIST_OWNER_LIMIT, compare);
   const selected = selectedProfileId
-    ? sortedPeople.find((person) => person.identity.id === selectedProfileId)
+    ? sortAndLimitBy(
+        entries.filter((person) => person.identity.id === selectedProfileId),
+        1,
+        compare,
+      )[0]
     : undefined;
   if (selected && !visiblePeople.includes(selected)) {
     visiblePeople.splice(-1, 1, selected);
   }
-  return { people: visiblePeople, selected, overflow: sortedPeople.length > visiblePeople.length };
+  return { people: visiblePeople, selected, overflow: entries.length > visiblePeople.length };
 }
 
 export function addSessionOwnerFacetIdentity(

@@ -188,7 +188,7 @@ describe("config state model", () => {
     runtimeConfig.dispose();
   });
 
-  it("preserves process-local needsApply after saving through an older Gateway", async () => {
+  it("config.set retains process-local needsApply without applied revision metadata", async () => {
     vi.useFakeTimers();
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
@@ -200,7 +200,7 @@ describe("config state model", () => {
           issues: [],
         };
       }
-      return method === "config.set" ? { hash: "hash-2" } : {};
+      return method === "config.set" ? { config: { count: 2 }, hash: "hash-2" } : {};
     });
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],

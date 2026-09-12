@@ -444,7 +444,9 @@ export async function removeStateAndLinkedPaths(
 
   const lock = await acquireStateCleanupOwnership(cleanup);
   let lockHeld = true;
-  let stateCoordinator: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+  let stateCoordinator:
+    | Awaited<ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion>>
+    | undefined;
   const releaseLock = async () => {
     if (!lockHeld) {
       return;
@@ -470,7 +472,7 @@ export async function removeStateAndLinkedPaths(
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
     });
-    stateCoordinator = acquireOpenClawStateDatabaseFileExclusion(databasePath);
+    stateCoordinator = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
     const preservePaths = requestedPreservePaths
       .map((target) =>
         isPathWithin(target, requestedStateDir)

@@ -317,25 +317,25 @@ async function runWithModelFallbackInternal<T>(
           profileId: userLockedAuthProfileId,
           includePendingOAuthRefresh: true,
         }).eligible;
+      let profileIds = authRuntime.resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store: authStore,
+        provider: candidate.provider,
+        forModel: candidate.model,
+        includePendingOAuthRefresh: true,
+      });
+      if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
+        profileIds = [...new Set([userLockedAuthProfileId, ...profileIds])];
+      }
+      await authRuntime.maybeReprobeWhamBlockedProfiles({
+        store: authStore,
+        profileIds,
+        agentDir: params.agentDir,
+        forModel: candidate.model,
+      });
       if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
-        candidateAuthProfileIds = authRuntime.resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store: authStore,
-          provider: candidate.provider,
-          forModel: candidate.model,
-          includePendingOAuthRefresh: true,
-        });
-        if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
-          candidateAuthProfileIds.unshift(userLockedAuthProfileId);
-          candidateAuthProfileIds = [...new Set(candidateAuthProfileIds)];
-        }
+        candidateAuthProfileIds = profileIds;
         profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
-        authRuntime.maybeReprobeWhamBlockedProfiles({
-          store: authStore,
-          profileIds: candidateAuthProfileIds,
-          agentDir: params.agentDir,
-          forModel: candidate.model,
-        });
       }
     }
     const candidateAuthScope = resolveFallbackAuthScope({

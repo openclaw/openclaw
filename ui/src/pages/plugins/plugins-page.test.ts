@@ -248,7 +248,7 @@ describe("PluginsPage", () => {
   });
 
   it.each(["install", "enable", "uninstall"] as const)(
-    "flushes a pending config draft before plugin %s and refreshes afterward",
+    "config.set flushes a pending config draft before plugin %s and refreshes afterward",
     async (action) => {
       vi.useFakeTimers();
       const method =
@@ -292,7 +292,7 @@ describe("PluginsPage", () => {
           order.push(requestMethod);
           config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
           hash = "hash-2";
-          return { hash };
+          return { config, hash };
         }
         if (requestMethod === method) {
           order.push(requestMethod);
