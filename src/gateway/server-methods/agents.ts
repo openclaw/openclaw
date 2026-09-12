@@ -130,31 +130,6 @@ const CORE_FILE_NAMES_POST_ONBOARDING = CORE_FILE_NAMES.filter(
   (name) => name !== DEFAULT_BOOTSTRAP_FILENAME,
 );
 
-const agentsHandlerDeps = {
-  root,
-  isWorkspaceSetupCompleted,
-};
-
-export const testing = {
-  setDepsForTests(
-    overrides: Partial<{
-      root: typeof root;
-      isWorkspaceSetupCompleted: typeof isWorkspaceSetupCompleted;
-    }>,
-  ) {
-    if (overrides.isWorkspaceSetupCompleted) {
-      agentsHandlerDeps.isWorkspaceSetupCompleted = overrides.isWorkspaceSetupCompleted;
-    }
-    if (overrides.root) {
-      agentsHandlerDeps.root = overrides.root;
-    }
-  },
-  resetDepsForTests() {
-    agentsHandlerDeps.root = root;
-    agentsHandlerDeps.isWorkspaceSetupCompleted = isWorkspaceSetupCompleted;
-  },
-};
-
 // Writes stay capped to canonical workspace files, and deliberately remain wider
 // than the listed core files: IDENTITY.md is not offered as an editor tab but is
 // still writable for clients that manage it directly.
@@ -251,7 +226,7 @@ async function statWorkspaceFileSafely(
 
 async function openWorkspaceRootSafely(workspaceDir: string): Promise<WorkspaceRoot | null> {
   try {
-    return await agentsHandlerDeps.root(workspaceDir);
+    return await root(workspaceDir);
   } catch {
     return null;
   }
@@ -363,7 +338,7 @@ function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigin
 
 async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
   const parentPath = cleanupPath.parentPath;
-  const parentRoot = await agentsHandlerDeps.root(parentPath, {
+  const parentRoot = await root(parentPath, {
     hardlinks: "reject",
     symlinks: "reject",
   });
@@ -728,7 +703,7 @@ async function writeWorkspaceFileOrRespond(params: {
 }): Promise<boolean> {
   await fs.mkdir(params.workspaceDir, { recursive: true });
   try {
-    const workspaceRoot = await agentsHandlerDeps.root(params.workspaceDir);
+    const workspaceRoot = await root(params.workspaceDir);
     await workspaceRoot.write(params.name, params.content, { encoding: "utf8" });
   } catch (err) {
     if (err instanceof FsSafeError) {
@@ -785,7 +760,7 @@ async function readWorkspaceFileContent(
   name: string,
 ): Promise<string | undefined> {
   try {
-    const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+    const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
       nonBlockingRead: true,
@@ -1532,7 +1507,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     let hideBootstrap = false;
     try {
-      hideBootstrap = await agentsHandlerDeps.isWorkspaceSetupCompleted(workspaceDir);
+      hideBootstrap = await isWorkspaceSetupCompleted(workspaceDir);
     } catch {
       // Fall back to showing BOOTSTRAP if workspace state cannot be read.
     }
@@ -1555,7 +1530,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const filePath = path.join(workspaceDir, name);
     let safeRead: ReadResult;
     try {
-      const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+      const workspaceRoot = await root(workspaceDir);
       safeRead = await workspaceRoot.read(name, {
         hardlinks: "reject",
         nonBlockingRead: true,
@@ -1608,7 +1583,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     let workspaceRoot: WorkspaceRoot;
     let conflict: { currentHash: string | undefined } | undefined;
     try {
-      workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+      workspaceRoot = await root(workspaceDir);
       const writeRoot = workspaceRoot;
       const expectedHash = params.expectedHash?.toLowerCase();
       conflict = await enqueueWorkspaceFileUpdate(async () => {
