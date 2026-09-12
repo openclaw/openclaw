@@ -362,16 +362,14 @@ function setGatewayState(payload) {
     gatewayState === "up" && typeof payload?.canvasSurfaceUrl === "string"
       ? payload.canvasSurfaceUrl
       : null;
-  if (nextCanvasSurfaceUrl !== canvasSurfaceObservedUrl) {
+  if (ownerChanged || nextCanvasSurfaceUrl !== canvasSurfaceObservedUrl) {
     canvasSurfaceObservedUrl = nextCanvasSurfaceUrl;
     canvasSurfaceUrl = nextCanvasSurfaceUrl;
     canvasSurfaceRefreshedAt = nextCanvasSurfaceUrl ? Date.now() : 0;
     canvasSurfaceRetryAt = 0;
     window.clearTimeout(canvasSurfaceRetryTimer);
     canvasSurfaceRetryTimer = null;
-    if (!nextCanvasSurfaceUrl) {
-      canvasSurfaceRefreshPromise = null;
-    }
+    canvasSurfaceRefreshPromise = null;
   }
   if (ownerChanged || gatewayState !== "up") {
     gatewayDisconnectSequence += 1;
@@ -496,15 +494,23 @@ function refreshCanvasSurface() {
     return canvasSurfaceRefreshPromise;
   }
   const requestedObservedUrl = canvasSurfaceObservedUrl;
+  const requestedGeneration = gatewayGeneration;
   if (!requestedObservedUrl || Date.now() < canvasSurfaceRetryAt) {
     return Promise.resolve(canvasSurfaceUrl);
   }
-  canvasSurfaceRefreshPromise = invoke("quickchat_refresh_widget_surface")
+  const pending = invoke("quickchat_refresh_widget_surface", {
+    gatewayGeneration: requestedGeneration,
+    observedUrl: requestedObservedUrl,
+  })
     .then((refreshed) => {
-      if (canvasSurfaceObservedUrl !== requestedObservedUrl) {
+      if (gatewayGeneration !== requestedGeneration ||
+          canvasSurfaceObservedUrl !== requestedObservedUrl ||
+          canvasSurfaceRefreshPromise !== pending) {
         return canvasSurfaceUrl;
       }
-      const next = typeof refreshed === "string" && refreshed.trim() ? refreshed : null;
+      const next = refreshed?.gatewayGeneration === requestedGeneration &&
+        typeof refreshed.canvasSurfaceUrl === "string" && refreshed.canvasSurfaceUrl.trim()
+        ? refreshed.canvasSurfaceUrl : null;
       if (next) {
         canvasSurfaceObservedUrl = next;
         canvasSurfaceUrl = next;
@@ -517,13 +523,18 @@ function refreshCanvasSurface() {
       return canvasSurfaceUrl;
     })
     .catch(() => {
-      if (canvasSurfaceObservedUrl === requestedObservedUrl) {
+      if (gatewayGeneration === requestedGeneration &&
+          canvasSurfaceObservedUrl === requestedObservedUrl &&
+          canvasSurfaceRefreshPromise === pending) {
         canvasSurfaceUrl = null;
         canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
       }
       return canvasSurfaceUrl;
     })
     .finally(() => {
+      if (gatewayGeneration !== requestedGeneration || canvasSurfaceRefreshPromise !== pending) {
+        return;
+      }
       canvasSurfaceRefreshPromise = null;
       if (activeReply?.widgets.length) {
         renderReplyWidgets();
@@ -536,17 +547,63 @@ function refreshCanvasSurface() {
         scheduleCanvasSurfaceRetry();
       }
     });
+  canvasSurfaceRefreshPromise = pending;
   return canvasSurfaceRefreshPromise;
 }
 
 let widgetSyncScheduled = false;
-let widgetSyncPromise = Promise.resolve();
+let widgetSyncPromise = null;
+let pendingWidgetSync = null;
+let widgetSyncSequence = 0;
+
+function widgetSyncIsCurrent(snapshot) {
+  return !hiding &&
+    snapshot.generation === visibilitySequence &&
+    snapshot.sessionId === rendererSessionId &&
+    snapshot.rendererEpoch === rendererEpoch &&
+    snapshot.gatewayGeneration !== null &&
+    snapshot.gatewayGeneration === gatewayGeneration &&
+    snapshot.surfaceUrl === canvasSurfaceUrl;
+}
+
+function drainWidgetSync() {
+  if (widgetSyncPromise || !pendingWidgetSync) {
+    return;
+  }
+  const pending = (async () => {
+    while (pendingWidgetSync) {
+      const snapshot = pendingWidgetSync;
+      const sequence = widgetSyncSequence;
+      pendingWidgetSync = null;
+      if (!widgetSyncIsCurrent(snapshot)) {
+        continue;
+      }
+      try {
+        await invoke("quickchat_sync_widgets", snapshot);
+      } catch (error) {
+        if (sequence === widgetSyncSequence && widgetSyncIsCurrent(snapshot)) {
+          sendError = friendlyError(error, "Could not render the widget.");
+          renderStatus();
+        }
+      }
+    }
+  })();
+  widgetSyncPromise = pending;
+  void pending.finally(() => {
+    if (widgetSyncPromise === pending) {
+      widgetSyncPromise = null;
+      drainWidgetSync();
+    }
+  });
+}
 
 function scheduleWidgetSync() {
+  // An upcoming frame supersedes even a captured snapshot waiting behind native work.
+  widgetSyncSequence += 1;
+  pendingWidgetSync = null;
   if (widgetSyncScheduled) {
     return;
   }
-  const generation = visibilitySequence;
   widgetSyncScheduled = true;
   window.requestAnimationFrame(() => {
     widgetSyncScheduled = false;
@@ -555,9 +612,12 @@ function scheduleWidgetSync() {
     const host = elements.replyWidgets.querySelector(".inline-widget-host");
     const rect = host?.getBoundingClientRect();
     const layouts = [];
-    if (rect && rect.width > 0 && rect.height > 0) {
+    const owner = gatewayGeneration;
+    const surface = canvasSurfaceUrl;
+    if (activeReply?.gatewayGeneration === owner && gatewayState === "up" &&
+        rect && rect.width > 0 && rect.height > 0) {
       for (const widget of widgets) {
-        const url = resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target);
+        const url = resolveInlineWidgetUrl(surface, widget.target);
         if (!url) {
           continue;
         }
@@ -573,22 +633,17 @@ function scheduleWidgetSync() {
         });
       }
     }
-    widgetSyncPromise = widgetSyncPromise
-      .catch(() => {})
-      .then(() =>
-        invoke("quickchat_sync_widgets", {
-          widgets: layouts,
-          hasWidgets: widgets.length > 0,
-          expanded: !elements.reply.hidden || Boolean(openPopover),
-          sessionId: rendererSessionId,
-          rendererEpoch,
-          generation,
-        }),
-      )
-      .catch(/** @param {unknown} error */ (error) => {
-        sendError = friendlyError(error, "Could not render the widget.");
-        renderStatus();
-      });
+    pendingWidgetSync = {
+      widgets: layouts,
+      hasWidgets: widgets.length > 0,
+      expanded: !elements.reply.hidden || Boolean(openPopover),
+      sessionId: rendererSessionId,
+      rendererEpoch,
+      generation: visibilitySequence,
+      gatewayGeneration: owner,
+      surfaceUrl: surface,
+    };
+    drainWidgetSync();
   });
 }
 
@@ -638,7 +693,8 @@ function renderReplyWidgets() {
   title.textContent = widget.title;
   card.append(title);
 
-  if (!resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target)) {
+  if (activeReply.gatewayGeneration !== gatewayGeneration ||
+      !resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target)) {
     const unavailable = document.createElement("div");
     unavailable.className = "inline-widget-unavailable";
     unavailable.textContent = "Widget unavailable until the Gateway reconnects.";

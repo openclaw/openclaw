@@ -132,6 +132,21 @@ function createQuickChatHarness(): Record<string, any> {
     resolve: (value: unknown) => void;
     reject: (error: Error) => void;
   }> = [];
+  const calls: Array<{ method: string; args: Record<string, any> }> = [];
+  const refreshes: Array<{
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  let deferRefresh = false;
+  const widgetSyncs: Array<{
+    args: Record<string, any>;
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }> = [];
+  let deferWidgetSync = false;
+  let activeWidgetSyncs = 0;
+  let maxActiveWidgetSyncs = 0;
+  const windowListeners = new Map<string, () => void>();
   let syncedWidgets: unknown[] = [];
   let syncedHasWidgets = false;
   let syncedExpanded = false;
@@ -176,6 +191,7 @@ function createQuickChatHarness(): Record<string, any> {
             generation?: number;
           },
         ) {
+          calls.push({ method, args: args ?? {} });
           if (method === "quickchat_send") {
             return new Promise((resolve, reject) => {
               sends.push({ resolve, reject });
@@ -183,9 +199,17 @@ function createQuickChatHarness(): Record<string, any> {
           }
           if (method === "quickchat_refresh_widget_surface") {
             widgetSurfaceRefreshCount += 1;
+            if (deferRefresh) {
+              return new Promise((resolve, reject) => {
+                refreshes.push({ resolve, reject });
+              });
+            }
             return widgetSurfaceRefreshFails
               ? Promise.reject(new Error("refresh failed"))
-              : Promise.resolve(widgetSurfaceRefreshResult);
+              : Promise.resolve({
+                  gatewayGeneration: (args as Record<string, unknown>)?.gatewayGeneration ?? 1,
+                  canvasSurfaceUrl: widgetSurfaceRefreshResult,
+                });
           }
           if (method === "quickchat_sync_widgets") {
             syncedWidgets = args?.widgets ?? [];
@@ -193,6 +217,15 @@ function createQuickChatHarness(): Record<string, any> {
             syncedExpanded = args?.expanded === true;
             syncedGeneration = args?.generation ?? 0;
             widgetSyncCount += 1;
+            if (deferWidgetSync) {
+              activeWidgetSyncs += 1;
+              maxActiveWidgetSyncs = Math.max(maxActiveWidgetSyncs, activeWidgetSyncs);
+              return new Promise<void>((resolve, reject) => {
+                widgetSyncs.push({ args: structuredClone(args ?? {}), resolve, reject });
+              }).finally(() => {
+                activeWidgetSyncs -= 1;
+              });
+            }
           }
           if (method === "quickchat_agents") {
             return Promise.resolve([]);
@@ -205,7 +238,9 @@ function createQuickChatHarness(): Record<string, any> {
       },
       event: { listen: async () => () => {} },
     },
-    addEventListener() {},
+    addEventListener(name: string, callback: () => void) {
+      windowListeners.set(name, callback);
+    },
     clearTimeout(id: number) {
       timers.delete(id);
     },
@@ -306,17 +341,53 @@ this.harness = {
       pending.reject(new Error(message));
     },
     sendCount: () => sends.length,
+    calls,
     drain,
     flushWidgets: async () => {
       await drain();
       await browserContext.harness.flushWidgets();
       await drain();
     },
+    deferRefresh: () => {
+      deferRefresh = true;
+    },
+    resolveRefresh: (value: unknown, index = refreshes.length - 1) => {
+      const pending = refreshes[index];
+      assert.ok(pending, "refresh invocation exists");
+      pending.resolve(value);
+    },
+    rejectRefresh: (index = refreshes.length - 1) => {
+      const pending = refreshes[index];
+      assert.ok(pending, "refresh invocation exists");
+      pending.reject(new Error("stale refresh failed"));
+    },
     syncedWidgets: () => syncedWidgets,
     syncedHasWidgets: () => syncedHasWidgets,
     syncedExpanded: () => syncedExpanded,
     syncedGeneration: () => syncedGeneration,
     widgetSyncCount: () => widgetSyncCount,
+    deferWidgetSync: () => {
+      deferWidgetSync = true;
+    },
+    widgetSyncs: () => widgetSyncs.map(({ args }) => args),
+    activeWidgetSyncs: () => activeWidgetSyncs,
+    maxActiveWidgetSyncs: () => maxActiveWidgetSyncs,
+    resolveWidgetSync: (index: number) => {
+      assert.ok(widgetSyncs[index], "widget sync invocation exists");
+      widgetSyncs[index].resolve();
+    },
+    rejectWidgetSync: (index: number) => {
+      assert.ok(widgetSyncs[index], "widget sync invocation exists");
+      widgetSyncs[index].reject(new Error("widget sync failed"));
+    },
+    resizeWidget: (x: number) => {
+      const host = elements.get("#reply-widgets")?.querySelector(".inline-widget-host");
+      assert.ok(host, "rendered widget host exists");
+      host.getBoundingClientRect = () => ({ x, y: 174, width: 540, height: 160 });
+      const resize = windowListeners.get("resize");
+      assert.ok(resize, "renderer registered its resize handler");
+      resize();
+    },
     widgetSurfaceRefreshCount: () => widgetSurfaceRefreshCount,
     setWidgetSurfaceRefreshFails: (value: boolean) => {
       widgetSurfaceRefreshFails = value;
@@ -741,6 +812,338 @@ test("a buffered matching final wins over terminal history recovery", async () =
   assert.equal(harness.replyText(), "Live final");
   assert.equal(harness.readOnly(), false);
 });
+
+function widgetFinal(gatewayGeneration = 1) {
+  return {
+    gatewayGeneration,
+    sessionKey: "global",
+    agentId: "work",
+    runId: "widget-owner-run",
+    state: "final",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            sandbox: "strict",
+            url: "/__openclaw__/canvas/documents/owner-a/index.html",
+          },
+        },
+      ],
+    },
+  };
+}
+
+function updateWidgetKeys(harness: Record<string, any>, keys: string[]) {
+  const event = widgetFinal();
+  event.state = "delta";
+  const first = event.message.content[0];
+  assert.ok(first);
+  const preview = first.preview;
+  event.message.content = keys.map((key) => ({
+    type: "canvas",
+    preview: {
+      ...preview,
+      viewId: key,
+      url: `/__openclaw__/canvas/documents/${key}/index.html`,
+    },
+  }));
+  harness.handleChatEvent(event);
+}
+
+async function createSlowWidgetHarness() {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage("show widgets");
+  const sending = harness.send(false);
+  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-owner-run" });
+  await sending;
+  await harness.flushWidgets();
+  harness.deferWidgetSync();
+  updateWidgetKeys(harness, ["first"]);
+  await harness.drain();
+  assert.equal(harness.widgetSyncs().length, 1);
+  return harness;
+}
+
+for (const kind of ["geometry", "structure"] as const) {
+  test(`widget sync coalesces six ${kind} frames into initial and latest state`, async () => {
+    const harness = await createSlowWidgetHarness();
+    // Six distinct RAF batches including the initial in-flight state.
+    for (let frame = 1; frame <= 5; frame += 1) {
+      if (kind === "structure") {
+        updateWidgetKeys(harness, frame === 2 ? [] : [`widget-${frame}`]);
+      }
+      if (kind === "geometry" || frame !== 2) {
+        harness.resizeWidget(52 + frame);
+      }
+      await harness.drain();
+    }
+    assert.equal(harness.widgetSyncs().length, 1);
+    assert.equal(harness.activeWidgetSyncs(), 1);
+    harness.resolveWidgetSync(0);
+    await harness.drain();
+    const latest = harness.widgetSyncs()[1];
+    assert.equal(latest.widgets[0].x, 57);
+    assert.equal(latest.widgets[0].key, kind === "geometry" ? "first" : "widget-5");
+    assert.equal(latest.hasWidgets, true);
+    assert.equal(latest.expanded, true);
+    assert.equal(latest.sessionId, harness.widgetSyncs()[0].sessionId);
+    assert.equal(latest.rendererEpoch, harness.widgetSyncs()[0].rendererEpoch);
+    harness.resolveWidgetSync(1);
+    await harness.drain();
+    assert.equal(harness.widgetSyncs().length, 2);
+    assert.equal(harness.activeWidgetSyncs(), 0);
+    assert.equal(harness.maxActiveWidgetSyncs(), 1);
+  });
+}
+
+test("widget sync retains a latest empty compact state", async () => {
+  const harness = await createSlowWidgetHarness();
+  harness.resizeWidget(56);
+  await harness.drain();
+  harness.clearReply();
+  await harness.drain();
+  harness.resolveWidgetSync(0);
+  await harness.drain();
+  const latest = harness.widgetSyncs()[1];
+  assert.deepEqual(latest.widgets, []);
+  assert.equal(latest.hasWidgets, false);
+  assert.equal(latest.expanded, false);
+  harness.resolveWidgetSync(1);
+  await harness.drain();
+  assert.equal(harness.widgetSyncs().length, 2);
+});
+
+test("widget sync allows a newer reply to supersede a pending clear", async () => {
+  const harness = await createSlowWidgetHarness();
+  harness.handleChatEvent({ ...widgetFinal(), message: { role: "assistant", content: [] } });
+  await harness.advanceTime(450);
+  harness.setMessage("new reply");
+  const sending = harness.send(false);
+  await harness.drain();
+  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "new-run" });
+  await sending;
+  harness.handleChatEvent({ ...widgetFinal(), runId: "new-run" });
+  await harness.drain();
+  harness.resolveWidgetSync(0);
+  await harness.drain();
+  assert.equal(harness.widgetSyncs()[1].widgets.length, 1);
+  assert.match(harness.widgetSyncs()[1].widgets[0].url, /documents\/owner-a/u);
+  harness.resolveWidgetSync(1);
+  await harness.drain();
+  assert.equal(harness.widgetSyncs().length, 2);
+});
+
+for (const transition of ["hide", "reveal"] as const) {
+  test(`widget sync drops pending pre-${transition} visibility state`, async () => {
+    const harness = await createSlowWidgetHarness();
+    harness.resizeWidget(56);
+    await harness.drain();
+    await harness.requestHide();
+    if (transition === "hide") {
+      await harness.advanceTime(45);
+      assert.ok(
+        harness.calls.some(({ method }: { method: string }) => method === "quickchat_hide"),
+      );
+    } else {
+      harness.reveal();
+      await harness.drain();
+    }
+    harness.resolveWidgetSync(0);
+    await harness.drain();
+    const latest = harness.widgetSyncs()[1];
+    assert.equal(latest.generation, transition === "hide" ? 2 : 3);
+    assert.equal(latest.widgets.length, transition === "hide" ? 0 : 1);
+    harness.resolveWidgetSync(1);
+    await harness.drain();
+    assert.equal(harness.widgetSyncs().length, 2);
+  });
+}
+
+for (const transition of ["owner", "surface"] as const) {
+  test(`widget sync preserves ${transition} fencing while work is pending`, async () => {
+    const harness = await createSlowWidgetHarness();
+    harness.resizeWidget(56);
+    await harness.drain();
+    const originalSurface = harness.widgetSyncs()[0].surfaceUrl;
+    if (transition === "owner") {
+      harness.setGatewayUp("https://gateway.example/__openclaw__/cap/other", 2);
+      await harness.drain();
+      harness.setGatewayUp(originalSurface, 3);
+    } else {
+      harness.emitGatewayState({ state: "down" });
+      await harness.drain();
+      harness.setGatewayUp("https://gateway.example/__openclaw__/cap/rotated", 1);
+    }
+    await harness.drain();
+    harness.rejectWidgetSync(0);
+    await harness.drain();
+    const latest = harness.widgetSyncs()[1];
+    assert.equal(latest.gatewayGeneration, transition === "owner" ? 3 : 1);
+    assert.equal(latest.widgets.length, transition === "owner" ? 0 : 1);
+    if (transition === "surface") {
+      assert.match(latest.widgets[0].url, /\/cap\/rotated\//u);
+    }
+    assert.equal(harness.error(), "");
+    harness.resolveWidgetSync(1);
+    await harness.drain();
+    assert.equal(harness.widgetSyncs().length, 2);
+  });
+}
+
+test("widget sync drains the latest state after rejection without replaying the failure", async () => {
+  const harness = await createSlowWidgetHarness();
+  for (const x of [54, 57]) {
+    harness.resizeWidget(x);
+    await harness.drain();
+  }
+  harness.rejectWidgetSync(0);
+  await harness.drain();
+  assert.equal(harness.widgetSyncs()[1].widgets[0].x, 57);
+  assert.equal(harness.error(), "", "a superseded sync must not overwrite current status");
+  harness.resolveWidgetSync(1);
+  await harness.drain();
+  assert.equal(harness.widgetSyncs().length, 2);
+  assert.equal(harness.maxActiveWidgetSyncs(), 1);
+});
+
+test("widget sync reports a current failure once and accepts later work", async () => {
+  const harness = await createSlowWidgetHarness();
+  harness.rejectWidgetSync(0);
+  await harness.drain();
+  assert.equal(harness.error(), "widget sync failed");
+  assert.equal(harness.widgetSyncs().length, 1, "failure does not retry itself");
+  harness.resizeWidget(57);
+  await harness.drain();
+  assert.equal(harness.widgetSyncs()[1].widgets[0].x, 57);
+  harness.resolveWidgetSync(1);
+  await harness.drain();
+  assert.equal(harness.activeWidgetSyncs(), 0);
+});
+
+for (const timing of ["same-frame", "awaiting-frame"] as const) {
+  test(`widget sync uses the latest ${timing} bounds`, async () => {
+    const harness = await createSlowWidgetHarness();
+    harness.resizeWidget(54);
+    if (timing === "awaiting-frame") {
+      await harness.drain();
+    }
+    harness.resizeWidget(57);
+    if (timing === "same-frame") {
+      await harness.drain();
+    }
+    harness.resolveWidgetSync(0);
+    await harness.drain();
+    assert.equal(harness.widgetSyncs()[1].widgets[0].x, 57);
+    harness.resolveWidgetSync(1);
+    await harness.drain();
+    assert.equal(harness.widgetSyncs().length, 2);
+  });
+}
+
+test("retained widgets reconnect only to their original generation, including same-URL roundtrips", async () => {
+  const harness = createQuickChatHarness();
+  const surfaceA = "https://gateway.example/__openclaw__/cap/owner-a";
+  harness.setGatewayUp(surfaceA, 1);
+  harness.setMessage("widget");
+  const sending = harness.send(false);
+  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-owner-run" });
+  await sending;
+  harness.handleChatEvent(widgetFinal());
+  await harness.flushWidgets();
+  assert.ok(harness.syncedWidgets()[0]?.url.includes("/cap/owner-a/"));
+  harness.emitGatewayState({ state: "down" });
+  await harness.flushWidgets();
+  assert.equal(harness.syncedWidgets().length, 0);
+  harness.setGatewayUp("https://gateway.example/__openclaw__/cap/owner-a-rotated", 1);
+  await harness.flushWidgets();
+  assert.ok(harness.syncedWidgets()[0]?.url.includes("/cap/owner-a-rotated/"));
+  const switchedAt = harness.calls.length;
+  harness.emitGatewayState({ state: "down", gatewayGeneration: 2 });
+  await harness.flushWidgets();
+  harness.setGatewayUp("https://gateway.example/__openclaw__/cap/owner-b", 2);
+  await harness.flushWidgets();
+  harness.setGatewayUp(surfaceA, 3);
+  await harness.flushWidgets();
+  const laterLayouts = harness.calls
+    .slice(switchedAt)
+    .filter((call: { method: string }) => call.method === "quickchat_sync_widgets")
+    .flatMap((call: { args: { widgets: unknown[] } }) => call.args.widgets);
+  assert.equal(
+    laterLayouts.length,
+    0,
+    "an A document must never acquire B or replacement-A authority",
+  );
+});
+
+for (const outcome of ["success", "failure"] as const) {
+  test(`a stale Canvas refresh ${outcome} cannot settle the new owner's refresh`, async () => {
+    const harness = createQuickChatHarness();
+    harness.deferRefresh();
+    harness.setGatewayUp();
+    harness.expireCanvasSurface();
+    harness.setMessage("A widget");
+    const first = harness.send(false);
+    harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-owner-run" });
+    await first;
+    harness.handleChatEvent(widgetFinal());
+    await harness.advanceTime(450);
+    assert.equal(harness.widgetSurfaceRefreshCount(), 1);
+    harness.emitGatewayState({ state: "down", gatewayGeneration: 2 });
+    await harness.drain();
+    harness.setGatewayUp("https://gateway.example/__openclaw__/cap/owner-b", 2);
+    harness.expireCanvasSurface();
+    harness.setMessage("B widget");
+    const second = harness.send(false);
+    harness.resolveSend({
+      gatewayGeneration: 2,
+      sessionKey: "global",
+      agentId: "work",
+      runId: "widget-owner-run",
+    });
+    await second;
+    const event = widgetFinal(2);
+    const widget = event.message.content[0];
+    assert.ok(widget);
+    widget.preview.url = "/__openclaw__/canvas/documents/owner-b/index.html";
+    harness.handleChatEvent(event);
+    await harness.drain();
+    assert.equal(harness.widgetSurfaceRefreshCount(), 2);
+    if (outcome === "success") {
+      harness.resolveRefresh(
+        {
+          gatewayGeneration: 1,
+          canvasSurfaceUrl: "https://gateway.example/__openclaw__/cap/stale-a",
+        },
+        0,
+      );
+    } else {
+      harness.rejectRefresh(0);
+    }
+    await harness.advanceTime(0);
+    assert.equal(
+      harness.widgetSurfaceRefreshCount(),
+      2,
+      "old finally must not clear the new promise",
+    );
+    harness.resolveRefresh(
+      {
+        gatewayGeneration: 2,
+        canvasSurfaceUrl: "https://gateway.example/__openclaw__/cap/fresh-b",
+      },
+      1,
+    );
+    await harness.flushSurfaceRefresh();
+    await harness.flushWidgets();
+    assert.equal(harness.syncedWidgets().length, 1);
+    assert.match(harness.syncedWidgets()[0].url, /fresh-b.*documents\/owner-b/u);
+  });
+}
 
 test("pre-ack frames replay once for only the acknowledged run", async () => {
   const harness = createQuickChatHarness();

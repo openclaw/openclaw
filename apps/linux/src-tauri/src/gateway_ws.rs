@@ -323,6 +323,7 @@ enum GatewayRequest {
     },
     RefreshCanvasSurface {
         observed_url: Option<String>,
+        generation: GatewayGeneration,
     },
     ChatHistory {
         target: ChatRoutingTarget,
@@ -460,9 +461,11 @@ impl RequestFailure {
     }
 }
 
-#[derive(Clone, Default)]
-struct CanvasSurfaceState {
+#[derive(Clone, Default, Serialize)]
+pub(crate) struct CanvasSurfaceState {
+    #[serde(rename = "gatewayGeneration")]
     generation: u64,
+    #[serde(rename = "canvasSurfaceUrl")]
     url: Option<String>,
 }
 
@@ -512,6 +515,29 @@ impl GatewayClient {
             return Err("Gateway changed during the Quick Chat request.".to_string());
         }
         action()
+    }
+
+    // Call this on the native UI thread, never around work that waits for that thread.
+    pub(crate) fn with_canvas_surface<T>(
+        &self,
+        generation: GatewayGeneration,
+        surface_url: &str,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_generation(generation, || {
+            let surface = self
+                .inner
+                .canvas_surface
+                .lock()
+                .map_err(|_| "Gateway Canvas surface is unavailable.".to_string())?;
+            if !self.is_connected()
+                || surface.generation != generation.0
+                || surface.url.as_deref() != Some(surface_url)
+            {
+                return Err("Gateway Canvas owner or capability changed.".to_string());
+            }
+            action()
+        })
     }
 
     pub fn configure(&self, app: &AppHandle, config: GatewayWsConfig) {
@@ -676,17 +702,19 @@ impl GatewayClient {
         Ok(page)
     }
 
-    pub async fn refresh_canvas_surface(&self) -> Result<Option<String>, String> {
+    pub(crate) async fn refresh_canvas_surface(
+        &self,
+        generation: GatewayGeneration,
+        observed_url: String,
+    ) -> Result<CanvasSurfaceState, String> {
         let observed = self.canvas_surface_state();
-        if observed.url.is_none() {
-            return Ok(None);
-        }
-        if self.inner.config_generation.load(Ordering::SeqCst) != observed.generation {
+        if observed.generation != generation.0 || observed.url.as_deref() != Some(&observed_url) {
             return Err("Gateway Canvas surface generation changed before refresh.".to_string());
         }
         let response = self
             .request(GatewayRequest::RefreshCanvasSurface {
                 observed_url: observed.url.clone(),
+                generation,
             })
             .await?;
         let GatewayResponse::CanvasSurface(refreshed) = response else {
@@ -697,19 +725,18 @@ impl GatewayClient {
         let Some(refreshed) = refreshed else {
             return Err("Gateway did not return a refreshed Canvas surface.".to_string());
         };
-        let mut current = self
-            .inner
-            .canvas_surface
-            .lock()
-            .map_err(|_| "Gateway Canvas surface state is unavailable.".to_string())?;
-        if self.inner.config_generation.load(Ordering::SeqCst) != observed.generation
-            || current.generation != observed.generation
-            || current.url != observed.url
-        {
-            return Err("Gateway Canvas surface changed during refresh.".to_string());
-        }
-        current.url = Some(refreshed.clone());
-        Ok(Some(refreshed))
+        self.with_generation(generation, || {
+            let mut current = self
+                .inner
+                .canvas_surface
+                .lock()
+                .map_err(|_| "Gateway Canvas surface state is unavailable.".to_string())?;
+            if current.generation != observed.generation || current.url != observed.url {
+                return Err("Gateway Canvas surface changed during refresh.".to_string());
+            }
+            current.url = Some(refreshed);
+            Ok(current.clone())
+        })
     }
 
     #[cfg(target_os = "linux")]
@@ -1785,7 +1812,10 @@ where
                     )
                 })
         }
-        GatewayRequest::RefreshCanvasSurface { observed_url } => {
+        GatewayRequest::RefreshCanvasSurface {
+            observed_url,
+            generation,
+        } => {
             let mut params = json!({ "surface": "canvas" });
             if let Some(observed_url) = observed_url {
                 params["observedUrl"] = Value::String(observed_url);
@@ -1796,7 +1826,14 @@ where
                 params,
                 budget,
                 dispatch,
-                None,
+                Some(RequestDispatch {
+                    client,
+                    generation,
+                    connection_generation,
+                    deadline: None,
+                    #[cfg(target_os = "linux")]
+                    sleep_route: None,
+                }),
             )
             .await?;
             let canvas = response
@@ -2520,6 +2557,54 @@ pub(crate) mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn canvas_refresh_keeps_same_owner_and_rejects_replacement_response() {
+        for replace in [false, true] {
+            let mut fixture = RpcFixture::new().await;
+            let original = "https://gateway.example/__openclaw__/cap/original";
+            let refreshed = "https://gateway.example/__openclaw__/cap/refreshed";
+            fixture.set_surface(original);
+            let client = fixture.client.clone();
+            let generation = client.generation();
+            let refresh = tokio::spawn(async move {
+                client
+                    .refresh_canvas_surface(generation, original.to_string())
+                    .await
+            });
+            let (request, reply) = fixture.request("plugin.surface.refresh").await;
+            assert_eq!(request["params"]["observedUrl"], original);
+            if replace {
+                fixture.replace_route();
+                fixture.set_surface(original);
+            }
+            reply
+                .send(Ok(json!({"pluginSurfaceUrls": {"canvas": refreshed}})))
+                .unwrap();
+            let result = refresh.await.unwrap();
+            if replace {
+                assert!(result.is_err());
+                assert_eq!(
+                    fixture.client.canvas_surface_state().url.as_deref(),
+                    Some(original)
+                );
+                assert!(fixture
+                    .client
+                    .with_canvas_surface(generation, original, || Ok(()))
+                    .is_err());
+            } else {
+                assert!(result.is_ok());
+                assert!(fixture
+                    .client
+                    .with_canvas_surface(generation, refreshed, || Ok(()))
+                    .is_ok());
+                assert!(fixture
+                    .client
+                    .with_canvas_surface(generation, original, || Ok(()))
+                    .is_err());
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "requires an isolated native X11 display and session bus"]
@@ -3010,7 +3095,10 @@ esac
             ),
             (
                 "plugin.surface.refresh",
-                GatewayRequest::RefreshCanvasSurface { observed_url: None },
+                GatewayRequest::RefreshCanvasSurface {
+                    observed_url: None,
+                    generation: GatewayGeneration(generation),
+                },
             ),
             #[cfg(target_os = "linux")]
             (
