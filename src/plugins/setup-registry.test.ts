@@ -347,6 +347,58 @@ describe("setup-registry module loader", () => {
     );
   });
 
+  it("executes canonical dist setup entries instead of their staging wrappers", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "extensions", "fixture");
+    const sourceSetup = path.join(pluginRoot, "setup-api.ts");
+    const stagingSetup = path.join(
+      packageRoot,
+      "dist-runtime",
+      "extensions",
+      "fixture",
+      "setup-api.js",
+    );
+    const canonicalSetup = path.join(packageRoot, "dist", "extensions", "fixture", "setup-api.js");
+    for (const setupPath of [sourceSetup, stagingSetup, canonicalSetup]) {
+      fs.mkdirSync(path.dirname(setupPath), { recursive: true });
+      fs.writeFileSync(setupPath, "export default {};\n", "utf8");
+    }
+    fs.writeFileSync(
+      path.join(path.dirname(stagingSetup), "package.json"),
+      JSON.stringify({ openclaw: { setupEntry: "./setup-api.js" } }),
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "fixture",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          setupSource: sourceSetup,
+          setup: { providers: [{ id: "fixture" }] },
+        },
+      ],
+      diagnostics: [],
+    });
+    const canonicalRealPath = fs.realpathSync(canonicalSetup);
+    mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
+      default: {
+        register(api: {
+          registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+        }) {
+          api.registerProvider({
+            id: "fixture",
+            label: modulePath === canonicalRealPath ? "canonical" : "staging",
+            auth: [],
+          });
+        },
+      },
+    }));
+
+    expect(resolvePluginSetupProviderCore({ provider: "fixture", env: {} })?.label).toBe(
+      "canonical",
+    );
+  });
+
   it("keeps bundled setup artifact selection independent of active runtime state", () => {
     const setupRegistrySource = fs.readFileSync(
       new URL("./setup-registry.ts", import.meta.url),
