@@ -250,6 +250,62 @@ describe("SidebarUpdateCard", () => {
     expect(element.textContent).toContain("Updating Gateway…");
   });
 
+  it.each(["current", "ahead"] as const)(
+    "retires stale git availability after a refreshed %s comparison",
+    async (status) => {
+      const element = await mount(
+        {
+          currentVersion: "2026.9.2",
+          latestVersion: "2026.9.3",
+          channel: "dev",
+          commitsBehind: 246,
+        },
+        {
+          channel: "dev",
+          autoEnabled: false,
+          install: {
+            kind: "git",
+            git: status === "current" ? { status } : { status, commitsAhead: 1 },
+          },
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "abc1234def",
+            commitsBehind: 246,
+          },
+        },
+      );
+
+      expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    },
+  );
+
+  it("retains cached git availability when the refreshed comparison is unavailable", async () => {
+    const element = await mount(
+      {
+        currentVersion: "2026.9.3",
+        latestVersion: "2026.9.3",
+        channel: "dev",
+        commitsBehind: 246,
+      },
+      {
+        channel: "dev",
+        autoEnabled: false,
+        install: { kind: "git", git: { status: "unavailable", reason: "fetch-failed" } },
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "abc1234def",
+          commitsBehind: 246,
+        },
+      },
+    );
+
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "246 commits behind",
+    );
+  });
+
   it("keeps an available update actionable inside the compact Inbox row", async () => {
     const element = await mount({
       currentVersion: "1.0.0",

@@ -197,6 +197,41 @@ it.each([
   },
 );
 
+it.each(["current", "ahead"] as const)(
+  "omits a cached git distance after a refreshed %s comparison",
+  async (status) => {
+    const { settled } = startUpdate({
+      updateAvailable: {
+        channel: "dev",
+        currentVersion: "2026.9.3",
+        latestVersion: "2026.9.3",
+        commitsBehind: 246,
+      },
+      updateSchedule: {
+        channel: "dev",
+        autoEnabled: false,
+        install: {
+          kind: "git",
+          git: status === "current" ? { status } : { status, commitsAhead: 1 },
+        },
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "abc1234",
+          commitsBehind: 246,
+        },
+      },
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+
+    expect(modal.textContent).toContain("v2026.9.3");
+    expect(modal.textContent).not.toContain("246 commits behind");
+
+    findButton("Cancel").click();
+    await settled;
+  },
+);
+
 it("keeps a repeated request from stacking a second confirmation or update", async () => {
   const first = startUpdate();
   const second = startUpdate();
