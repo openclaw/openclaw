@@ -355,62 +355,78 @@ describe("runSystemAgentTurn", () => {
     );
   });
 
-  it("rejects an always-on CLI backend before launching OpenClaw", async () => {
-    useTempStateDir();
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "google-gemini-cli",
-          pluginId: "google",
-          modelProvider: "google",
-          config: { command: "gemini" },
-          nativeToolMode: "always-on",
+  it.each(["always-on", "selectable"] as const)(
+    "rejects a %s CLI backend without tool enforcement before launching OpenClaw",
+    async (nativeToolMode) => {
+      useTempStateDir();
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "google-gemini-cli",
+            pluginId: "google",
+            modelProvider: "google",
+            config: { command: "gemini" },
+            nativeToolMode,
+          },
+        ],
+      });
+      const config = {
+        agents: {
+          defaults: {
+            model: "google-gemini-cli/gemini-3.1-pro-preview",
+          },
         },
-      ],
-    });
-    const config = {
-      agents: {
-        defaults: {
-          model: "google-gemini-cli/gemini-3.1-pro-preview",
-        },
-      },
-    } as OpenClawConfig;
-    const runCliAgent = vi.fn();
-    const runEmbeddedAgent = vi.fn();
-    const { session, deps } = await createVerifiedSession(config);
-    let failure: unknown;
+      } as OpenClawConfig;
+      const runCliAgent = vi.fn();
+      const runEmbeddedAgent = vi.fn();
+      const { session, deps } = await createVerifiedSession(config);
+      session.proposalRef.current = "partial-proposal";
+      session.proposalRef.operation = { kind: "setup" };
+      session.cliSession = {
+        routeKey: "stale-route",
+        binding: { sessionId: "uncertain-cli-session" },
+      };
+      let failure: unknown;
 
-    try {
-      await runSystemAgentTurnWithDeps(
-        {
-          input: "set up my workspace",
-          overview: { defaultModel: "google-gemini-cli/gemini-3.1-pro-preview" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
-        {
-          ...deps,
-          runCliAgent: runCliAgent as never,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        },
-      );
-    } catch (error) {
-      failure = error;
-    }
+      try {
+        await runSystemAgentTurnWithDeps(
+          {
+            input: "set up my workspace",
+            overview: { defaultModel: "google-gemini-cli/gemini-3.1-pro-preview" } as never,
+            surface: "gateway",
+            approvalArmed: false,
+            session,
+          },
+          {
+            ...deps,
+            runCliAgent: runCliAgent as never,
+            runEmbeddedAgent: runEmbeddedAgent as never,
+            readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+          },
+        );
+      } catch (error) {
+        failure = error;
+      }
 
-    expect(failure).toBeInstanceOf(SystemAgentInferenceUnavailableError);
-    expect((failure as SystemAgentInferenceUnavailableError).failures).toEqual([
-      expect.objectContaining({
-        message: expect.stringContaining(
-          "CLI backend google-gemini-cli cannot enforce OpenClaw's exact tool availability",
-        ),
-      }),
-    ]);
-    expect(runCliAgent).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
+      expect(failure).toBeInstanceOf(SystemAgentInferenceUnavailableError);
+      const unavailable = failure as SystemAgentInferenceUnavailableError;
+      expect(unavailable.failures).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "CLI backend google-gemini-cli cannot enforce OpenClaw's exact tool availability",
+          ),
+        }),
+      ]);
+      expect(unavailable.message).toContain("Choose a compatible model or CLI backend");
+      expect(unavailable.message).not.toContain("Try again");
+      expect(unavailable.message).not.toContain("openclaw onboard");
+      expect(unavailable.cause).toBe(unavailable.failures[0]);
+      expect(session.proposalRef).toEqual({});
+      expect(session.cliSession).toBeUndefined();
+      expect(runCliAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["timeout", "aborted"] as const)(
     "resumes Claude's native transcript and clears continuity after a partial %s",
@@ -955,7 +971,11 @@ describe("runSystemAgentTurn", () => {
           readConfigFileSnapshot: readConfigFileSnapshot as never,
         },
       ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({
+      code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
+      message: expect.stringContaining("openclaw onboard"),
+      failures: [],
+    });
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(runCliAgent).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();

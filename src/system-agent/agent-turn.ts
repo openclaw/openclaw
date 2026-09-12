@@ -16,7 +16,10 @@ import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
-import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import {
+  SystemAgentInferenceRouteError,
+  SystemAgentInferenceUnavailableError,
+} from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -212,7 +215,9 @@ function resolveSystemAgentCliToolAvailability(
     return { native: [], openClaw: [SYSTEM_AGENT_TOOL_NAME] };
   }
   const backendId = backend?.id ?? "unknown";
-  throw new Error(`CLI backend ${backendId} cannot enforce OpenClaw's exact tool availability`);
+  throw new SystemAgentInferenceRouteError(
+    `CLI backend ${backendId} cannot enforce OpenClaw's exact tool availability`,
+  );
 }
 
 /**
@@ -430,17 +435,17 @@ async function runSystemAgentTurnWithDeps(
       throw new Error(terminalError);
     }
     if (params.session.verifiedInference !== binding) {
-      throw new SystemAgentInferenceUnavailableError("agent-turn");
+      throw new Error("The verified inference route changed during the OpenClaw turn.");
     }
     // A completed model turn is still untrusted until the exact route owner is
     // revalidated. This also rejects directives produced while config changed.
     const currentRoute = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
     if (!currentRoute) {
-      throw new SystemAgentInferenceUnavailableError("agent-turn");
+      throw new Error("The verified inference route changed during the OpenClaw turn.");
     }
     const text = extractAgentRunText(result)?.trim();
     if (!text) {
-      throw new SystemAgentInferenceUnavailableError("agent-turn");
+      throw new Error("The OpenClaw inference turn completed without a visible reply.");
     }
     return {
       text,

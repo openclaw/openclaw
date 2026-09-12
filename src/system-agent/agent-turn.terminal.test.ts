@@ -3,7 +3,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createSystemAgentSession } from "./agent-turn.js";
 import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
-import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
   createSystemAgentPluginMetadataTestSnapshot,
@@ -37,6 +36,12 @@ describe("system-agent terminal failure cleanup", () => {
       name: "runner rejection",
       runEmbeddedAgent: async () => {
         throw new Error("provider unavailable");
+      },
+    },
+    {
+      name: "runner rejection without error text",
+      runEmbeddedAgent: async () => {
+        throw new Error("   ");
       },
     },
     {
@@ -147,7 +152,10 @@ describe("system-agent terminal failure cleanup", () => {
           })) as never,
         },
       ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({
+      code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
+      message: expect.stringContaining("OpenClaw could not complete this request. Try again."),
+    });
     expect(session.proposalRef.current).toBeUndefined();
     expect(session.proposalRef.operation).toBeUndefined();
     expect(session.cliSession).toBeUndefined();
