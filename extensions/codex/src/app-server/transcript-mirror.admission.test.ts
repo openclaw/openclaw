@@ -28,6 +28,7 @@ registerCodexEventProjectorTestLifecycle();
 it.each([undefined, "transport-user-key"])(
   "reuses the admitted prompt through native mirroring (source key: %s)",
   async (idempotencyKey) => {
+    const admittedContent = "Check the admitted monitor.";
     const createUserTurnTranscriptRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     const base = await createParams();
     const target = {
@@ -44,7 +45,7 @@ it.each([undefined, "transport-user-key"])(
         ...(idempotencyKey ? { idempotencyKey } : {}),
       },
       target: { ...target, sessionEntry: undefined },
-      beforeMessageWrite: ({ message }) => message,
+      beforeMessageWrite: ({ message }) => ({ ...message, content: admittedContent }),
     });
     await recorder.persistApproved();
     const attempt = {
@@ -92,6 +93,24 @@ it.each([undefined, "transport-user-key"])(
         return asOptionalRecord(message?.["__openclaw"])?.mirrorIdentity === "turn-1:prompt";
       });
       expect(prompts).toHaveLength(1);
+      expect(asOptionalRecord(asOptionalRecord(prompts[0])?.message)).toMatchObject({
+        content: admittedContent,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        __openclaw: {
+          mirrorIdentity: "turn-1:prompt",
+          mirrorOrigin: "codex-app-server",
+          upstreamUserText: "Check the monitor.",
+        },
+      });
+      expect(recorder.getPersistedMessage?.()).toMatchObject({
+        content: admittedContent,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        __openclaw: {
+          mirrorIdentity: "turn-1:prompt",
+          mirrorOrigin: "codex-app-server",
+          upstreamUserText: "Check the monitor.",
+        },
+      });
       if (idempotencyKey) {
         expect(recorder.getPersistedMessage?.()?.idempotencyKey).toBe(idempotencyKey);
       }
