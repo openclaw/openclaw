@@ -83,7 +83,7 @@ export function activateServiceCronRunReceiptInDatabase(
   });
 }
 
-export function cronRunReceiptOwnerMutationHooks(params: {
+function cronRunReceiptOwnerMutationHooks(params: {
   state: CronServiceState;
   jobId: string;
 }): CronStoreTransactionHooks {

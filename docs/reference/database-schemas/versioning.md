@@ -21,6 +21,15 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+Agent schema 19 records collected input consumption in the nullable
+`session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
+first-use ensure add it when needed; the schema version stays 19. The column
+shipped in 2026.8.2 ([#133457](https://github.com/openclaw/openclaw/pull/133457)),
+so the supported beta upgrade runs Doctor from 2026.8.2 or newer. Intermediate builds that
+already validate the optional pending-input table may reject the added column
+despite sharing version 19. Consumed source receipts remain until their session
+window is deleted, so rewriting a transcript cannot make an old input runnable again.
+
 Cron run receipts use the optional `cron_run_trigger_state_retirements` companion
 without changing state schema 17 or the released receipt table's shape. Its only
 column is `receipt_id`, a primary key referencing the existing receipt with
@@ -36,15 +45,6 @@ A missing table or row means no recorded retirement; earlier edits cannot be
 reconstructed from the final job definition. Older compatible readers ignore the
 companion but do not enforce this protection. Finish active runs before downgrading
 if their edited watcher state must be preserved.
-
-Agent schema 19 records collected input consumption in the nullable
-`session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
-first-use ensure add it when needed; the schema version stays 19. The column
-shipped in 2026.8.2 ([#133457](https://github.com/openclaw/openclaw/pull/133457)),
-so the supported beta upgrade runs Doctor from 2026.8.2 or newer. Intermediate builds that
-already validate the optional pending-input table may reject the added column
-despite sharing version 19. Consumed source receipts remain until their session
-window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
 Worker preparation uses the same-version rule for the bare nullable
 `worker_environments.preparation_purpose TEXT` column in the shared state
