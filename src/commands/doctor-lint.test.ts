@@ -796,6 +796,9 @@ describe("runDoctorLintCli", () => {
           },
         ],
       });
+      expect(
+        mocks.prepareSqliteReadOnlyLocationSync.mock.calls.map(([pathname]) => pathname),
+      ).toEqual([databasePath]);
       expect(sourceOpenStacks).toEqual([]);
       expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {

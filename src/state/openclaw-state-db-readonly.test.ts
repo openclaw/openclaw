@@ -27,6 +27,7 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,
   withArtifactPreservingStateReads,
+  withDisposableOpenClawStateReads,
 } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -241,6 +242,47 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
       : mode === "admission"
         ? admittedRead
         : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
+  it("reads only active disposable scopes directly and revokes inherited async access", async () => {
+    await withTempDir("openclaw-state-disposable-", async (root) => {
+      const outer = createOptions(path.join(root, "outer"));
+      const inner = createOptions(path.join(root, "inner"));
+      const source = createOptions(path.join(root, "source"));
+      const paths = [outer, inner, source];
+      for (const options of paths) {
+        fs.mkdirSync(path.dirname(options.path), { recursive: true });
+        const db = new DatabaseSync(options.path);
+        db.exec(
+          "PRAGMA journal_mode = WAL; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed')",
+        );
+        db.close();
+      }
+      const read = (options: ReturnType<typeof createOptions>) =>
+        readState(({ db }) => {
+          expect(db.prepare("SELECT value FROM held").get()).toEqual({ value: "committed" });
+          expect(() => db.exec("INSERT INTO held VALUES ('unexpected')")).toThrow(/readonly/);
+          return db.location();
+        }, options);
+      const sourceBefore = fs.readFileSync(source.path);
+      const released = createDeferredCore();
+      let descendant: Promise<unknown> | undefined;
+      await withDisposableOpenClawStateReads(outer.path, async () => {
+        expect(await read(outer)).toBe(outer.path);
+        await withDisposableOpenClawStateReads(inner.path, async () => {
+          expect(await read(outer)).toBe(outer.path);
+          expect(await read(inner)).toBe(inner.path);
+          expect(await read(source)).not.toBe(source.path);
+          descendant = released.promise.then(() => read(inner));
+        });
+        expect(await read(inner)).not.toBe(inner.path);
+        expect(await read(outer)).toBe(outer.path);
+        released.resolve();
+        expect(await descendant).not.toBe(inner.path);
+      });
+      expect(await read(outer)).not.toBe(outer.path);
+      expect(fs.readFileSync(source.path)).toEqual(sourceBefore);
+      expect(fs.readdirSync(path.dirname(source.path))).toEqual(["openclaw.sqlite"]);
+    });
+  });
   it("reads a consolidated WAL database without creating source sidecars", async () => {
     await withTempDir("openclaw-state-readonly-sidecars-", async (stateDir) => {
       const options = createOptions(stateDir);
