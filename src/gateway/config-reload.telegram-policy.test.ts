@@ -74,7 +74,7 @@ describe("Telegram live policy reload", () => {
       {
         channels: {
           telegram: {
-            accounts: { support: { dmPolicy: "pairing", [String(key)]: value } },
+            accounts: { support: { dmPolicy: "pairing", [key]: value } },
           },
         },
       },
