@@ -114,6 +114,11 @@ Recommended for most interactive installs on macOS/Linux/WSL.
 
 ### Flow (install.sh)
 
+Installer network operations allow five minutes for a connection or stalled
+transfer. Installer-managed downloads can take longer while data continues
+arriving; they do not have a fixed total download deadline. Registry metadata
+checks also default to five minutes.
+
 <Steps>
   <Step title="Detect OS">
     Supports macOS and Linux (including WSL).

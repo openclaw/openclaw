@@ -701,7 +701,11 @@ describe("managed npm root", () => {
     });
   });
 
-  it("syncs managed peer dependencies from npm's resolved lockfile plan", async () => {
+  it.each([
+    { name: "default", timeoutMs: undefined, expectedTimeoutMs: 300_000 },
+    { name: "short explicit", timeoutMs: 45_000, expectedTimeoutMs: 45_000 },
+    { name: "long explicit", timeoutMs: 420_000, expectedTimeoutMs: 420_000 },
+  ])("syncs managed peer pins with the $name budget", async (testCase) => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
       path.join(npmRoot, "package.json"),
@@ -795,7 +799,9 @@ describe("managed npm root", () => {
       return successfulSpawn;
     });
 
-    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
+    await expect(
+      syncManagedNpmRootPeerDependencies({ npmRoot, runCommand, timeoutMs: testCase.timeoutMs }),
+    ).resolves.toBe(true);
 
     const [args, rawOptions] = expectDefined(
       runCommand.mock.calls[0],
@@ -816,6 +822,7 @@ describe("managed npm root", () => {
       "--no-fund",
     ]);
     expect(options?.cwd).not.toBe(npmRoot);
+    expect(options.timeoutMs).toBe(testCase.expectedTimeoutMs);
     expect(options?.env?.npm_config_legacy_peer_deps).toBe("false");
 
     await expect(
@@ -1091,7 +1098,9 @@ describe("managed npm root", () => {
       return successfulSpawn;
     });
 
-    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
+    await expect(
+      syncManagedNpmRootPeerDependencies({ npmRoot, runCommand, timeoutMs: 45_000 }),
+    ).resolves.toBe(true);
     expect(runCommand).toHaveBeenCalledTimes(2);
     const [strictArgs, rawStrictOptions] = runCommand.mock.calls[0] ?? [];
     const [fallbackArgs, rawFallbackOptions] = runCommand.mock.calls[1] ?? [];
@@ -1101,6 +1110,7 @@ describe("managed npm root", () => {
     expect(strictOptions.env?.npm_config_legacy_peer_deps).toBe("false");
     expect(fallbackArgs).toContain("--legacy-peer-deps");
     expect(fallbackOptions.env?.npm_config_legacy_peer_deps).toBe("true");
+    expect([strictOptions.timeoutMs, fallbackOptions.timeoutMs]).toEqual([45_000, 45_000]);
     await expect(
       fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
     ).resolves.toEqual({

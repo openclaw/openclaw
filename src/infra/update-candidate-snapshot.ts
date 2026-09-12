@@ -1,23 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { ensureAbsoluteDirectory } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
-import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
-import { SQLITE_INSPECTION_BYTES_PER_SECOND } from "./sqlite-readonly-worker.js";
+import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
   collectStateDatabasePaths,
-  UpdateCandidateStateInventorySchema,
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
@@ -28,30 +25,6 @@ import {
 } from "./update-snapshot-capacity.js";
 
 type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
-
-async function measureSnapshotFiles(
-  files: z.infer<typeof UpdateCandidateStateInventorySchema>,
-): Promise<SnapshotSize> {
-  let bytes = 0;
-  let largest = 0;
-  for (const {
-    spellings: [file],
-  } of files.values()) {
-    let family = 0;
-    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-      try {
-        family += (await fs.stat(file + suffix)).size;
-      } catch (error) {
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
-    }
-    bytes += family;
-    largest = Math.max(largest, family);
-  }
-  return { bytes, largest, pluginBytes: null };
-}
 
 function requiredSnapshotBytes(size: SnapshotSize): number {
   // Keep the completed generation and Doctor backup, plus the largest raw,
@@ -165,31 +138,6 @@ async function allocateSnapshotRoot(
   throw new UpdateSnapshotCapacityError(capacity);
 }
 
-async function snapshotProgress(directory: string): Promise<string> {
-  const facts: string[] = [];
-  async function visit(current: string): Promise<void> {
-    const entries = await fs.readdir(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const file = path.join(current, entry.name);
-      try {
-        if (entry.isDirectory()) {
-          await visit(file);
-        } else if (entry.isFile()) {
-          const stat = await fs.stat(file);
-          facts.push(`${file}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
-        }
-      } catch (error) {
-        // The worker retires intermediate copies as it progresses.
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
-    }
-  }
-  await visit(directory);
-  return facts.toSorted().join("\n");
-}
-
 /** The parent owns both the child and its scratch root, including a killed SQLite operation. */
 export async function prepareUpdateCandidateStateSnapshot(params: {
   config: OpenClawConfig;
@@ -207,7 +155,12 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   cleanupDirectories: string[];
 }> {
   const initialFiles = await collectStateDatabasePaths(params);
-  let size = await measureSnapshotFiles(initialFiles);
+  let size: SnapshotSize = {
+    ...(await measureUpdateStateFiles(
+      [...initialFiles.values()].map(({ spellings }) => spellings[0]),
+    )),
+    pluginBytes: null,
+  };
   let capacity = measureSnapshotCapacity(params.stateDir, size, params.env);
   let directory = await allocateSnapshotRoot(capacity);
   let selectedRoot = capacity.selection!;
@@ -222,97 +175,64 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           databaseInventory: string[];
         },
   ) => {
-    params.signal?.throwIfAborted();
-    // This path copies, compares, scans, compacts and hashes the same bytes.
-    // Budget every pass at the read-only owner's conservative throughput.
-    const budget = Math.max(
-      params.timeoutMs ?? 300_000,
-      300_000 +
-        Math.ceil(
-          (12 * size.bytes + 2 * (size.pluginBytes ?? 0)) / SQLITE_INSPECTION_BYTES_PER_SECOND,
-        ) *
-          1000,
-    );
-    const stalled = new AbortController();
-    const finished = new AbortController();
-    let deadline = Date.now() + budget;
-    let previous = "";
-    const monitor = (async () => {
-      try {
-        while (!finished.signal.aborted) {
-          await sleep(Math.min(1000, Math.max(10, budget / 10)), undefined, {
-            signal: finished.signal,
-          });
-          const current = await snapshotProgress(directory);
-          if (current !== previous) {
-            previous = current;
-            deadline = Date.now() + budget;
-          } else if (Date.now() >= deadline) {
-            stalled.abort(
-              new Error(
-                `Update state snapshot made no progress for ${budget / 1000} seconds (${formatDiskSpaceBytes(size.bytes + (size.pluginBytes ?? 0))} of state and plugin files). Check storage performance before retrying.`,
-              ),
-            );
-            break;
-          }
-        }
-      } catch (error) {
-        if (!finished.signal.aborted) {
-          stalled.abort(error);
-        }
-      }
-    })();
-    try {
-      const result = await runCommandBuffered(
-        [
-          params.nodeRunner ?? process.execPath,
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-            params.nodeRunner,
-          ),
-        ],
-        {
-          input: JSON.stringify({
-            ...request,
-            stateDir: params.stateDir,
-            config: params.config,
-            targetStateDir: directory,
-            candidateRoot: params.candidateRoot,
-            env: {
-              HOME: params.env.HOME,
-              OPENCLAW_HOME: params.env.OPENCLAW_HOME,
-              USERPROFILE: params.env.USERPROFILE,
-              OPENCLAW_AGENT_DIR: params.env.OPENCLAW_AGENT_DIR,
-              PI_CODING_AGENT_DIR: params.env.PI_CODING_AGENT_DIR,
-              OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
-              OPENCLAW_DISABLE_BUNDLED_PLUGINS: params.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
-            },
-          }),
-          baseEnv: params.workerEnv(directory),
-          signal: AbortSignal.any([stalled.signal, ...(params.signal ? [params.signal] : [])]),
-          killGraceMs: 500,
-          maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-        },
-      );
-      params.signal?.throwIfAborted();
-      stalled.signal.throwIfAborted();
-      if (result.code !== 0) {
-        throw new Error(
-          `Update state snapshot failed (${result.termination}): ${redactSupportString(result.stderr.toString("utf8"), { env: params.env, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
+    return await withUpdateCandidateIoBudget(
+      {
+        directory,
+        bytes: size.bytes + (size.pluginBytes ?? 0),
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+        operation: "snapshot",
+      },
+      async (signal) => {
+        const result = await runCommandBuffered(
+          [
+            params.nodeRunner ?? process.execPath,
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
+              params.nodeRunner,
+            ),
+          ],
+          {
+            input: JSON.stringify({
+              ...request,
+              stateDir: params.stateDir,
+              config: params.config,
+              targetStateDir: directory,
+              candidateRoot: params.candidateRoot,
+              env: {
+                HOME: params.env.HOME,
+                OPENCLAW_HOME: params.env.OPENCLAW_HOME,
+                USERPROFILE: params.env.USERPROFILE,
+                OPENCLAW_AGENT_DIR: params.env.OPENCLAW_AGENT_DIR,
+                PI_CODING_AGENT_DIR: params.env.PI_CODING_AGENT_DIR,
+                OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+                OPENCLAW_DISABLE_BUNDLED_PLUGINS: params.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
+              },
+            }),
+            baseEnv: params.workerEnv(directory),
+            signal,
+            killGraceMs: 500,
+            maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+          },
         );
-      }
-      return JSON.parse(result.stdout.toString("utf8")) as unknown;
-    } finally {
-      finished.abort();
-      await monitor;
-    }
+        signal.throwIfAborted();
+        if (result.code !== 0) {
+          throw new Error(
+            `Update state snapshot failed (${result.termination}): ${redactSupportString(result.stderr.toString("utf8"), { env: params.env, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
+          );
+        }
+        return JSON.parse(result.stdout.toString("utf8")) as unknown;
+      },
+    );
   };
   try {
     const inventory = UpdateCandidateSnapshotInventorySchema.parse(
       await run({ mode: "inventory" }),
     );
     size = {
-      ...(await measureSnapshotFiles(inventory.databases)),
+      ...(await measureUpdateStateFiles(
+        [...inventory.databases.values()].map(({ spellings }) => spellings[0]),
+      )),
       pluginBytes: inventory.pluginBytes,
     };
     capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);

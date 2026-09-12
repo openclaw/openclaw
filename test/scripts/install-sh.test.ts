@@ -224,6 +224,7 @@ describe("install.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("curl=-fsSL --max-redirs 0");
       expect(result.stdout).toContain("wget=-q --max-redirect=0");
+      expect(result.stdout).toContain("--timeout=300");
       expect(result.stdout).toContain("managed-mode=deny");
     } finally {
       rmSync(tmp, { force: true, recursive: true });
@@ -245,8 +246,9 @@ describe("install.sh", () => {
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
+    expect(result.stdout).toContain("--speed-limit 1 --speed-time 300");
     expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).not.toContain("--max-time");
     expect(result.stdout).not.toContain("--max-redirs");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
     expect(result.stdout).toContain("status=28");

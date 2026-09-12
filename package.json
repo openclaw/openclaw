@@ -2147,6 +2147,8 @@
     "ui:proof:session-toolbar": "node --import ./scripts/tsx.mjs scripts/capture-session-toolbar-proof.mts",
     "ui:proof:where-chip": "node --import ./scripts/tsx.mjs scripts/capture-where-chip-auto-proof.mts",
     "ui:proof:workboard": "node --import ./scripts/tsx.mjs scripts/capture-workboard-ui-proof.mts",
+    "update:network-budget:check": "node scripts/generate-update-network-budget.mjs --check",
+    "update:network-budget:gen": "node scripts/generate-update-network-budget.mjs",
     "native:i18n:baseline": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts sync --write",

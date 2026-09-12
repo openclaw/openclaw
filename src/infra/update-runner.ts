@@ -6,7 +6,8 @@ import {
   resolveUpdateInstallRoot,
   updateInstallRootsMatch,
 } from "./update-install-root.js";
-import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
+import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import {

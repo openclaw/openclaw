@@ -13282,7 +13282,7 @@ describe("update-cli", () => {
       "run",
     ]);
     expect(installCall?.[1].cwd).toBe(updatedRoot);
-    expect(installCall?.[1].timeoutMs).toBe(60_000);
+    expect(installCall?.[1].timeoutMs).toBe(30 * 60_000);
     expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
@@ -13684,7 +13684,7 @@ describe("update-cli", () => {
       "run",
     ]);
     expect(installCall?.[1].cwd).toBe(String(root));
-    expect(installCall?.[1].timeoutMs).toBe(60_000);
+    expect(installCall?.[1].timeoutMs).toBe(30 * 60_000);
     const expectedEnv =
       "expectedEnv" in testCase && testCase.expectedEnv ? testCase.expectedEnv() : {};
     for (const [key, value] of Object.entries(expectedEnv)) {

@@ -303,6 +303,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     commandArgv[0] = startup.command;
   }
   const env = startup?.env ?? childEnv;
+  const handoffTimeoutMs = 30_000;
   await fs.writeFile(
     paramsFile,
     JSON.stringify({
@@ -316,8 +317,9 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
       failure: mode === "startup" ? { ...failure, kind: "gateway-startup" } : undefined,
       parentPid,
       parentStartIdentity: String(getFileLockProcessStartTime(parentPid)),
-      parentExitTimeoutMs: 30_000,
-      parentExitDeadlineAt: Date.now() + 30_000,
+      parentExitTimeoutMs: handoffTimeoutMs,
+      parentExitDeadlineAt: Date.now() + handoffTimeoutMs,
+      recoveryTimeoutMs: handoffTimeoutMs,
       cwd: root,
       commandArgv,
       commandLabel: "synthetic",

@@ -12,7 +12,6 @@ import type {
   UpdateStepResult,
 } from "./update-runner-types.js";
 
-export const UPDATE_RUNNER_TIMEOUT_MS = 20 * 60_000;
 export const MAX_LOG_CHARS = 8000;
 
 // A run shares its heartbeat callback across steps; weak keys do not retain completed runs.

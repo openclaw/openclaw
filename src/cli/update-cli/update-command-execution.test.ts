@@ -1,246 +1,34 @@
+// Install the fixture mocks before loading the execution owner and its dependencies.
+import "./update-command-execution.test-support.js";
+import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as configFile from "../../config/config.js";
+import * as gatewayService from "../../daemon/service.js";
+import * as gatewayCall from "../../gateway/call.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import * as portInspection from "../../infra/ports-inspect.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
-import type { PreManagedServiceStop } from "./update-command-service.js";
-
-const mocks = vi.hoisted(() => ({
-  captureManagedContext: vi.fn(),
-  captureManagedPreflight:
-    vi.fn<
-      typeof import("./update-command-managed-context.js").captureOwnedManagedUpdatePreflightContext
-    >(),
-  captureSchemaContext:
-    vi.fn<typeof import("./schema-preflight.js").captureTargetDatabaseSchemaContext>(),
-  checkTargetSchemas:
-    vi.fn<typeof import("./schema-preflight.js").checkTargetDatabaseSchemasForContexts>(),
-  formatSchemaRefusalLines: vi.fn(),
-  hasSchemaRefusal: vi.fn(),
-  maybeRestartService: vi.fn(),
-  maybeStopService: vi.fn(),
-  prepareMutableUpdate: vi.fn<(env?: NodeJS.ProcessEnv) => Promise<void>>(),
-  pluginPreflight: vi.fn(),
-  pluginTargets: vi.fn(),
-  pluginRecords: vi.fn(),
-  npmMetadata: vi.fn(),
-  readGitRecovery: vi.fn(),
-  runGitUpdate: vi.fn(),
-  runPackageUpdate: vi.fn(),
-  runtimeError: vi.fn(),
-  revalidateSchemaContext:
-    vi.fn<typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext>(),
-  validateCanary: vi.fn(),
-  nativeSupport:
-    vi.fn<
-      typeof import("./update-command-service-command.js").isUpdatedInstallGatewayExecutorSupported
-    >(),
-  serviceStopped: false,
-  shouldBlockServiceUpdate: vi.fn(),
-  verifyPackageRecovery: vi.fn(),
-}));
-
-vi.mock("./update-command-service-command.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  isUpdatedInstallGatewayExecutorSupported: mocks.nativeSupport,
-}));
-
-afterEach(() => vi.restoreAllMocks());
-
-vi.mock("../../infra/update-global.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
-  verifyPackageUpdateRecovery: mocks.verifyPackageRecovery,
-}));
-vi.mock("../../infra/update-candidate-canary.js", () => ({
-  validateUpdateCandidateCanary: mocks.validateCanary,
-}));
-
-vi.mock("./update-command-plugin-preflight.js", () => ({
-  preflightConfiguredNpmPluginTargets: mocks.pluginPreflight,
-}));
-
-vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.targets.js", () => ({
-  collectConfiguredNpmPluginTargets: mocks.pluginTargets,
-}));
-vi.mock("../../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index-records.js")>()),
-  loadInstalledPluginIndexInstallRecords: mocks.pluginRecords,
-}));
-vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/install-source-utils.js")>()),
-  resolveNpmSpecMetadata: mocks.npmMetadata,
-}));
-
-vi.mock("../../infra/update-runner-git-recovery.js", () => ({
-  readCurrentGitUpdateRecovery: mocks.readGitRecovery,
-}));
-
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: { error: mocks.runtimeError },
-}));
-
-vi.mock("./schema-preflight.js", () => ({
-  captureTargetDatabaseSchemaContext: mocks.captureSchemaContext,
-  checkTargetDatabaseSchemasForContexts: mocks.checkTargetSchemas,
-  formatSchemaRefusalLines: mocks.formatSchemaRefusalLines,
-  hasSchemaRefusal: mocks.hasSchemaRefusal,
-}));
-
-vi.mock("./update-command-git.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-git.js")>()),
-  updateGitInstall: mocks.runGitUpdate,
-}));
-
-vi.mock("./update-command-handoff.js", () => ({
-  formatUpdateAncestryBlockMessage: (message: string) => message,
-  handoffUpdateFromGateway: vi.fn(),
-}));
-
-vi.mock("./update-command-managed-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-managed-context.js")>()),
-  captureOwnedManagedUpdateContext: mocks.captureManagedContext,
-  captureOwnedManagedUpdatePreflightContext: mocks.captureManagedPreflight,
-  revalidateUpdateDatabaseContext: mocks.revalidateSchemaContext,
-}));
-
-vi.mock("./update-command-package.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-package.js")>()),
-  runPackageInstallUpdate: mocks.runPackageUpdate,
-}));
-
-vi.mock("./update-command-service.js", async () => {
-  const actual = await vi.importActual<typeof import("./update-command-service-maintenance.js")>(
-    "./update-command-service-maintenance.js",
-  );
-  return {
-    maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
-    maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
-    shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
-    UpdateCommandAbort: actual.UpdateCommandAbort,
-  };
-});
-
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as utils from "../../utils.js";
+import * as restartProbe from "../daemon-cli/restart-health-probe.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  gatewayServiceCommandUsesRoot,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
 
-const successfulUpdate: UpdateRunResult = {
-  status: "ok",
-  mode: "npm",
-  root: "/opt/openclaw",
-  before: { version: "1.0.0" },
-  after: { version: "1.0.1" },
-  steps: [],
-  durationMs: 1,
-};
-
-function executionParams(
-  updateInstallKind: "git" | "package",
-): Parameters<typeof executeMutableUpdate>[0] {
-  return {
-    root: "/opt/openclaw",
-    installKind: updateInstallKind,
-    updateInstallKind,
-    switchToGit: false,
-    timeoutMs: 30_000,
-    updateStepTimeoutMs: 30_000,
-    startedAt: 1,
-    progress: {},
-    stop: vi.fn(),
-    channel: "stable",
-    tag: "1.0.1",
-    opts: { json: true },
-    shouldRestart: true,
-    packageInstallSpec: "openclaw@1.0.1",
-    packageTargetVersion: "1.0.1",
-    managedServiceRootRedirect: null,
-    invocationCwd: "/work",
-    recoveryState: { triageTarget: { env: {} } },
-    prepareMutableUpdate: mocks.prepareMutableUpdate,
-    packageTargetSchemaVersions: { state: 15, agent: 19 },
-  };
-}
-
-function schemaContext(
-  profile: string,
-): Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>> {
-  const env = { OPENCLAW_PROFILE: profile };
-  return {
-    env,
-    readEnv: { ...env },
-    config: {},
-    configSnapshot: {
-      path: `/fixture/${profile}/openclaw.json`,
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      resolved: {},
-      sourceConfig: {},
-      config: {},
-      runtimeConfig: {},
-      valid: true,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    },
-  };
-}
-
-function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreManagedServiceStop {
-  const running = !mocks.serviceStopped;
-  if (phase === "prepare") {
-    mocks.serviceStopped = true;
-  }
-  return {
-    stopped: phase === "prepare",
-    inspected: true,
-    runtimeInspected: true,
-    running,
-    serviceEnv: { OPENCLAW_PROFILE: "default" },
-    serviceUpdateVerdict: {
-      kind: "owned",
-      root: "/opt/openclaw",
-      fingerprint: "service-fingerprint",
-      refreshDefinition: false,
-    },
-  };
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.serviceStopped = false;
-  mocks.validateCanary.mockResolvedValue({
-    status: "ok",
-    phase: "readiness",
-    steps: [],
-    durationMs: 1,
-    logTail: [],
-  });
-  mocks.captureManagedContext.mockResolvedValue(undefined);
-  mocks.captureManagedPreflight.mockResolvedValue(schemaContext("default"));
-  mocks.captureSchemaContext.mockResolvedValue(schemaContext("invoker"));
-  mocks.revalidateSchemaContext.mockImplementation(async (context) => context);
-  mocks.checkTargetSchemas.mockResolvedValue({ incompatible: [], indeterminate: [] });
-  mocks.formatSchemaRefusalLines.mockReturnValue(["schema refused"]);
-  mocks.hasSchemaRefusal.mockImplementation(
-    (schemas) => schemas.incompatible.length > 0 || schemas.indeterminate.length > 0,
-  );
-  mocks.maybeRestartService.mockResolvedValue(undefined);
-  mocks.maybeStopService.mockImplementation(async ({ phase }) => inspectOrStopService(phase));
-  mocks.prepareMutableUpdate.mockResolvedValue(undefined);
-  mocks.pluginPreflight.mockResolvedValue([]);
-  mocks.readGitRecovery.mockResolvedValue({ serviceRestartSafe: true });
-  mocks.runGitUpdate.mockResolvedValue({ ...successfulUpdate, mode: "git" });
-  mocks.runPackageUpdate.mockResolvedValue(successfulUpdate);
-  mocks.shouldBlockServiceUpdate.mockReturnValue(false);
-  mocks.verifyPackageRecovery.mockResolvedValue({ serviceRestartSafe: true });
-});
+const { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate } =
+  await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
   it.each(
@@ -275,6 +63,171 @@ describe("mutable update execution", () => {
     },
   );
 
+  it.each([
+    ["measured startup", undefined, true, undefined],
+    ["explicit allowance", 450_000, true, undefined],
+    ["explicit deadline", 30_000, false, undefined],
+    ["terminal version mismatch", undefined, false, "version"],
+    ["replaced executor", undefined, false, "executor"],
+  ] as const)(
+    "preserves previous Gateway verification through slow readiness (%s)",
+    async (_allowance, timeoutMs, verified, failure) =>
+      withTestDir({ prefix: "previous-gateway-readiness-" }, async (root) => {
+        const readyAtMs = 400_000;
+        mockProcessPlatform("linux");
+        let elapsedMs = 0;
+        const epochMs = Date.now();
+        vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+        vi.spyOn(Date, "now").mockImplementation(() => epochMs + elapsedMs);
+        vi.spyOn(utils, "sleep").mockImplementation(async (delayMs) => {
+          elapsedMs += delayMs;
+        });
+        let readyObservedAtMs: number | undefined;
+        let stoppedAtMs: number | undefined;
+        let replaceExecutor: (() => void) | undefined;
+        const server = createServer((request, response) => {
+          const ready = elapsedMs >= readyAtMs;
+          if (request.url === "/readyz" && ready) {
+            readyObservedAtMs = elapsedMs;
+            replaceExecutor?.();
+          }
+          response.writeHead(request.url === "/readyz" && !ready ? 503 : 200).end();
+        });
+        server.listen(0, "127.0.0.1");
+        await once(server, "listening");
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing synthetic Gateway listener");
+        }
+        try {
+          await fs.mkdir(path.join(root, "dist"));
+          await fs.writeFile(
+            path.join(root, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+          );
+          await fs.writeFile(path.join(root, "dist", "index.js"), "");
+          const context = schemaContext("default");
+          const config = { gateway: { mode: "local" as const, port: address.port } };
+          const configSnapshot = {
+            ...context.configSnapshot,
+            config,
+            sourceConfig: config,
+          };
+          const managedEnv = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, ".openclaw") };
+          vi.spyOn(os, "userInfo").mockReturnValue({
+            uid: 1000,
+            gid: 1000,
+            username: "operator",
+            homedir: root,
+            shell: "/bin/sh",
+          });
+          mocks.captureManagedContext.mockResolvedValue({
+            env: managedEnv,
+            configSnapshot,
+            pluginInstallRecords: {},
+          });
+          vi.spyOn(configFile, "readConfigFileSnapshot").mockResolvedValue(configSnapshot);
+          vi.spyOn(restartProbe, "resolveGatewayRestartProbeContext").mockResolvedValue({
+            config,
+            auth: {},
+          });
+          const service = gatewayService.resolveGatewayService();
+          vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+          vi.spyOn(service, "readRuntime").mockResolvedValue({ status: "running", pid: 8000 });
+          vi.spyOn(service, "readCommand").mockResolvedValue({
+            programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
+          });
+          expect(await gatewayServiceCommandUsesRoot({ root, env: managedEnv })).toBe(true);
+          vi.spyOn(portInspection, "inspectPortUsage").mockImplementation(async (port) => ({
+            port,
+            status: "busy",
+            listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+            hints: [],
+          }));
+          vi.spyOn(gatewayCall, "callGateway").mockImplementation(
+            gatewayHealthResponse({
+              server: {
+                version: failure === "version" ? "0.9.0" : "1.0.0",
+                bootId: "previous-boot",
+              },
+            }),
+          );
+          mocks.validateCanary.mockResolvedValue({
+            status: "ok",
+            phase: "readiness",
+            durationMs: 70_000,
+            logTail: [],
+            steps: [
+              {
+                name: "candidate gateway canary",
+                command: "gateway run",
+                cwd: root,
+                durationMs: 70_000,
+                exitCode: 0,
+              },
+            ],
+          });
+          mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+            if (phase === "prepare") {
+              stoppedAtMs = elapsedMs;
+            }
+            return inspectOrStopService(phase);
+          });
+          mocks.runPackageUpdate.mockImplementation(
+            async (
+              params: Parameters<
+                typeof import("./update-command-package.js").runPackageInstallUpdate
+              >[0],
+            ) => {
+              await params.validateCandidate(root);
+              await params.beforeActivate();
+              return successfulUpdate;
+            },
+          );
+          const params = {
+            ...executionParams("package"),
+            root,
+            timeoutMs,
+            updateStepTimeoutMs: timeoutMs ?? 20 * 60_000,
+          };
+          if (failure === "executor") {
+            replaceExecutor = () => {
+              params.opts.run = { runId: "replacement-run", env: { OPENCLAW_STATE_DIR: root } };
+            };
+          }
+          const execution = await executeMutableUpdate(params);
+          if (failure === "executor") {
+            expect(execution?.result.status).toBe("error");
+            expect(execution?.failure?.detail).toContain("lost its original executor");
+            expect(stoppedAtMs).toBeUndefined();
+            expect(execution?.previousVerified).toBe(false);
+            return;
+          }
+          expect(execution?.result.status, JSON.stringify(mocks.runtimeError.mock.calls)).toBe(
+            "ok",
+          );
+          expect(
+            execution?.previousVerified,
+            JSON.stringify({ readyObservedAtMs, stoppedAtMs }),
+          ).toBe(verified);
+          if (verified) {
+            expect(readyObservedAtMs).toBeGreaterThanOrEqual(readyAtMs);
+            expect(stoppedAtMs).toBeGreaterThanOrEqual(readyObservedAtMs!);
+          } else {
+            expect(readyObservedAtMs).toBeUndefined();
+            expect(stoppedAtMs).toBeLessThan(readyAtMs);
+            if (failure === "version") {
+              expect(stoppedAtMs).toBe(0);
+            }
+          }
+        } finally {
+          server.closeAllConnections();
+          const closed = once(server, "close");
+          server.close();
+          await closed;
+        }
+      }),
+  );
   it.each(["package", "staged", "git"] as const)(
     "refuses an unsupported native receiver before activation: %s",
     async (route) =>
@@ -286,6 +239,7 @@ describe("mutable update execution", () => {
         const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
         const params = executionParams(route === "git" ? "git" : "package");
         params.root = dir;
+        params.updateStepTimeoutMs = 600_000;
         params.opts.run = { runId, env };
         if (route === "staged") {
           params.packageInstallSpec = path.join(dir, "candidate.tgz");
@@ -329,6 +283,9 @@ describe("mutable update execution", () => {
           reason: "target-native-unsupported",
         });
         expect(events).toEqual(["native-admission"]);
+        expect(mocks.nativeSupport.mock.calls[0]?.[0]).toMatchObject({
+          timeoutMs: params.updateStepTimeoutMs,
+        });
         expect(mocks.serviceStopped).toBe(false);
         expect(mocks.validateCanary).not.toHaveBeenCalled();
       }),

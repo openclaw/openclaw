@@ -155,6 +155,7 @@ export async function rollbackFailedUpdate(params: {
       env,
       root: result.root ?? null,
       nodeRunner: params.nodeRunner,
+      timeoutMs: params.timeoutMs,
     });
     assertCurrent();
     const sharedPath = resolveOpenClawStateSqlitePath(env);

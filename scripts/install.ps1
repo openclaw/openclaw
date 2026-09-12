@@ -18,6 +18,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# BEGIN GENERATED UPDATE NETWORK BUDGET
+# Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
+$script:UpdateNetworkTimeoutSeconds = 300
+# END GENERATED UPDATE NETWORK BUDGET
+
 if ($Help) {
     @"
 Usage:
@@ -463,26 +468,60 @@ function Ensure-PortableNodeOnUserPath {
 function Get-WebRequestTimeoutParameters {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CommandName,
-        [Parameter(Mandatory = $true)]
-        [int]$LegacyTimeoutSec
+        [string]$CommandName
     )
 
     $command = Get-Command $CommandName -ErrorAction Stop
-    # PowerShell 7.4+ exposes a per-read limit, which bounds body stalls without rejecting slow
-    # connections. Earlier versions only expose TimeoutSec, so downloads keep a longer allowance.
     if ($command.Parameters.ContainsKey("OperationTimeoutSeconds")) {
-        return @{
-            OperationTimeoutSeconds = 30
+        $timeouts = @{ OperationTimeoutSeconds = $script:UpdateNetworkTimeoutSeconds }
+        if ($command.Parameters.ContainsKey("ConnectionTimeoutSeconds")) {
+            $timeouts.ConnectionTimeoutSeconds = $script:UpdateNetworkTimeoutSeconds
         }
+        return $timeouts
     }
 
-    return @{ TimeoutSec = $LegacyTimeoutSec }
+    return @{ TimeoutSec = $script:UpdateNetworkTimeoutSeconds }
+}
+
+function Save-InstallerDownload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [Parameter(Mandatory = $true)]
+        [string]$OutFile
+    )
+
+    $command = Get-Command Invoke-WebRequest -ErrorAction Stop
+    if ($command.Parameters.ContainsKey("OperationTimeoutSeconds")) {
+        $timeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest"
+        Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile @timeouts
+        return
+    }
+
+    # Older PowerShell has only a total deadline. Synchronous stream reads renew
+    # ReadWriteTimeout, preserving slow downloads with the system TLS/proxy defaults.
+    $request = [System.Net.WebRequest]::CreateHttp($Uri)
+    $request.Timeout = $script:UpdateNetworkTimeoutSeconds * 1000
+    $request.ReadWriteTimeout = $request.Timeout
+    $response = $null
+    $responseStream = $null
+    $outputStream = $null
+    try {
+        $response = $request.GetResponse()
+        $responseStream = $response.GetResponseStream()
+        $outputStream = [System.IO.File]::Create($OutFile)
+        $responseStream.CopyTo($outputStream)
+    } finally {
+        if ($outputStream) { $outputStream.Dispose() }
+        if ($responseStream) { $responseStream.Dispose() }
+        if ($response) { $response.Dispose() }
+        $request.Abort()
+    }
 }
 
 function Resolve-PortableNodeDownload {
     $architecture = Get-WindowsPortableArchitecture
-    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"
     $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
         Where-Object { $_.version -match '^v26\.' } |
@@ -571,8 +610,7 @@ function Install-PortableNode {
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
-        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
-        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
+        Save-InstallerDownload -Uri $download.Url -OutFile $tmpZip
         Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot
     } finally {
         if (Test-Path $tmpZip) {
@@ -601,9 +639,8 @@ function Install-PrivateNode {
     $backup = $null
     try {
         New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
-        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
-        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $archive @downloadTimeouts
-        Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/$($download.Version)/SHASUMS256.txt" -OutFile $checksums @downloadTimeouts
+        Save-InstallerDownload -Uri $download.Url -OutFile $archive
+        Save-InstallerDownload -Uri "https://nodejs.org/dist/$($download.Version)/SHASUMS256.txt" -OutFile $checksums
         $checksumPattern = '^(?<hash>[0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($download.Name) + '$'
         $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object {
             if ($_ -match $checksumPattern) { $Matches["hash"] }
@@ -888,7 +925,7 @@ function Resolve-PortableGitDownload {
         "User-Agent" = "openclaw-installer"
         "Accept" = "application/vnd.github+json"
     }
-    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"
     $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers @requestTimeouts
     if (-not $release -or -not $release.assets) {
         throw "Could not resolve latest git-for-windows release metadata."
@@ -946,8 +983,7 @@ function Install-PortableGit {
 
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
-        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
-        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
+        Save-InstallerDownload -Uri $download.Url -OutFile $tmpZip
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
         New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force

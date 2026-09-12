@@ -10,6 +10,7 @@ it.each([
   "missing executor",
   "restart revoked",
   "install revoked",
+  "install slow",
 ] as const)("handles %s after replacing the updater's module files", async (scenario) => {
   await withOpenClawTestState(
     { prefix: "openclaw-update-command-replacement-", scenario: "minimal", applyEnv: false },
@@ -19,14 +20,17 @@ it.each([
           import { existsSync } from "node:fs";
           import fs from "node:fs/promises";
           import { registerHooks } from "node:module";
+          import { mock } from "node:test";
           import path from "node:path";
           import { pathToFileURL } from "node:url";
 
           const scenario = ${JSON.stringify(scenario)};
+          const realSetTimeout = setTimeout;
           const action = scenario.startsWith("install") ? "install" : "restart";
           const root = ${JSON.stringify(state.path("installation"))};
           const dist = path.join(root, "dist");
           const receipt = path.join(root, "candidate.json");
+          const release = path.join(root, "release");
           const owner = ${JSON.stringify(new URL("./update-command-service-command.ts", import.meta.url).href)};
           await fs.mkdir(dist, { recursive: true });
 
@@ -64,7 +68,7 @@ it.each([
               } },
             } : {}) },
             invocationEnv: process.env,
-            timeoutMs: 10_000,
+            timeoutMs: scenario === "install slow" ? 120_000 : 10_000,
             assertCurrent() {
               if (scenario !== "unregistered executor" && scenario.endsWith("revoked") && existsSync(receipt)) {
                 throw new Error("Update authority revoked during native command");
@@ -84,6 +88,7 @@ it.each([
               '  config: process.env.OPENCLAW_CONFIG_PATH,',
               '  compileCacheDisabled: process.env.NODE_DISABLE_COMPILE_CACHE,',
               '}));',
+              scenario === "install slow" ? 'const timer = setInterval(() => { if (fs.existsSync(' + JSON.stringify(release) + ')) clearInterval(timer); }, 5);' : '',
             ].join("\n"));
             if (scenario === "missing executor") {
               await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
@@ -99,6 +104,22 @@ it.each([
               await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
                 message: "Update authority revoked during native command",
               });
+            } else if (scenario === "install slow") {
+              mock.timers.enable({ apis: ["setTimeout"] });
+              let settled = false;
+              const completed = runUpdatedInstallGatewayCommand(params, action, true).then(
+                (value) => { settled = true; return value; },
+                (error) => { settled = true; return error; },
+              );
+              while (!existsSync(receipt)) await new Promise(setImmediate);
+              mock.timers.tick(61_000);
+              await fs.writeFile(release, "done");
+              while (!settled) {
+                await new Promise((resolve) => realSetTimeout(resolve, 1));
+                mock.timers.tick(1);
+              }
+              mock.timers.reset();
+              assert.equal(await completed, "unverified");
             } else {
               assert.equal(await runUpdatedInstallGatewayCommand(params, action, true), "unverified");
             }

@@ -165,7 +165,7 @@ describe("read-only snapshot deadline", () => {
       // Exercise native termination and cleanup without waiting out the production budget.
       if (mode === "sync") {
         vi.mocked(spawnSync).mockImplementationOnce((command, args, options) => {
-          expect(options).toMatchObject({ timeout: 31_000, killSignal: "SIGKILL" });
+          expect(options).toMatchObject({ timeout: 301_000, killSignal: "SIGKILL" });
           const result = actual.spawnSync(command, args, { ...options, timeout: 2_000 });
           expect(result.error).toMatchObject({ code: "ETIMEDOUT" });
           closeSignal = result.signal;
@@ -173,7 +173,7 @@ describe("read-only snapshot deadline", () => {
         });
       } else {
         processMocks.execFile.mockImplementationOnce((file, args, options, callback) => {
-          expect(options).toMatchObject({ timeout: 31_000, killSignal: "SIGKILL" });
+          expect(options).toMatchObject({ timeout: 301_000, killSignal: "SIGKILL" });
           const child = actual.execFile(file, args, { ...options, timeout: 2_000 }, callback);
           childClosed = new Promise<void>((resolve) => {
             child.once("close", (_code, signal) => {
@@ -198,7 +198,7 @@ describe("read-only snapshot deadline", () => {
             expect(closeSignal).toBe("SIGKILL");
           }),
         ).rejects.toThrow(
-          /timed out after 31 seconds \(budget for 26 B\).*Stop the Gateway service/,
+          /timed out after 301 seconds \(budget for 26 B\).*Stop the Gateway service/,
         );
         expect(performance.now() - started).toBeLessThan(8_000);
         expect(fs.readFileSync(ready, "utf8")).toBe("ready");
