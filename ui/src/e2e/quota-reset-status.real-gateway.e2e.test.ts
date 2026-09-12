@@ -62,8 +62,12 @@ function clearSavedBlock(fixture: QuotaFixture): SavedClearReceipt {
   expect(receipt.pid).not.toBe(fixture.gateway.child?.pid);
   expect(receipt.credentialsAfter).toBe(receipt.credentialsBefore);
   expect(receipt.configAfter).toBe(receipt.configBefore);
+  const beforeUsage = receipt.before.usageStats[fixture.profileId];
+  if (!beforeUsage) {
+    throw new Error("Saved-block repair did not capture the selected profile usage.");
+  }
   const retainedUsage = Object.fromEntries(
-    Object.entries(receipt.before.usageStats[fixture.profileId]).filter(
+    Object.entries(beforeUsage).filter(
       ([key]) =>
         ![
           "blockedUntil",

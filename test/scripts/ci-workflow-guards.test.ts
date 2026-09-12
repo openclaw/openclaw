@@ -13460,8 +13460,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             }
           }
           if (
-            node.expression.text === "createSessionManagementE2eSuite" &&
-            node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword
+            node.expression.text === "createQuotaResetFixture" ||
+            (node.expression.text === "createSessionManagementE2eSuite" &&
+              node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword)
           ) {
             ownsPrivateServer = true;
             return;
@@ -13510,6 +13511,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
       "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
       "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+      "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",
       "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
     ]);
