@@ -17400,6 +17400,36 @@ fi
     },
   );
 
+  it("uses the canonical ClawSweeper app secret for dated TODO issue upserts", () => {
+    const workflowSource = readFileSync(".github/workflows/dated-todo-sweep.yml", "utf8");
+    const workflow = readWorkflow(".github/workflows/dated-todo-sweep.yml");
+    const upsertSteps = workflow.jobs.upsert.steps as WorkflowStep[];
+    const appTokenStep = upsertSteps.find(
+      (step: WorkflowStep) => step.name === "Create ClawSweeper app token",
+    );
+    const updateIssueStep = upsertSteps.find(
+      (step: WorkflowStep) => step.name === "Upsert dated TODO tracking issue",
+    );
+
+    expect(workflow.env.CLAWSWEEPER_APP_CLIENT_ID).toBe("Iv23liOECG0slfuhz093");
+    expect(appTokenStep).toMatchObject({
+      uses: CREATE_GITHUB_APP_TOKEN_V3,
+      with: {
+        "client-id": "${{ env.CLAWSWEEPER_APP_CLIENT_ID }}",
+        "private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+        owner: "${{ github.repository_owner }}",
+        repositories: "${{ github.event.repository.name }}",
+      },
+    });
+    expect(updateIssueStep).toMatchObject({
+      with: { "github-token": "${{ steps.app-token.outputs.token }}" },
+    });
+    expect(workflowSource).not.toContain("GH_APP_PRIVATE_KEY");
+    expect(workflowSource).not.toContain("GH_APP_PRIVATE_KEY_FALLBACK");
+    expect(workflowSource).not.toContain('app-id: "2729701"');
+    expect(workflowSource).not.toContain('app-id: "2971289"');
+  });
+
   it.skipIf(process.platform === "win32")(
     "fails the maturity workflow result gate when evidence is not passing",
     () => {
