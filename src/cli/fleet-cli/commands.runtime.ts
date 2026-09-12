@@ -8,13 +8,14 @@ import {
   type FleetLogsOptions,
 } from "../../fleet/service.runtime.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { FleetCommandTarget } from "./target.js";
 
-const fleetService = createFleetService();
+const fleetTarget: FleetCommandTarget = createFleetService();
 
 export async function runFleetCreateCommand(
   options: FleetCreateOptions & { json: boolean },
 ): Promise<void> {
-  const result = await fleetService.create(options);
+  const result = await fleetTarget.create(options);
   if (options.json) {
     defaultRuntime.writeJson(result);
     return;
@@ -33,7 +34,7 @@ export async function runFleetBackupCommand(options: {
   maxBytes?: number;
   json: boolean;
 }): Promise<void> {
-  const result = await fleetService.backup(options);
+  const result = await fleetTarget.backup(options);
   if (options.json) {
     defaultRuntime.writeJson(result);
     return;
@@ -54,7 +55,7 @@ export async function runFleetRestoreCommand(options: {
   maxBytes?: number;
   json: boolean;
 }): Promise<void> {
-  const result = await fleetService.restore(options);
+  const result = await fleetTarget.restore(options);
   if (options.json) {
     defaultRuntime.writeJson(result);
     return;
@@ -68,7 +69,7 @@ export async function runFleetDoctorCommand(options: {
   tenant?: string;
   json: boolean;
 }): Promise<void> {
-  const reports = await fleetService.doctor(options.tenant);
+  const reports = await fleetTarget.doctor(options.tenant);
   if (options.json) {
     defaultRuntime.writeJson(reports);
   } else {
@@ -99,7 +100,7 @@ export async function runFleetDoctorCommand(options: {
 }
 
 export async function runFleetListCommand(options: { json: boolean }): Promise<void> {
-  const cells = await fleetService.list();
+  const cells = await fleetTarget.list();
   if (options.json) {
     defaultRuntime.writeJson({ cells });
     return;
@@ -143,7 +144,7 @@ export async function runFleetStatusCommand(options: {
   tenant: string;
   json: boolean;
 }): Promise<void> {
-  const result = await fleetService.status(options.tenant);
+  const result = await fleetTarget.status(options.tenant);
   if (options.json) {
     defaultRuntime.writeJson(result);
     return;
@@ -159,14 +160,14 @@ export async function runFleetStatusCommand(options: {
 }
 
 export async function runFleetLogsCommand(options: FleetLogsOptions): Promise<void> {
-  await fleetService.logs(options);
+  await fleetTarget.logs(options);
 }
 
 export async function runFleetLifecycleCommand(options: {
   tenant: string;
   action: FleetLifecycleAction;
 }): Promise<void> {
-  const result = await fleetService.lifecycle(options.tenant, options.action);
+  const result = await fleetTarget.lifecycle(options.tenant, options.action);
   defaultRuntime.log(`${result.action} complete for fleet cell ${result.tenant}.`);
 }
 
@@ -174,7 +175,7 @@ export async function runFleetUpgradeCommand(options: {
   tenant: string;
   image?: string;
 }): Promise<void> {
-  const result = await fleetService.upgrade(options.tenant, options.image);
+  const result = await fleetTarget.upgrade(options.tenant, options.image);
   defaultRuntime.log(`Upgraded fleet cell ${result.tenant} to ${result.image}.`);
 }
 
@@ -183,7 +184,7 @@ export async function runFleetRemoveCommand(options: {
   purgeData: boolean;
   force: boolean;
 }): Promise<void> {
-  const result = await fleetService.remove(options);
+  const result = await fleetTarget.remove(options);
   defaultRuntime.log(
     result.dataPurged
       ? `Removed fleet cell ${result.tenant} and purged its data.`
