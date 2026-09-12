@@ -26,6 +26,7 @@ import {
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
   runWithGatewayDetachedWorkAdmission,
+  runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
   runWithRetainedGatewayRootWork,
@@ -361,6 +362,52 @@ it("retains detached work through descendant cleanup after its requester closes"
     await nextTurn();
   }
   expect(backgroundSignal?.aborted).toBe(true);
+  await expect(track?.(() => {})).rejects.toThrow("Async work scope is closed");
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("keeps a detached continuation's reservation while it owns its async lifetime", async () => {
+  const foreground = new AsyncWorkScope();
+  const root = tryBeginGatewayRootWorkAdmission("ws:agent")!;
+  const releaseChild = createDeferredCore();
+  const handlerReturned = createDeferredCore();
+  let child: Promise<string> | undefined;
+  let track: ReturnType<typeof captureAsyncWorkTracker> | undefined;
+  let continuationSignal: AbortSignal | undefined;
+  let settled = false;
+  const run = async () => {
+    track = captureAsyncWorkTracker();
+    continuationSignal = getAsyncWorkSignal();
+    child = trackAsyncWork(async () => {
+      await releaseChild.promise;
+      return "tracked-after-close";
+    });
+    handlerReturned.resolve();
+    return "completed";
+  };
+  const continuation = root.run(async () =>
+    foreground.run(() => runWithGatewayDetachedWorkContinuation(run, "webhook:detached")),
+  );
+  void continuation.then(() => {
+    settled = true;
+  });
+  await handlerReturned.promise;
+  root.release();
+  const foregroundClosed = foreground.drain();
+  try {
+    await nextTurn();
+    expect(settled).toBe(true);
+    expect(continuationSignal).toBeDefined();
+    expect(continuationSignal).not.toBe(foreground.signal);
+    expect(continuationSignal?.aborted).toBe(false);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["webhook:detached"]);
+  } finally {
+    releaseChild.resolve();
+    await expect(child).resolves.toBe("tracked-after-close");
+    await continuation;
+    await foregroundClosed;
+    await nextTurn();
+  }
   await expect(track?.(() => {})).rejects.toThrow("Async work scope is closed");
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
