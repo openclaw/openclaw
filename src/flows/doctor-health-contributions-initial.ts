@@ -41,6 +41,11 @@ function legacyOwnedRepair(
   };
 }
 
+async function runStaleRuntimeBuildHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
+  await runCoreContributionHealth(ctx, ["core/doctor/stale-runtime-build"]);
+}
+
 async function runTelegramGeneralTopicConversationHealth(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
@@ -305,6 +310,14 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "UI protocol freshness",
       healthCheckIds: ["core/doctor/ui-protocol-freshness"],
       run: async () => {},
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:stale-runtime-build",
+      label: "Stale runtime build",
+      healthCheckIds: ["core/doctor/stale-runtime-build"],
+      // healthCheckIds only claims the check for structured selection, which runs
+      // under --lint/--fix; a plain `openclaw doctor` needs this runner to report.
+      run: runStaleRuntimeBuildHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:disk-space",

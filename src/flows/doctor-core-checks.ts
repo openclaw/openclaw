@@ -977,6 +977,18 @@ const legacyCronStoreCheck: DoctorHealthCheck = {
   },
 };
 
+const staleRuntimeBuildCheck: DoctorHealthCheck = {
+  id: "core/doctor/stale-runtime-build",
+  kind: "core",
+  description: "The loaded runtime was built from the checkout's current commit.",
+  source: "doctor",
+  async detect() {
+    const { collectStaleRuntimeBuildFindings } =
+      await import("../commands/doctor-stale-runtime-build.js");
+    return collectStaleRuntimeBuildFindings();
+  },
+};
+
 const codexSessionRoutesCheck: HealthCheck = {
   id: CODEX_SESSION_ROUTES_CHECK_ID,
   kind: "core",
@@ -1461,6 +1473,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Doct
     removedWorkspacesStateCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
+    staleRuntimeBuildCheck,
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,
     shellCompletionCheck,
