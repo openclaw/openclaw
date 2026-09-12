@@ -75,6 +75,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type {
   ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
+  ChannelRuntimeSnapshotOptions,
   StartChannelOptions,
 } from "./server-channel-runtime.types.js";
 
@@ -260,7 +261,7 @@ async function waitForDeferredAccountStart(
 }
 
 export type ChannelManager = {
-  getRuntimeSnapshot: (channelId?: ChannelId) => ChannelRuntimeSnapshot;
+  getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   pauseChannelStarts: (
     channelIds: Iterable<ChannelId>,
   ) => (outcome: "published" | "rollback") => void;
@@ -1659,7 +1660,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     };
   };
 
-  const getRuntimeSnapshot = (channelId?: ChannelId): ChannelRuntimeSnapshot => {
+  const getRuntimeSnapshot = (
+    options: ChannelRuntimeSnapshotOptions = {},
+  ): ChannelRuntimeSnapshot => {
+    const { channelId, inspectAccounts = true } = options;
     const channels: ChannelRuntimeSnapshot["channels"] = {};
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
     const reloadingChannels = new Map<ChannelId, string | undefined>();
@@ -1668,9 +1672,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         continue;
       }
       const fence = getStore(plugin.id).startFence;
-      // Controls need account selection and recorded state, not fallible diagnostic inspection.
       const snapshot = (
-        fence?.paused ? fence.snapshot : captureChannelSnapshot(plugin, channelId === undefined)
+        fence?.paused ? fence.snapshot : captureChannelSnapshot(plugin, inspectAccounts)
       )?.();
       if (fence?.paused) {
         reloadingChannels.set(plugin.id, snapshot?.defaultAccountId);

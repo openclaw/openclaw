@@ -90,7 +90,9 @@ export async function verifyPreparedSidecarRecovery(
     expect(start).not.toHaveBeenCalled();
     expect(signals).toHaveLength(1);
     expect(signals[0]?.aborted).toBe(mode === "aborted-predecessor");
-    expect(manager.getRuntimeSnapshot(channelId).channels[channelId]).toMatchObject({
+    expect(
+      manager.getRuntimeSnapshot({ channelId, inspectAccounts: false }).channels[channelId],
+    ).toMatchObject({
       running: true,
       connected: true,
       lifecycle: "ready",
@@ -492,13 +494,18 @@ export async function verifyIndependentRollbackRestoration(
         },
       });
       expect(
-        manager.getRuntimeSnapshot("healthy-restore").reloadingChannels?.has("healthy-restore"),
+        manager
+          .getRuntimeSnapshot({ channelId: "healthy-restore", inspectAccounts: false })
+          .reloadingChannels?.has("healthy-restore"),
       ).toBe(true);
       expect(starts).toEqual(["first-restore", "healthy-restore"]);
     } else {
       expect(result).toMatchObject({ cause: { errors: [expect.any(Error), failure] } });
       expect(starts).toEqual(["first-restore", "healthy-restore", "healthy-restore"]);
-      expect(manager.getRuntimeSnapshot("healthy-restore").reloadingChannels?.size ?? 0).toBe(0);
+      expect(
+        manager.getRuntimeSnapshot({ channelId: "healthy-restore", inspectAccounts: false })
+          .reloadingChannels?.size ?? 0,
+      ).toBe(0);
     }
     expect(fixture.siblingStart).toHaveBeenCalledOnce();
     expect(fixture.siblingStop).not.toHaveBeenCalled();
