@@ -178,11 +178,10 @@ export function createClickClackClient(options: ClientOptions) {
         );
       }
       if (requestOptions.responseMode === "none") {
-        try {
-          await response.body?.cancel();
-        } catch {
-          // A successful write does not depend on an optional response body.
-        }
+        // Do not await cancel: teed/debug streams can leave cancel pending forever
+        // (same invariant as Google Chat fetchOk). Successful writes do not need
+        // the optional response body.
+        void response.body?.cancel().catch(() => undefined);
         return undefined as T;
       }
       return await readProviderJsonResponse<T>(response, "ClickClack response", {

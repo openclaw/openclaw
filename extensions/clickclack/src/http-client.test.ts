@@ -1080,3 +1080,48 @@ describe("createClickClackClient websocket", () => {
     expect(result.error).toMatch(/max payload/i);
   });
 });
+
+describe("ClickClack ephemeral responseMode none cancel", () => {
+  it("returns without waiting when optional response body cancel never settles", async () => {
+    let cancelStarted = false;
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            cancelStarted = true;
+            return new Promise(() => {});
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock,
+    });
+
+    const startedAt = Date.now();
+    await expect(
+      Promise.race([
+        client.publishEphemeral({
+          workspaceId: "wsp_1",
+          type: "typing.started",
+        }),
+        new Promise<never>((_, reject) => {
+          AbortSignal.timeout(1_000).addEventListener("abort", () => {
+            reject(new Error("publishEphemeral hung waiting for body.cancel"));
+          });
+        }),
+      ]),
+    ).resolves.toBeUndefined();
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(cancelStarted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(elapsedMs).toBeLessThan(1_000);
+    console.log(
+      `[clickclack ephemeral cancel-nofollow proof] cancel_started=${cancelStarted} elapsed_ms=${elapsedMs}`,
+    );
+  });
+});
