@@ -9,6 +9,7 @@ import type {
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
+import { triageTaskProgressSummary } from "./triage-task.js";
 
 /** Maps internal task summary counts to the plugin task-domain view contract. */
 export function mapTaskRunAggregateSummary(summary: TaskRegistrySummary): TaskRunAggregateSummary {
@@ -23,6 +24,7 @@ export function mapTaskRunAggregateSummary(summary: TaskRegistrySummary): TaskRu
 }
 
 export function mapTaskRunView(task: TaskRecord): TaskRunView {
+  const progressSummary = triageTaskProgressSummary(task) ?? task.progressSummary;
   return {
     id: task.taskId,
     runtime: task.runtime,
@@ -46,7 +48,7 @@ export function mapTaskRunView(task: TaskRecord): TaskRunView {
     ...(task.lastEventAt !== undefined ? { lastEventAt: task.lastEventAt } : {}),
     ...(task.cleanupAfter !== undefined ? { cleanupAfter: task.cleanupAfter } : {}),
     ...(task.error ? { error: task.error } : {}),
-    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
+    ...(progressSummary ? { progressSummary } : {}),
     ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
     ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
   };

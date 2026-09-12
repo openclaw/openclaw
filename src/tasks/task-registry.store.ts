@@ -1,6 +1,7 @@
 // Stores task registry records in memory and bridges persistence runtime hooks.
 import {
   closeTaskRegistryDatabase,
+  matchesTaskIdentityFromSqlite,
   deleteTaskAndDeliveryStateFromSqlite,
   loadTaskRegistryStateFromSqlite,
   listTaskRegistryRecordsByOwnerKeyFromSqlite,
@@ -13,6 +14,7 @@ import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = {
+  matchesTaskIdentity?: (task: TaskRecord) => boolean | undefined;
   loadSnapshot: () => TaskRegistryStoreSnapshot;
   listTasksForOwnerKey?: (ownerKey: string) => Promise<TaskRecord[]>;
   upsertTaskWithDeliveryState: (params: {
@@ -47,6 +49,7 @@ type TaskRegistryObservers = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
+  matchesTaskIdentity: matchesTaskIdentityFromSqlite,
   loadSnapshot: loadTaskRegistryStateFromSqlite,
   listTasksForOwnerKey: listTaskRegistryRecordsByOwnerKeyFromSqlite,
   upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,

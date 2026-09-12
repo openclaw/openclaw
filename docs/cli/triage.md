@@ -58,7 +58,7 @@ The repair prompt directs the agent to preserve migrated state, investigate befo
 
 Triage captures the diagnosed installation's resolved state directory, exact config path, and default workspace, including custom paths and named profiles. Local shell commands receive these as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_WORKSPACE_DIR`. Archive references and default workspace checks therefore resolve against the diagnosed installation, even when its selectors were implicit. An authored workspace in the installation's config still takes precedence over its default workspace. The embedded agent keeps its own config snapshot, sessions, execution cwd, and temporary run state separate. In-process config and session tools refer to that temporary run. Use local shell commands to inspect or repair the diagnosed installation.
 
-`openclaw triage --run` requests up to one bounded embedded repair turn in an interactive terminal. Inference uses the system-agent owner's default model, then its configured `model.fallbacks`, then other configured agents' authenticated routes. Models that explicitly lack tool support and routes without usable authentication are skipped. If no route works, triage reports that embedded repair is unavailable. Use a saved handoff command, or repair model setup with `openclaw onboard`.
+`openclaw triage --run` explicitly requests up to one bounded embedded repair turn. It works in a terminal or with `--non-interactive` and `--json`; those flags alone remain diagnostics-only. The installed CLI executes the repair under the existing single-flight owner, and the original parent reports its joined, validated result. Inference uses the system-agent owner's default model, then its configured `model.fallbacks`, then other configured agents' authenticated routes. Models that explicitly lack tool support and routes without usable authentication are skipped. If no route works, triage reports that embedded repair is unavailable. Use a saved handoff command, or repair model setup with `openclaw onboard`.
 
 The loop runs Doctor lint before and after the turn, using the number of error findings to measure improvement. If the initial check reports no errors, it returns successfully without starting inference or a repair turn. Validation determines whether the installation is repaired. An agent's successful exit or claim that it fixed the problem is not enough. Triage allows one turn, ten minutes total, five minutes for the turn, and 40 tool calls. More error findings after a turn report the installation as unrepaired.
 
@@ -94,7 +94,7 @@ A captured update failure adds `--update-result <saved-failure-path>` to the emb
 
 Printed Windows commands target PowerShell, including Windows PowerShell 5.1. They read saved prompts as UTF-8, preserve literal paths, and restore your installation selectors after the command completes. WSL uses POSIX shell commands.
 
-JSON output also includes `detectedAgents`, listing the external agents found on `PATH`. Standalone triage with JSON output, non-TTY sessions, or `--non-interactive` never starts an agent, even with `--agent`. The Codex command works outside a Git checkout. It does not change Codex sandbox or approval settings.
+JSON output also includes `detectedAgents`, listing the external agents found on `PATH`. Without `--run`, standalone triage with JSON output, non-TTY sessions, or `--non-interactive` never starts an agent, even with `--agent`. The Codex command works outside a Git checkout. It does not change Codex sandbox or approval settings.
 
 ## Automatic failure handoff
 
@@ -143,9 +143,9 @@ This connection requires a working CLI. Missing Node or CLI files, failures befo
 
 The prompt is written to `logs/support/` inside the state directory with owner-only permissions, alongside the diagnostics archive and sanitized update failure when available. Prompt and archive paths are printed, and `--json` returns them plus finding counts by severity and handoff commands.
 
-If a support artifact cannot be saved, triage reports the storage error. It still passes the in-memory prompt to an available interactive agent, including an explicitly requested embedded turn. It does not report a saved prompt path for a failed write. Standalone JSON output, non-interactive sessions, and sessions without a launchable handoff retain a non-zero artifact failure. These explicit diagnostic runs never start an agent automatically.
+If a support artifact cannot be saved, triage reports the storage error. It still passes the in-memory prompt to an available interactive agent. An explicit `--run` carries bounded failure diagnostics through its private handoff even when the support export cannot be saved. It does not report a saved prompt path for a failed write. Without `--run`, standalone JSON output, non-interactive sessions, and sessions without a launchable handoff retain a non-zero artifact failure. These explicit diagnostic runs never start an agent automatically.
 
-A launched external agent inherits the current environment with the captured installation's state, config, and default workspace selectors pinned. The printed commands pin the same selectors and preserve shell quoting. External agents still control their own shell environment and execution policy. Keep the handoff on this machine. Triage exits with the launched agent's exit code. If the agent cannot start, triage prints its manual command and exits non-zero. It does not try another provider. A failed embedded inference check, unsupported execution route, or `--run` without an interactive terminal also exits non-zero. Saved prompts and manual handoff commands remain available.
+A launched external agent inherits the current environment with the captured installation's state, config, and default workspace selectors pinned. The printed commands pin the same selectors and preserve shell quoting. External agents still control their own shell environment and execution policy. Keep the handoff on this machine. Triage exits with the launched agent's exit code. If the agent cannot start, triage prints its manual command and exits non-zero. It does not try another provider. A failed embedded inference check or unsupported execution route also exits non-zero. Saved prompts and manual handoff commands remain available.
 
 Embedded repair exits with 0 when Doctor validation passes, 2 when a time budget stops the run, and 1 for other incomplete or unavailable repairs. An improvement that leaves errors is still incomplete.
 
@@ -156,10 +156,10 @@ Embedded repair exits with 0 when Doctor validation passes, 2 when a time budget
 | `--json`                 | Emit prompt and archive paths, finding counts, detected agents, and commands.              |
 | `--no-export`            | Skip the diagnostics archive; still prepare the prompt and use the selected handoff route. |
 | `--agent <name>`         | Select `claude`, `codex`, `opencode`, or `pi` instead of automatic detection.              |
-| `--run`                  | Run one bounded embedded repair turn with Doctor validation in an interactive terminal.    |
-| `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.       |
+| `--run`                  | Explicitly request one bounded embedded repair turn with Doctor validation.                |
+| `--non-interactive`      | Do not prompt; without `--run`, collect diagnostics only.                                  |
 | `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.       |
 
-`--run` cannot be combined with `--json`, `--non-interactive`, or `--agent`.
+`--run` may be combined with `--json` and `--non-interactive`, but not `--agent`.
 
 Related: [Doctor](/cli/doctor), [Gateway](/cli/gateway), and [Troubleshooting](/help/troubleshooting).

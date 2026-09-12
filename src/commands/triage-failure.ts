@@ -6,6 +6,10 @@ import { resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { createEmbeddedStateSignalBridge } from "../infra/embedded-state-lock.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
+import {
+  installationTargetEnv,
+  resolveInstallationTarget,
+} from "../infra/installation-target-context.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import {
@@ -21,6 +25,8 @@ import {
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { renderTriagePrompt, type TriageFailureContext } from "./triage-prompt.js";
+import { readJoinedStartupTriageResult } from "./triage-startup-result.js";
+import { prepareStartupTriageValidator, type StartupTriageResult } from "./triage-startup.js";
 
 /** Failure owners retain their exit/result; triage only supplies a bounded repair attempt. */
 export async function triageAfterFailure(
@@ -28,7 +34,7 @@ export async function triageAfterFailure(
   failure: TriageFailureContext,
   signal?: AbortSignal,
   updateResultPath?: string,
-): Promise<void> {
+): Promise<StartupTriageResult | undefined> {
   // Exec stamps its descendants. Codex also stamps shells even when its env policy
   // drops inherited variables; neither context should recursively launch a fixing agent.
   if (
@@ -37,8 +43,11 @@ export async function triageAfterFailure(
     isGatewayExternallySupervised() ||
     signal?.aborted
   ) {
-    return;
+    return undefined;
   }
+  const target = resolveInstallationTarget();
+  const targetEnv = { ...process.env, ...installationTargetEnv(target) };
+  let startupResult: StartupTriageResult | undefined;
   const bridge = createEmbeddedStateSignalBridge();
   const cancellation = signal ? AbortSignal.any([signal, bridge.signal]) : bridge.signal;
   const redaction = { env: process.env, stateDir: resolveStateDir() };
@@ -48,7 +57,11 @@ export async function triageAfterFailure(
     error: scrubDoctorErrorMessage(
       redactSupportString(failure.error, redaction, { maxLength: 800 }),
     ),
-    ...(failure.expectedVersion ? { expectedVersion: failure.expectedVersion.slice(0, 100) } : {}),
+    // Protocol identities are exact or unavailable, never truncated lookalikes.
+    expectedVersion:
+      failure.expectedVersion && failure.expectedVersion.length <= 100
+        ? failure.expectedVersion
+        : undefined,
   };
   const previousShell = process.env.OPENCLAW_SHELL;
   process.env.OPENCLAW_SHELL = "exec";
@@ -75,45 +88,76 @@ export async function triageAfterFailure(
   try {
     await withConsoleLogsRoutedToStderr(async () => {
       const resolvedRoot =
-        failure.installationRoot ?? (await resolveOpenClawPackageRoot({ argv1: process.argv[1] }));
+        boundedFailure.installationRoot ??
+        (await resolveOpenClawPackageRoot({ argv1: process.argv[1] }));
       if (!resolvedRoot) {
         throw new Error("installed CLI root is unavailable; run openclaw triage manually");
       }
       const root = realpathSync(resolvedRoot);
       boundedFailure.installationRoot = root;
       const supervisor =
-        failure.kind === "gateway-startup"
+        boundedFailure.kind === "gateway-startup"
           ? detectRespawnSupervisor(process.env, process.platform, {
               includeLinuxOpenClawGatewayServiceMarker: true,
             })
           : null;
       managedStartup = Boolean(supervisor);
       if (!supervisor) {
-        // Imports above survive mutation; only the installed child loads triage's
-        // lazy graph. Service selector hints do not grant a foreground updater a lease.
+        // The failure owner preloads these modules before replacing the package.
+        // Confirmation remains optional if a deeper read dependency is unavailable.
+        const validate =
+          boundedFailure.gateway === "verify-running"
+            ? await prepareStartupTriageValidator(targetEnv, boundedFailure).catch(() => undefined)
+            : undefined;
+        const updateFailure = updateResultPath
+          ? await (
+              await import("./triage-update.js")
+            ).readTriageUpdateFailure(updateResultPath, redaction)
+          : undefined;
+        const updateRunId =
+          updateFailure && "result" in updateFailure ? updateFailure.result.runId : undefined;
+        // The resident parent validates; only the installed child loads the repair graph.
+        // Service selector hints do not grant a foreground updater a lease.
         const commandArgv = [
           ...(await resolveTriageEntrypoint(root)),
-          ...(failure.kind === "update" && updateResultPath
+          ...(boundedFailure.kind === "update" && updateResultPath
             ? ["--update-result", updateResultPath]
             : []),
         ];
         cancellation.throwIfAborted();
         if (
-          failure.kind === "update" &&
+          boundedFailure.kind === "update" &&
           (await queueManagedUpdateTriage(boundedFailure, commandArgv, cancellation))
         ) {
           runtime.error(
             "Automatic triage queued after managed update settlement; inspect the handoff log for its result.",
           );
         } else {
-          await continueTriageInFreshProcess({
+          const outcome = await continueTriageInFreshProcess({
             root,
+            target,
             commandArgv,
             failure: boundedFailure,
             signal: cancellation,
             output: (output) =>
               runtime.error(redactSupportString(output, redaction, { maxLength: 32 * 1024 })),
           });
+          if (validate && outcome.status === "completed") {
+            startupResult = await readJoinedStartupTriageResult({
+              outcome,
+              root,
+              failure: boundedFailure,
+              target,
+              validate,
+              signal: cancellation,
+              updateRunId,
+            });
+            runtime.error(
+              startupResult.after.ok
+                ? "Startup repair checks passed. Original failure and activation status remain separate."
+                : "Startup repair did not verify. Inspect the saved diagnostics before retrying.",
+            );
+          }
         }
         return;
       }
@@ -168,7 +212,11 @@ export async function triageAfterFailure(
         );
       }
     }
-    if (failure.kind === "update" && failure.installationRoot && !cancellation.aborted) {
+    if (
+      boundedFailure.kind === "update" &&
+      boundedFailure.installationRoot &&
+      !cancellation.aborted
+    ) {
       // A missing/incompatible candidate cannot collect fresh diagnostics. Save
       // the original bounded evidence without touching the removed lazy graph.
       const outputDir = path.join(redaction.stateDir, "logs", "support");
@@ -208,4 +256,5 @@ export async function triageAfterFailure(
   runtime.error(
     "Original failure retained; inspect the triage verification evidence before retrying.",
   );
+  return startupResult;
 }

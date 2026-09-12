@@ -700,24 +700,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(triageCommand).toHaveBeenCalledWith(runtime, options);
   });
 
-  it("rejects embedded execution in triage JSON mode", async () => {
-    await runMaintenanceCli(["triage", "--json", "--run"]);
-
-    expect(triageCommand).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      jsonFailure("triage --json cannot be combined with --run."),
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("rejects embedded execution in explicitly non-interactive triage", async () => {
-    await runMaintenanceCli(["triage", "--non-interactive", "--run"]);
-
-    expect(triageCommand).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "triage --non-interactive cannot be combined with --run.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
+  it.each([
+    { args: ["--json", "--run"], options: { json: true, noExport: false, run: true } },
+    {
+      args: ["--non-interactive", "--run"],
+      options: { json: false, noExport: false, nonInteractive: true, run: true },
+    },
+  ])("forwards unattended repair to the owned command for $args", async ({ args, options }) => {
+    await runMaintenanceCli(["triage", ...args]);
+    expect(triageCommand).toHaveBeenCalledExactlyOnceWith(runtime, options);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting embedded and external triage routes", async () => {

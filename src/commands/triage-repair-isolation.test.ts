@@ -86,6 +86,7 @@ describe("manual triage repair isolation", () => {
         mocks.oracle.mockImplementation(async () => ({
           code: repaired ? 0 : 1,
           termination: "exit",
+          cleanup: "normal",
           stdout: JSON.stringify({
             ok: repaired,
             findings: repaired ? [] : [{ severity: "error", message: "Synthetic repair needed" }],
@@ -121,17 +122,35 @@ describe("manual triage repair isolation", () => {
             },
           };
         });
-        const run = withTriageTerminal(true, () =>
-          triageCommand(runtime, { run: true, noExport: true }),
+        await withTriageTerminal(true, () =>
+          triageCommand(
+            runtime,
+            { run: true, noExport: true, json: true },
+            {
+              signal: new AbortController().signal,
+              assertCurrent: () => {},
+              operator: {
+                kind: "operator",
+                installationRoot: path.resolve(import.meta.dirname, "../.."),
+                gateway: "preserve",
+              },
+            },
+          ),
         );
-        if (throws) {
-          await expect(run).rejects.toMatchObject({ code: 1 });
-        } else {
-          await run;
-          expect(runtime.log).toHaveBeenCalledWith(
-            "Embedded repair repaired: Doctor lint reports no errors.",
-          );
-        }
+        expect(runtime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            repair: expect.objectContaining({
+              status: throws ? "aborted" : "repaired",
+              ...(throws
+                ? {
+                    reason: "Synthetic executor failure",
+                    finalValidation: expect.objectContaining({ ok: false }),
+                  }
+                : {}),
+            }),
+          }),
+          2,
+        );
         expect(mocks.agentExecCommand).toHaveBeenCalledOnce();
         expect(await fs.readFile(marker, "utf8")).toBe("repaired");
         expect(mocks.serviceStop).not.toHaveBeenCalled();

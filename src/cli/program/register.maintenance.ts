@@ -229,19 +229,9 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--no-export", "Skip the sanitized diagnostics archive")
     .option("--agent <name>", "Select a coding agent (claude|codex|opencode|pi)")
     .option("--run", "Run one embedded agent turn after verifying model inference", false)
-    .option(
-      "--non-interactive",
-      "Prepare diagnostics without prompting or starting an agent",
-      false,
-    )
+    .option("--non-interactive", "Skip prompts; diagnostics only unless --run is supplied", false)
     .option("--update-result <path>", "Include update-failure diagnostics from this JSON artifact")
     .action(async (opts) => {
-      if (opts.json === true && opts.run === true) {
-        return exitDoctorError("triage --json cannot be combined with --run.", true);
-      }
-      if (opts.nonInteractive === true && opts.run === true) {
-        return exitDoctorError("triage --non-interactive cannot be combined with --run.", false);
-      }
       const agent: unknown = opts.agent;
       if (opts.run === true && agent !== undefined) {
         return exitDoctorError("triage --run cannot be combined with --agent.", opts.json === true);

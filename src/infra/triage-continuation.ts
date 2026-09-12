@@ -9,21 +9,30 @@ import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "../cli/update-cli/update-command-service-env.js";
-import type { TriageFailureContext } from "../commands/triage-prompt.js";
+import type { TriageFailureContext, TriageContinuationContext } from "../commands/triage-prompt.js";
+import { updateFailureSchema } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
+import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
 import {
   forceKillChildProcessTree,
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { installationTargetEnv, resolveInstallationTarget } from "./installation-target-context.js";
+import {
+  installationTargetEnv,
+  resolveInstallationTarget,
+  type InstallationTarget,
+} from "./installation-target-context.js";
+import { captureTriageBackingReference, type TriageBackingReference } from "./triage-backing.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   readControlPlaneUpdateSentinelMeta,
   UPDATE_RUN_ID_ENV,
 } from "./update-control-plane-sentinel.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 import {
+  resolveManagedUpdateLeaseDatabasePath,
   createManagedHandoffLeaseStore,
   triageFailureSchema as failureSchema,
   type ManagedHandoffLease,
@@ -38,10 +47,22 @@ import {
 const TRIAGE_HANDOFF_GRACE_MS = 30_000;
 
 const readySchema = z.strictObject({ type: z.literal("triage-ready"), version: z.literal(2) });
-const continuationSchema = z.strictObject({
+const operatorSchema = z.strictObject({
+  kind: z.literal("operator"),
+  installationRoot: z.string().min(1).max(4096),
+  gateway: z.literal("preserve"),
+  // Same bounded diagnostic data as the prompt; never an execution grant.
+  updateFailure: updateFailureSchema
+    .refine((value) => Buffer.byteLength(JSON.stringify(value), "utf8") <= 4 * 1024)
+    .optional(),
+});
+const contextSchema = z.union([
+  z.strictObject({ failure: failureSchema }),
+  z.strictObject({ operator: operatorSchema }),
+]);
+const envelopeFields = {
   type: z.literal("triage"),
   version: z.literal(2),
-  failure: failureSchema,
   installRoot: z.string().min(1).max(4096),
   owner: z.string().min(1).max(4096),
   requester: z
@@ -51,10 +72,30 @@ const continuationSchema = z.strictObject({
       senderId: z.string().max(4096).optional(),
     })
     .optional(),
-});
+};
+const continuationSchema = z.union([
+  z.strictObject({ ...envelopeFields, failure: failureSchema }),
+  z.strictObject({ ...envelopeFields, operator: operatorSchema }),
+]);
 
-function ownsChildLease(root: string, action: "update" | "triage"): ManagedHandoffLease | null {
-  const store = createManagedHandoffLeaseStore();
+type FreshTriageOutcome =
+  | { status: "not-running"; reason: "busy" }
+  | {
+      status: "completed";
+      installationRoot: string;
+      generationOwner: string;
+      exitCode: 0;
+      signal: null;
+      commandOutput:
+        | { kind: "complete"; stdout: string }
+        | { kind: "unavailable"; reason: "output-limit" };
+    };
+
+function ownsChildLease(
+  root: string,
+  action: "update" | "triage",
+  store = createManagedHandoffLeaseStore(),
+): ManagedHandoffLease | null {
   const result = store.read(root);
   return result.kind === "current" &&
     result.lease.action.kind === action &&
@@ -174,17 +215,22 @@ export async function queueManagedUpdateTriage(
   return true;
 }
 
-export async function continueTriageInFreshProcess(params: {
-  root: string;
-  commandArgv: string[];
-  failure: TriageFailureContext;
-  signal: AbortSignal;
-  output: (text: string) => void;
-}): Promise<void> {
+export async function continueTriageInFreshProcess(
+  params: {
+    root: string;
+    commandArgv: string[];
+    target?: InstallationTarget;
+    signal: AbortSignal;
+    output: (text: string) => void;
+  } & TriageContinuationContext,
+): Promise<FreshTriageOutcome> {
   params.signal.throwIfAborted();
   const root = realpathSync(params.root);
-  const failure = failureSchema.parse(params.failure);
-  if (failure.installationRoot !== root) {
+  const context = contextSchema.parse({
+    ...(params.failure !== undefined ? { failure: params.failure } : {}),
+    ...(params.operator !== undefined ? { operator: params.operator } : {}),
+  });
+  if (("failure" in context ? context.failure : context.operator).installationRoot !== root) {
     throw new Error("automatic triage installation root mismatch");
   }
   const store = createManagedHandoffLeaseStore();
@@ -197,7 +243,7 @@ export async function continueTriageInFreshProcess(params: {
     params.output(
       "Automatic triage already owned for this installation; wait for its cleanup or inspect the saved diagnostics and run openclaw triage manually.\n",
     );
-    return;
+    return { status: "not-running", reason: "busy" };
   }
   let lease = acquired.lease;
   let child: ReturnType<typeof spawn> | undefined;
@@ -206,6 +252,8 @@ export async function continueTriageInFreshProcess(params: {
   let closed = false;
   let exited = false;
   let output = "";
+  const stdoutChunks: Buffer[] = [];
+  let stdoutBytes = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let shutdown: ReturnType<typeof setTimeout> | undefined;
   let forced = false;
@@ -270,7 +318,7 @@ export async function continueTriageInFreshProcess(params: {
     params.output("Automatic triage is preparing the installed CLI; diagnostics will follow.\n");
     const env = {
       ...stripGatewayServiceMarkerEnv(resolveUpdatedInstallCommandEnv()),
-      ...installationTargetEnv(resolveInstallationTarget()),
+      ...installationTargetEnv(params.target ?? resolveInstallationTarget()),
       OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     };
     const startup = buildCliRespawnPlan({
@@ -305,6 +353,15 @@ export async function continueTriageInFreshProcess(params: {
     child.once("close", (code, signal) => {
       closed = true;
       completion.resolve({ code, signal });
+    });
+    // Machine output is independent of the diagnostic tail. Never parse a truncated tail.
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes <= 32 * 1024) {
+        stdoutChunks.push(Buffer.from(chunk));
+      } else {
+        stdoutChunks.length = 0;
+      }
     });
     for (const stream of [child.stdout, child.stderr]) {
       stream?.on("data", (chunk) => {
@@ -348,7 +405,7 @@ export async function continueTriageInFreshProcess(params: {
         admitted = true;
         clearTimeout(timeout);
         child.send(
-          { type: "triage", version: 2, installRoot: root, owner: lease.owner, failure },
+          { type: "triage", version: 2, installRoot: root, owner: lease.owner, ...context },
           (error) => {
             if (error) {
               cancel();
@@ -388,6 +445,18 @@ export async function continueTriageInFreshProcess(params: {
         `automatic triage candidate ${admitted ? `failed (exit ${exit.code ?? "signal"})` : "is incompatible"}; run openclaw triage manually`,
       );
     }
+    return {
+      status: "completed",
+      // Correlate child-reported results only after the original parent joins and releases.
+      installationRoot: root,
+      generationOwner: lease.owner,
+      exitCode: 0,
+      signal: null,
+      commandOutput:
+        stdoutBytes <= 32 * 1024
+          ? { kind: "complete", stdout: Buffer.concat(stdoutChunks).toString("utf8") }
+          : { kind: "unavailable", reason: "output-limit" },
+    };
   } finally {
     clearTimeout(timeout);
     clearTimeout(shutdown);
@@ -406,12 +475,12 @@ export async function continueTriageInFreshProcess(params: {
 }
 
 export async function acceptTriageContinuation(): Promise<
-  | {
-      failure: TriageFailureContext;
+  | (TriageContinuationContext & {
+      backing: TriageBackingReference;
       signal: AbortSignal;
       assertCurrent: () => void;
       finish: (cleanup: "closed" | "uncertain") => Promise<void>;
-    }
+    })
   | undefined
 > {
   if (process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1") {
@@ -422,7 +491,14 @@ export async function acceptTriageContinuation(): Promise<
       "automatic triage requires its original connected owner; run openclaw triage manually",
     );
   }
-  const store = createManagedHandoffLeaseStore();
+  const databaseIdentity = captureManagedUpdateLeaseDatabaseIdentity(
+    resolveManagedUpdateLeaseDatabasePath(),
+  );
+  const store = createManagedHandoffLeaseStore({
+    databasePath: databaseIdentity.databasePath,
+    existingIdentity: databaseIdentity,
+    serviceManagerEnv: resolveServiceManagerEnv(),
+  });
   const controller = new AbortController();
   const parent = store.processIdentity(process.ppid);
   let lease: ManagedHandoffLease | undefined;
@@ -526,17 +602,20 @@ export async function acceptTriageContinuation(): Promise<
   };
   process.once("disconnect", cancel);
   try {
-    const { failure, installRoot, owner, requester } = continuationSchema.parse(
+    const parsed = continuationSchema.parse(
       await exchangeWithParent({ type: "triage-ready", version: 2 }),
     );
-    const admitted = ownsChildLease(installRoot, "triage");
+    const { installRoot, owner, requester } = parsed;
+    const context: TriageContinuationContext =
+      "failure" in parsed ? { failure: parsed.failure } : { operator: parsed.operator };
+    const admitted = ownsChildLease(installRoot, "triage", store);
     if (
       !admitted ||
       admitted.owner !== owner ||
       admitted.action.kind !== "triage" ||
       admitted.action.phase !== "running" ||
       realpathSync(installRoot) !== installRoot ||
-      failure.installationRoot !== installRoot ||
+      (context.failure ?? context.operator).installationRoot !== installRoot ||
       JSON.stringify(admitted.helper) !== JSON.stringify(parent)
     ) {
       throw new Error("automatic triage lost its live root/generation claim");
@@ -559,11 +638,13 @@ export async function acceptTriageContinuation(): Promise<
     process.on("message", onMessage);
     watch = setInterval(checkCurrent, 250);
     assertCurrent();
+    const backing = captureTriageBackingReference(admitted, databaseIdentity);
+    assertCurrent();
     delete process.env.OPENCLAW_UPDATE_RUN_HANDOFF;
     delete process.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV];
     delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     delete process.env[UPDATE_RUN_ID_ENV];
-    return { failure, signal: controller.signal, assertCurrent, finish };
+    return { ...context, backing, signal: controller.signal, assertCurrent, finish };
   } catch (error) {
     cancel();
     await finish("uncertain");
