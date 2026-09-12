@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -37,7 +36,6 @@ describe("direct embedded retry lifecycle", () => {
 
   it("cancels a long retry wait when its lane expires without aborting the caller", async () => {
     const { sleepWithAbort } = await import("../../infra/backoff.js");
-    const { sleepWithAbort: sleep } = await import("../../../packages/retry/src/index.js");
     const mockedSleep = vi.mocked(sleepWithAbort);
     const previousSleep = mockedSleep.getMockImplementation();
     const caller = new AbortController();
@@ -47,9 +45,16 @@ describe("direct embedded retry lifecycle", () => {
     let pending: ReturnType<typeof run> | undefined;
     vi.useFakeTimers();
     try {
-      mockedSleep.mockImplementation((delayMs, signal) => {
+      mockedSleep.mockImplementation((_delayMs, signal) => {
         sleepSignal = signal;
-        wait = sleep(delayMs, signal).finally(() => {
+        wait = new Promise<void>((_resolve, reject) => {
+          const abort = () => reject(signal?.reason ?? new Error("aborted"));
+          if (signal?.aborted) {
+            abort();
+          } else {
+            signal?.addEventListener("abort", abort, { once: true });
+          }
+        }).finally(() => {
           waitSettled = true;
         });
         return wait;
@@ -70,15 +75,15 @@ describe("direct embedded retry lifecycle", () => {
         runId: "run-retry-lane-expiry",
         provider: "mock",
         model: "model",
-        // Admit the provider floor while retaining the finite legacy lane watchdog.
-        timeoutMs: MAX_TIMER_TIMEOUT_MS,
+        // Admit the provider floor while retaining the finite lane watchdog.
+        timeoutMs: 3_610_000,
         abortSignal: caller.signal,
       });
       const outcome = pending.catch((error: unknown) => error);
       await vi.waitFor(() => expect(mockedSleep).toHaveBeenCalled(), { timeout: 10_000 });
       expect(mockedSleep).toHaveBeenCalledWith(3_600_000, expect.any(AbortSignal));
       expect(waitSettled).toBe(false);
-      await vi.advanceTimersByTimeAsync(resolveEmbeddedRunLaneTimeoutMs(MAX_TIMER_TIMEOUT_MS) + 1);
+      await vi.advanceTimersByTimeAsync(resolveEmbeddedRunLaneTimeoutMs(3_610_000) + 1);
       expect(await outcome).toMatchObject({ name: "CommandLaneTaskTimeoutError" });
       expect(caller.signal.aborted).toBe(false);
       expect(sleepSignal?.aborted).toBe(true);

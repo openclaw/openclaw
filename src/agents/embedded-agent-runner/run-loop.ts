@@ -157,8 +157,8 @@ export async function runPreparedEmbeddedLoop(
     tokenBudget?: number | null;
     maxOutputTokens?: number | null;
     degradedReason?: string | null;
-  }) => {
-    return buildContextEngineRuntimeSettings({
+  }) =>
+    buildContextEngineRuntimeSettings({
       contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       provider,
       requestedModel: preparedRuntime.requestedModelId,
@@ -170,7 +170,6 @@ export async function runPreparedEmbeddedLoop(
       fallbackReason: resolveRuntimeFallbackReason(),
       degradedReason: settingsParams.degradedReason,
     });
-  };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
