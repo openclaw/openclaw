@@ -96,6 +96,7 @@ export function createSessionManagedListRefresh(
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
           const issuedRevision = nextRevision();
+          entry.coordinator.requestStarted();
           const response = await requestSessionListParams(scope.client, requestParams);
           if (!isCurrent()) {
             return;

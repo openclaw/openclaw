@@ -233,6 +233,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         if (bootstrap) {
           issuedRevision = ++requestRevision;
         }
+        eventRefreshCoordinator.requestStarted();
         result = await requestSessionListParams(scope.client, listParams);
       }
       if (!isCurrent()) {
