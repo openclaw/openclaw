@@ -144,11 +144,7 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
     try {
       return asNonArrayRecord(partialParse(partialJson));
     } catch {
-      try {
-        return asNonArrayRecord(partialParse(repairJson(partialJson)));
-      } catch {
-        return {};
-      }
+      return {};
     }
   }
 }
