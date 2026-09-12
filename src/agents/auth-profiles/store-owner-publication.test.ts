@@ -575,7 +575,7 @@ describe("auth publication owner receipts", () => {
     expect(snapshotAt(original.agentPath)?.profiles.shared).toEqual(apiKey("updated-original"));
   });
 
-  it("retains shared OAuth in the owner snapshot but excludes it from bounded exec", async () => {
+  it("reads shared OAuth in bounded exec while retaining the original owner", async () => {
     const original = await seedRoot("original");
     const oauth = {
       type: "oauth",
@@ -593,11 +593,11 @@ describe("auth publication owner receipts", () => {
     withEnv({ ...original.env, OPENCLAW_STATE_DIR: temporary }, () => {
       withAuthProfileStoreAgentDir(original.agentDir, original.stateDir, () => {
         const current = ensureAuthProfileStoreWithoutExternalProfiles();
-        expect(current.profiles["shared-oauth"]).toBeUndefined();
+        expect(current.profiles["shared-oauth"]).toEqual(oauth);
         saveAuthProfileStore(current, undefined, saveOptions);
-        expect(
-          ensureAuthProfileStoreWithoutExternalProfiles().profiles["shared-oauth"],
-        ).toBeUndefined();
+        expect(ensureAuthProfileStoreWithoutExternalProfiles().profiles["shared-oauth"]).toEqual(
+          oauth,
+        );
       });
     });
     expect(snapshotAt(original.agentPath)?.profiles["shared-oauth"]).toEqual(oauth);

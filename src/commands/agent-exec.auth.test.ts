@@ -113,7 +113,7 @@ describe("agent exec stored auth", () => {
   });
 
   it.each([false, true])(
-    "reads portable shared credentials across temporary state (local override: %s)",
+    "reads shared credentials across temporary state (local override: %s)",
     async (localOverride) => {
       await withOpenClawTestState(
         { scenario: "minimal", env: { OPENAI_API_KEY: undefined } },
@@ -176,6 +176,7 @@ describe("agent exec stored auth", () => {
                 syncExternalCli: false,
               });
               expect(Object.keys(store.profiles).toSorted()).toEqual([
+                "openai:oauth",
                 "openai:shared",
                 "openai:token",
               ]);
@@ -225,6 +226,60 @@ describe("agent exec stored auth", () => {
       );
     },
   );
+
+  it("reads shared OAuth without persisting a temporary refresh owner", async () => {
+    await withOpenClawTestState(
+      { scenario: "minimal", env: { OPENAI_API_KEY: undefined } },
+      async (state) => {
+        writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+        const sharedStore = {
+          version: 1,
+          order: { openai: ["openai:oauth"] },
+          profiles: {
+            "openai:oauth": {
+              type: "oauth" as const,
+              provider: "openai",
+              access: "test-access",
+              refresh: "test-refresh",
+              expires: Date.now() + 3_600_000,
+            },
+          },
+        };
+        writePersistedAuthProfileStoreRaw(sharedStore);
+        const { runtime } = createRuntime();
+        let resolvedKey: string | undefined;
+
+        const result = await agentExecCommand("inspect", {}, runtime, {
+          runAgent: async () => {
+            expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
+            const store = ensureAuthProfileStore(undefined, {
+              externalCli: { mode: "none" },
+              syncExternalCli: false,
+            });
+            expect(store.profiles["openai:oauth"]).toEqual(sharedStore.profiles["openai:oauth"]);
+            expect(
+              resolvePersistedAuthProfileOwnerAgentDir({ profileId: "openai:oauth" }),
+            ).toBeUndefined();
+            const { resolveApiKeyForProfile, saveAuthProfileStore } =
+              await import("../agents/auth-profiles.js");
+            resolvedKey = (
+              await resolveApiKeyForProfile({ store, profileId: "openai:oauth", cfg: {} })
+            )?.apiKey;
+            saveAuthProfileStore(store);
+            return successResult();
+          },
+        });
+
+        expect(result.envelope.error).toBeUndefined();
+        expect(resolvedKey).toBe("test-access");
+        expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedStore);
+        expect(readPersistedAuthProfileStoreRaw(state.agentDir())).toEqual({
+          version: 1,
+          profiles: {},
+        });
+      },
+    );
+  });
 
   it("rejects an unreadable original shared store before entering temporary exec", async () => {
     await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
