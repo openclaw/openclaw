@@ -35,7 +35,7 @@ suite.define(() => {
     }
   });
 
-  it("shows advertised cloud machines after selecting a profile", async () => {
+  it("shows advertised cloud machines when hovering a profile", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -67,9 +67,7 @@ suite.define(() => {
       await where.click();
       const picker = page.locator("wa-popover.new-session-page__where-popover");
       const profile = picker.locator('[data-value="cloud:aws"]');
-      await profile.click();
-      await profile.waitFor({ state: "hidden" });
-      await where.click();
+      await profile.hover();
       await picker.locator('[data-value="machine:fast"]').waitFor();
     } finally {
       await context.close();
@@ -138,8 +136,7 @@ suite.define(() => {
       await where.click();
 
       const profile = page.locator('[data-value="cloud:aws"]');
-      await profile.click();
-      await where.click();
+      await profile.hover();
       await page.locator('[data-value="machine:fast"]').click();
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("keep this task on the cloud");
@@ -283,16 +280,14 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(requests);
       await expect.poll(() => runner.isDisabled()).toBe(true);
+      await runner.hover();
       await expect
-        .poll(() => runner.locator(".session-menu__description").textContent())
-        .toBe(" · No worker slots are available. Wait for a slot or pick another device.");
-      await expect
-        .poll(() => tooltipTitleText(runner))
-        .toBe("No worker slots are available. Wait for a slot or pick another device.");
-      // A disabled row keeps a muted meter with no utilization claim.
-      await expect
-        .poll(() => runner.locator(".capacity-meter-pips").getAttribute("aria-label"))
-        .toBe("Slot utilization unavailable");
+        .poll(() => runner.locator("..").locator('[slot="content"]').textContent())
+        .toContain("No worker slots are available. Wait for a slot or pick another device.");
+      expect(await runner.locator(".session-menu__description").count()).toBe(0);
+      expect(
+        await runner.locator("..").locator(".new-session-page__capacity-caption").count(),
+      ).toBe(0);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

@@ -9,7 +9,7 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
-import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
+import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
@@ -66,28 +66,13 @@ type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   toggleSection(sectionId: string): void;
 };
 
-type SidebarNativeGateway = {
-  id: string;
-  name: string;
-  isPrimary: boolean;
-  health: "ok" | "error" | "unknown";
-};
-
-type SidebarNativeGatewaysSnapshot = {
-  gateways: SidebarNativeGateway[];
-  currentId: string;
-};
-
 // Display-only: read the injected global directly; the capability module must stay
-// chat-chunk-owned to protect the QA smoke startup budget.
-function readSidebarNativeGateway(): SidebarNativeGateway | null {
-  if (!isNativeWebChromeHost()) {
-    return null;
-  }
-  const snapshot = (
-    window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewaysSnapshot }
-  )["__OPENCLAW_NATIVE_GATEWAYS__"];
-  if (!snapshot || !Array.isArray(snapshot.gateways) || snapshot.gateways.length < 2) {
+// lazy to protect the startup budget.
+function readSidebarNativeGateway(): NativeGateway | null {
+  const snapshot = (window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: NativeGatewaysSnapshot })[
+    "__OPENCLAW_NATIVE_GATEWAYS__"
+  ];
+  if (!snapshot || !Array.isArray(snapshot.gateways)) {
     return null;
   }
   return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
@@ -406,12 +391,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     name: selfLabel,
     watchedSessions: [],
   };
-  const gateway = host.offline ? null : readSidebarNativeGateway();
+  const gateway = readSidebarNativeGateway();
   const buildSubtitle = formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
-  // Health is visual-only here by budget decision; the header picker owns health accessibility.
-  const gatewayPrimaryTag = gateway?.isPrimary
-    ? t("chat.sessionHeader.gatewayPicker.primaryTag")
-    : null;
+  const gatewayPrimaryTag = gateway?.isPrimary ? t("nav.gateway.primaryTag") : null;
   const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
   const identityDetail = host.offline
     ? t("connection.reconnecting")
@@ -432,6 +414,21 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
         <span class="sidebar-identity-card__text">
           <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
+          ${
+            gateway
+              ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
+                  ${
+                    host.offline
+                      ? t("connection.reconnecting")
+                      : html`
+                          <span class="sidebar-gateway-health" data-health=${gateway.health}></span>
+                          <span class="sidebar-gateway-name">${gateway.name}</span>
+                          ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
+                        `
+                  }
+                </span>`
+              : nothing
+          }
         </span>
       </button>
       ${

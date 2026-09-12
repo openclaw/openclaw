@@ -6,6 +6,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { LaunchctlResult } from "../daemon/launchd-exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -936,6 +937,39 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect(mocks.install).toHaveBeenCalledTimes(1);
     });
   });
+
+  it.each(["ordinary", "post-commit"] as const)(
+    "stops service repair after a %s token persistence error",
+    async (kind) => {
+      await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+        setupGatewayTokenRepairScenario();
+        const cfg: OpenClawConfig = { gateway: {} };
+        const runtime = makeDoctorIo();
+        const cause = new Error("token persistence failed");
+        const failure =
+          kind === "post-commit"
+            ? new ConfigWritePostCommitError({
+                configPath: "/tmp/openclaw.json",
+                rollbackStatus: "not-restored",
+                cause,
+              })
+            : cause;
+        mocks.replaceConfigFile.mockRejectedValueOnce(failure);
+
+        const repair = maybeRepairGatewayServiceConfig(cfg, "local", runtime, makeDoctorPrompts());
+        if (kind === "post-commit") {
+          await expect(repair).rejects.toBe(failure);
+        } else {
+          await expect(repair).resolves.toBe(cfg);
+          expect(runtime.error).toHaveBeenCalledWith(
+            expect.stringContaining("Failed to persist gateway.auth.token before service repair:"),
+          );
+        }
+        expect(mocks.stage).not.toHaveBeenCalled();
+        expect(mocks.install).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("does not flag entrypoint mismatch when symlink and realpath match", async () => {
     setupGatewayEntrypointRepairScenario({

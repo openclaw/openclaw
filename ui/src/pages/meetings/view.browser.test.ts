@@ -100,6 +100,19 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     expect(document.querySelector<HTMLDetailsElement>(".transcripts-filters details")!.open).toBe(
       false,
     );
+    const overview = "A readable summary of the decisions and follow-up work. ".repeat(5);
+    props.search = "";
+    props.list.sessions[0] = { ...meetingEntry, overview };
+    render(renderTranscripts(props), container);
+    expect(container.querySelector(".transcripts-reader")).toBeNull();
+    const library = container.querySelector<HTMLElement>(".transcripts-library")!;
+    expect(library.getBoundingClientRect().width).toBeGreaterThan(600);
+    const preview = container.querySelector<HTMLElement>(".meetings-row__overview")!;
+    expect(preview.textContent).toBe(overview);
+    expect(preview.getBoundingClientRect().height).toBeGreaterThan(
+      Number.parseFloat(getComputedStyle(preview).lineHeight),
+    );
+    expect(preview.scrollWidth).toBeLessThanOrEqual(preview.clientWidth + 1);
   });
 
   it("renders stored Markdown notes with bounded paragraph spacing", async () => {

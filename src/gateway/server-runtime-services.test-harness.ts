@@ -168,6 +168,7 @@ export function createMaintenanceHandles() {
     dedupeCleanup: setInterval(() => undefined, 60_000),
     startMediaCleanup: vi.fn(async () => undefined),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
+    stopSessionColdStorageMaintenance: vi.fn(async () => {}),
     worktreeCleanup: setInterval(() => undefined, 60_000),
     skillUsageCleanup: vi.fn(),
   };

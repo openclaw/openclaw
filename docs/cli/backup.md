@@ -138,6 +138,14 @@ Snapshot creation verifies the live database before reading it, uses SQLite's on
 
 Do not copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a portability artifact. Copy only completed snapshot directories.
 
+When a database contains cold transcripts, snapshot creation embeds each
+referenced compressed archive in its private database copy after checking
+the file's size and SHA-256, even if automatic archival is disabled.
+Full archives and Git backups use the same cold payload capture. A restored
+database needs no original cold directory;
+missing or corrupt source archives fail backup creation. See
+[Cold transcript backups](/install/backups#cold-transcript-backups).
+
 SQLite snapshots can contain auth profiles, session state, plugin state, and other sensitive records. Protect repositories with the same permissions, encryption, retention policy, and destination restrictions as the live OpenClaw state directory.
 
 ### Verify and restore

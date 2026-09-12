@@ -181,6 +181,13 @@ personal sign-in route continue to use the shared owner profile.
 Open windows for saved Gateway profiles follow sign-in route changes after a
 reconnect. An unchanged route keeps the current dashboard and its navigation.
 
+The account card at the bottom-left of the dashboard shows your name and the
+current Gateway, including its health and primary status. While disconnected,
+it shows **Reconnecting…**. Open the card's **Gateway** section to switch Gateways,
+Command-click or Control-click a Gateway to open it in another window, or choose
+**Gateway settings…**. **Set as primary…** appears when the current Gateway can
+be promoted. These controls are available even with only one saved Gateway.
+
 Opening the embedded dashboard at its default Chat landing restores the last
 page you visited, such as **Usage**, for that Gateway origin. Explicit session
 links and navigation requests take precedence over the remembered page, and

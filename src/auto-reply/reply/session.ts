@@ -236,6 +236,7 @@ type InitSessionStateAttemptContext = {
   conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
   isSystemEvent: boolean;
   retargetedSession: boolean;
+  sessionKey: string;
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
@@ -355,6 +356,16 @@ function resolveInitSessionStateAttemptContext(
     conversationBindingContext,
     isSystemEvent,
     retargetedSession: sessionCtxForState !== ctx,
+    sessionKey: canonicalizeMainSessionAlias({
+      cfg,
+      agentId,
+      sessionKey: resolveSessionKey(
+        cfg.session?.scope ?? "per-sender",
+        sessionCtxForState,
+        normalizeMainKey(cfg.session?.mainKey),
+        agentId,
+      ),
+    }),
     sessionCtxForState,
     storePath: resolveSessionStorePathForScope({
       agentId,
@@ -377,16 +388,7 @@ export function resolveReplySessionPreprocessingState(
   const attemptContext = resolveInitSessionStateAttemptContext(params, {
     touchConversationBinding: false,
   });
-  const sessionKey = canonicalizeMainSessionAlias({
-    cfg: params.cfg,
-    agentId: attemptContext.agentId,
-    sessionKey: resolveSessionKey(
-      params.cfg.session?.scope ?? "per-sender",
-      attemptContext.sessionCtxForState,
-      normalizeMainKey(params.cfg.session?.mainKey),
-      attemptContext.agentId,
-    ),
-  });
+  const { sessionKey } = attemptContext;
   const sessionEntry = loadReplySessionInitializationSnapshot({
     agentId: attemptContext.agentId,
     storePath: attemptContext.storePath,
@@ -479,6 +481,39 @@ async function initSessionStateAttempt(
   staleSnapshotRetried: boolean,
 ): Promise<SessionInitResult> {
   const attemptContext = resolveInitSessionStateAttemptContext(params);
+  const parentSessionKey = normalizeOptionalString(params.ctx.ParentSessionKey);
+  const snapshot = loadReplySessionInitializationSnapshot({
+    agentId: attemptContext.agentId,
+    storePath: attemptContext.storePath,
+    sessionKey: attemptContext.sessionKey,
+    relatedSessionKeys: parentSessionKey ? [parentSessionKey] : [],
+  });
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  const restoreTargets = [
+    { sessionId: snapshot.currentEntry?.sessionId, sessionKey: attemptContext.sessionKey },
+    ...(parentSessionKey
+      ? [
+          {
+            sessionId: snapshot.readEntry(parentSessionKey)?.sessionId,
+            sessionKey: parentSessionKey,
+          },
+        ]
+      : []),
+  ];
+  // Restore before the writer lane: reset hooks and parent forks read synchronously inside it.
+  for (const target of restoreTargets) {
+    if (target.sessionId) {
+      params.signal?.throwIfAborted();
+      await restoreSessionColdTranscript({
+        ...target,
+        sessionId: target.sessionId,
+        agentId: attemptContext.agentId,
+        storePath: attemptContext.storePath,
+      });
+    }
+  }
+  params.signal?.throwIfAborted();
   // Guarded revision checks only serialize correctly when the snapshot and
   // commit share the same writer lane.
   const attempt = await runExclusiveSessionStoreWrite(
@@ -586,6 +621,7 @@ async function initSessionStateAttemptLocked(
     conversationBindingContext,
     isSystemEvent,
     retargetedSession,
+    sessionKey,
     sessionCtxForState,
     storePath,
   } = attemptContext;
@@ -624,12 +660,6 @@ async function initSessionStateAttemptLocked(
     resetTriggered = true;
   }
 
-  // Canonicalize so the written key matches what all read paths produce.
-  const sessionKey: string = canonicalizeMainSessionAlias({
-    cfg,
-    agentId,
-    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId),
-  });
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
   // mtime granularity may miss rapid writes) can cause incorrect sessionId

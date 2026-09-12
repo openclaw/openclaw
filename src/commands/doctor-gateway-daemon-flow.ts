@@ -57,6 +57,33 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 
+const GATEWAY_RESTART_HEALTH_ATTEMPTS = 20;
+const GATEWAY_RESTART_HEALTH_DELAY_MS = 500;
+
+function isTransientGatewayUnreachableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bECONNREFUSED\b|couldn't connect|connection refused/i.test(message);
+}
+
+async function waitForGatewayHealthAfterRestart(runtime: RuntimeEnv): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < GATEWAY_RESTART_HEALTH_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await sleep(GATEWAY_RESTART_HEALTH_DELAY_MS);
+    }
+    try {
+      await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, runtime);
+      return;
+    } catch (err) {
+      lastError = err;
+      if (err instanceof ExitError || !isTransientGatewayUnreachableError(err)) {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
 type LaunchAgentBootstrapDoctorOutcome =
   | { status: "skipped" }
   | { status: "not-loaded" }
@@ -511,9 +538,8 @@ export async function maybeRepairGatewayDaemon(params: {
         note(restartStatus.message, "Gateway");
         return;
       }
-      await sleep(1500);
       try {
-        await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, params.runtime);
+        await waitForGatewayHealthAfterRestart(params.runtime);
       } catch (err) {
         // A trapped ExitError means healthCommand already printed its own
         // reachable-gateway diagnostic; re-formatting it would only add noise.

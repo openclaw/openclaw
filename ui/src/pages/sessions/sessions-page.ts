@@ -216,6 +216,7 @@ class SessionsPage extends OpenClawLightDomElement {
         results,
         indexing = false,
         truncated = false,
+        archivedTranscriptsExcluded = 0,
       } = await searchVisibleSessionTranscripts({
         client,
         query,
@@ -226,7 +227,7 @@ class SessionsPage extends OpenClawLightDomElement {
         resolveAgentId: (sessionKey) =>
           parseAgentSessionKey(sessionKey)?.agentId ?? this.sessionAgentId(sessionKey, context),
       });
-      return { results, indexing, truncated };
+      return { results, indexing, truncated, archivedTranscriptsExcluded };
     },
   });
 

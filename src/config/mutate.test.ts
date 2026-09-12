@@ -1450,7 +1450,21 @@ describe("config mutate helpers", () => {
         await write;
         expect(JSON.parse(await fs.readFile(leafPath, "utf-8"))).toEqual(nextConfig.plugins);
       } else {
-        await expect(write).rejects.toThrow(ConfigMutationConflictError);
+        if (changeAt === "reread") {
+          await expect(write).rejects.toBeInstanceOf(Error);
+          await expect(write).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+          await expect(write).rejects.toMatchObject({
+            name: "ConfigWritePostCommitError",
+            configPath: leafPath,
+            rollbackStatus: "restored",
+            cause: expect.objectContaining({
+              name: "ConfigMutationConflictError",
+              retryable: true,
+            }),
+          });
+        } else {
+          await expect(write).rejects.toThrow(ConfigMutationConflictError);
+        }
         await expect(fs.readFile(leafPath, "utf-8")).resolves.toBe(leafRaw);
       }
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
@@ -2591,26 +2605,37 @@ describe("config mutate helpers", () => {
       }
     };
 
-    await expect(
-      replaceConfigFile({
-        baseHash: snapshot.hash,
-        snapshot,
-        writeOptions: {
-          expectedConfigPath: snapshot.path,
-          assertConfigPathForWrite,
-          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-        },
-        nextConfig: {
-          plugins: {
-            entries: {
-              demo: { enabled: true },
-            },
+    const operation = replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions: {
+        expectedConfigPath: snapshot.path,
+        assertConfigPathForWrite,
+        includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+      },
+      nextConfig: {
+        plugins: {
+          entries: {
+            demo: { enabled: true },
           },
         },
+      },
+    });
+    await expect(operation).rejects.toBeInstanceOf(Error);
+    await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+    await expect(operation).rejects.toMatchObject({
+      name: "ConfigWritePostCommitError",
+      configPath: pluginsPath,
+      rollbackStatus: "restored",
+      cause: expect.objectContaining({
+        name: "ConfigMutationConflictError",
+        message: "config path changed since last load",
       }),
-    ).rejects.toThrow("config path changed since last load");
+    });
 
     await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
   });
 
   it.each(["active path", "refreshed snapshot path"] as const)(
@@ -2657,23 +2682,95 @@ describe("config mutate helpers", () => {
         };
       });
 
-      await expect(
-        replaceConfigFile({
-          baseHash: snapshot.hash,
-          snapshot,
-          io: { ...ioMocks, env: {} },
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            assertConfigPathForWrite,
-            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-          },
-          nextConfig,
+      const operation = replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        io: { ...ioMocks, env: {} },
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig,
+      });
+      await expect(operation).rejects.toBeInstanceOf(Error);
+      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(operation).rejects.toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath: pluginsPath,
+        rollbackStatus: "restored",
+        cause: expect.objectContaining({
+          name: "ConfigMutationConflictError",
+          message: "config path changed since last load",
         }),
-      ).rejects.toThrow("config path changed since last load");
+      });
 
       await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
     },
   );
+
+  it("does not retry a committed include write after its post-write read conflicts", async () => {
+    const home = await suiteRootTracker.make("include-post-write-retry");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const concurrentRootRaw = `${JSON.stringify(
+      {
+        plugins: { $include: "./config/plugins.json5" },
+        logging: { level: "debug" },
+      },
+      null,
+      2,
+    )}\n`;
+    const env = { ...process.env };
+    const io = createActualConfigIO({
+      configPath,
+      env,
+      observe: false,
+      pluginValidation: "skip",
+    });
+    let savedRootEdit = false;
+    const readConfigFileSnapshotForWrite: ConfigIOReadForWrite = async (options) => {
+      if (!savedRootEdit && (await fs.readFile(pluginsPath, "utf-8")) !== initialPluginsRaw) {
+        await fs.writeFile(configPath, concurrentRootRaw, "utf-8");
+        savedRootEdit = true;
+      }
+      return await io.readConfigFileSnapshotForWrite(options);
+    };
+    const transform = vi.fn((config: OpenClawConfig) => ({
+      nextConfig: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: { ...config.plugins?.entries, demo: { enabled: true } },
+        },
+      },
+    }));
+
+    const operation = transformConfigFileWithRetry({
+      io: { ...io, env, readConfigFileSnapshotForWrite },
+      writeOptions: { observe: false, skipPluginValidation: true },
+      transform,
+    });
+    await expect(operation).rejects.toBeInstanceOf(Error);
+    await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+    await expect(operation).rejects.toMatchObject({
+      name: "ConfigWritePostCommitError",
+      configPath: pluginsPath,
+      rollbackStatus: "restored",
+      cause: expect.objectContaining({
+        name: "ConfigMutationConflictError",
+        message: "config changed while preparing include write",
+      }),
+    });
+    expect(transform).toHaveBeenCalledOnce();
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRootRaw);
+    await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+    await expect(fs.stat(`${pluginsPath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it.runIf(process.platform !== "win32")(
     "does not create a missing include through a parent symlink swapped during preflight",
@@ -3007,31 +3104,41 @@ describe("config mutate helpers", () => {
         writeOptions: { expectedConfigPath: configPath },
       };
     });
+    const refreshError = new Error("lost include secret");
 
     try {
       delete env[envKey];
       setRuntimeConfigSnapshotRefreshHandler({
         preflight: () => true,
         refresh: () => {
-          throw new Error("lost include secret");
+          throw refreshError;
         },
       });
 
-      await expect(
-        replaceConfigFile({
-          baseHash: snapshot.hash,
-          snapshot,
-          io: { ...ioMocks, env },
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            assertConfigPathForWrite: allowConfigPathWrite,
-            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-          },
-          nextConfig,
-        }),
-      ).rejects.toThrow(/runtime snapshot refresh failed: lost include secret/);
+      const operation = replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        io: { ...ioMocks, env },
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig,
+      });
+      await expect(operation).rejects.toBeInstanceOf(Error);
+      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(operation).rejects.toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath: pluginsPath,
+        rollbackStatus: "restored",
+        message: expect.stringMatching(/runtime snapshot refresh failed: lost include secret/),
+        cause: expect.objectContaining({ cause: refreshError }),
+      });
 
       await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
       expect(env[envKey]).toBeUndefined();
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
@@ -3042,7 +3149,8 @@ describe("config mutate helpers", () => {
   it("does not overwrite concurrent include edits during failed refresh rollback", async () => {
     const home = await suiteRootTracker.make("include-runtime-refresh-concurrent");
     const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
     const concurrentPluginsRaw = `${JSON.stringify(
       { entries: { concurrent: { enabled: true } } },
       null,
@@ -3070,30 +3178,40 @@ describe("config mutate helpers", () => {
       }),
       writeOptions: { expectedConfigPath: configPath },
     });
+    const refreshError = new Error("lost include secret");
 
     try {
       setRuntimeConfigSnapshotRefreshHandler({
         preflight: () => true,
         refresh: async () => {
           await fs.writeFile(pluginsPath, concurrentPluginsRaw, "utf-8");
-          throw new Error("lost include secret");
+          throw refreshError;
         },
       });
 
-      await expect(
-        replaceConfigFile({
-          baseHash: snapshot.hash,
-          snapshot,
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            assertConfigPathForWrite: allowConfigPathWrite,
-            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-          },
-          nextConfig,
-        }),
-      ).rejects.toThrow(/runtime snapshot refresh failed: lost include secret/);
+      const operation = replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig,
+      });
+      await expect(operation).rejects.toBeInstanceOf(Error);
+      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(operation).rejects.toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath: pluginsPath,
+        rollbackStatus: "not-restored",
+        message: expect.stringMatching(/runtime snapshot refresh failed: lost include secret/),
+        cause: expect.objectContaining({ cause: refreshError }),
+      });
 
       await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(concurrentPluginsRaw);
+      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }

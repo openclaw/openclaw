@@ -71,6 +71,10 @@ available, preserving bundled trust. External path installs keep their existing
 classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, and other side services are suppressed in this canary.
 
+Candidate build and rehearsal processes resolve source-linked plugin SDKs from
+the candidate root, even when the serving source launcher passed its own checkout
+root. This keeps candidate assets and validation independent of the old checkout.
+
 Snapshot preparation budgets time for the SQLite database and journal bytes,
 including copying and verification passes, with a five-minute startup floor.
 It uses the larger of that allowance and the configured per-step timeout.

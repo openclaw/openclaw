@@ -15,6 +15,24 @@ title: "Database layout"
 
 The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Cold transcript archives
+
+The per-agent `session_transcript_cold_archives` table records cold transcript
+locations alongside `session_windows` and `transcript_events`. Each row belongs
+to a retained session window and identifies its generation, archive name, hash,
+counts, and sizes. The payload lives in an immutable compressed JSONL file, or
+in the row's blob when embedded by a supported backup.
+
+The default archive directory is
+`~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
+`<sha256>.jsonl.zst`. A database in a directory named `agent` uses its sibling
+`sessions/cold/` directory; other store layouts use `cold/` beside the database.
+These files contain authoritative history. See
+[cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
+for retention and restoration, and
+[agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage)
+for the schema and update contract.
+
 ### Plugin state listing index
 
 Plugin keyed stores use the shared `plugin_state_entries` table. Its listing
@@ -296,3 +314,36 @@ Both tables are additive, lazily ensured on first use, and leave the numeric dat
 Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.git`, next to the shared database. These are bare repositories containing complete file manifests, cumulative changed-file blobs, and publication snapshots; they are not working checkouts or a backup of upstream Git history. Restoring an entire checkout still requires access to the pinned upstream commit. Back up these artifacts together with the shared and per-agent databases.
 
 Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
+
+## Sandbox runtime reservations
+
+The existing `sandbox_registry_entries` table owns runtime identity and cleanup.
+Backends that opt into reservation persist a generation before provider allocation.
+The entry payload retains the original `workspaceDir` and records `runtimeState`
+as `pending`, `ready`, `removing`, or `removing-pending`;
+no schema version, table, or column is added. Older entries are adopted on first
+use, and backends without reservation keep their existing registry behavior.
+Factories receive the reserved workspace on replay and shared-scope reuse, rather
+than the latest caller's local workspace. Provider execution and repository-scoped
+cleanup therefore use the same original owner.
+
+Reservation and publication use synchronous SQLite transactions. Provider work
+runs outside the transaction under a per-runtime file lock beside the shared
+database. Lock contenders wait up to 15 minutes, covering the backend's warmup
+and inspection budgets. Concurrent creators reuse the same generation. Failed
+provisioning retains its pending ID for replay after restart. Recreate and prune
+record removal intent before waiting for provisioning, then remove the provider runtime before
+deleting the row. Cleanup failures retain that intent for retry; stale handles
+cannot publish readiness or start new operations after removal begins.
+
+`removing-pending` preserves the fact that provisioning never published readiness.
+If ordinary cleanup fails, the Crabbox adapter can replay that same fixed ID from
+its original workspace and then release it. This also covers a failure before
+Crabbox recorded the request: recovery may allocate and immediately release the
+reserved runtime. Unknown outcomes retain the recovery row; an absent local claim
+or an error message is not proof that provider resources are absent.
+
+The reservation is canonical recovery state. Do not delete it to clear a provider
+error. Before downgrading to a version without reservation support, disable the
+backend and reconcile its pending leases using the current version. Older readers
+can open the database but do not implement this lifecycle.

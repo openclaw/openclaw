@@ -738,7 +738,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(blockedCodexProviderPlan.blockedModelIdentities.length > 0
       ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
       : {}),
-    ...(openAICodexAuthProfileIdMap?.size ? { openAICodexAuthProfileIdMap } : {}),
+    ...(openAICodexAuthProfileIdMap ? { openAICodexAuthProfileIdMap } : {}),
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     ...(pluginMetadataSnapshotState.current
       ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }

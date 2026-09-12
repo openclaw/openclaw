@@ -382,7 +382,7 @@ suite.define(() => {
       await waitForControlUiSettingsTakeover(page);
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
-      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
         .poll(() =>
           page.evaluate(() => {
@@ -501,11 +501,14 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
       const notice = page.locator('.connection-action-block[role="status"]');
-      await notice.waitFor();
+      await expect.poll(() => credential.getAttribute("type")).toBe("password");
+      expect(await notice.count()).toBe(0);
+      for (const input of [gatewayUrl, credential, sessionKey]) {
+        expect(await input.isEditable()).toBe(true);
+      }
       expect(await credential.getAttribute("type")).toBe("password");
       await gateway.waitForRequest("connect", { after: connections });
       await gateway.resolveDeferred("connect");
-      await notice.waitFor({ state: "hidden" });
       await gateway.waitForRequest("system.info", { after: reads });
       expect(await credential.getAttribute("type")).toBe("password");
 

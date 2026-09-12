@@ -191,7 +191,7 @@ export async function registerChannelsCli(
 
   channels
     .command("status")
-    .description("Show gateway channel status (use status --deep for local)")
+    .description("Show channel status (use openclaw status --deep for a full connection check)")
     .option("--channel <name>", `Only show one channel (${formatCliChannelOptions(["all"])})`)
     .option("--probe", "Probe channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms", "10000")

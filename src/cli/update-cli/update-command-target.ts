@@ -33,6 +33,7 @@ import {
   readPackageVersion,
   resolveGlobalManager,
   resolveTargetVersion,
+  UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -53,7 +54,7 @@ import {
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
-import { reportPreMutationUpdateFailure } from "./update-command-terminal.js";
+import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 
 export async function resolveUpdateCommandTarget(
   opts: UpdateCommandOptions,
@@ -85,7 +86,7 @@ export async function resolveUpdateCommandTarget(
     if (!opts.run && !opts.dryRun) {
       throw new UnreportedUpdateAdmissionOutcome(report);
     }
-    return await reportPreMutationUpdateFailure(report);
+    return await reportPreMutationUpdateResult(report);
   };
 
   if (requestedChannel === "extended-stable" && installKind === "git") {
@@ -211,6 +212,22 @@ export async function resolveUpdateCommandTarget(
         root,
         installKind,
         timeoutMs: updateStepTimeoutMs,
+      }).catch(async (error: unknown) => {
+        if (!(error instanceof UpdatePreMutationError)) {
+          throw error;
+        }
+        const report = {
+          root,
+          installKind,
+          reason: error.reason,
+          message: error.message,
+          opts,
+          controlPlaneUpdateSentinelMeta,
+        };
+        if (!opts.run) {
+          throw new UnreportedUpdateAdmissionOutcome(report, { exitCode: 0 });
+        }
+        return await reportPreMutationUpdateResult({ ...report, status: "skipped" });
       });
       packageInstallTarget = await resolveGlobalInstallTarget({
         manager,

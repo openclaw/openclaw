@@ -126,7 +126,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 <Accordion title="Gateway field details">
 
 - `mode`: `local` (run gateway) or `remote` (connect to remote gateway). Gateway refuses to start unless `local`.
-- `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
+- `port`: local Gateway bind port, multiplexing WS + HTTP. It does not select the macOS SSH tunnel port. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `publicOrigin`: optional externally reachable HTTPS origin of the Gateway,
   without a path, query, or credentials. HTTP is accepted only for literal
   loopback hosts (`localhost`, `127.0.0.1`, or `[::1]`) during local development.
@@ -187,7 +187,8 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows. Changes hot-apply to newly opened terminals; existing terminals keep running their original shell.
 - `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Changes hot-apply to existing detached sessions using their original disconnect time; expired sessions close immediately, while attached terminals keep running. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
-- `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
+- `remote.url`: remote client endpoint. In macOS SSH mode, its loopback port selects the local tunnel port independently of `gateway.port`.
+- `remote.remotePort`: Gateway port on the remote SSH host. The macOS tunnel falls back to the port in `remote.url`, then `18789`; set this explicitly when the tunnel and destination ports differ.
 - `remote.tlsFingerprint`: expected SHA-256 certificate fingerprint for a remote `wss://` Gateway. The macOS app applies it to both operator/control and companion-node connections. Without an explicit value, macOS records a first-use pin only after normal system trust succeeds.
 - `remote.sshHostKeyPolicy`: macOS SSH tunnel host-key policy. `strict` is the default and requires an already trusted key. `openssh` is an explicit opt-in to the effective OpenSSH configuration for managed aliases; review matching user and system SSH settings before using it. The macOS app and `configure-remote` reset this policy to `strict` when changing targets unless explicitly opted in again.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.

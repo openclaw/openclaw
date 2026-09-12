@@ -121,7 +121,8 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
   buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
 }));
 

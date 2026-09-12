@@ -5,22 +5,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const nativeGateways = vi.hoisted(() => ({ current: null as NativeGatewaysCapability | null }));
-
 // Keep this complete mock in the dedicated unit-mock-registry project.
 vi.mock("./chat-pane.ts", () => ({}));
-vi.mock("../../app/native-gateways.runtime.ts", () => ({
-  nativeGatewaysCapability: () => nativeGateways.current,
-}));
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import type {
-  NativeGatewaysCapability,
-  NativeGatewaysSnapshot,
-} from "../../app/native-gateways.runtime.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
@@ -60,8 +51,6 @@ type RenderedPane = HTMLElement & {
   paneTitle: string;
   narrow: boolean;
   mergedChrome: boolean;
-  nativeGateways: NativeGatewaysCapability | null;
-  gatewaysSnapshot: NativeGatewaysSnapshot | null;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
@@ -238,7 +227,6 @@ function stubMatchMedia(matches: boolean) {
 
 describe("chat page split layout host", () => {
   beforeEach(() => {
-    nativeGateways.current = null;
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     localStorage.clear();
@@ -282,35 +270,6 @@ describe("chat page split layout host", () => {
     );
     expect(page.querySelector("resizable-divider")).toBeNull();
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
-  });
-
-  it("passes the chat-owned gateway capability only to the rightmost pane", async () => {
-    const gatewaySnapshot: NativeGatewaysSnapshot = {
-      gateways: [],
-      currentId: "primary",
-    };
-    nativeGateways.current = {
-      snapshot: gatewaySnapshot,
-      subscribe: () => () => undefined,
-      select: vi.fn(),
-      openWindow: vi.fn(),
-      setPrimary: vi.fn(),
-      reconnect: vi.fn(),
-      reconnectCancel: vi.fn(),
-      openSettings: vi.fn(),
-    };
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
-    await page.updateComplete;
-
-    const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-    expect(panes).toHaveLength(2);
-    expect(panes[0]?.nativeGateways).toBeNull();
-    expect(panes[0]?.gatewaysSnapshot).toBeNull();
-    expect(panes[1]?.nativeGateways).toBe(nativeGateways.current);
-    expect(panes[1]?.gatewaysSnapshot).toBe(gatewaySnapshot);
   });
 
   it("passes merged chrome from the shared mobile-nav query", async () => {

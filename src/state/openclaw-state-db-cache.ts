@@ -38,11 +38,13 @@ import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-ve
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 type StateDatabaseHandle = Pick<OpenClawStateDatabase, "db" | "path"> &
-  Partial<Pick<OpenClawStateDatabase, "walMaintenance">>;
+  Partial<Pick<OpenClawStateDatabase, "walMaintenance">> & {
+    afterClose?: () => undefined;
+  };
 type OpenClawStateDatabaseCloseOptions = NonNullable<
   Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0]
 > & { busyTimeoutMs?: number };
-// Failed native closes stay disposal-owned, never eligible for a successful cache hit.
+// Failed native closes and dependent cleanup stay disposal-owned, never cache hits.
 const retainedDatabaseHandles = new Map<DatabaseSync, StateDatabaseHandle>();
 let unregisterRetainedExitClose: (() => void) | undefined;
 // Statements retain their native database; key by the plain lifecycle owner so
@@ -112,7 +114,16 @@ function closeOpenClawStateDatabaseHandle(
   } catch (error) {
     errors.push(error);
   }
-  if (database.db.isOpen) {
+  let cleanupPending = false;
+  if (!database.db.isOpen) {
+    try {
+      database.afterClose?.();
+    } catch (error) {
+      errors.push(error);
+      cleanupPending = true;
+    }
+  }
+  if (database.db.isOpen || cleanupPending) {
     retainedDatabaseHandles.set(database.db, database);
     unregisterRetainedExitClose ??= registerSqliteCacheExitClose(closeOpenClawStateDatabase);
   } else {
