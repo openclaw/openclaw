@@ -77,6 +77,11 @@ Candidate build and rehearsal processes resolve source-linked plugin SDKs from
 the candidate root, even when the serving source launcher passed its own checkout
 root. This keeps candidate assets and validation independent of the old checkout.
 
+Warning-severity Doctor findings do not block candidate or post-plugin readiness.
+The updater retains them in the run report shown by `openclaw update status`,
+including when an intentional open channel policy requires no configuration change.
+Error findings and failed check execution still refuse the update.
+
 The candidate answers the updater's native service capability probe before
 loading configuration or initializing debug capture. Probing capability does not
 open or migrate shared state, so the old Gateway can keep serving while its

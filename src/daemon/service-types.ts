@@ -98,8 +98,24 @@ export type GatewayServiceUnitInspection = {
   assertReadCurrent?: () => void;
 };
 
+/** Operation-local transport evidence, never serialized or a mutation grant. */
+export type SystemdServiceReadBinding = {
+  readonly unit: string;
+  readonly managerUid: number;
+  readonly destination: string;
+  verify: () => void;
+  query: (
+    args: string[],
+    signatures: string[],
+    deadline: number,
+    inspection?: GatewayServiceUnitInspection,
+  ) => Promise<unknown[] | null>;
+  close: () => Promise<void>;
+};
+
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
+  systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
   requireEffective?: boolean;
   /** Report failed effective inspection even when a read-only caller accepts the local definition. */

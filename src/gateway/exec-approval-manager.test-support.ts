@@ -3,10 +3,8 @@ import path from "node:path";
 import type { TestContext } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import type { ExecApprovalManagerOptions } from "./exec-approval-manager.types.js";
 

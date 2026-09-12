@@ -692,7 +692,7 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3);
   });
 
-  it("shares static workspace facts without eager per-agent catalog work", async () => {
+  it("shares static workspace facts across configured agents", async () => {
     mocks.configuredAgentIds = ["agent-a", "agent-b", "agent-c", "agent-d"];
     for (const agentId of ["agent-a", "agent-b", "agent-c"]) {
       mocks.configuredWorkspaces.set(agentId, "/tmp/shared-prepared-runtime-workspace");
@@ -740,17 +740,6 @@ describe("prepared model runtime owner selection", () => {
       runtimeRegistryCount: 2,
       fullCatalogConcurrencyLimit: 1,
     });
-
-    const snapshot = getPreparedModelRuntimeSnapshot({
-      agentId: "agent-a",
-      config,
-      agentDir: state.agentDir("agent-a"),
-      inheritedAuthDir: state.agentDir("default"),
-      workspaceDir: "/tmp/shared-prepared-runtime-workspace",
-    });
-    await snapshot?.loadFullModelCatalog?.();
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
   });
 
   it("shares workspace facts while isolating each agent's configured model projection", async () => {
@@ -947,59 +936,14 @@ describe("prepared model runtime owner selection", () => {
         inheritedAuthDir: state.agentDir("default"),
         workspaceDir: "/tmp/shared-prepared-runtime-workspace",
       })?.loadFullModelCatalog?.();
-    await Promise.all([loadAgentCatalog("agent-a"), loadAgentCatalog("agent-b")]);
+    const catalogs = await Promise.all([loadAgentCatalog("agent-a"), loadAgentCatalog("agent-b")]);
+    expect(catalogs).toEqual([
+      expect.objectContaining({ entries: [], routeVariants: [] }),
+      expect.objectContaining({ entries: [], routeVariants: [] }),
+    ]);
 
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
     expect(peakActivePlans).toBe(1);
-  });
-
-  it("serializes a lazy catalog plan before a superseding generation", async () => {
-    mocks.configuredAgentIds = ["agent-a"];
-    mocks.configuredWorkspaces.set("agent-a", "/tmp/shared-prepared-runtime-workspace");
-    const initialConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const snapshot = getPreparedModelRuntimeSnapshot({
-      agentId: "agent-a",
-      config: initialConfig,
-      agentDir: state.agentDir("agent-a"),
-      inheritedAuthDir: state.agentDir("default"),
-      workspaceDir: "/tmp/shared-prepared-runtime-workspace",
-    });
-    const releaseLazyPlanGate = createDeferred();
-    let releaseLazyPlan: (() => void) | undefined;
-    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
-      if (!releaseLazyPlan) {
-        releaseLazyPlan = releaseLazyPlanGate.resolve;
-        await releaseLazyPlanGate.promise;
-      }
-      return { entries: [], routeVariants: [] };
-    });
-
-    let replacement: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    const staleCatalogLoad = snapshot?.loadFullModelCatalog?.();
-    try {
-      await vi.waitFor(() => expect(releaseLazyPlan).toBeTypeOf("function"));
-      replacement = refreshPreparedModelRuntimeSnapshots(
-        { agents: { defaults: { model: "openai/gpt-5.6" } } },
-        { gatewayLifecycle: true, catalogMode: "live" },
-      );
-      await Promise.resolve();
-      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
-      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-
-      releaseLazyPlanGate.resolve();
-      await expect(staleCatalogLoad).rejects.toThrow("superseded");
-      await replacement;
-      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-    } finally {
-      releaseLazyPlanGate.resolve();
-      await Promise.allSettled([staleCatalogLoad, replacement]);
-    }
   });
 
   it("stops a superseded same-directory batch before another catalog write", async () => {

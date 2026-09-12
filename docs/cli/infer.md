@@ -124,7 +124,7 @@ openclaw infer model run --prompt "Summarize this changelog entry" --model opena
 openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
 openclaw infer model providers --agent <id> --json
-openclaw infer model inspect --model gpt-5.6-sol --json
+openclaw infer model inspect --model gpt-6-astra --json
 ```
 
 Use full `<provider/model>` refs with `--local` to smoke-test one provider without starting the Gateway or loading the agent tool surface:

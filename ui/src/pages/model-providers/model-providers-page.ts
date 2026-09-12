@@ -87,7 +87,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private coreCatalogGeneration = 0;
   private readonly core = new ModelProviderCoreLoader(this, {
     onStart: (reason) => {
-      this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
+      if (reason !== "publication") {
+        this.catalogDiscovery.reset();
+      }
       this.coreCatalogGeneration = this.catalogDiscovery.generation;
       this.supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
@@ -97,21 +99,14 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       }
     },
     onComplete: ({ client, data }) => {
-      const current = this.data;
-      // Pickers remain usable during core loading, so their newer catalog owns the view.
-      this.supplemental.adoptCoreData(
-        client,
-        current && this.catalogDiscovery.generation !== this.coreCatalogGeneration
-          ? {
-              ...data,
-              models: current.models,
-              automaticUtilityModel: current.automaticUtilityModel,
-              providerOutcomes: current.providerOutcomes,
-              catalogError: current.catalogError,
-            }
-          : data,
-      );
+      const preserveCatalog =
+        this.data !== null && this.catalogDiscovery.generation !== this.coreCatalogGeneration;
+      if (!preserveCatalog) {
+        this.catalogDiscovery.reset();
+      }
+      this.supplemental.adoptCoreData(client, data, { preserveCatalog });
     },
+    isCatalogLoading: () => this.catalogDiscovery.discovering,
     refreshPublication: () => void this.refresh("publication"),
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
@@ -140,6 +135,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     setData: (data) => (this.data = data),
     requestUpdate: () => this.requestUpdate(),
+    onSettled: () => this.core.flushPublication(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -189,7 +185,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
     canStart: () => this.canMutate(),
     canContinue: () => this.mutationBlockedReason() === null,
-    refresh: () => this.refresh("forced"),
+    refresh: () => this.refresh("replacement"),
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -661,7 +657,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       thinkingOverridden: defaults.thinkingOverridden,
       fastMode: defaults.fastMode,
       fastModeOverridden: defaults.fastModeOverridden,
-      catalogDiscovering: this.catalogDiscovery.discovering,
+      catalogDiscovering:
+        this.catalogDiscovery.discovering || Boolean(data.pendingProviders?.length),
       catalogDiscoveryError: this.catalogDiscovery.error ?? data.catalogError,
       configBusy: this.configBusy(),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
@@ -726,7 +723,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
       onFastModeChange: (mode) => stageDefaults({ fastMode: mode, fastModeOverridden: true }),
       onFastModeReset: () => stageDefaults({ fastMode: undefined, fastModeOverridden: false }),
-      onModelPickerOpen: () => this.catalogDiscovery.openPicker(),
       onCatalogRetry: () => this.catalogDiscovery.retry(),
       onOpenModelSetup: () => this.context.navigate("model-setup"),
       ...this.login.providerActions,

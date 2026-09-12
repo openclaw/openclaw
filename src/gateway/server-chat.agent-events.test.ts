@@ -634,6 +634,37 @@ describe("agent event handler", () => {
     );
   });
 
+  it("sizes retained progress once when a live event evicts old reconnect activity", () => {
+    const { chatRunState, handler } = createHarness();
+    registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
+    const emit = (seq: number) =>
+      emitAgentEvent(
+        handler,
+        "provider-run",
+        "item",
+        { kind: "preamble", itemId: `item-${seq}`, progressText: "x".repeat(2_048) },
+        { seq },
+      );
+    for (let seq = 1; seq <= 50; seq += 1) {
+      emit(seq);
+    }
+    const retained = chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1);
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      emit(51);
+      expect(
+        stringify.mock.calls.filter(([value]) => value === retained).length,
+      ).toBeLessThanOrEqual(1);
+      const snapshot = chatRunState.runs.get("client-run")?.progressSnapshot;
+      expect(snapshot?.events).toHaveLength(50);
+      expect(snapshot?.events[0]?.seq).toBe(2);
+      expect(snapshot?.events.at(-1)?.seq).toBe(51);
+    } finally {
+      stringify.mockRestore();
+      handler.dispose();
+    }
+  });
+
   it("replays cumulative usage with the same client identity as live delivery", () => {
     const { chatRunState, handler, broadcast } = createHarness();
     registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
@@ -1638,33 +1669,17 @@ describe("agent event handler", () => {
   );
 
   it.each([
-    {
-      name: "selection",
-      stream: "item",
-      data: answerCandidate("answer-1", "Hello", "selected"),
-    },
-    {
-      name: "supersession",
-      stream: "item",
-      data: answerCandidate("answer-1", "Hello", "superseded"),
-    },
-    {
-      name: "native item start",
-      stream: "item",
-      data: { itemId: "command-1", kind: "command", title: "Command", phase: "start" },
-    },
-    {
-      name: "tool start",
-      stream: "tool",
-      data: { phase: "start", name: "read", toolCallId: "read-1" },
-    },
-    {
-      name: "replacement",
-      stream: "assistant",
-      data: { text: "Corrected", delta: "", replace: true },
-    },
-    { name: "terminal", stream: "lifecycle", data: { phase: "end" } },
-  ] as const)("flushes candidate and assistant progress before $name", ({ stream, data }) => {
+    ["selection", "item", answerCandidate("answer-1", "Hello", "selected")],
+    ["supersession", "item", answerCandidate("answer-1", "Hello", "superseded")],
+    [
+      "native item start",
+      "item",
+      { itemId: "command-1", kind: "command", title: "Command", phase: "start" },
+    ],
+    ["tool start", "tool", { phase: "start", name: "read", toolCallId: "read-1" }],
+    ["replacement", "assistant", { text: "Corrected", delta: "", replace: true }],
+    ["terminal", "lifecycle", { phase: "end" }],
+  ] as const)("flushes candidate and assistant progress before %s", (_name, stream, data) => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const { broadcast, broadcastToConnIds, chatRunState, toolEventRecipients, handler } =
@@ -5452,18 +5467,10 @@ describe("agent event handler", () => {
   );
 
   it.each([
-    { name: "fallback exhaustion", data: { fallbackExhaustedFailure: true }, state: "error" },
-    {
-      name: "native cancellation",
-      data: { aborted: true, stopReason: "aborted" },
-      state: "aborted",
-    },
-    {
-      name: "provider timeout",
-      data: { stopReason: "timeout", timeoutPhase: "provider" },
-      state: "error",
-    },
-  ])("finalizes $name immediately and retires the preceding retryable error", ({ data, state }) => {
+    ["fallback exhaustion", { fallbackExhaustedFailure: true }, "error"],
+    ["native cancellation", { aborted: true, stopReason: "aborted" }, "aborted"],
+    ["provider timeout", { stopReason: "timeout", timeoutPhase: "provider" }, "error"],
+  ])("finalizes %s immediately and retires the preceding retryable error", (_name, data, state) => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-terminal-error",
@@ -5604,77 +5611,29 @@ describe("agent event handler", () => {
   });
 
   it.each([
-    {
-      name: "groq tpm 413",
-      error: new Error("Request too large: too many tokens per minute (TPM)"),
-      expected: "rate_limit",
-    },
-    {
-      name: "quota exceeded",
-      error: new Error("quota exceeded"),
-      expected: "rate_limit",
-    },
-    {
-      name: "resource_exhausted",
-      error: new Error("resource_exhausted"),
-      expected: "rate_limit",
-    },
-    {
-      name: "http 429",
-      error: Object.assign(new Error("Too many requests"), { code: 429 }),
-      expected: "rate_limit",
-    },
-    {
-      name: "fetch failed",
-      error: new Error("fetch failed"),
-      expected: "timeout",
-    },
-    {
-      name: "socket hang up",
-      error: new Error("socket hang up"),
-      expected: "timeout",
-    },
-    {
-      name: "etimedout",
-      error: Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
-      expected: "timeout",
-    },
-    {
-      name: "context overflow",
-      error: new Error("context length exceeded"),
-      expected: "context_length",
-    },
-    {
-      name: "refusal_policy",
-      error: new Error("Unhandled stop reason: refusal_policy"),
-      expected: "refusal",
-    },
-    {
-      name: "content_filter",
-      error: new Error("content_filter blocked the response"),
-      expected: "refusal",
-    },
-    {
-      name: "plain error",
-      error: new Error("plain provider failure"),
-      expected: undefined,
-    },
-    {
-      name: "http 500 is not a timeout",
-      error: Object.assign(new Error("Internal server error"), { status: 500 }),
-      expected: undefined,
-    },
-    {
-      name: "rate limit beats timeout text",
-      error: new Error("Rate limit exceeded, timeout: 30s"),
-      expected: "rate_limit",
-    },
-    {
-      name: "undefined error",
-      error: undefined,
-      expected: undefined,
-    },
-  ] as const)("classifies chat errorKind for $name", ({ error, expected }) => {
+    [
+      "groq tpm 413",
+      new Error("Request too large: too many tokens per minute (TPM)"),
+      "rate_limit",
+    ],
+    ["quota exceeded", new Error("quota exceeded"), "rate_limit"],
+    ["resource_exhausted", new Error("resource_exhausted"), "rate_limit"],
+    ["http 429", Object.assign(new Error("Too many requests"), { code: 429 }), "rate_limit"],
+    ["fetch failed", new Error("fetch failed"), "timeout"],
+    ["socket hang up", new Error("socket hang up"), "timeout"],
+    ["etimedout", Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }), "timeout"],
+    ["context overflow", new Error("context length exceeded"), "context_length"],
+    ["refusal_policy", new Error("Unhandled stop reason: refusal_policy"), "refusal"],
+    ["content_filter", new Error("content_filter blocked the response"), "refusal"],
+    ["plain error", new Error("plain provider failure"), undefined],
+    [
+      "http 500 is not a timeout",
+      Object.assign(new Error("Internal server error"), { status: 500 }),
+      undefined,
+    ],
+    ["rate limit beats timeout text", new Error("Rate limit exceeded, timeout: 30s"), "rate_limit"],
+    ["undefined error", undefined, undefined],
+  ] as const)("classifies chat errorKind for %s", (_name, error, expected) => {
     expect(resolveChatErrorKindFromError(error)).toBe(expected);
   });
 
@@ -5945,13 +5904,13 @@ describe("agent event handler", () => {
   });
 
   it.each([
-    { settled: false, executionSettled: false },
-    { settled: true, executionSettled: false },
-    { settled: false, executionSettled: true },
-    { settled: true, executionSettled: true },
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
   ])(
-    "preserves reply-dispatch ownership (delivery=$settled, execution=$executionSettled)",
-    async ({ settled, executionSettled }) => {
+    "preserves reply-dispatch ownership (delivery=%s, execution=%s)",
+    async (settled, executionSettled) => {
       vi.useFakeTimers();
       const settleTrackedTerminal = vi.fn();
       const harness = createHarness({

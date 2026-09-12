@@ -34,6 +34,8 @@ export type BrowserPanelTab = {
   targetId: string;
   title: string;
   url: string;
+  /** Page-declared icon supplied by the native Mac tab. */
+  favicon?: string;
   urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
 };
 

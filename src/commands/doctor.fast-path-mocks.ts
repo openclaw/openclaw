@@ -134,7 +134,7 @@ vi.mock("./doctor-sandbox.js", () => ({
 }));
 
 vi.mock("./doctor-security.js", () => ({
-  noteSecurityWarnings: vi.fn().mockResolvedValue(undefined),
+  noteSecurityWarnings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-install-policy.js", () => ({

@@ -215,6 +215,7 @@ export async function prepareCompactionHarnessAuth(params: {
       modelApi: params.model?.api,
       modelBaseUrl: params.model?.baseUrl,
       config: params.config,
+      agentId: params.runtimePolicyAgentId,
       env: process.env,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,

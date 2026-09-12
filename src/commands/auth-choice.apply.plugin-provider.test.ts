@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { createManagedPluginArtifactConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import * as pluginEnable from "../plugins/enable.js";
 import { metadataSnapshot } from "../plugins/management-service.test-helpers.js";
@@ -10,7 +11,9 @@ import {
   prepareAuthChoiceLoadedPluginProvider,
   runProviderPluginAuthMethod,
 } from "../plugins/provider-auth-choice.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import type { ProviderPlugin, ProviderAuthMethod } from "../plugins/types.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 type ResolveProviderInstallCatalogEntry =
@@ -678,53 +681,79 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
-  it("installs a missing provider plugin and retries setup resolution", async () => {
-    const provider = buildProvider();
-    const method = expectDefined(provider.auth[0], "provider.auth[0] test invariant");
-    const run = method.run;
-    method.run = async (context) => ({
-      ...(await run(context)),
-      configPatch: {
-        plugins: {
-          installs: { "local-provider-plugin": { source: "npm", spec: "provider-authored" } },
+  it("installs a verified official provider without capability review and retries setup resolution", async () => {
+    await withTestDir({ prefix: "official-provider-setup-" }, async (artifactDir) => {
+      const provider = buildProvider();
+      const method = expectDefined(provider.auth[0], "provider.auth[0] test invariant");
+      const run = method.run;
+      method.run = async (context) => ({
+        ...(await run(context)),
+        configPatch: {
+          plugins: {
+            installs: { diffs: { source: "npm", spec: "provider-authored" } },
+          },
         },
-      },
-    });
-    const installRecord = { source: "npm" as const, spec: "@openclaw/local-provider" };
-    const installed = buildInstalledLocalProviderPluginResult();
-    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
-    ensureOnboardingPluginInstalled.mockResolvedValue({
-      ...installed,
-      cfg: {
-        ...installed.cfg,
-        plugins: { ...installed.cfg.plugins, installs: { "local-provider-plugin": installRecord } },
-      },
-    });
-    resolvePluginProviders.mockReturnValue([provider]);
-    resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
-      provider,
-      method,
-    });
+      });
+      const installRecord = { source: "npm" as const, spec: "@openclaw/diffs" };
+      const installed = { ...buildInstalledLocalProviderPluginResult(), pluginId: "diffs" };
+      createColdPluginFixture({
+        rootDir: artifactDir,
+        pluginId: "diffs",
+        packageName: "@openclaw/diffs",
+      });
+      resolveProviderInstallCatalogEntry.mockReturnValue({
+        ...buildLocalProviderInstallCatalogEntry(),
+        pluginId: "diffs",
+        install: { npmSpec: "@openclaw/diffs" },
+      });
+      const onCapabilityConsent = vi.fn(async () => undefined);
+      ensureOnboardingPluginInstalled.mockImplementation(async (params) => {
+        const consent = createManagedPluginArtifactConsentHandler({
+          ...params,
+          config: params.cfg,
+          source: "npm",
+          onCapabilityConsent,
+        });
+        await consent.onBeforePluginArtifactCommit({
+          pluginId: "diffs",
+          stagedArtifactDir: artifactDir,
+          mode: "install",
+          sourceRecord: installRecord,
+        });
+        return {
+          ...installed,
+          cfg: {
+            ...installed.cfg,
+            plugins: { ...installed.cfg.plugins, installs: { diffs: installRecord } },
+          },
+        };
+      });
+      resolvePluginProviders.mockReturnValue([provider]);
+      resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
+        provider,
+        method,
+      });
 
-    const result = await prepareAuthChoiceLoadedPluginProvider(
-      buildParams(),
-      (prepared) => prepared,
-    );
-    expect(result?.pendingPluginInstalls).toEqual({ "local-provider-plugin": installRecord });
-    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+      const result = await prepareAuthChoiceLoadedPluginProvider(
+        buildParams(),
+        (prepared) => prepared,
+      );
+      expect(result?.pendingPluginInstalls).toEqual({ diffs: installRecord });
+      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
 
-    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-    const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];
-    if (installParams === undefined) {
-      throw new Error("expected plugin install params");
-    }
-    expect(installParams.entry?.pluginId).toBe("local-provider-plugin");
-    expect(installParams.entry?.label).toBe(LOCAL_PROVIDER_LABEL);
-    expect(installParams.workspaceDir).toBe("/tmp/workspace");
-    expect(installParams.reviewOfficialArtifacts).toBe(true);
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
-    expect(result?.config.agents?.defaults?.model).toEqual({
-      primary: LOCAL_DEFAULT_MODEL,
+      expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+      expect(onCapabilityConsent).not.toHaveBeenCalled();
+      const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];
+      if (installParams === undefined) {
+        throw new Error("expected plugin install params");
+      }
+      expect(installParams.entry?.pluginId).toBe("diffs");
+      expect(installParams.entry?.label).toBe(LOCAL_PROVIDER_LABEL);
+      expect(installParams.workspaceDir).toBe("/tmp/workspace");
+      expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+      expect(result?.config.agents?.defaults?.model).toEqual({
+        primary: LOCAL_DEFAULT_MODEL,
+      });
     });
   });
 

@@ -10,11 +10,13 @@ import {
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
 } from "../infra/state-database-coordinator.js";
-import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openClawStateDatabaseCache,
+} from "./openclaw-state-db-cache.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import {
   closeOpenClawStateDatabase,
-  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,

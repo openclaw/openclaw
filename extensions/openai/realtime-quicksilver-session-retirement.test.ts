@@ -124,15 +124,7 @@ describe("GA Realtime call retirement", () => {
   it.each(["cancel", "cleanup"] as const)(
     "retains a failed GA hangup for a later %s without reviving the client grant",
     async (action) => {
-      const bridge = {
-        connect: vi.fn(async () => undefined),
-        close: vi.fn(),
-        sendAudio: vi.fn(),
-        setMediaTimestamp: vi.fn(),
-        submitToolResult: vi.fn(),
-        acknowledgeMark: vi.fn(),
-        isConnected: vi.fn(() => true),
-      } satisfies RealtimeVoiceBridge;
+      const bridge = retirementBridge();
       const hangupTargets: string[] = [];
       const fetchMock = vi.fn(async (url: string | URL | Request) => {
         const target = requestTarget(url);
@@ -147,20 +139,7 @@ describe("GA Realtime call retirement", () => {
       });
       const { realtime } = createBroker({ fetchImpl: fetchMock as typeof fetch });
       try {
-        const reservation = await realtime.broker.createBrowserSession(
-          {
-            providerConfig: {},
-            model: "gpt-realtime-2.1",
-            gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
-            gaSideband: { createBridge: () => bridge },
-            clientControl: { owner: "gateway" },
-            gatewayControl: { bindBridge: vi.fn() },
-          },
-          { type: "api-key", token: "platform-key" },
-        );
-        if (reservation.transport !== "webrtc") {
-          throw new Error("Expected WebRTC reservation");
-        }
+        const reservation = await reserveRetirementSession(realtime, () => bridge);
         const response = createResponseHarness();
         await realtime.handler(
           createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
@@ -218,25 +197,19 @@ describe("GA Realtime call retirement", () => {
     let creations = 0;
     let hangups = 0;
     let failHangup = true;
-    let releaseCreation!: () => void;
-    const creation = new Promise<void>((resolve) => {
-      releaseCreation = resolve;
-    });
-    let releaseFirstHangup!: () => void;
-    const firstHangup = new Promise<void>((resolve) => {
-      releaseFirstHangup = resolve;
-    });
+    const creation = createDeferred<void>();
+    const firstHangup = createDeferred<void>();
     let cancelSettled = false;
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       if (requestTarget(url).endsWith("/hangup")) {
         hangups += 1;
         if (failure === "cancel during creation" && hangups === 1) {
-          await firstHangup;
+          await firstHangup.promise;
         }
         return new Response(null, { status: failHangup && hangups < 3 ? 503 : 204 });
       }
       creations += 1;
-      await creation;
+      await creation.promise;
       const answer =
         failure === "answer stream failure"
           ? new ReadableStream({
@@ -306,11 +279,11 @@ describe("GA Realtime call retirement", () => {
                 },
               )
             : undefined;
-      releaseCreation();
+      creation.resolve();
       if (failure === "cancel during creation") {
         await vi.waitFor(() => expect(hangups).toBe(1));
         expect.soft(cancelSettled).toBe(false);
-        releaseFirstHangup();
+        firstHangup.resolve();
       }
       const handlingError = await handling.then(
         () => undefined,
@@ -364,8 +337,8 @@ describe("GA Realtime call retirement", () => {
       expect(hangups).toBe(3);
     } finally {
       failHangup = false;
-      releaseCreation();
-      releaseFirstHangup();
+      creation.resolve();
+      firstHangup.resolve();
       await realtime.cleanup();
     }
   });
@@ -377,10 +350,7 @@ describe("GA Realtime call retirement", () => {
       const bridge = retirementBridge();
       let hangups = 0;
       let failHangup = true;
-      let answerStarted!: () => void;
-      const delivering = new Promise<void>((resolve) => {
-        answerStarted = resolve;
-      });
+      const delivering = createDeferred<void>();
       const fetchImpl = vi.fn(async (url: string | URL | Request) => {
         if (requestTarget(url).endsWith("/hangup")) {
           hangups += 1;
@@ -396,7 +366,7 @@ describe("GA Realtime call retirement", () => {
       const response = new ServerResponse(request);
       const end = vi.spyOn(response, "end").mockImplementationOnce(() => {
         response.writeHead(response.statusCode);
-        answerStarted();
+        delivering.resolve();
         return response;
       });
       let handling: Promise<boolean> | undefined;
@@ -404,7 +374,7 @@ describe("GA Realtime call retirement", () => {
         const reservation = await reserveRetirementSession(realtime, () => bridge);
         request.headers.authorization = `Bearer ${reservation.clientSecret}`;
         handling = realtime.handler(request, response);
-        await delivering;
+        await delivering.promise;
         expect(response.headersSent).toBe(true);
         await expect(realtime.broker.cancelBrowserSession(reservation)).rejects.toThrow(
           "OpenAI Realtime call hangup failed (503)",
@@ -483,15 +453,12 @@ describe("GA Realtime call retirement", () => {
   it.each([204, 404])("coalesces reentrant retirement and settles HTTP %s once", async (status) => {
     vi.useFakeTimers();
     const bridge = retirementBridge();
-    let finishHangup!: () => void;
-    const hungUp = new Promise<void>((resolve) => {
-      finishHangup = resolve;
-    });
+    const hungUp = createDeferred<void>();
     let hangups = 0;
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       if (requestTarget(url).endsWith("/hangup")) {
         hangups += 1;
-        await hungUp;
+        await hungUp.promise;
         return new Response(null, { status });
       }
       return new Response("v=answer\r\n", {
@@ -517,13 +484,13 @@ describe("GA Realtime call retirement", () => {
       const concurrent = realtime.cleanup();
       expect(hangups).toBe(1);
       expect(bridge.close).toHaveBeenCalledOnce();
-      finishHangup();
+      hungUp.resolve();
       await Promise.all([first, concurrent, reentered]);
       await vi.advanceTimersByTimeAsync(30 * 60_000);
       await realtime.cleanup();
       expect(hangups).toBe(1);
     } finally {
-      finishHangup();
+      hungUp.resolve();
       await realtime.cleanup();
     }
   });

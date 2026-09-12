@@ -1,4 +1,4 @@
-import { nothing } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
@@ -21,7 +21,8 @@ export function browserPanelHostedTabs(tabs: BrowserPanelTab[]): PanelHostedTab[
     id: tab.id,
     label: tabLabel(tab),
     url: tab.url,
-    kind: tab.kind,
+    favicon: tab.favicon,
+    icon: tab.kind === "native" ? icons.monitor : icons.globe,
   }));
 }
 
@@ -34,12 +35,14 @@ export function renderBrowserPanelTabs(params: {
   /** Embedded chrome hosts the new-tab action in its toolbar instead. */
   hideNewControl?: boolean;
 }) {
-  const tabs: PanelTabStripTab[] = browserPanelHostedTabs(params.tabs).map((tab) => ({
+  const tabs: PanelTabStripTab[] = browserPanelHostedTabs(params.tabs).map((tab, index) => ({
     id: tab.id,
     domId: `browser-tab-${tab.id}`,
     label: tab.label,
-    title: `${t(tab.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
-    icon: tab.kind === "native" ? icons.monitor : icons.globe,
+    title: `${t(params.tabs[index]?.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
+    icon: tab.favicon
+      ? html`<img class="tabstrip-tab__favicon" src=${tab.favicon} alt="" />`
+      : tab.icon,
     closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
   }));
   return renderPanelTabStrip({

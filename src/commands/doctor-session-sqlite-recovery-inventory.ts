@@ -364,11 +364,12 @@ export function protectRecoveryDependencies(
   };
   for (const [archive, references] of refs) {
     for (const ref of references.filter(active)) {
-      const moves = uniqueRestoreMoves(ref.target);
       const dependencies =
         (ref.move.artifact ?? adoptions?.get(ref))?.dependencies ??
         (ref.move.kind === "legacy-store"
-          ? moves.filter((move) => move.kind === "transcript").map((move) => move.sourcePath)
+          ? uniqueRestoreMoves(ref.target)
+              .filter((move) => move.kind === "transcript")
+              .map((move) => move.sourcePath)
           : []);
       for (const source of dependencies) {
         for (const dependency of bySource.get(source) ?? []) {

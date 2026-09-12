@@ -146,17 +146,29 @@ describe("projects vitest config", () => {
     expect(serverIsolatedConfig.isolate).toBe(true);
     expect(serverIsolatedConfig.runner).toBeUndefined();
     expect(serverIsolatedConfig.include).toEqual(gatewayServerIsolatedTestFiles);
-    expect(methodsConfig.exclude).toContain("server-methods/agent.test.ts");
-    expect(methodsConfig.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
-    expect(methodsConfig.exclude).toContain("server-methods/chat.reset-visible-yield.test.ts");
-    expect(methodsConfig.exclude).toContain("server-methods/system-agent-setup-control-ui.test.ts");
-    expect(gatewayFallback.exclude).toContain("server-methods/agent.test.ts");
-    expect(gatewayFallback.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
-    expect(gatewayFallback.exclude).toContain("server-methods/chat.reset-visible-yield.test.ts");
-    expect(gatewayFallback.exclude).toContain(
-      "server-methods/system-agent-setup-control-ui.test.ts",
+    expect(methodsConfig.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/board.runtime-boundaries.test.ts",
     );
-    expect(gatewayFallback.exclude).toContain("server.sessions.compaction-read-errors.test.ts");
+    expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/chat.reset-visible-yield.test.ts",
+    );
+    expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/board.runtime-boundaries.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/chat.reset-visible-yield.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server.sessions.compaction-read-errors.test.ts",
+    );
   });
 
   it("limits isolated Gateway include files to each project's owned tests", () => {

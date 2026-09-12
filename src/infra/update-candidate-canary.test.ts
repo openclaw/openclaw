@@ -19,6 +19,7 @@ import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
+import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -48,6 +49,7 @@ let pluginErrors = false;
 let pluginInventory: unknown;
 let runtimeError = false;
 let runtimeContract: unknown;
+let lintReport: { ok: boolean; checksRun: number; findings: unknown[]; warnings: unknown[] };
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -55,6 +57,7 @@ beforeEach(async () => {
   pluginInventory = undefined;
   runtimeError = false;
   runtimeContract = { state: 2, agent: 3 };
+  lintReport = { ok: true, checksRun: 1, findings: [], warnings: [] };
   root = path.join(await fs.realpath(tempDirs.make("canary-unit-")), "candidate");
   await fs.mkdir(root);
   await fs.mkdir(path.join(root, "dist"));
@@ -103,7 +106,16 @@ beforeEach(async () => {
           if (args.includes("--check")) {
             child.stdout.write(JSON.stringify(runtimeContract));
           }
-          child.emit("close", runtimeError && args.includes("--check") ? 1 : 0);
+          if (args.includes("--lint")) {
+            child.stdout.write(JSON.stringify(lintReport));
+          }
+          child.emit(
+            "close",
+            (runtimeError && args.includes("--check")) ||
+              (!lintReport.ok && args.includes("--lint"))
+              ? 1
+              : 0,
+          );
         });
       }
       return child;
@@ -160,6 +172,43 @@ describe("update candidate canary", () => {
     }
   });
 
+  it.each([false, true])(
+    "retains posture warnings without admitting blocking lint errors (blocking: %s)",
+    async (blocking) => {
+      lintReport = {
+        ok: !blocking,
+        checksRun: 1,
+        findings: blocking
+          ? [{ checkId: "core/config", severity: "error", message: "Invalid configuration." }]
+          : [],
+        warnings: [
+          {
+            checkId: "core/doctor/security",
+            severity: "warning",
+            message: "Open group policy permits mention-gated requests.",
+          },
+        ],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ status: "started", ready: true })),
+      );
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+      });
+      expect(result.status).toBe(blocking ? "error" : "ok");
+      if (blocking) {
+        expect(result).toMatchObject({ phase: "lint", reason: "doctor-failed" });
+      } else {
+        expect(
+          updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep)),
+        ).toContain("Open group policy permits mention-gated requests.");
+      }
+    },
+  );
   it("keeps snapshot and validation source selection inside the candidate", async () => {
     vi.stubGlobal(
       "fetch",
@@ -535,6 +584,7 @@ describe("update candidate canary", () => {
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: path.join(root, "live-result.json"),
         [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: path.join(root, "live-config.json"),
         OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: path.join(root, "live-doctor-result.json"),
         OPENCLAW_SYSTEMD_UNIT: "source-gateway.service",
         CUSTOM_PROVIDER_KEY: "synthetic-provider-credential",
       },
@@ -584,6 +634,7 @@ describe("update candidate canary", () => {
       POST_CORE_UPDATE_RESULT_PATH_ENV,
       POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
       "OPENCLAW_UPDATE_RUN_HANDOFF",
+      "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
       "OPENCLAW_SYSTEMD_UNIT",
     ]) {
       expect(childEnv[key]).toBeUndefined();

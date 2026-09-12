@@ -364,31 +364,32 @@ async function collectDeclaredQaEvidenceArtifactFiles(params: {
 }
 
 function classifyArtifact(kind: string, filePath: string): QaEvidenceArtifactView["mediaKind"] {
-  const normalizedKind = kind.toLowerCase();
   const ext = path.extname(filePath).toLowerCase();
-  if (
-    normalizedKind.includes("screenshot") ||
-    normalizedKind.includes("gif") ||
-    [".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext)
-  ) {
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext)) {
     return "image";
   }
-  if (normalizedKind.includes("video") || [".webm", ".mp4", ".mov"].includes(ext)) {
+  if ([".webm", ".mp4", ".mov"].includes(ext)) {
     return "video";
   }
-  if (
-    normalizedKind.includes("validation") ||
-    normalizedKind.includes("json") ||
-    ext === ".json" ||
-    ext === ".jsonl"
-  ) {
+  if (ext === ".json" || ext === ".jsonl") {
     return "json";
   }
-  if (
-    normalizedKind.includes("log") ||
-    normalizedKind.includes("report") ||
-    [".log", ".md", ".txt"].includes(ext)
-  ) {
+  if ([".log", ".md", ".txt"].includes(ext)) {
+    return "text";
+  }
+
+  // Kinds are free-form labels; use their hints only without a known file format.
+  const normalizedKind = kind.toLowerCase();
+  if (normalizedKind.includes("screenshot") || normalizedKind.includes("gif")) {
+    return "image";
+  }
+  if (normalizedKind.includes("video")) {
+    return "video";
+  }
+  if (normalizedKind.includes("validation") || normalizedKind.includes("json")) {
+    return "json";
+  }
+  if (normalizedKind.includes("log") || normalizedKind.includes("report")) {
     return "text";
   }
   return "file";

@@ -287,7 +287,13 @@ describe("qa scenario catalog channel contracts", () => {
       "received.some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
     );
     expect(semanticFlow).not.toContain("received.at(-1)?.botApiMessageId");
+    expect(semanticFlow).toContain('"set":"expectedNormalized"');
+    expect(semanticFlow).toContain("JSON.stringify(actual) === JSON.stringify(expectedNormalized)");
+    expect(semanticFlow).not.toContain(
+      "JSON.stringify(actual) === JSON.stringify(fixture.expectedChunks)",
+    );
     expect(compactionFlow).toContain('"minimumPreviewEvents":2');
+    expect(compactionFlow).toContain("progress: { commentary: true, toolProgress: true }");
     expect(compactionFlow).toContain("config.commentaryOne");
     expect(compactionFlow).toContain("config.commentaryTwo");
     expect(compactionFlow).toContain("Compacting context");
@@ -296,9 +302,14 @@ describe("qa scenario catalog channel contracts", () => {
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+    const matrixProgress = requireFlowScenario(
+      readQaScenarioById("matrix-room-tool-progress-mention-safety"),
+    );
 
     expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
+    expect(matrixProgress.execution.suiteIsolation).toBe("isolated");
+    expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
   it("uses public parent history and durable task records before accepting fanout", () => {

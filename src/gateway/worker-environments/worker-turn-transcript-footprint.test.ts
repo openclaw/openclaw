@@ -4,7 +4,6 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { withTimeout } from "../../infra/fs-safe.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
@@ -15,7 +14,6 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
-  root as fixtureRoot,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -176,6 +174,7 @@ describe("Gateway worker-turn selected transcript preparation", () => {
           return result;
         },
       });
+      hasUnjoinedOwner = true;
       const pending = provider
         .executeTurn(
           { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: request.runId },
@@ -192,16 +191,12 @@ describe("Gateway worker-turn selected transcript preparation", () => {
       const failures: unknown[] = [];
       let outcome: Awaited<typeof pending> | undefined;
       try {
-        await withTimeout(
-          Promise.race([
-            reachedCredential.promise,
-            pending.then(() => {
-              throw new Error("Turn settled before reaching credential acquisition");
-            }),
-          ]),
-          request.timeoutMs,
-          "worker transcript preparation",
-        );
+        await Promise.race([
+          reachedCredential.promise,
+          pending.then(() => {
+            throw new Error("Turn settled before reaching credential acquisition");
+          }),
+        ]);
         expect(contextCalls).toBe(1);
         expect(observation?.contextMessages).toBe(expectedMessages);
         expect(observation?.inactiveContextMessages).toBe(0);
@@ -220,12 +215,8 @@ describe("Gateway worker-turn selected transcript preparation", () => {
         releaseCredential.resolve();
         fixtureAbort.abort(deliberateStop);
         try {
-          outcome = await withTimeout(pending, request.timeoutMs, "worker preparation owner join");
-        } catch (error) {
-          hasUnjoinedOwner = true;
-          failures.push(
-            new Error(`Unjoined worker fixture retained at ${fixtureRoot}`, { cause: error }),
-          );
+          outcome = await pending;
+          hasUnjoinedOwner = false;
         } finally {
           try {
             request.preparedRunAdmission.close();

@@ -2560,15 +2560,14 @@ describe("grouped chat rendering", () => {
 
   it.each([
     { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
-    { agentId: "research", avatar: null, expected: "initials" },
-    { agentId: "research", avatar: "https://example.test/avatar.png", expected: "initials" },
-    // Same-agent sources wear the current agent's own avatar (fallback logo here).
-    { agentId: "main", avatar: "blob:main-avatar", expected: "assistant" },
+    { agentId: "research", avatar: null, expected: "face" },
+    { agentId: "research", avatar: "https://example.test/avatar.png", expected: "face" },
+    { agentId: "main", avatar: "blob:main-avatar", expected: "face" },
     { agentId: "removed", avatar: "blob:stale-avatar", expected: "glyph" },
     { agentId: undefined, avatar: null, expected: "glyph" },
   ])(
     "renders $expected for forwarded agent $agentId with $avatar",
-    ({ agentId, avatar, expected }) => {
+    async ({ agentId, avatar, expected }) => {
       const container = document.createElement("div");
       const group = createMessageGroup(createAssistantMessage("forwarded report"), "assistant", {
         senderSession: { agentId },
@@ -2580,24 +2579,20 @@ describe("grouped chat rendering", () => {
       };
       render(renderTestMessageGroup(group, options), container);
 
-      const image = container.querySelector("img.chat-avatar:not(.chat-avatar--logo)");
-      const initials = container.querySelector<HTMLElement>(".chat-avatar--sender-initials");
+      const image = container.querySelector("img.chat-avatar.assistant");
       expect(image !== null).toBe(expected === "image");
-      expect(initials !== null).toBe(expected === "initials");
       expect(container.querySelector(".chat-avatar--forwarded") !== null).toBe(
         expected === "glyph",
       );
-      if (expected === "assistant") {
-        expect(container.querySelector(".chat-avatar")).not.toBeNull();
-      }
       if (expected === "image") {
         expect(image?.getAttribute("src")).toBe(avatar);
         expect(image?.getAttribute("alt")).toBe("Research Agent");
       }
-      if (expected === "initials") {
-        expect(initials?.textContent?.trim()).toBe("RA");
-        expect(initials?.getAttribute("aria-label")).toBe("Research Agent");
-        expect(initials?.style.background).not.toBe("");
+      if (expected === "face") {
+        await vi.waitFor(() =>
+          expect(container.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+        );
+        expect(container.querySelector(".chat-avatar--sender-initials")).toBeNull();
       }
     },
   );

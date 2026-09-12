@@ -4,6 +4,7 @@ import {
   WORKSPACE,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  openEnvironmentPicker,
   pollLocatorText,
 } from "./new-session-page.test-support.ts";
 
@@ -169,7 +170,7 @@ suite.define(() => {
       const where = page.locator("#new-session-where-trigger");
       const model = page.locator('[data-chat-model-select="true"]');
       const start = page.getByRole("button", { name: "Start session" });
-      await where.click();
+      await openEnvironmentPicker(page);
 
       const profile = page.locator('[data-value="cloud:aws"]');
       await profile.hover();

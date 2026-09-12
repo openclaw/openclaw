@@ -8,7 +8,7 @@ const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 
 suite.define(() => {
   it.each([1440, 1100, 768, 640, 390])(
-    "keeps controls separate and discovery stable at %ipx",
+    "Models page keeps controls separate and publishes discovery into a passive picker at %ipx",
     async (width) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 1000 } },
@@ -119,20 +119,38 @@ suite.define(() => {
           }
           await primary.scrollIntoViewIfNeeded();
           const beforeDiscovery = await primary.boundingBox();
-          await gateway.deferNext("models.list");
+          const requestsBeforeOpen = await gateway.getRequests("models.list");
           await primary.click();
+          await page.locator('.model-providers__defaults [role="listbox"]').first().waitFor();
+          expect(await gateway.getRequests("models.list")).toEqual(requestsBeforeOpen);
+          await gateway.setMethodResponse("models.list", {
+            ...catalog,
+            pendingProviders: ["openai"],
+          });
+          await gateway.emitGatewayEvent("chat.metadata.changed", {});
           const progress = page.locator('.model-providers__catalog-progress[role="status"]');
           await progress.waitFor();
           expect(await primary.boundingBox()).toEqual(beforeDiscovery);
           expect(await progress.locator('[aria-hidden="true"]').count()).toBe(1);
-          await page.keyboard.press("Escape");
           if (recordVisuals) {
             await page.screenshot({
               path: path.join(suite.artifactDir, `discovering-${width}.png`),
             });
           }
-          await gateway.resolveDeferred("models.list", catalog);
+          await gateway.setMethodResponse("models.list", {
+            ...catalog,
+            models: [
+              ...models,
+              { id: "account-new", name: "New account model", provider: "openai", available: true },
+            ],
+          });
+          await gateway.emitGatewayEvent("chat.metadata.changed", {});
           await expect.poll(() => progress.count()).toBe(0);
+          await page
+            .locator('.model-providers__defaults [role="option"][data-value="openai/account-new"]')
+            .first()
+            .waitFor({ state: "visible" });
+          expect(await primary.getAttribute("aria-expanded")).toBe("true");
           expect(await primary.textContent()).toContain("GPT-5.5");
         },
       );

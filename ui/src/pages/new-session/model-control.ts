@@ -49,13 +49,9 @@ type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snaps
 type GatewayAgentRuntime = NonNullable<GatewayAgentRow["agentRuntime"]> & {
   cloudPlacementSupported?: boolean;
 };
-type NewSessionMetadataStatus = ChatModelCatalogState["status"];
-type NewSessionMetadataState = {
+type NewSessionMetadataState = ChatModelCatalogState & {
   catalog: ModelCatalogEntry[];
   accountSelection?: ChatAccountSelection;
-  refreshFailed?: boolean;
-  hasSnapshot: boolean;
-  status: NewSessionMetadataStatus;
 };
 type NewSessionMetadataLoadOptions = {
   agent?: GatewayAgentRow;
@@ -629,6 +625,7 @@ export class NewSessionModelControl {
         // ready catalog until the selected agent can supply its concrete defaults.
         hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
         refreshFailed: this.metadataState.refreshFailed,
+        pendingProviders: this.metadataState.pendingProviders,
         status:
           !agentDefaultsAvailable && this.metadataState.status !== "error"
             ? "loading"

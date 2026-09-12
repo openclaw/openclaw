@@ -1,4 +1,8 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   collectActiveSessionWorkAdmissions,
@@ -229,14 +233,41 @@ export function collectAdmissionProtectedSessionIds(params: {
     [...admissionIdentities].map((identity) => normalizeStoreSessionKey(identity)),
   );
   const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
+  const admittedKeyBytes: string[] = [];
+  // Normalize lightweight keys before reading payloads; unrelated saved prompts can be large.
+  for (const row of iterateSqliteQuerySync(
     params.database.db,
-    db.selectFrom("session_nodes").select(["entry_json", "current_session_id", "session_key"]),
-  ).rows;
-  for (const row of rows) {
-    if (!normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
-      continue;
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", db.fn<string>("hex", ["session_key"]).as("key_bytes")]),
+  )) {
+    if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
+      admittedKeyBytes.push(row.key_bytes);
     }
+  }
+  const rows = admittedKeyBytes.length
+    ? iterateSqliteQuerySync(
+        params.database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["entry_json", "current_session_id"])
+          // Keep stored keys inside SQLite: Node TEXT rebinding can change raw UTF-16 keys.
+          // The key-only subquery scans the existing index before fetching matched payloads.
+          .where(
+            "session_key",
+            "in",
+            db
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where(
+                db.fn<string>("hex", ["session_key"]),
+                "in",
+                sqliteStringSet(admittedKeyBytes),
+              ),
+          ),
+      )
+    : [];
+  for (const row of rows) {
     protectedSessionIds.add(row.current_session_id);
     const entry = parseSessionEntryJson(row);
     if (entry) {
@@ -248,10 +279,10 @@ export function collectAdmissionProtectedSessionIds(params: {
   // Key-scoped admissions must survive rollover: an in-flight run admitted by
   // key may still write to a generation the entry no longer references, so
   // every generation of an admitted key stays off-limits.
-  const generationRows = executeSqliteQuerySync(
+  const generationRows = iterateSqliteQuerySync(
     params.database.db,
     db.selectFrom("session_windows").select(["session_id", "session_key"]),
-  ).rows;
+  );
   for (const row of generationRows) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
       protectedSessionIds.add(row.session_id);
@@ -514,11 +545,14 @@ async function enforceSessionHistoryMaintenanceSerialized(
   };
   let { usage, removedFiles } = await pruneArchives("initial");
   let removedEntries = 0;
-  const candidates = readHistoricalSessionIds({
-    databaseOptions,
-    preserveRecentMs: params.maintenance.preserveRecentMs,
-    storePath: params.storePath,
-  });
+  const candidates =
+    usage.totalBytes > highWaterBytes
+      ? readHistoricalSessionIds({
+          databaseOptions,
+          preserveRecentMs: params.maintenance.preserveRecentMs,
+          storePath: params.storePath,
+        })
+      : [];
 
   for (const sessionId of candidates) {
     if (usage.totalBytes <= highWaterBytes) {

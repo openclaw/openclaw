@@ -311,7 +311,13 @@ Optional members:
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
-| `dispose()`                    | Method | Release engine-instance resources when the logical turn retires, after any retained turn work finishes.                                      |
+| `dispose()`                    | Method | Release engine-instance resources when the owning operation ends, after any retained work finishes.                                          |
+
+The host also disposes instances resolved for standalone compaction, Doctor
+inspection, and subagent lifecycle hooks. A queued subagent spawn keeps its
+instance until dispatch succeeds or preparation is rolled back; returning a
+queued acceptance does not end that lifetime. Timed-out compaction keeps its
+instance until the underlying plugin work settles.
 
 Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
 default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup

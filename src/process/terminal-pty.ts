@@ -19,14 +19,18 @@ import {
 } from "./windows-command.js";
 
 /** Live PTY handle shared by gateway terminals and node-host commands. */
+export type TerminalPtySubscription = { dispose(): void };
+
 export type TerminalPtyHandle = {
   pid: number;
-  write(data: string): void;
+  write(data: string | Buffer): void;
   resize(cols: number, rows: number): void;
   pause(): void;
   resume(): void;
-  onData(listener: (chunk: string) => void): void;
-  onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
+  onData(listener: (chunk: string) => void): TerminalPtySubscription | void;
+  onExit(
+    listener: (event: { exitCode: number; signal?: number }) => void,
+  ): TerminalPtySubscription | void;
   kill(signal?: string): void;
 };
 
@@ -84,27 +88,43 @@ export type TerminalPtySpawnParams = {
   file: string;
   args: string[];
   cwd?: string;
-  env: Record<string, string>;
+  env?: Record<string, string>;
+  name?: string;
   cols: number;
   rows: number;
 };
 
-export async function spawnTerminalPty(params: TerminalPtySpawnParams): Promise<TerminalPtyHandle> {
+export async function spawnTerminalPty(
+  params: TerminalPtySpawnParams,
+  lifecycle?: { abortSignal?: AbortSignal; assertCurrent?: () => void },
+): Promise<TerminalPtyHandle> {
   if (process.versions.bun && process.platform !== "win32") {
     // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN, hanging up the child.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
+    lifecycle?.assertCurrent?.();
+    if (lifecycle?.abortSignal?.aborted) {
+      throw new Error("PTY construction aborted");
+    }
     return await spawnNodeTerminalPty(params);
   }
   const { spawn } = await import("@lydell/node-pty");
-  const env = { ...params.env };
+  lifecycle?.assertCurrent?.();
+  if (lifecycle?.abortSignal?.aborted) {
+    throw new Error("PTY construction aborted");
+  }
+  const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
-  const terminalName = resolvePtyTerminalName(readPtyTerminalName(env, process.platform));
-  setPtyTerminalName({ env, name: terminalName, platform: process.platform });
+  const terminalName = resolvePtyTerminalName(
+    params.name ?? readPtyTerminalName(env ?? process.env, process.platform),
+  );
+  if (env) {
+    setPtyTerminalName({ env, name: terminalName, platform: process.platform });
+  }
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
-    env,
+    env: env ?? process.env,
   });
   const pty = spawn(invocation.file, invocation.args, {
     name: terminalName,
@@ -117,16 +137,13 @@ export async function spawnTerminalPty(params: TerminalPtySpawnParams): Promise<
     get pid() {
       return pty.pid;
     },
-    write: (data) => pty.write(data),
+    // SAFETY: node-pty accepts Buffer input at runtime although its declaration exposes string.
+    write: (data) => pty.write(data as string),
     resize: (cols, rows) => pty.resize(cols, rows),
     pause: () => pty.pause(),
     resume: () => pty.resume(),
-    onData: (listener) => {
-      pty.onData(listener);
-    },
-    onExit: (listener) => {
-      pty.onExit(listener);
-    },
+    onData: (listener) => pty.onData(listener),
+    onExit: (listener) => pty.onExit(listener),
     kill: (signal) => killPtyTree(pty, signal),
   } satisfies TerminalPtyHandle;
 }

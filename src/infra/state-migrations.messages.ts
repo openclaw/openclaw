@@ -81,6 +81,7 @@ export function createLegacyStateMigrationStepReceipt(
       ? { refusedAgentDatabasePaths: result.refusedAgentDatabasePaths }
       : {}),
     ...(result.notices?.length ? { notices: result.notices } : {}),
+    ...(result.rehearsal ? { rehearsal: result.rehearsal } : {}),
     ...(refused
       ? {
           refusal: step.refusal ?? {

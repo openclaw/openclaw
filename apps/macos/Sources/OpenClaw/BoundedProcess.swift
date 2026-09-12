@@ -14,11 +14,6 @@ struct BoundedProcessResult: Sendable {
 enum BoundedProcess {
     private static let outputLimit = 64 * 1024
 
-    private enum DeadlineOutcome: Sendable {
-        case exited
-        case timedOut
-    }
-
     static func run(
         path: String,
         arguments: [String],
@@ -51,22 +46,7 @@ enum BoundedProcess {
         { execution in
             let exitSignal = ChildProcessExit(
                 processIdentifier: pid_t(execution.processIdentifier.value))
-            let deadline = await withTaskGroup(of: DeadlineOutcome.self) { group in
-                group.addTask {
-                    await exitSignal.wait()
-                    return .exited
-                }
-                group.addTask {
-                    do {
-                        try await Task.sleep(for: .seconds(timeout))
-                        return .timedOut
-                    } catch {
-                        return .exited
-                    }
-                }
-                defer { group.cancelAll() }
-                return await group.next() ?? .exited
-            }
+            let deadline = await exitSignal.wait(timeout: timeout)
             try Task.checkCancellation()
 
             switch deadline {

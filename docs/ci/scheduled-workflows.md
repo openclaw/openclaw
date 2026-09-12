@@ -282,6 +282,8 @@ for the weekly burst separately from PR and main admission.
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
 
+Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
+
 The workflow has three lanes:
 
 - `clawsweeper_item` for exact issue and pull request review requests;

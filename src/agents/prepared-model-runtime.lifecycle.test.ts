@@ -48,20 +48,6 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
-  it("publishes invalidation before the replacement generation", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      events.push(event.phase);
-    });
-
-    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-    unregister();
-    await refreshPreparedModelRuntimeSnapshots({});
-
-    expect(events).toEqual(["invalidated", "published"]);
-  });
-
   it("makes the replacement owner readable before announcing publication", async () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};

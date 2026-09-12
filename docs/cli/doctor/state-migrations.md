@@ -25,6 +25,13 @@ milestones normally. A successful repair removes the runtime blocker; the next
 run has no workspace setup migration to repeat. Invalid files and workspace
 identity/version conflicts remain blocked for inspection.
 
+Update rehearsals write only inside their copied state directory. Workspace
+files are not copied by the rehearsal, so absolute paths retained in proposal,
+rollback, and backup records remain read-only inventory. Doctor reports how many
+legacy workspace files it left untouched; it does not retire their files or
+proposal history. After the candidate is installed, the real Doctor runs the
+normal import, archival, and relocation against the operator's state.
+
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 
 `doctor --fix` also repairs an inconsistent completed auth migration only when its old receipt has no credential fingerprints, none of the migrated credentials remain in the current canonical store, and the preserved archive still matches the recorded source hash. Doctor reimports through the normal verified migration flow. Completed receipts with fingerprints, surviving migrated credentials, or no archive remain untouched, so removing credentials after a verified migration does not restore them from backup.

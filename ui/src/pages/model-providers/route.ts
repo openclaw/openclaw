@@ -18,7 +18,7 @@ export type ModelProvidersRouteData = {
 };
 
 async function loadModelProvidersRouteData(
-  context: ApplicationContext,
+  context: Pick<ApplicationContext, "gateway" | "agents" | "agentSelection">,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
   const gateway = context.gateway;

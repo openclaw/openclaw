@@ -50,11 +50,11 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
           : null,
       }
     : undefined;
-  const warnings = step.advisory
-    ? step.warnings?.length
-      ? step.warnings
-      : [step.advisory.message]
-    : [];
+  const warnings = step.warnings?.length
+    ? step.warnings
+    : step.advisory
+      ? [step.advisory.message]
+      : [];
   return [
     {
       step: text(step.name),

@@ -4,7 +4,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 
 export const page = definePage({
   ...routePageSpec("usage"),
-  loader: (context: ApplicationContext, options: RouteLoaderOptions) => {
+  loader: (
+    context: Pick<ApplicationContext, "gateway" | "agentSelection">,
+    options: RouteLoaderOptions,
+  ) => {
     const gateway = context.gateway;
     const snapshot = {
       gateway,

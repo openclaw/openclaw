@@ -36,6 +36,8 @@ import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.confi
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
 import { createGatewayClientVitestConfig } from "../vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "../vitest/vitest.gateway-core.config.ts";
+import { createGatewayMethodsIsolatedVitestConfig } from "../vitest/vitest.gateway-methods-isolated.config.ts";
+import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.ts";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest/vitest.media-understanding.config.ts";
@@ -1475,6 +1477,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // The embedded composite expands into per-config groups and stripes its
     // serial base config; whole-config runtime consumers may also be striped.
     const embeddedBaseOwnerFiles = ownerScopedTestFiles(agentVitestProjectOwners.embedded);
+    const gatewayMethodsOwnerFiles = [
+      ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
+      ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
+    ];
     const compactGroups = compact.flatMap((shard) => shard.groups);
     const pullRequestCompactGroups = pullRequestCompact.flatMap((shard) => shard.groups);
     const expectedGroupNames = base.flatMap((shard) =>
@@ -1555,6 +1561,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(actual.toSorted()).toEqual(
             listMatchedTestFiles(createRuntimeConfigVitestConfig({})).toSorted(),
           );
+        } else if (owner.shardName === "agentic-gateway-methods") {
+          expect(actual.toSorted()).toEqual(gatewayMethodsOwnerFiles.toSorted());
         }
       }
     }
@@ -1570,6 +1578,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap((shard) => shard.includePatterns ?? [])
         .concat(
           embeddedBaseOwnerFiles,
+          gatewayMethodsOwnerFiles,
           listMatchedTestFiles(createCliProcessVitestConfig({})),
           listMatchedTestFiles(createPluginSdkVitestConfig({})),
           listMatchedTestFiles(createPluginSdkLightVitestConfig({})),
@@ -1586,6 +1595,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap((shard) => shard.includePatterns ?? [])
         .concat(
           embeddedBaseOwnerFiles,
+          gatewayMethodsOwnerFiles,
           listMatchedTestFiles(createCliProcessVitestConfig({})),
           listMatchedTestFiles(createPluginSdkVitestConfig({})),
           listMatchedTestFiles(createPluginSdkLightVitestConfig({})),
@@ -2408,11 +2418,39 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
-    // The checkout is fixed; keep real discovery caches while rebuilding each planner snapshot.
     const unitFastPaths = await vi.importActual<
       typeof import("../vitest/vitest.unit-fast-paths.mjs")
     >("../vitest/vitest.unit-fast-paths.mjs");
-    const trackedTestFiles = new Map<string, readonly string[]>();
+    // Fifty-six full-budget anchors leave 24 of the 80 jobs for tooling.
+    const anchors = Array.from({ length: 56 }, (_, index) => ({
+      config: `test/vitest/vitest.capacity-anchor-${index}.config.ts`,
+      name: `capacity-anchor-${index}`,
+      projects: [`test/vitest/vitest.capacity-anchor-${index}.config.ts`],
+    }));
+    const fixtureShards = [
+      ...anchors,
+      {
+        config: "test/vitest/vitest.full-core-tooling.config.ts",
+        name: "core-tooling",
+        projects: ["test/vitest/vitest.tooling.config.ts"],
+      },
+    ];
+    // Ten files per tooling family exercise full stripes and packable tails; the compiler
+    // fixture puts a stronger runner in a tail that can absorb smaller families.
+    const fixtureFiles = [
+      ...Array.from(
+        { length: 160 },
+        (_, index) => `test/scripts/fixture-${String(index).padStart(3, "0")}.test.ts`,
+      ),
+      "test/scripts/write-unified-entry-dts.test.ts",
+    ];
+    const fixtureTimings = Object.fromEntries([
+      ...anchors.map(({ name }): [string, number] => [name, 210]),
+      ...Array.from({ length: 16 }, (_, index): [string, number] => [
+        `core-tooling-${index + 1}`,
+        200,
+      ]),
+    ]);
     const options = {
       compactMode: "pull-request" as const,
       runnerBackend: "github",
@@ -2430,7 +2468,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "test/scripts/install-smoke-ref-admission.test.ts",
       ],
     ];
-    const growthFiles = new Set([inventoryGrowthFile, ...extraInventories.flat()]);
     const isHostedToolingGroup = (group: { shard_name: string }) =>
       /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name);
     const runnerRanks = new Map([
@@ -2443,38 +2480,40 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       extraFiles: string[] = [],
     ) => {
       vi.resetModules();
-      vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => unitFastPaths);
-      vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
-        const actual =
-          await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>();
-        return {
-          ...actual,
-          listTrackedTestFiles(rootDir: string, suffix = ".test.ts") {
-            const key = JSON.stringify([rootDir, suffix]);
-            let rawFiles = trackedTestFiles.get(key);
-            if (rawFiles === undefined) {
-              rawFiles = actual.listTrackedTestFiles(rootDir, suffix);
-              trackedTestFiles.set(key, rawFiles);
-            }
-            const files = rawFiles.filter((file) => !growthFiles.has(file));
-            return rootDir === "test" && (includeGrowthFile || extraFiles.length > 0)
-              ? [
-                  ...new Set([
-                    ...files,
-                    ...extraFiles,
-                    ...(includeGrowthFile ? [inventoryGrowthFile] : []),
-                  ]),
-                ].toSorted()
-              : files;
-          },
-        };
-      });
+      vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => ({
+        ...unitFastPaths,
+        getUnitFastTestFiles: () => [],
+        getUnitFastIsolatedTestFiles: () => [],
+        getUnitFastTimerTestFiles: () => [],
+        getUnitFastTestFilesForIncludePatterns: () => [],
+      }));
+      vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+        fullSuiteVitestShards: fixtureShards,
+      }));
+      vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
+        ...testTimings,
+        readCompactGroupTimings: () => fixtureTimings,
+      }));
+      vi.doMock("../../scripts/lib/list-test-files.mts", () => ({
+        listTrackedTestFiles(rootDir: string) {
+          return rootDir === "test"
+            ? [
+                ...fixtureFiles,
+                ...extraFiles,
+                ...(includeGrowthFile ? [inventoryGrowthFile] : []),
+              ].toSorted()
+            : [];
+        },
+      }));
       try {
         const { createNodeTestShardBundles: createPlan } =
           await import("../../scripts/lib/ci-node-test-plan.mts");
         return createPlan(options);
       } finally {
         vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+        vi.doUnmock("../vitest/vitest.test-shards.mjs");
         vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
         vi.resetModules();
       }
@@ -2484,6 +2523,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .flatMap((job) => job.groups)
       .filter(isNumberedToolingGroup)
       .flatMap((group) => group.includePatterns ?? []);
+    expect(baseline).toHaveLength(80);
+    expect(baselineToolingFiles.toSorted()).toEqual(fixtureFiles.toSorted());
     const grown = await createPlanWithInventory(true);
     const toolingGroups = grown.flatMap((job) => job.groups).filter(isNumberedToolingGroup);
     const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
@@ -3257,6 +3298,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "test/vitest/vitest.gateway-methods.config.ts",
         "test/vitest/vitest.gateway-methods-isolated.config.ts",
       ],
+      pretestBuildMode: "runtime",
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });

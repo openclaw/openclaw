@@ -8,7 +8,7 @@ const unexpected = () => {
 const beforeStore = Object.fromEntries(
   Array.from({ length: count }, (_, i) => [
     `agent:main:label-${i}`,
-    { sessionId: `session-${i}`, updatedAt: 1, model: "gpt-5.6-sol", label: `label-${i}` },
+    { sessionId: `session-${i}`, updatedAt: 1, model: "gpt-5.6-luna", label: `label-${i}` },
   ]),
 );
 let serviceCalls = 0;

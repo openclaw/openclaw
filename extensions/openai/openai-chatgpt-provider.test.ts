@@ -86,9 +86,9 @@ describe("OpenAI provider Codex transport hooks", () => {
         refresh: "refresh-token",
       },
     });
-    expect(result?.defaultModel).toBe("openai/gpt-5.6-sol");
+    expect(result?.defaultModel).toBe("openai/gpt-6-astra");
     expect(result?.configPatch?.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.6-sol": {},
+      "openai/gpt-6-astra": {},
     });
   });
 

@@ -1,8 +1,9 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveThreadBindingSpawnPolicy } from "../../../channels/thread-bindings-policy.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
+import type { ContextEngine, SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
@@ -102,6 +103,10 @@ export async function prepareSubagentSessionContext(params: {
   }
 }
 
+export type PreparedContextEngineSubagentSpawn = SubagentSpawnPreparation & {
+  dispose(): Promise<void>;
+};
+
 export async function prepareContextEngineSubagentSpawn(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
@@ -110,12 +115,26 @@ export async function prepareContextEngineSubagentSpawn(params: {
   childSessionKey: string;
   runTimeoutSeconds: number;
 }): Promise<
-  { status: "ok"; preparation?: SubagentSpawnPreparation } | { status: "error"; error: string }
+  | { status: "ok"; preparation: PreparedContextEngineSubagentSpawn }
+  | { status: "error"; error: string }
 > {
+  let engine: ContextEngine | undefined;
+  let disposal: Promise<void> | undefined;
+  const dispose = () =>
+    (disposal ??= (async () => {
+      try {
+        await engine?.dispose?.();
+      } catch (error) {
+        console.warn(
+          `[context-engine] Failed subagent preparation cleanup: ${sanitizeForLog(String(error))}`,
+        );
+        throw error;
+      }
+    })());
   try {
     const deps = getSubagentSpawnDeps();
     deps.ensureContextEnginesInitialized();
-    const engine = await deps.resolveContextEngine(params.cfg);
+    engine = await deps.resolveContextEngine(params.cfg);
     // Resolution may outlive the caller. Returned preparation must still reach
     // the pipeline rollback owner before its next authority check.
     params.assertActive?.();
@@ -132,8 +151,27 @@ export async function prepareContextEngineSubagentSpawn(params: {
         floorSeconds: true,
       }),
     });
-    return { status: "ok", preparation };
+    let rollback: Promise<void> | undefined;
+    return {
+      status: "ok",
+      preparation: {
+        rollback: () =>
+          (rollback ??= (async () => {
+            try {
+              await preparation?.rollback();
+            } finally {
+              await dispose();
+            }
+          })()),
+        async dispose() {
+          // Cancellation may already be rolling back while its caller unwinds.
+          await rollback?.catch(() => {});
+          await dispose().catch(() => {});
+        },
+      },
+    };
   } catch (err) {
+    await dispose().catch(() => {});
     return {
       status: "error",
       error: `Context engine subagent preparation failed: ${summarizeSpawnError(err)}`,

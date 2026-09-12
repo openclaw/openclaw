@@ -25,13 +25,13 @@ export const QA_FRONTIER_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, Qa
   });
 
 export const QA_FRONTIER_CHARACTER_JUDGE_MODELS = Object.freeze([
-  "openai/gpt-5.6-sol",
+  "openai/gpt-5.6-luna",
   "anthropic/claude-opus-4-8",
 ]);
 
 export const QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS: Readonly<
   Record<string, QaFrontierCharacterModelOptions>
 > = Object.freeze({
-  "openai/gpt-5.6-sol": { thinkingDefault: "xhigh", fastMode: true },
+  "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: true },
   "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
 });

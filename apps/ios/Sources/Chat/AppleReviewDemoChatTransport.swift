@@ -74,8 +74,8 @@ struct LocalChatFixture {
         displayName: "Molty",
         subject: "Mobile command center",
         modelProvider: "openai",
-        modelID: "gpt-5.6-sol",
-        modelName: "GPT-5.6 Sol",
+        modelID: "gpt-6-astra",
+        modelName: "GPT-6 Astra",
         modelSelectionTarget: "global",
         additionalModels: [
             OpenClawChatModelChoice(
@@ -95,7 +95,7 @@ struct LocalChatFixture {
                 identity: ["emoji": AnyCodable("M")],
                 workspace: "OpenClaw",
                 workspacegit: false,
-                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.6-sol")],
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-6-astra")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
                 thinkingoptions: ["auto", "low", "medium", "high"],
@@ -106,7 +106,7 @@ struct LocalChatFixture {
                 identity: ["emoji": AnyCodable("RS")],
                 workspace: "OpenClaw",
                 workspacegit: false,
-                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.6-sol")],
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-6-astra")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
                 thinkingoptions: ["auto", "low", "medium", "high"],
@@ -117,7 +117,7 @@ struct LocalChatFixture {
                 identity: ["emoji": AnyCodable("AU")],
                 workspace: "OpenClaw",
                 workspacegit: false,
-                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.6-sol")],
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-6-astra")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
                 thinkingoptions: ["auto", "low", "medium", "high"],
@@ -233,7 +233,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         if ProcessInfo.processInfo.arguments.contains("--openclaw-unavailable-model-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
             {"models":[
-              {"id":"gpt-5.6-sol","name":"GPT-5.6 Sol","provider":"openai",
+              {"id":"gpt-6-astra","name":"GPT-6 Astra","provider":"openai",
                "available":true,"contextWindow":128000},
               {"id":"claude-opus-4-1","name":"Claude Opus 4.1","provider":"anthropic",
                "available":false,"unavailableReason":"missing-auth","contextWindow":200000}
@@ -243,7 +243,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         if ProcessInfo.processInfo.arguments.contains("--openclaw-selected-model-auth-failure-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
             {"models":[
-              {"id":"gpt-5.6-sol","name":"GPT-5.6 Sol","provider":"openai",
+              {"id":"gpt-6-astra","name":"GPT-6 Astra","provider":"openai",
                "available":false,"unavailableReason":"auth-failed","contextWindow":128000},
               {"id":"claude-opus-4-1","name":"Claude Opus 4.1","provider":"anthropic",
                "available":true,"contextWindow":200000}

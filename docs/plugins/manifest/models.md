@@ -12,7 +12,7 @@ Manifest fields that describe the models a provider plugin exposes: which shorth
 
 ## modelSupport reference
 
-Use `modelSupport` when OpenClaw should infer your provider plugin from shorthand model ids like `gpt-5.6-sol` or `claude-sonnet-4.6` before plugin runtime loads.
+Use `modelSupport` when OpenClaw should infer your provider plugin from shorthand model ids like `gpt-6-astra` or `claude-sonnet-4.6` before plugin runtime loads.
 
 ```json
 {

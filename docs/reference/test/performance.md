@@ -98,6 +98,50 @@ Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only 
 
 </Accordion>
 
+<Accordion title="Gateway concurrency (scripts/bench-gateway-concurrency.ts)">
+
+Runs synthetic streaming agent turns in parallel sessions on one isolated
+Gateway. Add tool calls, session history, observers, and control-plane probes to
+reproduce allocation pressure from a busy Gateway. Build with `pnpm build`
+first; no provider key is required.
+
+```bash
+pnpm test:gateway:concurrency -- --concurrency 16 --tool-events --workspace-fanout --session-count 100 --history-messages 20 --history-clients 4 --subscribers 4 --visible-observer --control-plane --heap-prof-dir .artifacts/gateway-heap --output .artifacts/gateway-concurrency.json
+pnpm test:gateway:concurrency -- --concurrency 64 --turns-per-session 8 --tool-events --timeout-ms 600000 --heap-prof-dir .artifacts/gateway-sustained-heap --output .artifacts/gateway-sustained.json
+```
+
+`--concurrency` controls parallel sessions; `--turns-per-session` controls serial
+turns in each session (default 1, maximum 100). The second example completes 512
+turns across 64 sessions. Each session starts its next turn as soon as its
+previous turn completes, retaining its conversation history and workspace;
+there is no barrier between rounds. The fresh-connection probe runs once after
+every session has started its first turn. `--tool-events` requests a tool call
+on every turn, including follow-ups. The per-run timeout still bounds the whole
+workload. Health/control sampling is capped at 2,048 samples, while heap
+sampling continues until the full workload finishes.
+
+`--heap-prof-dir` samples allocations in the Gateway's main V8 isolate, starting
+after startup, session seeding, and probe warmup. Sampling ends after the load
+and its final memory probe, before profile serialization and teardown. It uses
+a 32 KiB sampling interval and includes objects collected by both minor and
+major GC, so `sampledAllocatedBytes` estimates gross allocations rather than
+retained heap. Native allocations and separate worker isolates are outside this
+profile. Each run records its `.heapprofile` path and the twenty largest
+allocation stacks; open the raw file in the Chrome DevTools Memory panel.
+
+The summary includes sampled allocation bytes per run and per completed turn.
+The per-turn figure also includes concurrent probes and session mutations;
+compare identical workload settings and Node versions across multiple runs.
+Initial and follow-up turns overlap across sessions, so the allocation profile
+covers their combined workload rather than attributing separate cold and warm
+allocations. Compare matched one-turn and sustained runs to study reuse.
+Sampling is statistical and adds overhead. Use unprofiled runs for latency
+comparisons. Existing heap/RSS measurements are taken before exporting the
+profile. `--cpu-prof-dir` remains available separately and includes startup;
+the recorded `loadWindow` identifies the measured interval in that CPU profile.
+
+</Accordion>
+
 <Accordion title="Gateway restart (scripts/bench-gateway-restart.ts)">
 
 macOS and Linux only (uses SIGUSR1 for in-process restarts; fails immediately on Windows). Same built-entry default and `--entry scripts/run-node.mjs` override as gateway startup above.

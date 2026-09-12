@@ -1,15 +1,26 @@
+import type { nothing, TemplateResult } from "lit";
+
 export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change";
 
 export type PanelHostedTab = {
   id: string;
   label: string;
-  url: string;
-  kind: "remote" | "native";
+  /** Page URL used for hostname favicon lookup when no explicit favicon is available. */
+  url?: string;
+  /** Explicit icon URL; takes precedence over hostname lookup and `icon`. */
+  favicon?: string;
+  icon?: TemplateResult;
+  title?: string | null;
+  statusLabel?: string | null;
+  badge?: string | null;
+  className?: string;
 };
 
 export type PanelHostedTabsElement = HTMLElement & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
+  /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
+  readonly hostedActions?: TemplateResult | typeof nothing;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };

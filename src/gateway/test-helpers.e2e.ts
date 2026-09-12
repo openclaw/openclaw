@@ -45,6 +45,7 @@ export async function connectGatewayClient(params: {
   url: string;
   token?: string;
   deviceToken?: string;
+  origin?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
@@ -90,6 +91,7 @@ export async function connectGatewayClient(params: {
       url: params.url,
       token: params.token,
       deviceToken: params.deviceToken,
+      origin: params.origin,
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
@@ -274,6 +276,9 @@ export async function startGatewayWithClient(params: {
   cfg: unknown;
   configPath: string;
   token: string;
+  clientName?: GatewayClientName;
+  mode?: GatewayClientMode;
+  origin?: string;
   clientDisplayName?: string;
   scopes?: string[];
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
@@ -302,6 +307,9 @@ export async function startGatewayWithClient(params: {
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       token: params.token,
+      clientName: params.clientName,
+      mode: params.mode,
+      origin: params.origin,
       clientDisplayName: params.clientDisplayName,
       scopes: params.scopes,
       onEvent: params.onEvent,

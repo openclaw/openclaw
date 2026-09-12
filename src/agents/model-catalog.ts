@@ -46,6 +46,7 @@ export type BuildPreparedModelCatalogParams = {
   modelRegistry: ModelRegistry;
   readOnly?: boolean;
   includeProviderPluginAugmentation?: boolean;
+  providerIds?: readonly string[];
   metadataSnapshot: PluginMetadataSnapshot;
   providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"];
   workspaceDir?: string;
@@ -385,6 +386,7 @@ export async function buildPreparedModelCatalogSnapshot(
           ? resolveProviderApiKeyForProvider(providerId)
           : { apiKey: undefined, discoveryApiKey: undefined };
       const supplemental = await augmentModelCatalogWithProviderPlugins({
+        providerIds: params.providerIds,
         config: cfg,
         workspaceDir,
         env,

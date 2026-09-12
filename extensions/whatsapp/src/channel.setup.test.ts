@@ -282,7 +282,7 @@ describe("whatsapp setup wizard", () => {
     expect(warnings).toEqual([
       {
         checkId: "channels.whatsapp.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "WhatsApp security warning",
         detail:
           'WhatsApp groups: groupPolicy="open" with no channels.whatsapp.accounts.default.groups allowlist; any group can add + ping (mention-gated). Set channels.whatsapp.accounts.default.groupPolicy="allowlist" + channels.whatsapp.accounts.default.groupAllowFrom or configure channels.whatsapp.accounts.default.groups.',
@@ -320,7 +320,7 @@ describe("whatsapp setup wizard", () => {
     expect(warnings).toEqual([
       {
         checkId: "channels.whatsapp.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "WhatsApp security warning",
         detail:
           'WhatsApp groups: groupPolicy="open" with no channels.whatsapp.accounts.Default.groups allowlist; any group can add + ping (mention-gated). Set channels.whatsapp.accounts.Default.groupPolicy="allowlist" + channels.whatsapp.accounts.Default.groupAllowFrom or configure channels.whatsapp.accounts.Default.groups.',

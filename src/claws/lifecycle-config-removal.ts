@@ -146,6 +146,7 @@ async function commitClawAgentConfigRemoval(
 }
 
 type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
+  operationId: string;
   assertCurrent: (database?: OpenClawStateDatabase) => void;
   drainMonitors: () => Promise<void>;
   completeDeletion: (database: OpenClawStateDatabase) => void;
@@ -237,6 +238,7 @@ export async function withClawAgentConfigRemoval<T>(
           assertCurrent();
           return {
             ...result,
+            operationId: deletion.entry.operationId,
             assertCurrent,
             drainMonitors: async () => {
               assertCurrent();
