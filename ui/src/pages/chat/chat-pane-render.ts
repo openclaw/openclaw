@@ -20,6 +20,7 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
+import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
@@ -293,6 +294,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.githubPublication = this.context.sessions.githubPublication.attach(
           publicationRow,
           () => this.requestUpdate(),
+          GitHubPublicationController,
         );
       }
       const publication = this.githubPublication;
@@ -656,9 +658,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onAgentChange: (agentId) => {
         this.onPaneSessionChange?.(this.paneId, buildAgentMainSessionKey({ agentId }));
       },
-      onSessionSelect: (next) => {
-        this.onPaneSessionChange?.(this.paneId, next);
-      },
+      onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
       onOpenSidebar: state.handleOpenSidebar,

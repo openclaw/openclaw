@@ -27,7 +27,10 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
-import type { GitHubPublicationPresentationBinding } from "./github-publication-controller.ts";
+import type {
+  GitHubPublicationController,
+  GitHubPublicationPresentationBinding,
+} from "./github-publication-controller.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
@@ -172,7 +175,12 @@ export type GitHubPublicationBinding = GitHubPublicationPresentationBinding & {
 
 export type SessionCapability = {
   readonly githubPublication: {
-    attach: (row: GatewaySessionRow, changed: () => void) => GitHubPublicationBinding | null;
+    // The lazy presentation supplies code; this session owner keeps operation custody.
+    attach: (
+      row: GatewaySessionRow,
+      changed: () => void,
+      Controller: typeof GitHubPublicationController,
+    ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
