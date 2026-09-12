@@ -10,8 +10,14 @@ import { buildCodexUserInput } from "./user-input.js";
 
 type QueueParams = Parameters<typeof createCodexSteeringQueue>[0];
 
-const prepareMessage: QueueParams["prepareMessage"] = async (text, options) =>
-  buildCodexUserInput(text, options.images);
+const prepareMessage: QueueParams["prepareMessage"] = async (text, options) => ({
+  input: buildCodexUserInput(text, options.images),
+  message: {
+    role: "user",
+    content: [{ type: "text", text }, ...(options.images ?? [])],
+    timestamp: 1,
+  },
+});
 
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z0V8AAAAASUVORK5CYII=";
@@ -438,7 +444,11 @@ describe("Codex app-server steering queue", () => {
 
     queue.cancel();
     await rejected;
+    expect(queue.getAcceptedMessages()).toEqual([
+      { role: "user", content: [{ type: "text", text: "completion wake" }], timestamp: 1 },
+    ]);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
+    expect(queue.getAcceptedMessages()).toHaveLength(1);
     await expect(queue.queue("too late", { debounceMs: 0 })).rejects.toThrow(
       "steering queue cancelled",
     );
@@ -630,7 +640,11 @@ describe("Codex app-server steering queue", () => {
 
     await rejected;
     expect(onQueueAccepted).toHaveBeenCalledWith(true);
+    expect(queue.getAcceptedMessages()).toEqual([
+      { role: "user", content: [{ type: "text", text: "on the wire" }], timestamp: 1 },
+    ]);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
+    expect(queue.getAcceptedMessages()).toHaveLength(1);
     acceptSteer?.();
     await vi.advanceTimersByTimeAsync(0);
   });

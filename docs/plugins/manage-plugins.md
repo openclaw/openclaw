@@ -312,8 +312,16 @@ further model steps to wait for completion; completed actions and accepted steer
 remain in the transcript and are not replayed. Finish a running program before
 asking it to use changed tools.
 
-Runtimes without a refresh consumer report the backend change but require a new
-conversation to use changed tools. Do not repeat a completed mutation.
+Managed Codex sessions continue in the same OpenClaw conversation after stopping
+the current native turn and its background terminals, then creating a thread with
+updated tools. Completed tool results, accepted follow-up messages, and ordinary
+question answers carry into that thread as bounded conversation context. If native cleanup or thread release
+fails, the attempt reports the failure and preserves the binding for recovery
+instead of replaying completed work.
+
+Imported or supervised native sessions keep their original ownership and tool
+definitions. They report the backend change but require a new managed conversation
+to use changed tools. Other runtimes without a refresh consumer do the same.
 
 Inventory and result output are bounded. Narrow `list` with `query`, inspect a
 specific plugin, or use the Control UI Plugins page for omitted details and

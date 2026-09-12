@@ -387,6 +387,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
       }
     },
+    pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,

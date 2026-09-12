@@ -179,6 +179,13 @@ describe("plugin runtime refresh admission", () => {
           expect(getAgentRunContext(params.runId)?.delegatedAuthority).toBe(admittedOwner);
           expect(params.prompt).toContain("Continue the current task from the transcript");
           expect(params.prompt).not.toContain(originalPrompt);
+          expect(params.pluginRuntimeRefreshMessages).toEqual(
+            Array.from({ length: index }, (_, previous) => ({
+              role: "user",
+              content: `committed effect ${previous}`,
+              timestamp: previous,
+            })),
+          );
           expect(params.skipPreparedUserTurnMessage).toBe(true);
           expect(params.suppressNextUserMessagePersistence).toBe(true);
           for (const stale of staleOwners) {
@@ -195,6 +202,9 @@ describe("plugin runtime refresh admission", () => {
           return makeAttemptResult({
             assistantTexts: [],
             sessionIdUsed: params.sessionId,
+            pluginRuntimeRefreshMessages: [
+              { role: "user", content: `committed effect ${index}`, timestamp: index },
+            ],
             toolMetas: [
               { toolName: " plugins ", isError: false },
               { toolName: "failed", isError: true },

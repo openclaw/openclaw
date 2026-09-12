@@ -64,14 +64,11 @@ install safety checks.
 </Warning>
 
 Bundled plugins and verified first-party catalog plugins do not require
-`--accept-capabilities` for install, enable, update, or Doctor repair. Local
+`--accept-capabilities` during setup, install, enable, update, or Doctor repair. Local
 copies and unverified sources still require capability consent even when their
 package name matches an official plugin. This exemption does not grant OAuth,
 operating-system, or runtime tool permissions. See
 [capability consent](/plugins/manage-plugins#capability-consent).
-
-AI onboarding separately requests a capability review before installing a chosen
-provider or required runtime, including verified first-party packages.
 
 `plugins search` queries ClawHub for installable `code-plugin` and
 `bundle-plugin` packages (not skills; use `openclaw skills search` for those).

@@ -227,6 +227,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   pluginRuntimeRefreshPending?: () => boolean;
   /** Registers the exact attempt owner able to stop before another model request. */
   registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
+  /** Completed native attempt results excluded by the original admission read fence. */
+  pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
   permissionChange?: {
     readonly owner: object;
@@ -348,6 +350,7 @@ export type EmbeddedRunAttemptResult = {
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
   messagesSnapshot: AgentMessage[];
+  pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
   settledTurnFinalizationContext?:
     | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }
