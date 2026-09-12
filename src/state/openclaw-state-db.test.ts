@@ -2489,9 +2489,14 @@ describe("openclaw state database", () => {
     },
   );
 
-  it.each(["runtime open", "doctor repair"] as const)(
-    "migrates v12 wide rows to canonical JSON through %s without changing hydrated jobs",
-    (migrationPath) => {
+  it.each([
+    { migrationPath: "runtime open", hasPathAliases: true },
+    { migrationPath: "doctor repair", hasPathAliases: true },
+    { migrationPath: "runtime open", hasPathAliases: false },
+    { migrationPath: "doctor repair", hasPathAliases: false },
+  ] as const)(
+    "migrates legacy wide rows through $migrationPath with path aliases $hasPathAliases without changing hydrated jobs",
+    ({ migrationPath, hasPathAliases }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -2621,13 +2626,22 @@ describe("openclaw state database", () => {
       insertLegacyAttestation.run("wk-setup", 1_000, 1_100);
       insertLegacyAttestation.run("wk-alias", 2_000, 2_100);
       insertLegacyAttestation.run("wk-orphan", 3_000, 3_100);
-      legacy
-        .prepare(
-          `INSERT INTO workspace_path_aliases (
-             alias_key, alias_path, workspace_key, workspace_path, updated_at_ms
-           ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run("wk-alias-link", "/tmp/wk-alias-link", "wk-alias", "/tmp/wk-alias", 2_200);
+      if (hasPathAliases) {
+        legacy
+          .prepare(
+            `INSERT INTO workspace_path_aliases (
+               alias_key, alias_path, workspace_key, workspace_path, updated_at_ms
+             ) VALUES (?, ?, ?, ?, ?)`,
+          )
+          .run("wk-alias-link", "/tmp/wk-alias-link", "wk-alias", "/tmp/wk-alias", 2_200);
+      } else {
+        legacy.exec(`
+          DROP TABLE workspace_path_aliases;
+          PRAGMA user_version = 1;
+          UPDATE schema_meta SET schema_version = 1, app_version = '2026.6.35'
+           WHERE meta_key = 'primary';
+        `);
+      }
       const insertLegacyHash = legacy.prepare(
         "INSERT INTO workspace_generated_bootstrap_hashes (workspace_key, filename, sha256) VALUES (?, ?, ?)",
       );
@@ -2661,6 +2675,12 @@ describe("openclaw state database", () => {
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [
+            ...(!hasPathAliases
+              ? [
+                  "Migrated cloud worker placements to execution modes",
+                  "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
+                ]
+              : []),
             "Consolidated shared state tables (v13)",
             "Qualified historical cron creator attribution as unknown (v14)",
           ],
@@ -2811,7 +2831,7 @@ describe("openclaw state database", () => {
       ).toEqual([
         {
           workspace_key: "wk-alias",
-          workspace_path: "/tmp/wk-alias",
+          workspace_path: hasPathAliases ? "/tmp/wk-alias" : null,
           version: null,
           bootstrap_seeded_at: null,
           setup_completed_at: null,
