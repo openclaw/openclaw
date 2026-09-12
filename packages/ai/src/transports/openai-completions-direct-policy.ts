@@ -20,9 +20,8 @@ export function applyDirectCompletionsReasoningAndRouting(
   // Provider compat is authoritative; keep model-level and literal values as fallbacks
   // for catalogs that have not adopted reasoningEffortMap.
   const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
-  const thinkingLevelMap:
-    | Partial<Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string | null>>
-    | undefined = model.thinkingLevelMap;
+  const thinkingLevelMap: Record<string, string | null | undefined> | undefined =
+    model.thinkingLevelMap;
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
   const declaredEfforts = resolveOpenAIModelReasoningEfforts(model);
   const hasReasoningContract =
@@ -78,28 +77,29 @@ export function applyDirectCompletionsReasoningAndRouting(
     }
   } else if (model.reasoning && compat.supportsReasoningEffort) {
     const isNoneSupported = supportsOpenAIReasoningEffort(model, "none");
-    const isOffNone =
-      typeof offReasoningEffort === "string" && offReasoningEffort.trim().toLowerCase() === "none";
-    const isReasoningEffortNone =
-      typeof reasoningEffort === "string" && reasoningEffort.trim().toLowerCase() === "none";
-    const isMappedNone =
-      options?.reasoningEffort !== undefined &&
-      ((typeof reasoningEffortMap[options.reasoningEffort] === "string" &&
-        reasoningEffortMap[options.reasoningEffort]!.trim().toLowerCase() === "none") ||
-        (typeof thinkingLevelMap?.[options.reasoningEffort] === "string" &&
-          thinkingLevelMap[options.reasoningEffort]!.trim().toLowerCase() === "none"));
-    const isNoneExplicitlyMapped = isOffNone || isMappedNone;
+    const isReasoningEffortDisabled =
+      typeof reasoningEffort === "string" &&
+      (reasoningEffort.trim().toLowerCase() === "none" ||
+        reasoningEffort.trim().toLowerCase() === "off");
 
     if (reasoningEnabled && reasoningEffort) {
       // OpenAI-style reasoning_effort
       params.reasoning_effort = reasoningEffort;
-    } else if (
-      (isReasoningEffortNone || isOffNone) &&
-      (isNoneSupported || isNoneExplicitlyMapped)
-    ) {
-      params.reasoning_effort = "none";
     } else if (typeof offReasoningEffort === "string") {
       params.reasoning_effort = offReasoningEffort;
+    } else if (
+      options?.reasoningEffort !== undefined &&
+      (reasoningEffortMap[options.reasoningEffort] !== undefined ||
+        (thinkingLevelMap && options.reasoningEffort in thinkingLevelMap))
+    ) {
+      if (reasoningEffort) {
+        params.reasoning_effort = reasoningEffort;
+      }
+    } else if (
+      (isReasoningEffortDisabled || options?.reasoningEffort === "none") &&
+      isNoneSupported
+    ) {
+      params.reasoning_effort = "none";
     }
   }
 
