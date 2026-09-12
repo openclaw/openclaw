@@ -1,7 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export type ExistingAgentSchemaMeta = {
@@ -15,13 +13,10 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
   if (!tableExists(db, "schema_meta")) {
     return null;
   }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "schema_meta">>(db)
-      .selectFrom("schema_meta")
-      .select(["role", "schema_version", "agent_id"])
-      .where("meta_key", "=", "primary"),
-  );
+  // Schema admission runs in native readers before query-builder runtimes load.
+  const row = db
+    .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
+    .get();
   if (!row) {
     return null;
   }
