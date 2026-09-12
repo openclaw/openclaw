@@ -41,7 +41,6 @@ function prepareRequest(
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     terminalState: initial.terminalState,
     hasTerminalToolPresentation: false,
-    settledTurnFinalizationAvailable: true,
   };
 }
 

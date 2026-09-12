@@ -588,6 +588,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
     const input = finalizationInput(attempt);
     input.finalization.preparedAttempt.silentExpected = true;
+    delete input.finalization.harness.finalizeSettledTurn;
 
     const result = await prepareTerminalWithSettledTurnFinalization(input);
 
@@ -699,6 +700,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       const attempt = settledFailedAttempt();
       const input = finalizationInput(attempt);
       const controller = new AbortController();
+      delete input.finalization.harness.finalizeSettledTurn;
       input.finalization.abortSignal = AbortSignal.any([
         input.finalization.abortSignal,
         controller.signal,
@@ -726,60 +728,82 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     },
   );
 
-  it("preserves cancellation while fallback transcript persistence is pending", async () => {
-    const attempt = settledSuccessfulAttempt();
-    const input = finalizationInput(attempt);
-    const controller = new AbortController();
-    input.finalization.abortSignal = controller.signal;
-    input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
-    input.finalization.preparedAttempt.agentId = "main";
-    input.finalization.preparedAttempt.sessionTarget = {
-      agentId: "main",
-      sessionId: "session-settled",
-      sessionKey: "agent:main:settled",
-      storePath: "/tmp/sessions.json",
-    } as never;
-    const emptyAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "" }],
-    });
-    backendMocks.runSettledFinalization.mockResolvedValue({
-      outcome: "empty",
-      result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
-    });
+  it.each([
+    { mode: "durable", expectedAppends: 1, expectedDeliveries: 1 },
+    { mode: "detached", expectedAppends: 0, expectedDeliveries: 1 },
+    { mode: "pre-append-abort", expectedAppends: 0, expectedDeliveries: 0 },
+    { mode: "post-append-abort", expectedAppends: 1, expectedDeliveries: 1 },
+  ] as const)(
+    "keeps the missing-finalizer fallback atomic across $mode dispatch",
+    async ({ mode, expectedAppends, expectedDeliveries }) => {
+      const attempt = settledSuccessfulAttempt();
+      const input = finalizationInput(attempt);
+      const controller = new AbortController();
+      input.finalization.abortSignal = controller.signal;
+      delete input.finalization.harness.finalizeSettledTurn;
+      input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
+      input.finalization.preparedAttempt.agentId = "main";
+      input.finalization.preparedAttempt.sessionTarget = {
+        agentId: "main",
+        sessionId: "session-settled",
+        sessionKey: "agent:main:settled",
+        storePath: "/tmp/sessions.json",
+      } as never;
+      if (mode === "detached") {
+        input.finalization.preparedAttempt.sessionPersistence = "detached";
+      }
+      backendMocks.runSettledFinalization.mockRejectedValueOnce(
+        new Error("Harness does not support settled-turn finalization"),
+      );
+      if (mode === "pre-append-abort") {
+        vi.mocked(resolveAgentRunSessionTarget).mockImplementationOnce(async () => {
+          controller.abort(new Error("cancelled before append"));
+          return {
+            agentId: "main",
+            sessionId: "session-settled",
+            sessionKey: "agent:main:settled",
+            storePath: "/synthetic/sessions.json",
+          };
+        });
+      } else if (mode === "post-append-abort") {
+        transcriptMocks.appendAssistantMirrorMessageByIdentity.mockImplementationOnce(async () => {
+          controller.abort(new Error("cancelled after append"));
+          return { ok: true, messageId: "fallback-message" };
+        });
+      } else {
+        transcriptMocks.appendAssistantMirrorMessageByIdentity.mockResolvedValueOnce({
+          ok: true,
+          messageId: "fallback-message",
+        });
+      }
 
-    let markAppendStarted!: () => void;
-    const appendStarted = new Promise<void>((resolve) => {
-      markAppendStarted = resolve;
-    });
-    let releaseAppend!: () => void;
-    const appendRelease = new Promise<void>((resolve) => {
-      releaseAppend = resolve;
-    });
-    transcriptMocks.appendAssistantMirrorMessageByIdentity.mockImplementationOnce(
-      async (params: { signal?: AbortSignal }) => {
-        markAppendStarted();
-        await appendRelease;
-        return params.signal?.aborted
-          ? { ok: false, reason: "cancelled", code: "blocked" }
-          : { ok: true, messageId: "fallback-message" };
-      },
-    );
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-    const resultPromise = prepareTerminalWithSettledTurnFinalization(input);
-    await appendStarted;
-    controller.abort(new Error("cancelled by user"));
-    releaseAppend();
-    const result = await resultPromise;
-
-    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
-    );
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.attempt).toBe(attempt);
-    expect(result.prepared.payloadsWithToolMedia).not.toEqual([
-      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
-    ]);
-  });
+      expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(
+        expectedAppends,
+      );
+      expect(result.finalizationOutcome).toBe("failed");
+      expect(
+        result.prepared.payloadsWithToolMedia?.filter(
+          (payload) => payload.text === SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+        ),
+      ).toHaveLength(expectedDeliveries);
+      if (expectedDeliveries === 0) {
+        expect(result.attempt).toBe(attempt);
+        return;
+      }
+      const metadata = getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {});
+      expect(metadata?.deliverDespiteSourceReplySuppression).not.toBe(true);
+      if (mode === "detached") {
+        expect(metadata?.assistantTranscriptIdempotencyKey).toBeUndefined();
+      } else {
+        expect(metadata).toMatchObject({
+          assistantTranscriptOwned: true,
+          assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
+        });
+      }
+    },
+  );
 
   it("keeps the honest fallback when its transcript target cannot be resolved", async () => {
     const input = finalizationInput(settledSuccessfulAttempt());

@@ -57,6 +57,7 @@ import {
   createOverflowRunParams,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
+import { runMissingFinalizerDeliveryCase } from "./run.prepared-harness-source-delivery.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
@@ -98,6 +99,84 @@ describe("prepared harness source delivery", () => {
     await state?.cleanup();
   });
   beforeEach(describe2BeforeEach0);
+
+  it.each([
+    {
+      mode: "durable",
+      expectedAppends: 1,
+      expectedDeliveries: 1,
+      expectedAbort: false,
+      expectedIdempotencyKeys: ["run-settled:settled-finalization-fallback"],
+    },
+    {
+      mode: "detached",
+      expectedAppends: 0,
+      expectedDeliveries: 1,
+      expectedAbort: false,
+      expectedIdempotencyKeys: [],
+    },
+    {
+      mode: "pre-append-abort",
+      expectedAppends: 0,
+      expectedDeliveries: 0,
+      expectedAbort: true,
+      expectedIdempotencyKeys: [],
+    },
+    {
+      mode: "post-append-abort",
+      expectedAppends: 1,
+      expectedDeliveries: 1,
+      expectedAbort: true,
+      expectedIdempotencyKeys: ["run-settled:settled-finalization-fallback"],
+    },
+  ] as const)(
+    "projects an absent-finalizer fallback through real SQLite and source dispatch ($mode)",
+    async ({
+      mode,
+      expectedAppends,
+      expectedDeliveries,
+      expectedAbort,
+      expectedIdempotencyKeys,
+    }) => {
+      const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+      state = await createOpenClawTestState({ label: `prepared-source-${mode}` });
+      const result = await runMissingFinalizerDeliveryCase({
+        mode,
+        state,
+        sessionStoreMocks,
+        dispatchReplyFromConfig,
+        sourceReplyDeliveryMode: "automatic",
+      });
+      expect(result).toMatchObject({
+        appends: expectedAppends,
+        fallbackDeliveries: expectedDeliveries,
+        abortedBeforeDispatch: expectedAbort,
+        appendedIdempotencyKeys: expectedIdempotencyKeys,
+      });
+    },
+  );
+
+  it("keeps an absent-finalizer fallback private for message-tool-only delivery", async () => {
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "prepared-source-message-tool-only" });
+
+    const result = await runMissingFinalizerDeliveryCase({
+      mode: "durable",
+      state,
+      sessionStoreMocks,
+      dispatchReplyFromConfig,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result).toMatchObject({
+      appends: 1,
+      deliveries: 0,
+      fallbackDeliveries: 0,
+      queuedFinals: 0,
+      abortedBeforeDispatch: false,
+      appendedIdempotencyKeys: ["run-settled:settled-finalization-fallback"],
+    });
+  });
 
   it.each([
     {

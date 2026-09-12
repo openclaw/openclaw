@@ -117,10 +117,9 @@ export function resolveSettledTurnFinalizationRequest(input: {
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   hasTerminalToolPresentation: boolean;
   terminalState: EmbeddedRunTerminalState;
-  settledTurnFinalizationAvailable: boolean;
 }): string | null {
   const terminalAssistant = resolveCurrentAttemptAssistant(input.attempt);
-  if (!input.settledTurnFinalizationAvailable || isTerminalAssistantError(terminalAssistant)) {
+  if (isTerminalAssistantError(terminalAssistant)) {
     return null;
   }
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);

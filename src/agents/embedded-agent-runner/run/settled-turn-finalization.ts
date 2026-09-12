@@ -109,8 +109,6 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
     terminalState: initial.terminalState,
-    settledTurnFinalizationAvailable:
-      typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
   if (!prompt) {
     return {
@@ -235,7 +233,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
       sessionTarget: committedSessionTarget,
     });
-    if (input.finalization.abortSignal.aborted) {
+    if (input.finalization.abortSignal.aborted && !transcriptIdempotencyKey) {
       log.warn(
         `settled-turn fallback was cancelled during transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
@@ -529,6 +527,9 @@ async function persistSettledToolFallbackTranscript(input: {
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<string | undefined> {
   input.assertActive();
+  if (input.attempt.sessionPersistence === "detached") {
+    return undefined;
+  }
   const target = input.sessionTarget ?? input.attempt.sessionTarget;
   const sessionKey = target?.sessionKey ?? input.attempt.sessionKey;
   const hasWriterFence =
@@ -576,20 +577,23 @@ async function persistSettledToolFallbackTranscript(input: {
           text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
         }),
     );
+    // A successful append is the commit boundary. Preserve its key even when
+    // cancellation races immediately afterward so delivery can project that
+    // already-committed row exactly once.
+    if (result.ok) {
+      return idempotencyKey;
+    }
     if (input.abortSignal.aborted) {
       return undefined;
     }
     input.assertActive();
-    if (!result.ok) {
-      if (hasWriterFence || result.code === "session-rebound") {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
-      log.warn(
-        `settled-turn fallback transcript append skipped: runId=${input.attempt.runId} sessionId=${input.sessionId} reason=${result.reason}`,
-      );
-      return undefined;
+    if (hasWriterFence || result.code === "session-rebound") {
+      throw new SessionTranscriptWriterClaimReboundError();
     }
-    return idempotencyKey;
+    log.warn(
+      `settled-turn fallback transcript append skipped: runId=${input.attempt.runId} sessionId=${input.sessionId} reason=${result.reason}`,
+    );
+    return undefined;
   } catch (error) {
     // The caller preserves queue cancellation instead of synthesizing a reply.
     if (input.abortSignal.aborted) {
