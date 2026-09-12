@@ -703,19 +703,10 @@ export function splitMediaFromOutput(
     lineOffset += line.length + 1; // +1 for newline
   }
 
-  let cleanedText = keptLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
-
-  // Detect and strip [[audio_as_voice]] tag
-  const audioTagResult = parseAudioTag(cleanedText);
+  const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");
+  const audioTagResult = parseAudioTag(visibleText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
-  if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").trim();
-  }
+  const cleanedText = (audioTagResult.hadTag ? audioTagResult.text : visibleText).trimEnd();
 
   if (media.length === 0) {
     const parsedText = foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw;

@@ -317,3 +317,19 @@ describe("splitMediaFromOutput", () => {
     );
   });
 });
+
+describe("strip-only MEDIA text preservation", () => {
+  it("preserves paragraph breaks, indentation, and repeated spaces", () => {
+    const input = "First\n\n  Second  paragraph\nMEDIA:./image.png\n    code  example";
+    expect(splitMediaFromOutput(input, { extractMediaDirectives: false }).text).toBe(
+      "First\n\n  Second  paragraph\n    code  example",
+    );
+  });
+
+  it("preserves fenced text containing MEDIA examples", () => {
+    const input = "Before\n\n```text\nMEDIA:./example.png\n  keep  spaces\n```\nMEDIA:./image.png";
+    expect(splitMediaFromOutput(input, { extractMediaDirectives: false }).text).toBe(
+      "Before\n\n```text\nMEDIA:./example.png\n  keep  spaces\n```",
+    );
+  });
+});
