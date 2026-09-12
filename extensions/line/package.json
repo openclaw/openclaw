@@ -51,6 +51,12 @@
       "systemImage": "message",
       "order": 75,
       "quickstartAllowFrom": true,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "sender",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": true
+      },
       "setup": {
         "fields": [
           {

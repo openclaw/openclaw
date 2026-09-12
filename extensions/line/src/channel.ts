@@ -19,6 +19,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
+import { lineDoctor } from "./doctor.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupLookupIds } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
@@ -144,6 +145,7 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
     }),
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
+    doctor: lineDoctor,
     gateway: lineGatewayAdapter,
     heartbeat: {
       sendTyping: async ({ cfg, to, accountId }) => {

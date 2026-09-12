@@ -98,6 +98,15 @@ describe("doctor channel capabilities", () => {
     expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
+  it("returns sender-scoped group semantics for line without a DM allowlist fallback", () => {
+    expect(getDoctorChannelCapabilities("line")).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "sender",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: true,
+    });
+  });
+
   it("returns capability overrides from matrix plugin metadata", () => {
     expect(getDoctorChannelCapabilities("matrix")).toEqual({
       dmAllowFromMode: "nestedOnly",
