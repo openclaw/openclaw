@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -121,7 +122,7 @@ describe("SQLite trajectory runtime store", () => {
     expect(events.map((event) => event.type)).toEqual(["event-3", "event-4"]);
   });
 
-  it("stops reading old event bodies once the retained byte window is full", async () => {
+  it("trims the retained byte window without fetching UTF-8 event bodies", async () => {
     const history = Array.from({ length: 64 }, (_, index) =>
       createTrajectoryEvent({ type: `old-${index}`, payloadSize: 64 * 1024 }),
     );
@@ -153,7 +154,7 @@ describe("SQLite trajectory runtime store", () => {
       appendSqliteTrajectoryRuntimeEvents({ maxRuntimeBytes, sessionId: "session-1", storePath }, [
         newest,
       ]);
-      expect(materializedEvents).toBeLessThanOrEqual(retained.length + 1);
+      expect(materializedEvents).toBe(0);
     } finally {
       prepareSpy.mockRestore();
     }
@@ -162,26 +163,48 @@ describe("SQLite trajectory runtime store", () => {
     ).resolves.toEqual(retained);
   });
 
-  it.each([0, -1])("keeps the exact UTF-8 byte window with a %i-byte adjustment", async (delta) => {
-    const events = ["old", "middle", "newest"].map((type) => {
-      const event = createTrajectoryEvent({ type });
-      event.data = { payload: "日本語🦞".repeat(20) };
-      return event;
-    });
-    const maxRuntimeBytes = events
-      .slice(-2)
-      .reduce(
-        (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1,
-        delta,
+  it.each(
+    ["UTF-8", "UTF-16le", "UTF-16be"].flatMap((encoding) =>
+      [0, -1].map((delta) => ({ encoding, delta })),
+    ),
+  )(
+    "keeps the UTF-8 byte window in $encoding with a $delta-byte adjustment",
+    async ({ encoding, delta }) => {
+      if (encoding !== "UTF-8") {
+        storePath = path.join(tempDir, `${encoding}.sqlite`);
+        const seed = new DatabaseSync(storePath);
+        try {
+          seed.exec(
+            `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
+          );
+        } finally {
+          seed.close();
+        }
+        await replaceSessionEntry(
+          { sessionKey: "agent:main:main", storePath },
+          { sessionId: "session-1", updatedAt: 10 },
+        );
+      }
+      const events = ["old", "middle", "newest"].map((type) => {
+        const event = createTrajectoryEvent({ type });
+        event.data = { payload: "日本語🦞".repeat(20) };
+        return event;
+      });
+      const maxRuntimeBytes = events
+        .slice(-2)
+        .reduce(
+          (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1,
+          delta,
+        );
+      appendSqliteTrajectoryRuntimeEvents(
+        { maxRuntimeBytes, sessionId: "session-1", storePath },
+        events,
       );
-    appendSqliteTrajectoryRuntimeEvents(
-      { maxRuntimeBytes, sessionId: "session-1", storePath },
-      events,
-    );
-    await expect(
-      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
-    ).resolves.toEqual(events.slice(delta === 0 ? -2 : -1));
-  });
+      await expect(
+        loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+      ).resolves.toEqual(events.slice(delta === 0 ? -2 : -1));
+    },
+  );
 
   it("loads a bounded trailing window in storage order", () => {
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
