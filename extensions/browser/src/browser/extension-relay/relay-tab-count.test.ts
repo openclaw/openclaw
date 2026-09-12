@@ -32,10 +32,14 @@ async function authServer(
   let connections = 0;
   let fields: BrowserRelayProofFields;
   let entered!: () => void;
-  const received = new Promise<void>((resolve) => (entered = resolve));
+  const received = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
   let socketClosed!: () => void;
-  const closed = new Promise<void>((resolve) => (socketClosed = resolve));
-  const server = http.createServer(async (req, res) => {
+  const closed = new Promise<void>((resolve) => {
+    socketClosed = resolve;
+  });
+  const handleRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     paths.push(req.url ?? "");
     entered();
     if (options.hang) {
@@ -85,6 +89,11 @@ async function authServer(
         }),
       );
     }
+  };
+  const server = http.createServer((req, res) => {
+    void handleRequest(req, res).catch((error: unknown) => {
+      res.destroy(error instanceof Error ? error : new Error(String(error)));
+    });
   });
   server.on("connection", (socket) => {
     connections += 1;
@@ -94,7 +103,9 @@ async function authServer(
   await once(server, "listening");
   onTestFinished(async () => {
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
   const address = server.address();
   if (address === null || typeof address === "string") {

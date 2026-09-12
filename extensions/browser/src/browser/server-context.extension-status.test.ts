@@ -24,7 +24,7 @@ vi.mock("./pw-ai-module.js", () => ({
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
     await cleanup();
   }
   vi.restoreAllMocks();
