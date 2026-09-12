@@ -121,12 +121,13 @@ export function resolveOpenAIModelReasoningEfforts(
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  const supportsMax = model.api !== "openai-completions";
   // Azure deployment capabilities must be declared until its Astra contract is verified.
   if (id === "gpt-6-astra" && model.api !== "azure-openai-responses") {
-    return GPT_6_ASTRA_REASONING_EFFORTS;
+    return supportsMax ? GPT_6_ASTRA_REASONING_EFFORTS : GPT_CODEX_REASONING_EFFORTS;
   }
   if (/^gpt-5\.6(?:-|$)/u.test(id)) {
-    return GPT_56_REASONING_EFFORTS;
+    return supportsMax ? GPT_56_REASONING_EFFORTS : GPT_52_REASONING_EFFORTS;
   }
   if (id === "gpt-5.1-codex-mini") {
     return GPT_51_CODEX_MINI_REASONING_EFFORTS;

@@ -4,6 +4,7 @@ import {
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeMandatoryAdaptiveThinking,
 } from "@openclaw/llm-core";
+import { resolveOpenAIModelReasoningEfforts } from "./providers/openai-reasoning-effort.js";
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
@@ -47,6 +48,13 @@ export function getSupportedThinkingLevels<TApi extends Api>(
     return ["off"];
   }
   const thinkingLevelMap = resolveThinkingLevelMap(model);
+  const reasoningEfforts =
+    model.api === "openai-completions" ||
+    model.api === "openai-responses" ||
+    model.api === "azure-openai-responses" ||
+    model.api === "openai-chatgpt-responses"
+      ? resolveOpenAIModelReasoningEfforts(model)
+      : undefined;
 
   return EXTENDED_THINKING_LEVELS.filter((level) => {
     const mapped = thinkingLevelMap?.[level];
@@ -54,7 +62,7 @@ export function getSupportedThinkingLevels<TApi extends Api>(
       return false;
     }
     if (level === "xhigh" || level === "max") {
-      return mapped !== undefined;
+      return mapped !== undefined || reasoningEfforts?.includes(level) === true;
     }
     return true;
   });

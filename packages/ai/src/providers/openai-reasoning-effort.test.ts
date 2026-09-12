@@ -9,6 +9,24 @@ import {
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
+  it.each([
+    { api: "openai-completions", expected: "xhigh", compat: undefined },
+    { api: "openai-responses", expected: "max", compat: undefined },
+    {
+      api: "openai-completions",
+      expected: "max",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    },
+    {
+      api: "openai-completions",
+      expected: undefined,
+      compat: { supportsReasoningEffort: false },
+    },
+  ])("uses the $api max contract with compat=$compat", ({ api, expected, compat }) => {
+    const model = { provider: "openai", id: "gpt-5.6-sol", api, compat };
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "max" })).toBe(expected);
+  });
+
   it("recognizes GPT-5.6 model ids and deployment names", () => {
     expect(isOpenAIGpt56Model({ id: "gpt-5.6-luna" })).toBe(true);
     expect(isOpenAIGpt56Model({ id: "prod-luna", name: "GPT-5.6 (Azure)" })).toBe(true);
