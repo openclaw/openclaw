@@ -96,8 +96,7 @@ SQLite snapshots, Git backups, and support exports. Selecting a containing or
 nested workspace does not override this rule. Selecting a capture file as config
 or as a database backup source refuses the backup. Other states' captures are
 recognized by the exact sibling layout: `<owner>/` beside
-`<owner>.update-captures/`, with an existing owner directory. Canonical path
-aliases receive the same protection. Unrelated similarly named workspace
+`<owner>.update-captures/`, with an existing real owner directory. Unrelated similarly named workspace
 directories remain included; a suffix alone does not establish ownership.
 
 Marked private directories remain excluded after their owner is removed or
@@ -105,10 +104,19 @@ renamed, or the marked directory is moved or copied. Keep the marker with the
 whole directory. Files copied out without it are not recognized by this rule.
 The fixed `.openclaw-private-update-capture` file contains exactly
 `openclaw-private-update-capture-v1` followed by a newline. Export checks inspect
-only selected paths and their ancestors, including canonical aliases. They do
-not parse workspace manifests or scan for other state roots. A malformed or
-unreadable marker refuses export of that selection; a support bundle reports
-the refusal without including that input.
+each real path component with `lstat`, stopping at the first symbolic link.
+They do not resolve that link or inspect its target to decide whether to archive
+the link entry. Valid, malformed, and unreadable markers in a link target do not
+hide the link or refuse its backup. Its original target text is preserved, and
+its target contents are not copied through the link.
+
+A marker on a real ancestor before the link still excludes the selection. A
+malformed or unreadable real marker refuses export; a support bundle reports
+the refusal without including that input. Explicitly selected file contents,
+such as configuration, databases, and support inputs, require the same privacy
+check on both the selected path and its actual read path. Separately selected
+workspace contents also receive their own check. These checks do not parse
+workspace manifests or scan for other state roots.
 
 The marker is an exclusion instruction, not proof of artifact ownership or
 permission to reopen, adopt, or delete it. Producers must durably write it before

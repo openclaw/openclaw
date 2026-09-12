@@ -15,6 +15,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import { backupGitCreateCommand } from "./backup-git.js";
 import { backupSqliteCreateCommand } from "./backup-sqlite.js";
 import { verifyBackupArchive } from "./backup-verify.js";
+import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 describe("private update capture exclusion", () => {
@@ -232,8 +233,14 @@ describe("private update capture exclusion", () => {
     }
   });
 
-  it.each(["valid", "invalid with duplicate", "valid with duplicate"])(
-    "checks a %s lexical marker before deduplicating an outward workspace alias",
+  it.each([
+    "valid",
+    "invalid with duplicate",
+    "valid with duplicate",
+    "valid via alias",
+    "invalid via alias",
+  ])(
+    "backupCreateCommand respects the link-entry boundary for a %s outward workspace selection",
     async (mode) => {
       const outside = path.join(home.home, "unmarked-target");
       const marked = path.join(home.home, "marked-parent");
@@ -246,8 +253,13 @@ describe("private update capture exclusion", () => {
       await fs.writeFile(marker, markerBytes);
       const raw = path.join(outside, "outward.txt");
       await fs.writeFile(raw, "synthetic outward bytes");
-      const alias = path.join(marked, "workspace");
+      let alias = path.join(marked, "workspace");
       await fs.symlink(outside, alias, process.platform === "win32" ? "junction" : "dir");
+      if (mode.endsWith("via alias")) {
+        const markedAlias = path.join(home.home, "marked-alias");
+        await fs.symlink(marked, markedAlias, process.platform === "win32" ? "junction" : "dir");
+        alias = path.join(markedAlias, "workspace");
+      }
       await fs.writeFile(
         path.join(stateDir, "openclaw.json"),
         JSON.stringify({
@@ -266,13 +278,13 @@ describe("private update capture exclusion", () => {
         `${path.basename(home.home)}-outward.tar.gz`,
       );
       try {
-        if (mode.startsWith("invalid")) {
-          await expect(createBackupArchive({ output })).rejects.toThrow(
+        if (mode.startsWith("invalid") && !mode.endsWith("via alias")) {
+          await expect(backupCreateCommand(createTestRuntime(), { output })).rejects.toThrow(
             "Private update capture marker",
           );
           await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
-          const result = await createBackupArchive({ output });
+          const result = await backupCreateCommand(createTestRuntime(), { output });
           const entries: string[] = [];
           await tar.t({
             file: result.archivePath,
@@ -281,13 +293,15 @@ describe("private update capture exclusion", () => {
             },
           });
           expect(entries.some((entry) => entry.endsWith("/outward.txt"))).toBe(
-            mode.includes("duplicate"),
+            mode.includes("duplicate") || mode.endsWith("via alias"),
           );
           expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
           await verifyBackupArchive(result.archivePath);
-          expect(result.skipped).toContainEqual(
-            expect.objectContaining({ kind: "workspace", sourcePath: alias, reason: "private" }),
-          );
+          if (!mode.endsWith("via alias")) {
+            expect(result.skipped).toContainEqual(
+              expect.objectContaining({ kind: "workspace", sourcePath: alias, reason: "private" }),
+            );
+          }
         }
         expect(await fs.readFile(raw, "utf8")).toBe("synthetic outward bytes");
         expect(await fs.readFile(marker, "utf8")).toBe(markerBytes);

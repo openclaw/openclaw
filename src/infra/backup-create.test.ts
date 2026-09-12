@@ -3314,7 +3314,15 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").each<{
+    label: string;
+    relative: boolean;
+    targetExists: boolean;
+    directory: boolean;
+    internal: boolean;
+    cyclic?: boolean;
+    marker?: "valid" | "malformed" | "unreadable";
+  }>([
     {
       label: "absolute file",
       relative: false,
@@ -3358,9 +3366,17 @@ describe("createBackupArchive", () => {
       internal: true,
       cyclic: true,
     },
+    ...(["valid", "malformed", "unreadable"] as const).map((marker) => ({
+      label: `${marker} marked directory`,
+      relative: false,
+      targetExists: true,
+      directory: true,
+      internal: false,
+      marker,
+    })),
   ])(
     "backupCreateCommand preserves and reports $label links through backupRestoreCommand",
-    async ({ relative, targetExists, directory, internal, cyclic }) => {
+    async ({ relative, targetExists, directory, internal, cyclic, marker }) => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-backup-symbolic-link-", scenario: "minimal" },
         async (state) => {
@@ -3370,6 +3386,13 @@ describe("createBackupArchive", () => {
           if (directory) {
             await fs.mkdir(targetPath);
             await fs.writeFile(path.join(targetPath, "external.txt"), "outside\n");
+            if (marker) {
+              await fs.writeFile(
+                path.join(targetPath, ".openclaw-private-update-capture"),
+                marker === "malformed" ? "invalid" : "openclaw-private-update-capture-v1\n",
+                { mode: marker === "unreadable" ? 0o000 : 0o600 },
+              );
+            }
           } else if (targetExists) {
             await fs.writeFile(targetPath, "target\n");
           }

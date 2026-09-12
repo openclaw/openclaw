@@ -5,7 +5,6 @@ import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
-import { isPathInside } from "./path-guards.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
@@ -17,9 +16,6 @@ function hasPrivacyMarker(directory: string): boolean {
   const markerPath = path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER);
   let before: fs.BigIntStats;
   try {
-    if (!fs.lstatSync(directory).isDirectory()) {
-      return false;
-    }
     before = fs.lstatSync(markerPath, { bigint: true });
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
@@ -33,10 +29,9 @@ function hasPrivacyMarker(directory: string): boolean {
     if (!before.isFile()) {
       throw new Error("Marker must be a regular file");
     }
-    const canonicalDirectory = resolvePathViaExistingAncestorSync(directory);
     const opened = openRootFileSync({
-      absolutePath: path.join(canonicalDirectory, UPDATE_CAPTURE_PRIVACY_MARKER),
-      rootPath: canonicalDirectory,
+      absolutePath: markerPath,
+      rootPath: directory,
       boundaryLabel: "private update capture marker",
       maxBytes: MARKER_BYTES.length,
     });
@@ -66,79 +61,64 @@ function hasPrivacyMarker(directory: string): boolean {
   }
 }
 
-function isMarkedCapturePath(candidate: string): boolean {
-  // Only selected ancestors. Never parse workspace manifests or enumerate roots.
-  let marked = false;
-  for (let ancestor = candidate; ; ancestor = path.dirname(ancestor)) {
-    if (hasPrivacyMarker(ancestor)) {
-      marked = true;
-    }
-    if (path.dirname(ancestor) === ancestor) {
-      return marked;
-    }
-  }
-}
-
 const CAPTURE_SUFFIX = ".update-captures";
 
 export function resolveUpdateCaptureRoot(stateDir: string): string {
   return `${path.resolve(stateDir)}${CAPTURE_SUFFIX}`;
 }
 
-function isPairedCapturePath(candidate: string): boolean {
-  // Only inspect the selected path's ancestors, not other profiles or a global registry.
-  // The sibling directory anchors the reserved layout; it is not writer authority.
-  for (
-    let ancestor = candidate;
-    path.dirname(ancestor) !== ancestor;
-    ancestor = path.dirname(ancestor)
-  ) {
-    const name = path.basename(ancestor);
-    if (name.length <= CAPTURE_SUFFIX.length || !name.endsWith(CAPTURE_SUFFIX)) {
-      continue;
+function isPairedCapturePath(directory: string): boolean {
+  const name = path.basename(directory);
+  if (name.length <= CAPTURE_SUFFIX.length || !name.endsWith(CAPTURE_SUFFIX)) {
+    return false;
+  }
+  try {
+    return fs.lstatSync(directory.slice(0, -CAPTURE_SUFFIX.length)).isDirectory();
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return false;
     }
-    try {
-      if (fs.statSync(ancestor.slice(0, -CAPTURE_SUFFIX.length)).isDirectory()) {
-        return true;
-      }
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
-        throw error;
-      }
+    throw error;
+  }
+}
+
+/** Inspect real ancestors up to the first link; link targets are separate source selections. */
+export function isUpdateCapturePath(sourcePath: string, stateDir: string): boolean {
+  const ancestors: string[] = [];
+  for (let ancestor = path.resolve(sourcePath); ; ancestor = path.dirname(ancestor)) {
+    ancestors.push(ancestor);
+    if (path.dirname(ancestor) === ancestor) {
+      break;
     }
   }
-  return false;
+  const captureRoot = resolveUpdateCaptureRoot(stateDir);
+  let captured = false;
+  for (const ancestor of ancestors.toReversed()) {
+    try {
+      if (!fs.lstatSync(ancestor).isDirectory()) {
+        return captured;
+      }
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+        return captured;
+      }
+      throw new Error("Private update capture marker is unreadable; export refused.", {
+        cause: error,
+      });
+    }
+    // Inspect every real marker even after an earlier ancestor excludes the source.
+    captured = hasPrivacyMarker(ancestor) || captured;
+    captured = ancestor === captureRoot || isPairedCapturePath(ancestor) || captured;
+  }
+  return captured;
 }
 
-/** Exact managed roots, not a basename filter that hides unrelated workspace files. */
-export function isUpdateCapturePath(sourcePath: string, stateDir: string): boolean {
-  const roots = new Set([
-    resolveUpdateCaptureRoot(stateDir),
-    resolveUpdateCaptureRoot(resolvePathViaExistingAncestorSync(stateDir)),
-  ]);
-  const candidate = path.resolve(sourcePath);
-  const canonical = resolvePathViaExistingAncestorSync(sourcePath);
-  // A valid child marker or legacy root must not hide a malformed ancestor.
-  // Evaluate both alias spellings before any exclusion can short-circuit.
-  const marked = isMarkedCapturePath(candidate);
-  const canonicalMarked = canonical !== candidate && isMarkedCapturePath(canonical);
-  const isSelectedStateCapture = [...roots].some((root) => {
-    const resolvedRoot = resolvePathViaExistingAncestorSync(root);
-    return [root, resolvedRoot].some(
-      (boundary) => isPathInside(boundary, candidate) || isPathInside(boundary, canonical),
-    );
-  });
-  return (
-    marked ||
-    canonicalMarked ||
-    isSelectedStateCapture ||
-    isPairedCapturePath(candidate) ||
-    isPairedCapturePath(canonical)
-  );
-}
-
+/** Admit selected file contents, including the actual read path; not ordinary link entries. */
 export function assertNotUpdateCapturePath(sourcePath: string, stateDir: string): void {
-  if (isUpdateCapturePath(sourcePath, stateDir)) {
+  const selectedPrivate = isUpdateCapturePath(sourcePath, stateDir);
+  const readPath = resolvePathViaExistingAncestorSync(sourcePath);
+  const readPrivate = readPath !== sourcePath && isUpdateCapturePath(readPath, stateDir);
+  if (selectedPrivate || readPrivate) {
     throw new Error("Private update captures are excluded from backups and support exports.");
   }
 }
