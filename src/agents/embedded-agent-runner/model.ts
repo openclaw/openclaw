@@ -6,7 +6,7 @@ import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
-import { modelKey } from "../model-ref-shared.js";
+import { modelKey, type ModelRef } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
 import {
@@ -57,6 +57,8 @@ type CommonModelResolutionOptions = {
 };
 
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
+  /** Selected executable IDs must not pass through input aliases again. */
+  modelIdSource?: "input" | "selected";
   allowBundledStaticCatalogFallback?: boolean;
   preferBundledStaticCatalogTransport?: boolean;
   agentRuntimeId?: string;
@@ -98,18 +100,21 @@ function resolvePreparedAgentSnapshot(
   return getPreparedModelRuntimeSnapshot({ ...base, workspaceDir: derivedWorkspaceDir });
 }
 
+type ModelResolution = {
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+} & (
+  | { model: Model; logicalRef: Readonly<ModelRef>; error?: undefined }
+  | { model?: undefined; error: string }
+);
+
 export async function resolveModelAsync(
   provider: string,
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
   options?: AsyncModelResolutionOptions,
-): Promise<{
-  model?: Model;
-  error?: string;
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
-}> {
+): Promise<ModelResolution> {
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const derivedWorkspaceDir = resolveModelWorkspaceDir(
     cfg,
@@ -146,7 +151,14 @@ export async function resolveModelAsync(
   const resolve = async () => {
     const workspaceDir =
       options?.workspaceDir ?? preparedModelRuntime?.workspaceDir ?? derivedWorkspaceDir;
-    const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+    const normalizedRef = normalizeProviderModelRef({
+      provider,
+      modelId,
+      cfg,
+      workspaceDir,
+      modelIdSource: options?.modelIdSource,
+    });
+    const logicalRef = { provider: normalizedRef.provider, model: normalizedRef.model };
     let { authStorage, modelRegistry } = options ?? {};
     if (!authStorage || !modelRegistry) {
       const stores = preparedModelRuntime?.createStores() ?? createEmptyAgentDiscoveryStores();
@@ -162,6 +174,11 @@ export async function resolveModelAsync(
       if (!staticCatalogResolved) {
         staticCatalogResolved = true;
         staticCatalogModel =
+          preparedModelRuntime?.configuredRuntimeModels?.find(
+            ({ modelId: candidateId, provider: rowProvider }) =>
+              candidateId === normalizedRef.model &&
+              normalizeProviderId(rowProvider) === normalizeProviderId(normalizedRef.provider),
+          )?.model ??
           preparedModelRuntime?.configuredRuntimeModels?.find(
             ({ modelId: candidateId, provider: rowProvider }) =>
               staticModelIdMatches({
@@ -231,7 +248,7 @@ export async function resolveModelAsync(
         getStaticCatalogModel: getManifestStaticCatalogModel,
       });
       if (suppressedRuntimeModel) {
-        return { model: suppressedRuntimeModel, authStorage, modelRegistry };
+        return { model: suppressedRuntimeModel, logicalRef, authStorage, modelRegistry };
       }
       return {
         error:
@@ -374,7 +391,7 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
-      return { model, authStorage, modelRegistry };
+      return { model, logicalRef, authStorage, modelRegistry };
     }
     return {
       error: buildUnknownModelError({

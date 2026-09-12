@@ -111,6 +111,8 @@ describe("prepared workspace skill resources", () => {
       const worker = await materializeSkillResources(next!, () => {});
       try {
         const skill = worker.snapshot.resolvedSkills![0]!;
+        expect(skill.contentHash).toBe(next!.skills[0]!.revision);
+        expect(skill.contentHash).not.toBe(first!.skills[0]!.revision);
         expect(await fs.readFile(path.join(skill.baseDir, "scripts/check.sh"), "utf8")).toBe(
           "#!/bin/sh\nprintf after\n",
         );

@@ -1,9 +1,8 @@
 // Verifies models.json provider/model merge behavior and secret preservation.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import type { ExistingProviderConfig } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
-
-let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let mergeProviderModels: typeof import("./models-config.merge.js").mergeProviderModels;
 let mergeProviders: typeof import("./models-config.merge.js").mergeProviders;
 let mergeWithExistingProviderSecrets: typeof import("./models-config.merge.js").mergeWithExistingProviderSecrets;
@@ -12,7 +11,6 @@ async function loadMergeModules() {
   // Merge helpers depend on real manifest registry behavior; undo previous
   // mocks before importing the module under test.
   vi.doUnmock("../plugins/manifest-registry.js");
-  ({ NON_ENV_SECRETREF_MARKER } = await import("./model-auth-markers.js"));
   ({ mergeProviderModels, mergeProviders, mergeWithExistingProviderSecrets } =
     await import("./models-config.merge.js"));
 }
@@ -166,7 +164,7 @@ describe("models-config merge helpers", () => {
       mergeProviderModels(implicit, explicit, {
         providerId: "ollama",
         sourceModelFields: new Map([
-          ["ollama/qwen3-vl:latest", { inputOmitted: true, cost: undefined }],
+          [JSON.stringify(["ollama", "qwen3-vl:latest"]), { inputOmitted: true, cost: undefined }],
         ]),
       }).models?.[0]?.input,
     ).toEqual(["text", "image"]);

@@ -52,10 +52,15 @@ Commands may also declare a bounded client presentation action for parsed no-arg
 invocations:
 
 ```ts
-clientPresentation: {
-  when: "no-arguments",
-  action: { kind: "device-pairing" },
-}
+api.registerCommand({
+  name: "pair",
+  description: "Pair a device",
+  clientPresentation: {
+    when: "no-arguments",
+    action: { kind: "device-pairing" },
+  },
+  handler: async () => ({ text: "ok" }),
+});
 ```
 
 The action union is closed and intentionally does not accept routes, callbacks,
@@ -68,10 +73,15 @@ Guidance entries may be legacy strings, which apply to every prompt surface, or
 structured entries:
 
 ```ts
-agentPromptGuidance: [
-  "Global command hint.",
-  { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
-];
+api.registerCommand({
+  name: "demo_cmd",
+  description: "Demo command",
+  agentPromptGuidance: [
+    "Global command hint.",
+    { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
+  ],
+  handler: async () => ({ text: "ok" }),
+});
 ```
 
 Structured `surfaces` may include `openclaw_main`, `codex_app_server`,

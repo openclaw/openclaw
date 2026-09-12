@@ -3611,6 +3611,7 @@ openclaw-sidebar-attention {
 
 .sidebar-identity-card__text {
   display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -3626,6 +3627,56 @@ openclaw-sidebar-attention {
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 18px;
+}
+
+.sidebar-identity-card__gateway,
+.sidebar-gateway-details {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-identity-card__gateway {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.sidebar-gateway-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-gateway-primary {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-gateway-health {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sidebar-gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.sidebar-gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.sidebar-gateway-check {
+  display: inline-flex;
+}
+
+.sidebar-gateway-check svg {
+  width: 12px;
+  height: 12px;
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {

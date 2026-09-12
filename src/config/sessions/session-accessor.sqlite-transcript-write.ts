@@ -38,7 +38,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
-import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
+import { resolveTranscriptEventAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
@@ -116,6 +116,8 @@ export async function replaceTranscriptEvents(
   events: TranscriptEvent[],
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptScope(scope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -139,6 +141,8 @@ export async function replaceSessionWithBranchedTranscript(
 ): Promise<void> {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...fencedScope, sessionId: resolved.sessionId });
   const databaseOptions = toDatabaseOptions(resolved);
   const expectedLifecycleRevision = readSessionEntryRow(
     openOpenClawAgentDatabase(databaseOptions),
@@ -210,6 +214,8 @@ export async function rewriteTranscriptEventRowsExact(
     return null;
   }
   const resolved = resolveSqliteTranscriptScope(scope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -267,6 +273,8 @@ export async function trimTranscriptForManualCompact(
   options: { nowMs?: number } = {},
 ): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
   const resolved = resolveSqliteTranscriptScope(scope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -343,6 +351,8 @@ export async function appendTranscriptEvent(
 ): Promise<void> {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -490,32 +500,6 @@ export function persistCompactionBoundaryWithSessionEntrySync(
   );
 }
 
-function resolveTranscriptEventAppendParent(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions,
-): TranscriptEvent {
-  if (
-    options.appendIntent !== "active-branch" ||
-    !event ||
-    typeof event !== "object" ||
-    Array.isArray(event) ||
-    !("parentId" in event)
-  ) {
-    return event;
-  }
-  const parentId = event.parentId;
-  if (parentId !== null && typeof parentId !== "string") {
-    return event;
-  }
-  const effectiveParentId = resolveTranscriptMessageAppendParent(database, sessionId, {
-    appendIntent: "active-branch",
-    parentId,
-  });
-  return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
-}
-
 /** Appends one transcript message to the additive SQLite transcript store. */
 export async function appendTranscriptMessage<TMessage>(
   scope: SessionTranscriptWriteScope,
@@ -532,6 +516,8 @@ export async function appendTranscriptMessage<TMessage>(
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   const resolved = resolveSqliteTranscriptScope(scope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -576,6 +562,8 @@ export async function withTranscriptWriteLock<T>(
 ): Promise<T> {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...fencedScope, sessionId: resolved.sessionId });
   const databaseOptions = toDatabaseOptions(resolved);
   return await runExclusiveSqliteSessionWrite(
     resolved,
@@ -676,6 +664,8 @@ export async function withTranscriptWriteTransaction<T>(
   run: (context: SessionTranscriptWriteTransactionContext) => T,
 ): Promise<T> {
   const resolved = resolveSqliteTranscriptScope(scope);
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () =>

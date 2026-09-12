@@ -304,11 +304,66 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
   expect(await fs.readFile(path.join(remoteWorkspaceDir, "tracked.txt"), "utf8")).toBe(
     "pinned contents\n",
   );
+  const preparedWorkspace = {
+    baseCommit: commit,
+    workspaceDir: remoteWorkspaceDir,
+    sourceManifestRef: manifestRef,
+    preparedManifestRef: manifestRef,
+  };
+  const branch = "openclaw/session-prepared";
+  await expect(
+    repository.bindPreparedRepository(
+      { ...source, branch },
+      { ...preparedWorkspace, workspaceDir: origin },
+    ),
+  ).rejects.toThrow("session binding failed");
+  expect(await git(remoteWorkspaceDir, "branch", "--show-current")).toBe("");
+  await expect(
+    repository.bindPreparedRepository(
+      { ...source, origin: `${source.origin}-different`, branch },
+      preparedWorkspace,
+    ),
+  ).rejects.toThrow("session binding failed");
+  expect(await git(remoteWorkspaceDir, "branch", "--show-current")).toBe("");
+  const author = { name: 'Prepared "Name"', email: "prepared+session@example.invalid" };
+  const bound = await repository.bindPreparedRepository(
+    { ...source, branch },
+    preparedWorkspace,
+    author,
+  );
+  expect(bound).toMatchObject({
+    mode: "repository",
+    baseCommit: commit,
+    baseManifestRef: manifestRef,
+    remoteWorkspaceDir,
+  });
+  expect(await git(remoteWorkspaceDir, "symbolic-ref", "--short", "HEAD")).toBe(branch);
+  expect(await git(remoteWorkspaceDir, "config", "--local", "user.name")).toBe(author.name);
+  expect(await git(remoteWorkspaceDir, "config", "--local", "user.email")).toBe(author.email);
   await fs.writeFile(path.join(remoteWorkspaceDir, "session-only.txt"), "discard on replacement");
 
   const offlineOrigin = `${origin}-offline`;
   await fs.rename(origin, offlineOrigin);
   try {
+    // Bind replay cannot contact the source or erase edits in the already consumed workspace.
+    await expect(
+      repository.bindPreparedRepository({ ...source, branch }, preparedWorkspace),
+    ).resolves.toEqual(bound);
+    expect(await fs.readFile(path.join(remoteWorkspaceDir, "session-only.txt"), "utf8")).toBe(
+      "discard on replacement",
+    );
+    await expect(
+      repository.bindPreparedRepository(
+        { ...source, branch: "openclaw/another-session" },
+        preparedWorkspace,
+      ),
+    ).rejects.toThrow("session binding failed");
+    await expect(
+      repository.bindPreparedRepository(
+        { ...source, commit: "f".repeat(40), branch },
+        preparedWorkspace,
+      ),
+    ).rejects.toThrow("pinned session commit");
     const reused = await repository.prepareRepository(source, manifestRef);
 
     expect(reused).toEqual({ ...prepared, seeded: true });

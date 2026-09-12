@@ -298,6 +298,7 @@ describe("prepared model runtime scoped refresh", () => {
         ],
       };
       setPreparedModelFullCatalogAuth(previous, {
+        providerAuthLabels: new Map(),
         authStore: { version: 1, profiles: change === "synthetic-credential" ? {} : profiles },
         authModes: { demo: "api_key" },
         credentials:
@@ -306,6 +307,7 @@ describe("prepared model runtime scoped refresh", () => {
             : {},
       });
       setPreparedModelFullCatalogAuth(failed, {
+        providerAuthLabels: new Map(),
         authStore: {
           version: 1,
           profiles:
@@ -402,6 +404,14 @@ describe("prepared model runtime scoped refresh", () => {
     "carries completed discovery across hot reload without rediscovery (scope: %j)",
     async (agentIds) => {
       mocks.configuredAgentIds = ["pro"];
+      const credential = { type: "api_key" as const, key: "discovered-provider-key" };
+      mocks.preparedAuthStore = {
+        version: 1,
+        profiles: {
+          "discovered-provider:default": { ...credential, provider: "discovered-provider" },
+        },
+      };
+      mocks.authStorage.getAll.mockReturnValue({ "discovered-provider": credential });
       const config: OpenClawConfig = {
         agents: { entries: { pro: {} } },
         plugins: { entries: { fixture: { enabled: true } } },
@@ -417,7 +427,8 @@ describe("prepared model runtime scoped refresh", () => {
       });
       const auth = {
         authModes: { "discovered-provider": "api_key" as const },
-        authStore: { version: 1 as const, profiles: {} },
+        providerAuthLabels: new Map(),
+        authStore: mocks.preparedAuthStore,
         credentials: mocks.authStorage.getAll(),
       };
       setPreparedModelFullCatalogAuth(catalog, auth);
@@ -475,7 +486,8 @@ describe("prepared model runtime scoped refresh", () => {
       expect(refreshedCatalog).toMatchObject(refreshed);
       expect(replacement.readFullModelCatalog!()).toBe(refreshedCatalog);
       expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
-      mocks.credentialsRevision += 1;
+      mocks.preparedAuthStore = { version: 1, profiles: {} };
+      mocks.authStorage.getAll.mockReturnValue({});
       mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
       const afterAuth = await loadPreparedGatewayModelCatalogSnapshot({
         agentId: "pro",
@@ -584,6 +596,7 @@ describe("prepared model runtime scoped refresh", () => {
     setPreparedModelFullCatalogAuth(catalog, {
       authStore: { version: 1, profiles: {} },
       authModes: { demo: "api_key" },
+      providerAuthLabels: new Map(),
       credentials: { demo: { type: "api_key", key: "post-startup-key" } },
     });
     const owner = await prepareCatalogOwner(config, [catalog]);
@@ -685,6 +698,12 @@ describe("prepared model runtime scoped refresh", () => {
 
   it("reprojects retained discovery when a runtime override is added and removed", async () => {
     mocks.configuredAgentIds = ["pro"];
+    mocks.preparedAuthStore = {
+      version: 1,
+      profiles: {
+        "custom:default": { type: "api_key", provider: "custom", key: "test-key" },
+      },
+    };
     mocks.resolveStaticCatalogModel.mockImplementation(({ provider, modelId }) => ({
       provider,
       id: modelId,
@@ -710,7 +729,8 @@ describe("prepared model runtime scoped refresh", () => {
     });
     setPreparedModelFullCatalogAuth(catalog, {
       authModes: { custom: "api_key" },
-      authStore: { version: 1, profiles: {} },
+      providerAuthLabels: new Map(),
+      authStore: mocks.preparedAuthStore,
       credentials: mocks.authStorage.getAll(),
     });
     mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(catalog);
@@ -742,7 +762,8 @@ describe("prepared model runtime scoped refresh", () => {
         };
         setPreparedModelFullCatalogAuth(failed, {
           authModes: { custom: "api_key" },
-          authStore: { version: 1, profiles: {} },
+          providerAuthLabels: new Map(),
+          authStore: mocks.preparedAuthStore,
           credentials: mocks.authStorage.getAll(),
         });
         mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(failed);
@@ -787,37 +808,39 @@ describe("prepared model runtime scoped refresh", () => {
       maxTokens: 4096,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }));
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "fixture-native",
-      source: "fixture",
-      harness: {
-        id: "fixture-native",
-        label: "Fixture native",
-        supports: () => ({ supported: true }),
-        async runAttempt() {
-          throw new Error("catalog-only fixture");
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "fixture-native",
+        source: "fixture",
+        harness: {
+          id: "fixture-native",
+          label: "Fixture native",
+          supports: () => ({ supported: true }),
+          async runAttempt() {
+            throw new Error("catalog-only fixture");
+          },
+          async loadModelCatalog({ config: currentConfig }) {
+            if (holdNative) {
+              nativeStarted.resolve();
+              await releaseNative.promise;
+            }
+            return [
+              {
+                provider: "demo",
+                id:
+                  currentConfig.agents?.defaults?.model === "demo/old-configured"
+                    ? "native-old"
+                    : "native-new",
+                name: "Native",
+                nativeRuntime: "fixture-native",
+              },
+            ];
+          },
         },
-        async loadModelCatalog({ config: currentConfig }) {
-          if (holdNative) {
-            nativeStarted.resolve();
-            await releaseNative.promise;
-          }
-          return [
-            {
-              provider: "demo",
-              id:
-                currentConfig.agents?.defaults?.model === "demo/old-configured"
-                  ? "native-old"
-                  : "native-new",
-              name: "Native",
-              nativeRuntime: "fixture-native",
-            },
-          ];
-        },
-      },
+      });
+      return registry;
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
     const config: OpenClawConfig = {
       models: {
         providers: {
@@ -918,7 +941,7 @@ describe("prepared model runtime scoped refresh", () => {
         },
       },
     };
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(createEmptyPluginRegistry);
     await refreshModelRuntimeAfterHotReload({
       config: retiredConfig,
       agentIds: undefined,

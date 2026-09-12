@@ -1,7 +1,6 @@
 import { html, noChange, nothing } from "lit";
-import { repeat } from "lit/directives/repeat.js";
+import { keyed } from "lit/directives/keyed.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -47,14 +46,12 @@ type ChatPagePaneRenderOptions = {
   onSplitRight?: (paneId: string) => void;
   ownerKey: string;
   pane: ChatSplitPane;
-  sessionKeys: readonly string[];
-  showGatewayPicker: boolean;
+  sessionSlots: readonly (string | undefined)[];
   splitMode: boolean;
   weight: number;
 };
 
 export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
-  const nativeGateways = options.showGatewayPicker ? nativeGatewaysCapability() : null;
   const sessions = options.context?.sessions?.state.result?.sessions ?? [];
   return html`
     <div
@@ -67,30 +64,31 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
       @focusin=${() => options.onFocusPane(options.pane.id)}
     >
       <div class="chat-pane-cache">
-        ${repeat(
-          options.sessionKeys,
-          (sessionKey) => sessionKey,
-          (sessionKey) => {
-            const visible =
-              sessionKey === options.pane.sessionKey ||
-              areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
-            const presented = options.presented && visible && (!options.narrow || options.active);
-            const active = options.active && visible;
-            const routeData =
-              options.data && areUiSessionKeysEquivalent(sessionKey, options.data.sessionKey)
-                ? options.data
-                : undefined;
-            const draft = active
-              ? routeDraft(options.data, options.consumedDraftData, sessionKey)
+        ${options.sessionSlots.map((sessionKey) => {
+          if (sessionKey === undefined) {
+            return nothing;
+          }
+          const visible =
+            sessionKey === options.pane.sessionKey ||
+            areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
+          const presented = options.presented && visible && (!options.narrow || options.active);
+          const active = options.active && visible;
+          const routeData =
+            options.data && areUiSessionKeysEquivalent(sessionKey, options.data.sessionKey)
+              ? options.data
               : undefined;
-            const resolvedKey =
-              resolveSessionKey(sessionKey, options.context?.gateway?.snapshot?.hello) ||
-              sessionKey;
-            const title = resolveSessionDisplayName(
-              resolvedKey,
-              sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
-            );
-            return html`<openclaw-chat-pane
+          const draft = active
+            ? routeDraft(options.data, options.consumedDraftData, sessionKey)
+            : undefined;
+          const resolvedKey =
+            resolveSessionKey(sessionKey, options.context?.gateway?.snapshot?.hello) || sessionKey;
+          const title = resolveSessionDisplayName(
+            resolvedKey,
+            sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
+          );
+          return keyed(
+            sessionKey,
+            html`<openclaw-chat-pane
               class="chat-pane-cache__pane ${
                 visible ? "chat-pane-cache__pane--visible" : ""
               } ${active ? "chat-pane-cache__pane--active" : ""} ${
@@ -104,6 +102,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .chatMessagesBySession=${options.chatMessagesBySession}
               .sessionSnapshotStore=${options.sessionSnapshotStore}
               .sessionKey=${sessionKey}
+              .routeLoadingSkeleton=${routeData?.routeLoadingSkeleton ?? noChange}
               .presented=${presented}
               .visuallyPresented=${presented}
               .active=${active}
@@ -120,8 +119,6 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .narrow=${options.narrow}
               .mergedChrome=${options.mergedChrome && active}
               .navDrawerOpen=${options.navDrawerOpen && active}
-              .nativeGateways=${nativeGateways}
-              .gatewaysSnapshot=${nativeGateways?.snapshot ?? null}
               .onboarding=${options.onboarding}
               .onOpenSplitView=${options.onOpenSplitView}
               .onSplitDown=${options.onSplitDown}
@@ -135,9 +132,9 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               ) => options.onPaneSessionChange(paneId, sessionKey, nextSessionKey, paneOptions)}
               .onSessionDeleted=${options.onSessionDeleted}
               .onFaceChange=${options.onFaceChange}
-            ></openclaw-chat-pane>`;
-          },
-        )}
+            ></openclaw-chat-pane>`,
+          );
+        })}
       </div>
     </div>
   `;

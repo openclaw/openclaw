@@ -16,11 +16,13 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as taskRuntime from "../../tasks/runtime-internal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
+import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {
@@ -262,15 +264,22 @@ async function prepareSnapshot(
     templateModelRegistry: ModelRegistry.inMemory(facts.templateAuthStorage),
     configuredRuntimeModels: facts.configuredRuntimeModels,
   });
-  return createPreparedModelRuntimeSnapshot(undefined, facts, prepared.pluginGeneration, catalog, {
-    isCurrent: () => true,
-    withRefreshStatus: (value) => value,
-    readFullModelCatalog: () => catalog.modelCatalog,
-    loadFullModelCatalog: async () => catalog.modelCatalog,
-    loadAuth: async () => {
-      throw new Error("The synthetic media provider does not request model credentials");
+  const snapshot = createPreparedModelRuntimeSnapshot(
+    undefined,
+    facts,
+    prepared.pluginGeneration,
+    catalog,
+    {
+      isCurrent: () => true,
+      withRefreshStatus: (value) => value,
+      readFullModelCatalog: () => catalog.modelCatalog,
+      loadFullModelCatalog: async () => catalog.modelCatalog,
+      loadAuth: async () => {
+        throw new Error("The synthetic media provider does not request model credentials");
+      },
     },
-  });
+  );
+  return { snapshot, release: () => discardPreparedPluginGeneration(prepared.pluginGeneration) };
 }
 
 afterEach(() => {
@@ -294,74 +303,108 @@ describe.each(["image", "music", "video"] as const)(
       music: musicGenerationTaskLifecycle,
       video: videoGenerationTaskLifecycle,
     }[kind];
-    it("refuses new paid admission when the prepared owner releases during reference loading", async () => {
-      const fixture = createNativeFixture(kind, true);
-      const referenceStarted = createDeferredCore();
-      const resumeReference = createDeferredCore();
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const first = await acquirePluginRegistryForInspection({ config: fixture.config });
-          const referencePath = path.join(fixture.dir, "reference.png");
-          fs.writeFileSync(referencePath, png);
-          const snapshot = await prepareSnapshot(fixture, first.registry);
-          const createTask = vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
-            taskId: "preflight-image-task",
-            runId: "preflight-image-run",
-            requesterSessionKey: "agent:main:discord:direct:synthetic-media",
-            taskLabel: "Synthetic media edit",
-          });
-          const schedule = vi.fn();
-          const loadReference = webMedia.loadWebMedia;
-          vi.spyOn(webMedia, "loadWebMedia").mockImplementation(async (...args) => {
-            referenceStarted.resolve();
-            await resumeReference.promise;
-            return loadReference(...args);
-          });
-          const tool = createTool({
-            config: fixture.config,
-            agentDir: snapshot.agentDir,
-            workspaceDir: fixture.dir,
-            preparedModelRuntime: snapshot,
-            agentSessionKey: "agent:main:discord:direct:synthetic-media",
-            scheduleBackgroundWork: schedule,
-          });
-          const outcome = tool!
-            .execute("preflight-image-call", {
-              prompt: "Synthetic media edit",
-              image: referencePath,
-            })
-            .then(
-              (value) => ({ value, error: undefined }),
-              (error: unknown) => ({ value: undefined, error }),
+    it.each(["request lookup", "duplicate lookup", "reference loading"] as const)(
+      "refuses preflight work when the prepared owner releases during %s",
+      async (pause) => {
+        const fixture = createNativeFixture(kind, true);
+        const preflightPaused = createDeferredCore();
+        const resumePreflight = createDeferredCore();
+        try {
+          await fixture.withEnvironment(async () => {
+            useNoBundledPlugins();
+            const first = await acquirePluginRegistryForInspection({ config: fixture.config });
+            const referencePath = path.join(fixture.dir, "reference.png");
+            fs.writeFileSync(referencePath, png);
+            const prepared = await prepareSnapshot(fixture, first.registry);
+            const { snapshot } = prepared;
+            const createTask = vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
+              taskId: "preflight-image-task",
+              runId: "preflight-image-run",
+              requesterSessionKey: "agent:main:discord:direct:synthetic-media",
+              taskLabel: "Synthetic media edit",
+            });
+            const schedule = vi.fn();
+            const loadReference = webMedia.loadWebMedia;
+            const reference = vi
+              .spyOn(webMedia, "loadWebMedia")
+              .mockImplementation(async (...args) => {
+                if (pause === "reference loading") {
+                  preflightPaused.resolve();
+                  await resumePreflight.promise;
+                }
+                return loadReference(...args);
+              });
+            const readTasks = taskRuntime.listFreshTasksForOwnerKey;
+            let lookups = 0;
+            vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey").mockImplementation(
+              async (ownerKey) => {
+                const tasks = await readTasks(ownerKey);
+                if (
+                  pause !== "reference loading" &&
+                  ++lookups === (pause === "request lookup" ? 1 : 2)
+                ) {
+                  preflightPaused.resolve();
+                  await resumePreflight.promise;
+                }
+                return tasks;
+              },
             );
-          try {
-            await Promise.race([
-              referenceStarted.promise,
-              outcome.then(() => {
-                throw new Error("Media preflight settled before reading its reference");
-              }),
-            ]);
-            await first.release();
-            resumeReference.resolve();
-            const result = await outcome;
-            expect(result.error).toBeInstanceOf(Error);
-            expect(result.value).toBeUndefined();
-            expect(createTask).not.toHaveBeenCalled();
-            expect(schedule).not.toHaveBeenCalled();
-            expect(fixture.connections[0]!.generated).toBe(0);
-            expect(fixture.connections[0]!.database.isOpen).toBe(false);
-            expect(fixture.connections[0]!.disposals).toBe(1);
-          } finally {
-            resumeReference.resolve();
-            await outcome;
-            await first.release();
-          }
-        });
-      } finally {
-        fixture.cleanup();
-      }
-    });
+            const tool = createTool({
+              config: {
+                ...fixture.config,
+                agents: pause === "request lookup" ? undefined : fixture.config.agents,
+              },
+              agentDir: snapshot.agentDir,
+              workspaceDir: fixture.dir,
+              preparedModelRuntime: snapshot,
+              agentSessionKey: "agent:main:discord:direct:synthetic-media",
+              scheduleBackgroundWork: schedule,
+            });
+            const outcome = tool!
+              .execute("preflight-image-call", {
+                prompt: "Synthetic media edit",
+                image: referencePath,
+              })
+              .then(
+                (value) => ({ value, error: undefined }),
+                (error: unknown) => ({ value: undefined, error }),
+              );
+            try {
+              await Promise.race([
+                preflightPaused.promise,
+                outcome.then(() => {
+                  throw new Error(`Media preflight settled before ${pause}`);
+                }),
+              ]);
+              await first.release();
+              await prepared.release();
+              resumePreflight.resolve();
+              const result = await outcome;
+              expect(result.error).toBeInstanceOf(Error);
+              expect(result.value).toBeUndefined();
+              if (pause !== "reference loading") {
+                expect(reference).not.toHaveBeenCalled();
+              }
+              if (pause === "request lookup") {
+                expect(lookups).toBe(1);
+              }
+              expect(createTask).not.toHaveBeenCalled();
+              expect(schedule).not.toHaveBeenCalled();
+              expect(fixture.connections[0]!.generated).toBe(0);
+              expect(fixture.connections[0]!.database.isOpen).toBe(false);
+              expect(fixture.connections[0]!.disposals).toBe(1);
+            } finally {
+              resumePreflight.resolve();
+              await outcome;
+              await first.release();
+              await prepared.release();
+            }
+          });
+        } finally {
+          fixture.cleanup();
+        }
+      },
+    );
 
     it.each(
       kind === "video"
@@ -384,9 +427,11 @@ describe.each(["image", "music", "video"] as const)(
         await fixture.withEnvironment(async () => {
           useNoBundledPlugins();
           const first = await acquirePluginRegistryForInspection({ config: fixture.config });
+          let prepared: Awaited<ReturnType<typeof prepareSnapshot>> | undefined;
           let successor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
           try {
-            const snapshot = await prepareSnapshot(fixture, first.registry);
+            prepared = await prepareSnapshot(fixture, first.registry);
+            const { snapshot } = prepared;
             expect(snapshot.mediaCapabilityProviders?.[`${kind}GenerationProviders`]).toHaveLength(
               1,
             );
@@ -443,6 +488,7 @@ describe.each(["image", "music", "video"] as const)(
             expect(connection.generated).toBe(0);
             if (phase === "queued") {
               await first.release();
+              await prepared.release();
             }
             successor = await acquirePluginRegistryForInspection({ config: fixture.config });
             setActivePluginRegistry(successor.registry);
@@ -459,6 +505,7 @@ describe.each(["image", "music", "video"] as const)(
                 }),
               ]);
               await first.release();
+              await prepared.release();
               expect(connection.database.isOpen).toBe(true);
               expect(connection.generated).toBe(0);
               fixture.resumeLookup.resolve();
@@ -478,6 +525,7 @@ describe.each(["image", "music", "video"] as const)(
             ]);
             if (kind !== "video" || phase !== "rollback") {
               await first.release();
+              await prepared.release();
             }
             expect(connection.database.isOpen).toBe(true);
             expect(connection.disposals).toBe(0);
@@ -487,6 +535,7 @@ describe.each(["image", "music", "video"] as const)(
               await rollbackStarted.promise;
               if (kind === "video") {
                 await first.release();
+                await prepared.release();
               }
               expect(connection.database.isOpen).toBe(true);
               expect(savedPath && fs.existsSync(savedPath)).toBe(true);
@@ -519,6 +568,7 @@ describe.each(["image", "music", "video"] as const)(
             resumeRollback.resolve();
             await completion;
             await first.release();
+            await prepared?.release();
             await successor?.release();
           }
         });

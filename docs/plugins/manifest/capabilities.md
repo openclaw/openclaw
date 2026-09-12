@@ -64,7 +64,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
 | `workerProviders`                | `string[]` | Cloud-worker provider ids this plugin owns for provisioning and profile-backed lease lifecycle.                                      |
 | `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for [`openclaw migrate`](/cli/migrate).                                                         |
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
@@ -167,7 +167,7 @@ Every plugin should set `activation.onStartup` intentionally. Set it to `true` o
 | `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.                                                      |
 | `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                                                                     |
 
-Current live consumers:
+Activation planner consumers:
 
 - Gateway startup planning uses `activation.onStartup` for explicit startup import.
 - Command-triggered CLI planning falls back to legacy `commandAliases[].cliCommand` or `commandAliases[].name`.
@@ -176,4 +176,4 @@ Current live consumers:
 - Startup plugin planning uses `activation.onConfigPaths` for non-channel root config surfaces such as the bundled browser plugin's `browser` block.
 - Provider-triggered setup/runtime planning falls back to legacy `providers[]` and top-level `cliBackends[]` ownership when explicit provider activation metadata is missing.
 
-Planner diagnostics can distinguish explicit activation hints from manifest ownership fallback. For example, `activation-command-hint` means `activation.onCommands` matched, while `manifest-command-alias` means the planner used `commandAliases` ownership instead. These reason labels are for host diagnostics and tests; plugin authors should keep declaring the metadata that best describes ownership.
+Planner diagnostics can distinguish explicit activation hints from manifest ownership fallback. For example, `activation-command-hint` means `activation.onCommands` matched, while `manifest-command-alias` means the planner used `commandAliases` ownership instead. These reason labels are for host diagnostics and tests; plugin authors should keep declaring the metadata that best describes ownership. The [load pipeline](/plugins/architecture-internals/load-pipeline) reference is authoritative for the planner narrowing steps and the complete reason-label table.

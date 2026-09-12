@@ -35,7 +35,6 @@ import {
 } from "./model-runtime-aliases.js";
 import {
   acquireAgentRunPreparedModelRuntime,
-  type PreparedModelRuntimeLease,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import {
@@ -400,14 +399,14 @@ async function prepareHostAuthorization(params: {
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
-  return await runWithAsyncWorkResources((acceptLease, captureWorkContext) =>
-    runIsolatedCompletionOwned(params, acceptLease, captureWorkContext),
+  return await runWithAsyncWorkResources((onAcquired, captureWorkContext) =>
+    runIsolatedCompletionOwned(params, onAcquired, captureWorkContext),
   );
 }
 
 async function runIsolatedCompletionOwned(
   params: RunIsolatedCompletionParams,
-  acceptLease: (lease: PreparedModelRuntimeLease) => void,
+  onAcquired: (resources: { release: () => Promise<void> }) => void,
   captureWorkContext: () => void,
 ): Promise<IsolatedCompletionResult> {
   // Snapshot caller choices and validators before admission yields; callbacks expire on close.
@@ -459,7 +458,7 @@ async function runIsolatedCompletionOwned(
       ],
     },
   );
-  acceptLease(lease);
+  onAcquired({ release: () => lease[Symbol.asyncDispose]() });
   try {
     assertCurrent();
     const run = async (): Promise<IsolatedCompletionResult> => {
@@ -629,6 +628,7 @@ async function runIsolatedCompletionOwned(
                 metadataSnapshot: lease.snapshot.metadataSnapshot,
                 resolveModel: ({ config: modelConfig, authProfileId, authProfileMode }) =>
                   resolveModelAsync(runtimeModel.provider, runtimeModel.id, agentDir, modelConfig, {
+                    modelIdSource: "selected",
                     preparedModelRuntime: lease.snapshot,
                     workspaceDir,
                     authProfileId,

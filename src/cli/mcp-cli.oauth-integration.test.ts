@@ -34,8 +34,8 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function startOAuthFixture(port: number) {
-  const issuer = `http://127.0.0.1:${port}`;
+async function startOAuthFixture() {
+  let issuer = "";
   let codeChallenge: string | undefined;
   let tokenRedirectUri: string | undefined;
   let tokenVerifier: string | undefined;
@@ -188,14 +188,21 @@ async function startOAuthFixture(port: number) {
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", resolve);
   });
+  const close = () =>
+    new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await close();
+    throw new Error("OAuth fixture did not bind a TCP address");
+  }
+  issuer = `http://127.0.0.1:${address.port}`;
   return {
     issuer,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
+    close,
     exchange: () => ({ tokenRedirectUri, tokenVerifier }),
     mcpRequests: () => mcpRequests,
   };
@@ -315,22 +322,21 @@ describe("mcp login OAuth integration", () => {
 
   it("logs in and probes an OAuth MCP server through the CLI", async () => {
     await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
-      const oauthPort = await getFreePort();
-      const callbackPort = await getFreePort();
-      const fixture = await startOAuthFixture(oauthPort);
-      const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`;
-      const logs: string[] = [];
-      const authorizationUrl = createDeferred<string>();
-      vi.spyOn(defaultRuntime, "log").mockImplementation((line) => {
-        const text = String(line);
-        logs.push(text);
-        if (text.startsWith(`${fixture.issuer}/authorize`)) {
-          authorizationUrl.resolve(text);
-        }
-      });
-      const program = new Command().exitOverride();
-      registerMcpCli(program);
+      const fixture = await startOAuthFixture();
       try {
+        const callbackPort = await getFreePort();
+        const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`;
+        const logs: string[] = [];
+        const authorizationUrl = createDeferred<string>();
+        vi.spyOn(defaultRuntime, "log").mockImplementation((line) => {
+          const text = String(line);
+          logs.push(text);
+          if (text.startsWith(`${fixture.issuer}/authorize`)) {
+            authorizationUrl.resolve(text);
+          }
+        });
+        const program = new Command().exitOverride();
+        registerMcpCli(program);
         await program.parseAsync(
           [
             "mcp",

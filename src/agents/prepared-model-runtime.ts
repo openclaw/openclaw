@@ -46,6 +46,7 @@ import {
   type PreparedModelRuntimeReplacementGateId,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
+import { releasePreparedPluginPublication } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   notifyPreparedModelRuntimePublication,
   resetPreparedModelRuntimePublicationListenersForTest,
@@ -62,10 +63,7 @@ import {
 } from "./prepared-model-runtime.refresh-scope.js";
 import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-runtime.resources.js";
 import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
-import type {
-  PreparedModelRuntimeCatalogMode,
-  PreparedModelRuntimeLeaseOptions,
-} from "./prepared-model-runtime.types.js";
+import type { PreparedModelRuntimeLeaseOptions } from "./prepared-model-runtime.types.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -124,32 +122,28 @@ async function closeModelRuntime(error: Error): Promise<void> {
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
-  const resourcesClosed = closeEphemeralPreparedModelRuntimeResources();
-  for (const owner of owners.values()) {
-    owner.resourceClaim?.release();
-    owner.resourceClaim = undefined;
-  }
+  // The final generation owner observes failures after all build and caller joins.
+  void closeEphemeralPreparedModelRuntimeResources().catch(() => {});
+  const closingOwners = [...owners.values()];
   owners.clear();
   retainedDirectRunOwners.clear(owners);
   retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;
   replyDispatchPublication.clear();
-  const closed = await Promise.allSettled([
+  const results = await Promise.allSettled([
     refreshTail,
     ...agentBuildCompletions.values(),
     ...standaloneActivationTails.values(),
-    resourcesClosed,
   ]);
-  // A loader that settled after the close fence still owns its failed admission cleanup.
-  const lateResources = await Promise.allSettled([closeEphemeralPreparedModelRuntimeResources()]);
-  const failures = [...closed, ...lateResources].flatMap((result) =>
+  closingOwners.forEach(releasePreparedPluginPublication);
+  releaseProcessLifetime?.();
+  releaseProcessLifetime = undefined;
+  const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
   if (failures.length) {
-    throw new AggregateError(failures, "Prepared model runtime resources failed to close");
+    throw new AggregateError(failures, "Prepared model work failed to close");
   }
-  releaseProcessLifetime?.();
-  releaseProcessLifetime = undefined;
 }
 
 /** Advances model-neutral config identity without rebuilding prepared generation artifacts. */
@@ -395,14 +389,13 @@ export async function acquireAgentRunPreparedModelRuntime(
 /** Acquires an exact read-only generation scoped to the returned lease. */
 export async function acquireReadOnlyPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
-  abortSignal?: AbortSignal,
-  catalogMode: PreparedModelRuntimeCatalogMode = "live",
+  options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(
     { ...rawInput, readOnly: true },
     "ephemeral",
     preparedModelRuntimeLeaseContext,
-    { abortSignal, catalogMode },
+    { ...options, catalogMode: options.catalogMode ?? "live" },
   );
 }
 
@@ -535,6 +528,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     }
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
       owners.delete(key);
+      releasePreparedPluginPublication(owner);
     }
   }
   const candidates = entries.map(({ owner: existing, input }) => {

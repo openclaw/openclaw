@@ -24,9 +24,14 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 [//]: # "secretref-supported-list-start"
 
+#### `agents`
+
 - `agents.entries.*.memory.search.remote.apiKey`
 - `agents.entries.*.tts.personas.*.providers.*.apiKey`
 - `agents.entries.*.tts.providers.*.apiKey`
+
+#### `channels`
+
 - `channels.buzz.accounts.*.authTag`
 - `channels.buzz.accounts.*.privateKey`
 - `channels.buzz.authTag`
@@ -89,12 +94,24 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.zalo.accounts.*.webhookSecret`
 - `channels.zalo.botToken`
 - `channels.zalo.webhookSecret`
+
+#### `cron`
+
 - `cron.webhookToken`
+
+#### `gateway`
+
 - `gateway.auth.password`
 - `gateway.auth.token`
 - `gateway.remote.password`
 - `gateway.remote.token`
+
+#### `memory`
+
 - `memory.search.remote.apiKey`
+
+#### `models`
+
 - `models.providers.*.apiKey`
 - `models.providers.*.headers.*`
 - `models.providers.*.request.auth.token`
@@ -108,6 +125,9 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `models.providers.*.request.tls.cert`
 - `models.providers.*.request.tls.key`
 - `models.providers.*.request.tls.passphrase`
+
+#### `plugins`
+
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
@@ -133,9 +153,18 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.voice-call.config.twilio.authToken`
 - `plugins.entries.webhooks.config.routes.*.secret`
 - `plugins.entries.xai.config.webSearch.apiKey`
+
+#### `skills`
+
 - `skills.entries.*.apiKey`
+
+#### `talk`
+
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
+
+#### `tts`
+
 - `tts.personas.*.providers.*.apiKey`
 - `tts.providers.*.apiKey`
 
@@ -190,4 +219,5 @@ These credentials are minted, rotated, session-bearing, or OAuth-durable classes
 ## Related
 
 - [Secrets management](/gateway/secrets)
+- [Secrets CLI](/cli/secrets)
 - [Auth credential semantics](/auth-credential-semantics)

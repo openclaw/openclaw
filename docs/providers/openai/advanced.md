@@ -142,7 +142,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     OpenClaw because it describes a direct provider request.
 
     When enabled on the embedded runtime, OpenClaw maps fast mode to OpenAI API
-    Fast mode (formerly Priority processing) and currently sends
+    Fast mode (formerly Priority processing) and sends
     `service_tier = "priority"`. Fast mode does not rewrite `reasoning` or
     `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the
     auto cutoff, then starts later retry, fallback, tool-result, or continuation
@@ -186,7 +186,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
   <Accordion title="OpenAI API Fast mode with service_tier">
     OpenAI now calls this API product Fast mode; it was formerly Priority
-    processing. OpenClaw currently sends the wire value
+    processing. OpenClaw sends the wire value
     `service_tier = "priority"`. Set an explicit tier per
     model on the embedded OpenClaw runtime:
 

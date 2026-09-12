@@ -222,6 +222,8 @@ openclaw_resolve_frozen_agent_bundle_mcp_contract() {
   # Resolve the reader and parser from tooling, never from the selected checkout.
   resolved="$(node --input-type=module -e '
 import { createRequire } from "node:module";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 const [root, sha, trustedHelper] = process.argv.slice(1);
 const fail = (message) => { throw new Error(message); };
@@ -234,7 +236,37 @@ try {
     return source;
   };
   let ts;
-  try { ts = createRequire(trustedHelper)("typescript"); } catch {
+  try {
+    const tooling = realpathSync(resolve(dirname(trustedHelper), "../.."));
+    const modules = join(tooling, "node_modules");
+    if (realpathSync(modules) !== modules) fail("borrowed parser installation");
+    const manifest = JSON.parse(readFileSync(join(tooling, "package.json"), "utf8"));
+    const pin = manifest.dependencies?.typescript;
+    if (typeof pin !== "string" || !/^\d+\.\d+\.\d+$/.test(pin)) fail("parser is not pinned");
+    // Check the frozen lock entry without loading another installed dependency.
+    // Only the canonical root importer and integrity-bearing package entry count.
+    const lock = readFileSync(join(tooling, "pnpm-lock.yaml"), "utf8");
+    const rootImporters = [...lock.matchAll(/^  \.:\n((?: {4}.*\n|\n)*)/gm)];
+    const lockedPins = rootImporters.flatMap((entry) =>
+      [...entry[1].matchAll(/^      typescript:\n        specifier: ([^\n]+)\n        version: ([^\n]+)\n/gm)]);
+    const packageEntry = new RegExp(`^  typescript@${pin.replaceAll(".", "\\.")}:\\n    resolution: \\{integrity: sha512-[A-Za-z0-9+/=]+\\}`, "gm");
+    if (lockedPins.length !== 1 || lockedPins[0][1] !== pin || lockedPins[0][2] !== pin ||
+        [...lock.matchAll(packageEntry)].length !== 1) fail("parser lock does not match");
+    const require = createRequire(trustedHelper);
+    const metadataPath = realpathSync(require.resolve("typescript/package.json"));
+    const packageRoot = dirname(metadataPath);
+    const ownedRoots = [
+      join(modules, "typescript"),
+      join(modules, ".pnpm", `typescript@${pin}`, "node_modules/typescript"),
+    ];
+    if (!ownedRoots.includes(packageRoot)) fail("parser is outside trusted tooling");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const entry = realpathSync(require.resolve("typescript"));
+    if (metadata.name !== "typescript" || metadata.version !== pin ||
+        entry !== join(packageRoot, "lib/typescript.js")) fail("parser metadata does not match");
+    // Resolution and ownership checks precede the first module execution.
+    ts = require(entry);
+  } catch {
     fail("unable to load trusted TypeScript parser for bundle contract");
   }
   // Parse source text only: no target imports, config, plugins or type resolution.

@@ -37,6 +37,10 @@ type CanaryResult = {
   logTail: string[];
   steps: UpdateStepResult[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
+  listenerIsolation?: {
+    gateway: { host: "127.0.0.1"; port: number };
+    mcpAppSandbox: "disabled";
+  };
 } & (
   | { status: "ok" }
   | {
@@ -45,22 +49,22 @@ type CanaryResult = {
     }
 );
 
-async function waitBounded(
-  promise: Promise<unknown>,
+async function waitBounded<T>(
+  promise: Promise<T>,
   milliseconds: number,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<{ status: "completed"; value: T } | { status: "deadline" | "aborted" }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
   try {
-    await Promise.race([
-      promise,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, Math.max(0, milliseconds));
-        abort = resolve;
+    return await Promise.race([
+      promise.then((value) => ({ status: "completed" as const, value })),
+      new Promise<{ status: "deadline" | "aborted" }>((resolve) => {
+        timer = setTimeout(() => resolve({ status: "deadline" }), Math.max(0, milliseconds));
+        abort = () => resolve({ status: "aborted" });
         signal?.addEventListener("abort", abort, { once: true });
         if (signal?.aborted) {
-          resolve();
+          abort();
         }
       }),
     ]);
@@ -112,8 +116,8 @@ export async function validateUpdateCandidateCanary(params: {
 }): Promise<CanaryResult> {
   const started = Date.now();
   const budget = Math.max(1, params.timeoutMs ?? 300_000);
-  const deadline = started + budget;
-  const workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
+  let deadline = started + budget;
+  let workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
   const remaining = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
@@ -128,6 +132,7 @@ export async function validateUpdateCandidateCanary(params: {
   const logTail: string[] = [];
   const steps: UpdateStepResult[] = [];
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let listenerIsolation: CanaryResult["listenerIsolation"];
   let phase: CanaryPhase = "snapshot";
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
@@ -263,17 +268,27 @@ export async function validateUpdateCandidateCanary(params: {
     if (!policy.fix) {
       throw new Error("Candidate Doctor cannot enforce isolated service-repair ownership");
     }
+    const snapshotStarted = Date.now();
     rehearsal ??= await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
       stateDir: params.stateDir,
       env: sourceEnv,
       nodeRunner: params.nodeRunner,
-      timeoutMs: remaining(),
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
     });
+    // Copying private state has its own size/progress budget; preserve the
+    // runtime validation budget after large snapshots finish.
+    const snapshotDuration = Date.now() - snapshotStarted;
+    deadline += snapshotDuration;
+    workDeadline += snapshotDuration;
     env = { ...rehearsal.env };
     const { port } = rehearsal;
+    listenerIsolation = {
+      gateway: { host: "127.0.0.1", port },
+      mcpAppSandbox: "disabled",
+    };
     const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
       {
         phase: "doctor",
@@ -311,17 +326,17 @@ export async function validateUpdateCandidateCanary(params: {
       const commandStart = Date.now();
       const running = launch(command.entry ?? entry, command.args);
       let code: number | null = null;
+      let timedOut = false;
       try {
-        await waitBounded(
-          running.closed.then((value) => {
-            code = value;
-          }),
-          remaining(),
-          params.signal,
-        );
+        const outcome = await waitBounded(running.closed, remaining(), params.signal);
+        // Freeze the winning outcome before teardown can make a killed child
+        // emit a successful close event.
+        code = outcome.status === "completed" ? outcome.value : 1;
+        timedOut = outcome.status === "deadline";
       } finally {
         await terminateCanary(running.child, running.closed, deadline);
       }
+      params.signal?.throwIfAborted();
       if (code === 0 && phase === "plugins") {
         const inventory: unknown = running.outputExceeded()
           ? undefined
@@ -364,9 +379,7 @@ export async function validateUpdateCandidateCanary(params: {
       };
       steps.push(step);
       if (code !== 0) {
-        throw new Error(
-          `Candidate ${phase} failed${running.hasExited() ? "" : " (deadline exceeded)"}`,
-        );
+        throw new Error(`Candidate ${phase} failed${timedOut ? " (deadline exceeded)" : ""}`);
       }
       params.onStep?.(step);
     }
@@ -434,6 +447,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
+      listenerIsolation,
       steps,
     };
   } catch (error) {
@@ -464,6 +478,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
+      listenerIsolation,
       steps,
     };
   } finally {

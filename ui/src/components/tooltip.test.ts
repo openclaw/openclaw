@@ -92,6 +92,29 @@ describe("openclaw-tooltip", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    [undefined, "right-start"],
+    [false, "right-start"],
+    [true, "bottom-start"],
+  ] as const)(
+    "positions side cards when narrow viewport support is %s",
+    async (matches, placement) => {
+      vi.stubGlobal("matchMedia", matches === undefined ? undefined : vi.fn(() => ({ matches })));
+      try {
+        const { tooltip, trigger } = createRichTooltip("Device details");
+        tooltip.setAttribute("placement", "right-start");
+        document.body.append(tooltip);
+        await tooltip.updateComplete;
+        expect(webAwesomeTooltip(tooltip)?.getAttribute("placement")).toBe(placement);
+        focusTrigger(trigger);
+        expectOpenCount(1);
+        expect(webAwesomeTooltip(tooltip)?.getAttribute("placement")).toBe(placement);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("reattaches trigger listeners after reconnect", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Reconnect tooltip");

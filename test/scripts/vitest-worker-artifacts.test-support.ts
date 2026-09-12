@@ -167,6 +167,43 @@ export function writeFixture(directory: string, name: string, source: string) {
   return filename;
 }
 
+export function workerBorrowingProbe(directory: string) {
+  const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
+  const test = writeFixture(
+    directory,
+    "child.test.ts",
+    `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import {it,expect,inject} from 'vitest';
+    import {value} from '#fixture-value';
+    import {runtimeProcessEntrypoints} from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
+    import {resolveRuntimeWorkerUrl} from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
+    const generation = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+    const preparedAtCollection = fs.existsSync(generation);
+    it('borrows the compiled generation through its runtime declaration',()=>{
+      const launcherArgv = inject('launcherArgv');
+      expect(path.isAbsolute(launcherArgv[1])).toBe(true);
+      expect(path.basename(launcherArgv[1])).toBe('vitest.mjs');
+      expect(generation.pathname.endsWith('/dist/infra/sqlite-readonly-location.worker.js')).toBe(true);
+      expect(preparedAtCollection).toBe(true);
+      expect(value).toBe('first');
+      fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))},JSON.stringify(generation.href)+'\\n');
+    });
+  `,
+  );
+  const config = writeFixture(
+    directory,
+    "vitest.config.mts",
+    `
+    import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
+    const project = name => ({extends:false,plugins:shared.plugins,resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(value)}},...shared.resolve.alias]},test:{name,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,provide:{launcherArgv:process.argv}}});
+    export default async () => ({root:${JSON.stringify(root)},plugins:shared.plugins,test:{projects:[project('first'),project('second')]}});
+  `,
+  );
+  return { config };
+}
+
 export function workerProbe(
   directory: string,
   holdSecond = false,
@@ -179,7 +216,7 @@ export function workerProbe(
     "configured-value.ts",
     'export const value: string = "configured";',
   );
-  const parent = path.join(root, "src/infra/sqlite-readonly-location.ts");
+  const parent = path.join(root, "src/infra/sqlite-snapshot-source.ts");
   const test = writeFixture(
     directory,
     "child.test.ts",
@@ -199,7 +236,7 @@ export function workerProbe(
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
     import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
-    import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-readonly-location.ts"))};
+    import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-snapshot-source.ts"))};
     import { runSqliteTranscriptArchivePublishWorker } from ${JSON.stringify(path.join(root, "src/config/sessions/session-accessor.sqlite-archive.ts"))};
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);

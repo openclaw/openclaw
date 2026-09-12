@@ -269,21 +269,6 @@ def installed_java() -> str | None:
     return java if probe.returncode == 0 else None
 
 
-def path_excluding_command(name: str) -> str:
-    """Build a PATH value with every directory that resolves ``name``
-    removed, so a subprocess launched with it cannot find that command
-    even when it is genuinely installed on the host running the tests.
-    """
-    kept = []
-    for part in os.environ.get("PATH", "").split(os.pathsep):
-        if not part:
-            continue
-        if (Path(part) / name).is_file():
-            continue
-        kept.append(part)
-    return os.pathsep.join(kept)
-
-
 class AutoreviewMixedTargetTests(unittest.TestCase):
     def setUp(self):
         self.helper = load_helper()
@@ -5774,45 +5759,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 result.stdout,
                 r"engine check: codex[^\n]* UNAVAILABLE",
             )
-
-    @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
-    def test_dry_run_succeeds_without_trufflehog(self) -> None:
-        # Dry run needs only the reviewer CLI, with no external scanner.
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = init_repo(root)
-            source = repo / "source.txt"
-            source.write_text("staged\n", encoding="utf-8")
-            git(repo, "add", "source.txt")
-            codex_bin = write_executable(
-                root / "codex",
-                fake_codex_script(),
-            )
-            env = {**os.environ, "CODEX_HOME": str(root)}
-            env["PATH"] = path_excluding_command("trufflehog")
-
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--mode",
-                    "local",
-                    "--engine",
-                    "codex",
-                    "--codex-bin",
-                    str(codex_bin),
-                    "--dry-run",
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("prompt: OK", result.stdout)
-            self.assertRegex(result.stdout, r"engine check: codex[^\n]* OK\b")
 
     def test_dry_run_flag_exits_nonzero_when_codex_no_tools(self) -> None:
         # run_codex() unconditionally refuses --no-tools; --dry-run must

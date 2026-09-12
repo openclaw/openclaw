@@ -1065,9 +1065,10 @@ describe("getStatusSummary", () => {
 
   it("resolves aggregate selected models from each row's agent", async () => {
     const models: Record<string, string> = { ops: "ops", research: "research" };
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation(
-      (_cfg, _entry, id) => ({ provider: "openai", model: models[id ?? ""] ?? "global" }),
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockImplementation(
+      ({ agentId }) => ({ provider: "openai", model: models[agentId ?? ""] ?? "global" }),
     );
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation((model) => model);
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },

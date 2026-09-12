@@ -23,8 +23,8 @@ type TeamReportsHttpOptions = {
   /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
   assetsDir: string;
   getStore: () => TeamReportsStore | undefined;
-  status: () => unknown;
-  health: () => TeamReportsHealth;
+  status: () => Promise<unknown>;
+  health: () => Promise<TeamReportsHealth>;
   orgs: () => string[];
   people: () => Person[];
 };
@@ -116,7 +116,7 @@ function visiblePeople(configured: Person[], recentReports: PersonReport[]): Per
 }
 
 export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
-  return (req: IncomingMessage, res: ServerResponse): boolean => {
+  return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const nonce = randomBytes(16).toString("base64url");
     const send = (
       status: number,
@@ -177,15 +177,15 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     }
     const json = (body: unknown) => send(200, "application/json", JSON.stringify(body));
     if (first === "status" && route.segments.length === 1) {
-      return json(options.status());
+      return json(await options.status());
     }
-    const index = (): PeriodIndex => ({
-      day: store.listPeriods({ period: "day", limit: 400 }),
-      week: store.listPeriods({ period: "week", limit: 60 }),
-      month: store.listPeriods({ period: "month", limit: 60 }),
+    const index = async (): Promise<PeriodIndex> => ({
+      day: await store.listPeriods({ period: "day", limit: 400 }),
+      week: await store.listPeriods({ period: "week", limit: 60 }),
+      month: await store.listPeriods({ period: "month", limit: 60 }),
     });
     if (first === "latest" && route.segments.length === 1) {
-      const closed = store.listPeriods({ period: "day", status: "closed", limit: 1 })[0];
+      const closed = (await store.listPeriods({ period: "day", status: "closed", limit: 1 }))[0];
       if (closed) {
         return send(302, "text/plain", "Redirecting to the latest closed day.\n", {
           Location: `${options.basePath}/day/${closed.key}/`,
@@ -194,7 +194,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       return notFound();
     }
     if (first === "index.json" && route.segments.length === 1) {
-      const periods = index();
+      const periods = await index();
       return json({
         latest: {
           day: periods.day[0]?.key ?? null,
@@ -216,33 +216,35 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     };
     const html = (body: string) => send(200, "text/html", body);
     if (route.segments.length === 0) {
-      const periods = index();
+      const periods = await index();
       const latest = periods.day[0];
-      const stored = latest ? store.getPeriod("day", latest.key) : undefined;
+      const stored = latest ? await store.getPeriod("day", latest.key) : undefined;
       return html(
         renderIndexPage(ctx, periods, {
           orgs: stored?.report.orgs ?? options.orgs(),
           latest: stored,
-          health: options.health(),
+          health: await options.health(),
         }),
       );
     }
     if (first === "people" && route.segments.length <= 2) {
-      const latest = store.listPeriods({ period: "day", limit: 1 })[0];
-      const recent = latest ? (store.getPeriod("day", latest.key)?.report.members ?? []) : [];
+      const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
+      const recent = latest
+        ? ((await store.getPeriod("day", latest.key))?.report.members ?? [])
+        : [];
       const people = visiblePeople(options.people(), recent);
       if (!key) {
         const endKey = latest?.key ?? new Date().toISOString().slice(0, 10);
         const since = new Date(Date.parse(`${endKey}T00:00:00Z`) - 27 * DAY_MS)
           .toISOString()
           .slice(0, 10);
-        return html(renderPeoplePage(ctx, people, store.listPersonDaysSince(since), endKey));
+        return html(renderPeoplePage(ctx, people, await store.listPersonDaysSince(since), endKey));
       }
       const person = people.find((candidate) =>
         candidate.github.some((login) => login.toLowerCase() === key.toLowerCase()),
       );
       const login = person?.github[0] ?? key;
-      const days = store.listPersonDays(login, { limit: 400 });
+      const days = await store.listPersonDays(login, { limit: 400 });
       if (!person && days.length === 0) {
         return notFound();
       }
@@ -264,7 +266,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       } catch {
         return notFound();
       }
-      const stored = store.getPeriod(first, key);
+      const stored = await store.getPeriod(first, key);
       if (!stored) {
         return notFound();
       }
@@ -279,7 +281,9 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
           ctx,
           stored.report,
           stored.summary,
-          store.listPeriods({ period: first, limit: 400 }).filter((entry) => entry.key <= key),
+          (await store.listPeriods({ period: first, limit: 400 })).filter(
+            (entry) => entry.key <= key,
+          ),
         ),
       );
     }

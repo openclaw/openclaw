@@ -67,6 +67,13 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
   };
 }
 
+function parseMessageChannelSelector(channel: string): string {
+  if (!channel.trim()) {
+    throw new Error("--channel must not be blank");
+  }
+  return channel;
+}
+
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
     if (opts[key] === undefined) {
@@ -150,7 +157,11 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
   return {
     withMessageBase: (command) =>
       command
-        .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
+        .option(
+          "--channel <channel>",
+          `Channel: ${messageChannelOptions}`,
+          parseMessageChannelSelector,
+        )
         .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
         .option("--json", "Output result as JSON", false)
         .option("--dry-run", "Print payload and skip sending", false)

@@ -12,6 +12,7 @@ import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveProjectRegistry } from "../projects/project-registry.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
@@ -21,8 +22,36 @@ export function resolveSpawnParentWorktreeSource(
   assertCallerCurrent: (() => void) | undefined,
 ) {
   const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, { agentId });
-  if (!parent.entry?.worktree) {
+  if (!parent.entry) {
     return undefined;
+  }
+  if (!parent.entry.worktree) {
+    const projectId = normalizeOptionalString(parent.entry.projectId);
+    if (!projectId) {
+      return undefined;
+    }
+    const project = resolveProjectRegistry(parent.cfg, projectId);
+    if (!project) {
+      throw new Error("Spawn parent project changed; retry from its current session");
+    }
+    const parentSessionId = parent.entry.sessionId;
+    const assertCurrent = () => {
+      assertCallerCurrent?.();
+      const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
+      const currentProject = resolveProjectRegistry(current.cfg, projectId);
+      if (
+        current.entry?.sessionId !== parentSessionId ||
+        current.entry.archivedAt !== undefined ||
+        current.entry.projectId !== projectId ||
+        current.entry.sessionRoot !== project.repoRoot ||
+        current.entry.worktree !== undefined ||
+        currentProject?.repoRoot !== project.repoRoot
+      ) {
+        throw new Error("Spawn parent project changed; retry from its current session");
+      }
+    };
+    assertCurrent();
+    return { workspace: project.repoRoot, assertCurrent };
   }
   const worktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
   if (

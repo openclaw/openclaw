@@ -52,7 +52,7 @@ Once the gateway is running and your email is on the visibility list:
 1. Go to [Google Chat](https://chat.google.com/).
 2. Click the **+** (plus) icon next to **Direct Messages**.
 3. Search for the **App name** you configured in the Google Cloud Console.
-   - The bot does _not_ appear in the Marketplace browse list because it is a private app; search for it by name.
+   - The bot does _not_ appear in the Marketplace browse list because it is a private app. Search for it by name.
 4. Select the bot, click **Add** or **Chat**, and send a message.
 
 ## Public URL (Webhook-only)
@@ -104,7 +104,7 @@ Use Tailscale Serve for the private dashboard and Funnel for the public webhook 
    tailscale funnel status
    ```
 
-Your public webhook URL is `https://<node-name>.<tailnet>.ts.net/googlechat`; the dashboard stays tailnet-only at `https://<node-name>.<tailnet>.ts.net:8443/`. Use the public URL (without `:8443`) in the Google Chat app config.
+Your public webhook URL is `https://<node-name>.<tailnet>.ts.net/googlechat`. The dashboard stays tailnet-only at `https://<node-name>.<tailnet>.ts.net:8443/`. Use the public URL (without `:8443`) in the Google Chat app config.
 
 > Note: This configuration persists across reboots. Remove it later with `tailscale funnel reset` and `tailscale serve reset`.
 
@@ -131,23 +131,23 @@ Configure the tunnel ingress rules to route only the webhook path:
 
 1. Google Chat POSTs JSON to the gateway webhook path (POST only, JSON content type required, per-IP rate limited).
 2. OpenClaw authenticates every request before dispatch:
-   - Chat app events carry `Authorization: Bearer <token>`; the token is verified before the full body is parsed.
-   - Google Workspace Add-on events carry the token in the body (`authorizationEventObject.systemIdToken`) and are read under a stricter pre-auth budget (16 KB, 3 s) before verification.
+   - Chat app events carry `Authorization: Bearer <token>`. The token is verified before the full body is parsed.
+   - Google Workspace Add-on events carry the token in the body (`authorizationEventObject.systemIdToken`). OpenClaw reads them under a stricter pre-auth budget (16 KB, 3 s) before verification.
 3. The token is checked against `audienceType` + `audience`:
    - `audienceType: "app-url"` → audience is your HTTPS webhook URL.
    - `audienceType: "project-number"` → audience is the Cloud project number.
-   - Add-on tokens under `app-url` additionally require `appPrincipal` set to the app's numeric OAuth 2.0 client ID (21 digits, not an email); otherwise verification fails with a logged warning.
+   - Add-on tokens under `app-url` additionally require `appPrincipal` set to the app's numeric OAuth 2.0 client ID (21 digits, not an email). Otherwise verification fails with a logged warning.
 4. Messages route by space:
-   - Spaces get per-space sessions `agent:<agentId>:googlechat:group:<spaceId>`; replies go to the message thread.
-   - DMs collapse into the agent's main session by default; set `session.dmScope` for per-peer DM sessions (see [Session](/concepts/session)).
-5. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
+   - Spaces get per-space sessions `agent:<agentId>:googlechat:group:<spaceId>`. Replies go to the message thread.
+   - DMs collapse into the agent's main session by default. Set `session.dmScope` for per-peer DM sessions (see [Session](/concepts/session)).
+5. DM access is pairing by default. Unknown senders receive a pairing code. Approve with:
    - `openclaw pairing approve googlechat <code>`
-6. Group spaces require @-mention by default. Mentions are detected from Chat `USER_MENTION` annotations targeting the app; set `botUser` (e.g., `users/1234567890`) if detection needs the app's user resource name.
-7. When an exec or plugin approval starts from Google Chat and a stable `users/<id>` approver is configured, OpenClaw posts a native approval card (`cardsV2`) in the originating space or thread. Card buttons carry opaque callback tokens; the manual `/approve <id> <decision>` prompt appears only when native delivery is unavailable.
+6. Group spaces require @-mention by default. Mentions are detected from Chat `USER_MENTION` annotations targeting the app. Set `botUser` (e.g., `users/1234567890`) if detection needs the app's user resource name.
+7. When an exec or plugin approval starts from Google Chat and a stable `users/<id>` approver is configured, OpenClaw posts a native approval card (`cardsV2`) in the originating space or thread. Card buttons carry opaque callback tokens. The manual `/approve <id> <decision>` prompt appears only when native delivery is unavailable.
 
 ### Inbound durability
 
-After request authentication, OpenClaw removes the add-on authorization object from storage and durably queues Google Chat `MESSAGE` events before returning `200`. A persistence failure returns `503`, allowing Google Chat to retry instead of acknowledging an event that could be lost. A durably queued `200` carries `x-openclaw-delivery-accepted: durable`; non-message action acks and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`.
+After request authentication, OpenClaw removes the add-on authorization object from storage and durably queues Google Chat `MESSAGE` events before returning `200`. A persistence failure returns `503`, allowing Google Chat to retry instead of acknowledging an event that could be lost. A durably queued `200` carries `x-openclaw-delivery-accepted: durable`. Non-message action acks and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`.
 
 Pending or retryable messages survive a Gateway restart, remain serialized per space, and use the Google Chat message resource name to suppress duplicate queue entries while the active or retained completion record exists. Non-message actions keep their existing detached webhook path and do not receive this durable-queue guarantee. Delivery remains at least once across the queue-to-agent boundary, so a crash during handoff can replay a turn.
 
@@ -197,15 +197,15 @@ Use these identifiers for delivery and allowlists:
 Notes:
 
 - Service account credentials: `serviceAccountFile` (path) or `serviceAccount` (inline JSON string, object, or env/file/exec/store SecretRef). Env vars `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON) and `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path) apply to the default account only. Multi-account setups use `channels.googlechat.accounts.<id>` with the same keys, including per-account `serviceAccount` SecretRefs.
-- Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. The root defaults to `pairing` and `allowlist` respectively. Shared settings from `accounts.default` have lower precedence than the root; its credentials, `enabled`, and `dangerouslyAllowNameMatching` are not inherited by named accounts.
-- Default webhook path is `/googlechat` when `webhookPath` is unset; `webhookUrl` can supply the path instead.
+- Omitted account `dmPolicy` and `groupPolicy` inherit the channel root. Explicit account policies win. The root defaults to `pairing` and `allowlist` respectively. Shared settings from `accounts.default` have lower precedence than the root. Its credentials, `enabled`, and `dangerouslyAllowNameMatching` are not inherited by named accounts.
+- Default webhook path is `/googlechat` when `webhookPath` is unset. `webhookUrl` can supply the path instead.
 - Group keys must be stable space ids (`spaces/<spaceId>`). Display-name keys are deprecated and logged as such.
-- `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode); doctor warns about email entries.
+- `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode). Doctor warns about email entries.
 - Google Chat reaction actions are not exposed. The plugin uses service-account authentication, while Google Chat reaction endpoints require user authentication. Remove unsupported legacy reaction settings with `openclaw doctor --fix`.
 - Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose text `send` only. Google Chat attachment upload requires user authentication, while this plugin uses service-account authentication, so outbound file upload is not exposed.
-- `typingIndicator`: `message` (default) posts a `_<Bot> is typing..._` placeholder and edits it into the first reply; `none` disables it; `reaction` requires user OAuth and currently falls back to `message` with a logged error under service-account auth.
-- Inbound attachments (first attachment per message) are downloaded through the Chat API into the media pipeline, capped by `mediaMaxMb` (default 20). Google Drive files are not downloaded; the agent receives an unavailable-attachment notice asking for a direct file upload instead. Other unsupported attachment sources receive the same upload guidance. Messages with multiple attachments include a counted notice for the additional attachments that were not processed. Oversize attachments retain their size-limit notice.
+- `typingIndicator`: `message` (default) posts a `_<Bot> is typing..._` placeholder and edits it into the first reply. `none` disables it. `reaction` requires user OAuth and currently falls back to `message` with a logged error under service-account auth.
+- OpenClaw downloads the first inbound attachment per message through the Chat API into the media pipeline. `mediaMaxMb` caps that download (default 20). Google Drive files are not downloaded. The agent receives an unavailable-attachment notice asking for a direct file upload instead. Other unsupported attachment sources receive the same upload guidance. Messages with multiple attachments include a counted notice for the additional attachments that were not processed. Oversize attachments retain their size-limit notice.
 - Bot-authored messages are ignored by default. With `allowBots: true`, accepted bot messages use shared [bot loop protection](/channels/bot-loop-protection): configure `channels.defaults.botLoopProtection`, then override with `channels.googlechat.botLoopProtection` or `channels.googlechat.groups.<space>.botLoopProtection`.
 
 Custom emoji listing is unavailable because Google Chat's `customEmojis.list` endpoint requires user authentication with the `chat.customemojis` or `chat.customemojis.readonly` scope. This plugin authenticates exclusively as a service account with the `chat.bot` scope, which cannot access that endpoint.

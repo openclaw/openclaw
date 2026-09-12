@@ -17,6 +17,7 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 type WindowsProcessSnapshotEntry = {
@@ -313,6 +314,7 @@ export async function terminateGatewayProcessTree(
   graceMs: number,
   assertCurrent?: () => void,
 ): Promise<void> {
+  assertGatewayServiceUpdateCurrent();
   assertCurrent?.();
   if (process.platform !== "win32") {
     // These PIDs come from argv/port ownership; leader verification avoids signaling our group.
@@ -330,6 +332,7 @@ export async function terminateGatewayProcessTree(
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
+  assertGatewayServiceUpdateCurrent();
   assertCurrent?.();
   const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
     env: resolveServiceManagerEnv(),

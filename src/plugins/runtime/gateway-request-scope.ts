@@ -218,6 +218,8 @@ export function withPluginRuntimeRegistryScope<T>(
       pluginRegistry: registry,
       declaredProviderOwners:
         declaredProviderOwners ??
+        // Nested calls keep this prepared registry's facts, never a different registry's index.
+        (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
         getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
     },
     run,
@@ -251,13 +253,6 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
     delete scoped.pluginTrustedOfficialInstall;
   }
   return pluginRuntimeGatewayRequestScope.run(scoped, run);
-}
-
-/**
- * Runs work under the current gateway request scope while attaching plugin identity.
- */
-export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
-  return withPluginRuntimePluginScope({ pluginId }, run);
 }
 
 /**

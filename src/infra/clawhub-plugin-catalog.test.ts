@@ -1,22 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { jsonResponse, requestUrl } from "../test-helpers/http.js";
 import {
-  fetchAllOfficialClawHubPlugins,
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
+  fetchClawHubPluginOverview,
   fetchClawHubPluginVersionCategories,
   fetchClawHubPluginDetail,
 } from "./clawhub-plugin-catalog.js";
-
-function jsonResponse(value: unknown): Response {
-  return new Response(JSON.stringify(value), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function requestUrl(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-}
 
 const remotePlugin = {
   name: "memory-plus",
@@ -34,54 +24,49 @@ const remotePlugin = {
 };
 
 describe("ClawHub plugin catalog client", () => {
-  it("reads every official page for bundled publication classification", async () => {
-    const requestedUrls: string[] = [];
+  it("reads the bounded plugin overview in one request", async () => {
+    let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(requestUrl(input));
-      requestedUrls.push(`${url.pathname}${url.search}`);
-      return jsonResponse(
-        url.searchParams.has("cursor")
-          ? { items: [{ ...remotePlugin, name: "memory-next" }] }
-          : { items: [remotePlugin], nextCursor: "official-next" },
-      );
+      requestedUrl = requestUrl(input);
+      return jsonResponse({
+        categories: [
+          {
+            slug: "memory",
+            label: "Memory",
+            description: "Long-term memory.",
+            icon: "database",
+            order: 0,
+          },
+        ],
+        items: [
+          {
+            ...remotePlugin,
+            featured: true,
+            trending: true,
+            featuredRank: 1,
+            trendingRank: 0,
+          },
+        ],
+      });
     });
 
-    const result = await fetchAllOfficialClawHubPlugins({
+    const result = await fetchClawHubPluginOverview({
       baseUrl: "https://example.com",
       fetchImpl,
     });
 
-    expect(result.map((item) => item.packageName)).toEqual(["memory-plus", "memory-next"]);
-    expect(requestedUrls).toEqual([
-      "/api/v1/plugins?isOfficial=true&officialFirst=true&sort=downloads&limit=100",
-      "/api/v1/plugins?cursor=official-next&isOfficial=true&officialFirst=true&sort=downloads&limit=100",
+    expect(new URL(requestedUrl).pathname).toBe("/api/v1/plugins/overview");
+    expect(result.categories.map((category) => category.slug)).toEqual(["memory"]);
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        packageName: "memory-plus",
+        featured: true,
+        trending: true,
+        featuredRank: 1,
+        trendingRank: 0,
+      }),
     ]);
-  });
-
-  it("rejects a repeated official pagination cursor", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ items: [], nextCursor: "stalled" }));
-
-    await expect(
-      fetchAllOfficialClawHubPlugins({ baseUrl: "https://example.com", fetchImpl }),
-    ).rejects.toThrow("repeated a pagination cursor");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-  });
-
-  it("reuses the complete official catalog across default-client searches", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ items: [remotePlugin] }));
-    vi.stubGlobal("fetch", fetchImpl);
-
-    try {
-      const first = await fetchAllOfficialClawHubPlugins();
-      const second = await fetchAllOfficialClawHubPlugins();
-
-      expect(first.map((item) => item.packageName)).toEqual(["memory-plus"]);
-      expect(second).toEqual(first);
-      expect(second).not.toBe(first);
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("browses the combined plugin endpoint with an opaque cursor", async () => {
@@ -231,6 +216,30 @@ describe("ClawHub plugin catalog client", () => {
     expect(categories.map((category) => category.slug)).toEqual(["channels", "models"]);
   });
 
+  it.each([
+    ["agent-runtimes", "bot"],
+    ["integrations", "plug"],
+    ["developer-tools", "code-xml"],
+    ["infrastructure", "server"],
+    ["documents-files", "files"],
+    ["inbox-collaboration", "inbox"],
+    ["productivity", "list-todo"],
+    ["scheduling", "calendar-days"],
+    ["finance-payments", "wallet-cards"],
+    ["sales-marketing", "megaphone"],
+    ["data-analytics", "chart-no-axes-combined"],
+    ["agent-orchestration", "workflow"],
+    ["research", "search"],
+  ])("preserves the registry icon for %s", async (slug, icon) => {
+    const category = { slug, label: slug, description: "Plugin category.", icon, order: 0 };
+    await expect(
+      fetchClawHubPluginCategories({
+        baseUrl: "https://example.com",
+        fetchImpl: async () => jsonResponse({ categories: [category] }),
+      }),
+    ).resolves.toEqual([category]);
+  });
+
   it("rejects arbitrary category icon values", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({
@@ -279,43 +288,50 @@ describe("ClawHub plugin catalog client", () => {
     ]);
   });
 
-  it("batch-reads categories for exact package versions", async () => {
-    let request: Request | undefined;
-    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      request = new Request(input, init);
-      return jsonResponse({
+  it.each([
+    ["memory", "tools"],
+    ["documents-files", "research"],
+    ["tools", "runtime", "gateway"],
+  ])(
+    "batch-reads current and legacy categories for exact package versions: %j",
+    async (...categories) => {
+      let request: Request | undefined;
+      const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        request = new Request(input, init);
+        return jsonResponse({
+          packages: [
+            { name: "@openclaw/memory", version: "1.2.3", categories },
+            { name: "@openclaw/missing", version: "4.5.6", categories: null },
+          ],
+        });
+      });
+
+      const result = await fetchClawHubPluginVersionCategories({
+        baseUrl: "https://example.com",
+        token: "private-token",
+        skipAuth: true,
         packages: [
-          { name: "@openclaw/memory", version: "1.2.3", categories: ["memory", "tools"] },
-          { name: "@openclaw/missing", version: "4.5.6", categories: null },
+          { name: "@openclaw/memory", version: "1.2.3" },
+          { name: "@openclaw/missing", version: "4.5.6" },
+        ],
+        fetchImpl,
+      });
+
+      expect(request?.method).toBe("POST");
+      expect(request?.headers.has("authorization")).toBe(false);
+      expect(new URL(request?.url ?? "").pathname).toBe("/api/v1/packages/categories:batch");
+      await expect(request?.json()).resolves.toEqual({
+        packages: [
+          { name: "@openclaw/memory", version: "1.2.3" },
+          { name: "@openclaw/missing", version: "4.5.6" },
         ],
       });
-    });
-
-    const result = await fetchClawHubPluginVersionCategories({
-      baseUrl: "https://example.com",
-      token: "private-token",
-      skipAuth: true,
-      packages: [
-        { name: "@openclaw/memory", version: "1.2.3" },
-        { name: "@openclaw/missing", version: "4.5.6" },
-      ],
-      fetchImpl,
-    });
-
-    expect(request?.method).toBe("POST");
-    expect(request?.headers.has("authorization")).toBe(false);
-    expect(new URL(request?.url ?? "").pathname).toBe("/api/v1/packages/categories:batch");
-    await expect(request?.json()).resolves.toEqual({
-      packages: [
-        { name: "@openclaw/memory", version: "1.2.3" },
-        { name: "@openclaw/missing", version: "4.5.6" },
-      ],
-    });
-    expect(result).toEqual([
-      { name: "@openclaw/memory", version: "1.2.3", categories: ["memory", "tools"] },
-      { name: "@openclaw/missing", version: "4.5.6", categories: null },
-    ]);
-  });
+      expect(result).toEqual([
+        { name: "@openclaw/memory", version: "1.2.3", categories },
+        { name: "@openclaw/missing", version: "4.5.6", categories: null },
+      ]);
+    },
+  );
 
   it("assembles normalized detail from ClawHub package metadata and release endpoints", async () => {
     const requestedUrls: string[] = [];

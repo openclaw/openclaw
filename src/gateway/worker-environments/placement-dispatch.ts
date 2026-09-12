@@ -23,7 +23,6 @@ import {
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import {
   matchesWorkerPlacementTarget,
-  type WorkerPlacementCancellationTarget,
   type WorkerPlacementReclaimBarriers,
   type WorkerPlacementPendingOperations,
   type WorkerReclaimPlacement,
@@ -36,9 +35,11 @@ import { reportPlacementTransition } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
+  WorkerPlacementCancellationTarget,
   WorkerPlacementMoveDestination,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
+  WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -170,19 +171,31 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
-      const preparedIntent =
-        !request.deviceId && workspace.kind === "local"
-          ? await environments.prepareProjectIntent(request.profileId, {
-              machineClass: request.machineClass,
-              executionMode: request.executionMode,
-              projectPath,
-              inherited: request.inheritedProfile,
-              signal,
-              os: request.os,
-              runSetupScript: request.runSetupScript,
-              setupAuthorized: request.runSetupScript !== undefined,
-            })
-          : undefined;
+      const preparedIntent = !request.deviceId
+        ? await environments.prepareProjectIntent(request.profileId, {
+            machineClass: request.machineClass,
+            executionMode: request.executionMode,
+            projectPath,
+            ...(workspace.kind === "repository"
+              ? {
+                  repository: {
+                    agentId: request.agentId,
+                    url: workspace.repository.url,
+                    ref: workspace.repository.requestedRef ?? undefined,
+                    baseCommit: workspace.repository.baseCommit ?? undefined,
+                  },
+                }
+              : {}),
+            inherited: request.inheritedProfile,
+            signal,
+            os: request.os,
+            runSetupScript:
+              workspace.kind === "repository"
+                ? workspace.repository.runSetupScript && request.runSetupScript !== false
+                : request.runSetupScript,
+            setupAuthorized: request.runSetupScript !== undefined,
+          })
+        : undefined;
       assertCurrent();
       const prepared = preparedIntent
         ? await startup.bindPreparedPlacement({
@@ -376,28 +389,31 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const reclaim = async (
     request: WorkerPlacementReclaimRequest,
     authorize?: WorkerPlacementAuthorization,
-    beforeDrain?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementReclaimSourceCheck,
     serialize: (
       run: () => Promise<WorkerReclaimPlacement>,
     ) => Promise<WorkerReclaimPlacement> = async (run) => await run(),
     pendingOperations?: WorkerPlacementPendingOperations,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
+    authorize?.();
+    beforeDrain?.();
     const initial = placements.get(request.sessionId);
     if (initial) {
       reportPlacementTransition(onTransition, initial);
     }
+    const checkSource = () => beforeDrain?.(pendingOperations?.currentPlacement());
     return await options.runReclaimPreparation({
       ...request,
       authorize,
-      beforeDrain,
+      beforeDrain: checkSource,
       pendingOperations,
       run: (reauthorize) =>
         serialize(() =>
           reclaimCurrent(
             request,
             reauthorize,
-            beforeDrain,
+            checkSource,
             initial,
             pendingOperations?.completedPlacement(),
             onTransition,

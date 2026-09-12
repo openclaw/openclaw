@@ -13,9 +13,9 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -243,7 +243,8 @@ export function registerGenerationRecoveryTests(
           after: { version: VERSION },
           verification: { serviceRunning: true, runningVersion: VERSION },
         });
-        expect(completedStatus).toBe("rolled-back");
+        // Cleanup is pre-terminal; rollback is recorded only after completion settles.
+        expect(completedStatus).toBe("running");
         expect(record.downtimeMs).toBeGreaterThanOrEqual(0);
         expect(record.confirmedAtMs).toBeGreaterThanOrEqual(before.stoppedAtMs!);
         expect(renderUpdateRunReport(record).headline).toBe(

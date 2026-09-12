@@ -41,6 +41,11 @@ downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
+The canary uses a temporary loopback Gateway port and suppresses background
+listeners, including the MCP Apps sandbox, browser control, and channel services.
+This lets validation run while the serving Gateway keeps its configured ports.
+The activated Gateway retains your normal listener settings.
+
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets
 are checked early; explicit package artifacts are checked using the privately
@@ -202,6 +207,12 @@ from a chat shell; use the update action so restart and notification stay coordi
 
 ## Stale update history
 
+Untouched, identityless legacy admissions older than 24 hours can
+[expire automatically](/cli/update/status-and-history#run-history-and-reports)
+during Gateway startup or a status check. The row is retained as `failed` with
+reason `legacy-driver-expired` and retry advice; no explicit repair is needed
+for that shape.
+
 If update status stays in progress while the Gateway is healthy, check that no
 update is still running. On the updated installation, run:
 
@@ -214,8 +225,9 @@ For an inactive legacy row older than 30 minutes, repair verifies that the
 running Gateway matches the installed version and build, then clears the stale
 run without maintenance or a service restart. A new explicit `openclaw update`
 can also supersede a single stale identityless row. Recent rows and recorded
-live drivers are protected. Identityless rows are never cleared automatically;
-the Control UI's configuration-write suspension clears after reconciliation.
+live drivers are protected. Identityless rows outside the legacy-expiry shape
+require explicit recovery; the Control UI's configuration-write suspension clears
+after reconciliation.
 
 OpenClaw 2026.9.2 does not reject a new CLI update because an older running row
 exists: its [admission path](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command-run.ts#L77)

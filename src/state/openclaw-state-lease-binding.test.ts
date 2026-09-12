@@ -1,7 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";

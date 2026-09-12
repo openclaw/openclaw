@@ -529,6 +529,56 @@ describe("bootstrap limit resolvers", () => {
     }
   });
 
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "uses built-in limits for invalid per-agent overrides (%s), not configured defaults",
+    (value) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { bootstrapMaxChars: 12345, bootstrapTotalMaxChars: 12345 },
+          entries: { worker: { bootstrapMaxChars: value, bootstrapTotalMaxChars: value } },
+        },
+      };
+      for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+        expect(resolver.resolve(cfg, "worker")).toBe(resolver.defaultValue);
+      }
+    },
+  );
+
+  it.each([
+    { name: "omitted", override: {} },
+    {
+      name: "undefined",
+      override: { bootstrapMaxChars: undefined, bootstrapTotalMaxChars: undefined },
+    },
+  ])("inherits configured defaults for $name per-agent limits", ({ override }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { bootstrapMaxChars: 12345, bootstrapTotalMaxChars: 12345 },
+        entries: { worker: override },
+      },
+    };
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      expect(resolver.resolve(cfg, "worker")).toBe(12345);
+    }
+  });
+
+  it("floors positive fractional limits to zero", () => {
+    const configs: OpenClawConfig[] = [
+      { agents: { defaults: { bootstrapMaxChars: 0.5, bootstrapTotalMaxChars: 0.5 } } },
+      {
+        agents: {
+          defaults: { bootstrapMaxChars: 12345, bootstrapTotalMaxChars: 12345 },
+          entries: { worker: { bootstrapMaxChars: 0.5, bootstrapTotalMaxChars: 0.5 } },
+        },
+      },
+    ];
+    for (const cfg of configs) {
+      for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+        expect(resolver.resolve(cfg, "worker")).toBe(0);
+      }
+    }
+  });
+
   it("fall back when values are invalid", () => {
     for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
       const cfg = {

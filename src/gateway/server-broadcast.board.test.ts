@@ -288,8 +288,8 @@ describe("board and progress event session ownership", () => {
             sessionKey: "agent:work:global",
             markdown: "Ordinary session",
           });
-          expect(progressCardStore.get("global", "work")).toBeNull();
-          expect(progressCardStore.get("agent:work:global", "work")?.markdown).toBe(
+          expect(await progressCardStore.get("global", "work")).toBeNull();
+          expect((await progressCardStore.get("agent:work:global", "work"))?.markdown).toBe(
             "Ordinary session",
           );
           const changed = (revision: number | null) => ({
@@ -314,7 +314,7 @@ describe("board and progress event session ownership", () => {
           content: { kind: "html", html: "<p>Working</p>" },
           declared: { tools: ["status.refresh"] },
         });
-        const widget = boardStore.getSnapshot(target).widgets[0]!;
+        const widget = (await boardStore.getSnapshot(target)).widgets[0]!;
         const rawGrant = await invoke("board.widget.grant", {
           ...target,
           name: "status",
@@ -332,7 +332,7 @@ describe("board and progress event session ownership", () => {
           agentId: "main",
           ops: [{ kind: "tab_create", tabId: "main-notes", title: "Main notes" }],
         });
-        expect(boardStore.getSnapshot(target)).toMatchObject({
+        expect(await boardStore.getSnapshot(target)).toMatchObject({
           sessionKey: "global",
           revision: 3,
           widgets: [{ name: "status", grantState: "granted" }],

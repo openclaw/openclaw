@@ -87,27 +87,33 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner",
     );
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway")).toBeNull();
   });
 
-  it("stays hidden outside native chrome", async () => {
-    const nativeWindow = window as SidebarNativeGatewayTestWindow;
-    nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = twoGateways;
+  it.each([false, true])("keeps plain web one line (offline: %s)", async (offline) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.offline = offline;
+    await sidebar.updateComplete;
 
     expect(
       sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
     ).not.toContain("Local Gateway");
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway")).toBeNull();
   });
 
-  it("stays hidden with one configured gateway", async () => {
+  it("shows a single configured gateway below the identity name", async () => {
     setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
-    expect(
-      sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
-    ).not.toContain("Local Gateway");
+    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
+      "Identity and app menu for Owner: Local Gateway, primary",
+    );
+    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
+    const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
+    expect(detail?.textContent).toContain("Local Gateway");
+    expect(detail?.querySelector(".sidebar-gateway-primary")?.textContent).toBe("primary");
   });
 
   it("shows the current gateway health, name, and primary suffix", async () => {
@@ -119,12 +125,18 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: Local Gateway, primary",
     );
+    const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
+    expect(detail?.textContent).toContain("Local Gateway");
+    expect(detail?.querySelector(".sidebar-gateway-primary")?.textContent).toBe("primary");
+    expect(detail?.querySelector(".sidebar-gateway-health")?.getAttribute("data-health")).toBe(
+      "ok",
+    );
     expect(
       sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
     ).not.toContain("git@e8cbc62");
   });
 
-  it("shows the visible offline retry pill instead of a hidden reconnecting subtitle", async () => {
+  it("shows reconnecting below the identity name and retains the offline retry action", async () => {
     setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -148,6 +160,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: Reconnecting…",
     );
+    const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
+    expect(detail?.textContent?.trim()).toBe("Reconnecting…");
+    expect(detail?.querySelector(".sidebar-gateway-primary")).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
     ).not.toContain("git@e8cbc62");
@@ -183,5 +198,11 @@ describe("AppSidebar gateway footer subtitle", () => {
     const ariaLabel = sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label");
     expect(ariaLabel).toContain("Remote Gateway");
     expect(ariaLabel).not.toContain("primary");
+    const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
+    expect(detail?.textContent).toContain("Remote Gateway");
+    expect(detail?.querySelector(".sidebar-gateway-primary")).toBeNull();
+    expect(detail?.querySelector(".sidebar-gateway-health")?.getAttribute("data-health")).toBe(
+      "error",
+    );
   });
 });

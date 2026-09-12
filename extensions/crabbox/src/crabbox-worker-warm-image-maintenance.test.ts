@@ -46,7 +46,7 @@ describe("Crabbox idle image maintenance", () => {
       if (params?.binary === "/opt/b/crabbox") {
         throw new Error("fixture binary acquisition unavailable");
       }
-      return params?.binary ?? "crabbox";
+      return { binary: params?.binary ?? "crabbox", version: "0.55.0" };
     });
     const store = openWarmImageStore();
     store.register("expired", expiredImage("chk_expired"));

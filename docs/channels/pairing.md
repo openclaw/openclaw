@@ -17,7 +17,9 @@ Security context: [Security](/gateway/security)
 
 ## 1) DM pairing (inbound chat access)
 
-When a channel is configured with DM policy `pairing`, unknown senders get a short code and their message is **not processed** until you approve.
+DM pairing applies to channels that implement OpenClaw's pairing API. With DM
+policy `pairing`, unknown senders get a short code and their message is **not
+processed** until you approve.
 
 Default DM policies are documented in: [Security](/gateway/security)
 
@@ -74,7 +76,11 @@ WhatsApp's login QR links a WhatsApp account to OpenClaw. DM access requests
 approve people who message that account. These are separate flows.
 </Note>
 
-Supported channels (any installed channel plugin that declares pairing; external plugins such as `openclaw-weixin` can add more): `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+Supported channels include: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+
+Installed external plugins can also support DM pairing if they implement
+OpenClaw's pairing API. Check the plugin's documentation for version-specific
+limitations.
 
 ### Reusable sender groups
 
@@ -107,7 +113,8 @@ Access groups are documented in detail here: [Access groups](/channels/access-gr
 
 ### Where the state lives
 
-Stored in the shared SQLite state database at
+For channels that use OpenClaw's pairing API, state is stored in the shared SQLite
+database at
 `~/.openclaw/state/openclaw.sqlite`:
 
 - pending requests in `channel_pairing_requests`
@@ -116,7 +123,7 @@ Stored in the shared SQLite state database at
 Account scoping behavior:
 
 - each request and approved sender is keyed by channel and account
-- runtime reads only the canonical SQLite rows; it does not merge legacy files
+- channels using the pairing API read only the canonical SQLite rows; they do not merge legacy files
 
 Older gateways wrote `<channel>-pairing.json` and
 `<channel>-<accountId>-allowFrom.json` under `~/.openclaw/credentials/`.

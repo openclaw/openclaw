@@ -12,6 +12,7 @@ import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createCodexAppServerToolResultExtensionRunner } from "../../agents/harness/codex-app-server-extensions.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../config/sessions.js";
 import {
   clearPluginOwnedSessionState,
@@ -25,20 +26,18 @@ import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type {
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
 } from "../agent-tool-result-middleware-types.js";
+import type { CodexAppServerExtensionFactory } from "../codex-app-server-extension-types.js";
 import { registerPluginCommandInRegistry } from "../command-registration.js";
 import { executePluginCommand } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
-import { cleanupReplacedPluginHostRegistry, runPluginHostCleanup } from "../host-hook-cleanup.js";
-import {
-  clearPluginHostRuntimeState,
-  getPluginRunContext,
-  setPluginRunContext,
-} from "../host-hook-runtime.js";
+import { createPluginHostRegistryRetirement, runPluginHostCleanup } from "../host-hook-cleanup.js";
+import { getPluginRunContext, setPluginRunContext } from "../host-hook-runtime.js";
 import { listPluginSessionSchedulerJobs } from "../host-hook-runtime.test-fixtures.js";
 import {
   drainPluginNextTurnInjectionContext,
@@ -48,9 +47,15 @@ import {
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
+import { getPluginInstance } from "../plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  clearActivePluginRegistry,
+  disposePluginRegistryInstances,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import {
@@ -170,10 +175,12 @@ async function withHostHookState(
 }
 
 describe("host-hook fixture plugin contract", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    clearPluginHostRuntimeState();
-    resetAgentEventsForTest();
+  afterEach(async () => {
+    try {
+      await clearActivePluginRegistry();
+    } finally {
+      resetAgentEventsForTest();
+    }
   });
 
   it("registers generic SDK seams without Plan Mode business logic", () => {
@@ -383,6 +390,88 @@ describe("host-hook fixture plugin contract", () => {
       ["exec", "codex"],
       ["apply_patch", "openclaw"],
     ]);
+  });
+
+  it("initializes a repeatedly registered Codex extension factory only once", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const handler = vi.fn(() => undefined);
+    const factory = vi.fn<CodexAppServerExtensionFactory>((runtime) => {
+      runtime.on("tool_result", handler);
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "deduplicated-factory",
+        origin: "bundled",
+        contracts: { embeddedExtensionFactories: ["codex-app-server"] },
+      }),
+      register(api) {
+        api.registerCodexAppServerExtensionFactory(factory);
+        api.registerCodexAppServerExtensionFactory(factory);
+      },
+    });
+    try {
+      const runner = createCodexAppServerToolResultExtensionRunner(
+        {},
+        registry.registry.codexAppServerExtensionFactories.map((entry) => entry.factory),
+      );
+      await runner.applyToolResultExtensions({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toolCallId: "call-1",
+        toolName: "read",
+        args: {},
+        result: { content: [{ type: "text", text: "ok" }], details: {} },
+      });
+      expect(factory).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledOnce();
+    } finally {
+      await disposePluginRegistryInstances(registry.registry);
+    }
+  });
+
+  it("fences handlers from a retired managed Codex factory without claiming caller-owned factories", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const managedHandler = vi.fn(() => undefined);
+    const callerHandler = vi.fn(() => undefined);
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "managed-factory",
+        origin: "bundled",
+        contracts: { embeddedExtensionFactories: ["codex-app-server"] },
+      }),
+      register(api) {
+        api.registerCodexAppServerExtensionFactory((runtime) => {
+          runtime.on("tool_result", managedHandler);
+        });
+      },
+    });
+    const runner = createCodexAppServerToolResultExtensionRunner({}, [
+      ...registry.registry.codexAppServerExtensionFactories.map((entry) => entry.factory),
+      (runtime) => runtime.on("tool_result", callerHandler),
+    ]);
+    const event = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "read",
+      args: {},
+      result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
+    };
+    try {
+      await expect(runner.applyToolResultExtensions(event)).resolves.toEqual(event.result);
+      expect(managedHandler).toHaveBeenCalledOnce();
+      expect(callerHandler).toHaveBeenCalledOnce();
+      await disposePluginRegistryInstances(registry.registry);
+      await expect(runner.applyToolResultExtensions(event)).resolves.toEqual(event.result);
+      expect(managedHandler).toHaveBeenCalledOnce();
+      expect(callerHandler).toHaveBeenCalledTimes(2);
+    } finally {
+      await disposePluginRegistryInstances(registry.registry);
+    }
   });
 
   it("diagnoses malformed trusted policy registrations", () => {
@@ -1663,6 +1752,127 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it.each(["patch", "projection", "injection"] as const)(
+    "uses the admitted registry for session %s after a new registry becomes globally active",
+    async (operation) => {
+      const createRegistry = (label: "global" | "scoped") => {
+        const fixture = createPluginRegistryFixture();
+        const record = createPluginRecord({ id: `${label}-owner` });
+        registerTestPlugin({
+          ...fixture,
+          record,
+          register(api) {
+            api.registerSessionExtension({
+              namespace: "workflow",
+              description: "Scoped workflow state",
+              sessionEntrySlotKey: `${label}Projection`,
+              sessionEntrySlotSchema: { type: "object" },
+              project: ({ state }) => ({ registry: label, state: state ?? null }),
+            });
+          },
+        });
+        return { ...fixture, instance: expectDefined(getPluginInstance(record), "plugin owner") };
+      };
+      const active = createRegistry("global");
+      const scoped = createRegistry("scoped");
+      setActivePluginRegistry(scoped.registry.registry);
+      try {
+        await withHostHookState("openclaw-host-hooks-scope-", async ({ storePath, tempConfig }) => {
+          const sessionKey = "agent:main:main";
+          const access = { sessionKey, storePath };
+          await replaceSessionEntry(access, {
+            sessionId: "scoped-session",
+            updatedAt: 1,
+            pluginExtensions: { "scoped-owner": { workflow: "initial" } },
+          });
+          for (const label of ["global", "scoped"] as const) {
+            await enqueuePluginNextTurnInjection({
+              cfg: tempConfig,
+              pluginId: `${label}-owner`,
+              injection: { sessionKey, text: `${label} context` },
+            });
+          }
+          const readEntry = () => expectDefined(loadSessionEntryReadOnly(access), "stored session");
+          const admitted = createDeferredCore();
+          const resume = createDeferredCore();
+          const pending = scoped.instance.run(async () => {
+            admitted.resolve();
+            await resume.promise;
+            if (operation === "patch") {
+              const patch = {
+                cfg: tempConfig,
+                sessionKey,
+                pluginId: "scoped-owner",
+                namespace: "workflow",
+                value: "updated",
+              };
+              await expect(patchPluginSessionExtension(patch)).resolves.toMatchObject({
+                ok: true,
+                value: "updated",
+              });
+              const stored = readEntry();
+              expect(Reflect.get(stored, "scopedProjection")).toEqual({
+                registry: "scoped",
+                state: "updated",
+              });
+              expect(Reflect.get(stored, "globalProjection")).toBeUndefined();
+              const failure = new Error("session mutation authority expired");
+              await expect(
+                patchPluginSessionExtension({
+                  ...patch,
+                  value: "must not commit",
+                  assertCurrent: () => {
+                    throw failure;
+                  },
+                }),
+              ).rejects.toBe(failure);
+              expect(readEntry()).toEqual(stored);
+            } else if (operation === "projection") {
+              expect(
+                projectPluginSessionExtensionsSync({ sessionKey, entry: readEntry() }),
+              ).toEqual([
+                {
+                  pluginId: "scoped-owner",
+                  namespace: "workflow",
+                  value: {
+                    registry: "scoped",
+                    state: "initial",
+                  },
+                },
+              ]);
+            } else {
+              const result = await drainPluginNextTurnInjectionContext({
+                cfg: tempConfig,
+                sessionKey,
+              });
+              expect(result.prependContext).toBe("scoped context");
+              expect(result.queuedInjections.map((entry) => entry.pluginId)).toEqual([
+                "scoped-owner",
+              ]);
+              expect(readEntry().pluginNextTurnInjections).toBeUndefined();
+            }
+          });
+          try {
+            await admitted.promise;
+            setActivePluginRegistry(active.registry.registry);
+            expect(() => scoped.instance.run(() => undefined)).toThrow("reloaded or disabled");
+            resume.resolve();
+            await pending;
+          } finally {
+            resume.resolve();
+            await pending.catch(() => undefined);
+            await disposePluginRegistryInstances(scoped.registry.registry);
+          }
+        });
+      } finally {
+        await Promise.all([
+          disposePluginRegistryInstances(scoped.registry.registry),
+          disposePluginRegistryInstances(active.registry.registry),
+        ]);
+      }
+    },
+  );
+
   it("requires explicit unset to remove plugin session extension state", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -2227,7 +2437,7 @@ describe("host-hook fixture plugin contract", () => {
     ).toBe(false);
   });
 
-  it("projects plugin UI descriptors through the strict gateway result shape", () => {
+  it("projects plugin UI descriptor metadata through the strict gateway result shape", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
@@ -2241,6 +2451,12 @@ describe("host-hook fixture plugin contract", () => {
           id: "approval-panel",
           surface: "session",
           label: "Approval panel",
+        });
+        api.registerControlUiDescriptor({
+          id: "admin-panel",
+          surface: "settings",
+          label: "Admin panel",
+          requiredScopes: ["operator.admin"],
         });
       },
     });
@@ -2276,6 +2492,14 @@ describe("host-hook fixture plugin contract", () => {
           pluginName: "Host Hook Fixture",
           surface: "session",
           label: "Approval panel",
+        },
+        {
+          id: "admin-panel",
+          pluginId: "host-hook-fixture",
+          pluginName: "Host Hook Fixture",
+          surface: "settings",
+          label: "Admin panel",
+          requiredScopes: ["operator.admin"],
         },
       ],
     });
@@ -2731,6 +2955,7 @@ describe("host-hook fixture plugin contract", () => {
         });
       },
     });
+    setActivePluginRegistry(registry.registry);
 
     const entry: SessionEntry = {
       sessionId: "session-1",
@@ -2784,11 +3009,13 @@ describe("host-hook fixture plugin contract", () => {
         reason: "reset",
         sessionKey: "agent:main:main",
       });
-      await cleanupReplacedPluginHostRegistry({
+      const next = createEmptyPluginRegistry();
+      stageActivePluginRegistry(next, null, "default");
+      await createPluginHostRegistryRetirement({
         cfg: tempConfig,
         previousRegistry: registry.registry,
-        nextRegistry: createEmptyPluginRegistry(),
-      });
+        nextRegistry: next,
+      })();
     });
 
     expect(cleanupEvents).toEqual([
@@ -2802,6 +3029,9 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it("keeps scheduler job records when cleanup fails so cleanup can retry", async () => {
+    const cleanup = vi.fn<() => void>().mockImplementationOnce(() => {
+      throw new Error("cleanup failed");
+    });
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
@@ -2815,12 +3045,11 @@ describe("host-hook fixture plugin contract", () => {
           id: "retryable-job",
           sessionKey: "agent:main:main",
           kind: "monitor",
-          cleanup: () => {
-            throw new Error("cleanup failed");
-          },
+          cleanup,
         });
       },
     });
+    setActivePluginRegistry(registry.registry);
 
     const cleanupResult = await runPluginHostCleanup({
       cfg: config,
@@ -2841,6 +3070,16 @@ describe("host-hook fixture plugin contract", () => {
         kind: "monitor",
       },
     ]);
+    await expect(
+      runPluginHostCleanup({
+        cfg: config,
+        registry: registry.registry,
+        pluginId: "cleanup-failure-fixture",
+        reason: "disable",
+      }),
+    ).resolves.toEqual({ cleanupCount: 0, failures: [] });
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(listPluginSessionSchedulerJobs("cleanup-failure-fixture")).toEqual([]);
   });
 
   it("preserves restarted scheduler jobs while cleaning the replaced registry", async () => {
@@ -2891,28 +3130,14 @@ describe("host-hook fixture plugin contract", () => {
         rootDir: "/virtual/restart-fixture",
       },
     ];
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "restart-fixture",
-        name: "Restart Fixture",
-      }),
-      register(api) {
-        api.registerSessionSchedulerJob({
-          id: "shared-job",
-          sessionKey: "agent:main:main",
-          kind: "monitor",
-        });
-      },
-    });
+    setActivePluginRegistry(previous);
+    stageActivePluginRegistry(next, null, "default");
 
-    const cleanupResult = await cleanupReplacedPluginHostRegistry({
-      cfg: config,
+    const cleanupResult = await createPluginHostRegistryRetirement({
+      cfg: {},
       previousRegistry: previous,
       nextRegistry: next,
-    });
+    })();
     expect(cleanupResult.failures).toEqual([]);
     expect(cleanupEvents).toStrictEqual([]);
     expect(listPluginSessionSchedulerJobs("restart-fixture")).toEqual([
@@ -2946,6 +3171,7 @@ describe("host-hook fixture plugin contract", () => {
         });
       },
     });
+    setActivePluginRegistry(previousFixture.registry.registry);
 
     const replacementFixture = createPluginRegistryFixture();
     registerTestPlugin({
@@ -2964,12 +3190,13 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
+    stageActivePluginRegistry(replacementFixture.registry.registry, null, "default");
     await expect(
-      cleanupReplacedPluginHostRegistry({
+      createPluginHostRegistryRetirement({
         cfg: previousFixture.config,
         previousRegistry: previousFixture.registry.registry,
         nextRegistry: replacementFixture.registry.registry,
-      }),
+      })(),
     ).resolves.toEqual({ cleanupCount: 0, failures: [] });
     expect(cleanupEvents).toEqual([]);
     expect(listPluginSessionSchedulerJobs("scheduler-preserve")).toEqual([
@@ -2983,11 +3210,8 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it("does not let stale scheduler cleanup delete a newer job generation", async () => {
-    let releaseCleanup: (() => void) | undefined;
-    let markCleanupStarted: (() => void) | undefined;
-    const cleanupStartedPromise = new Promise<void>((resolve) => {
-      markCleanupStarted = resolve;
-    });
+    const cleanupStarted = createDeferredCore();
+    const finishCleanup = createDeferredCore();
     const previousFixture = createPluginRegistryFixture();
     registerTestPlugin({
       registry: previousFixture.registry,
@@ -3002,56 +3226,63 @@ describe("host-hook fixture plugin contract", () => {
           sessionKey: "agent:main:main",
           kind: "monitor",
           cleanup: async () => {
-            if (!markCleanupStarted) {
-              throw new Error("Expected scheduler cleanup start callback to be initialized");
-            }
-            markCleanupStarted();
-            await new Promise<void>((resolve) => {
-              releaseCleanup = resolve;
-            });
+            cleanupStarted.resolve();
+            await finishCleanup.promise;
           },
         });
       },
     });
+    setActivePluginRegistry(previousFixture.registry.registry);
 
-    const cleanupPromise = cleanupReplacedPluginHostRegistry({
+    const next = createEmptyPluginRegistry();
+    stageActivePluginRegistry(next, null, "default");
+    const cleanupPromise = createPluginHostRegistryRetirement({
       cfg: previousFixture.config,
       previousRegistry: previousFixture.registry.registry,
-      nextRegistry: createEmptyPluginRegistry(),
-    });
-    await cleanupStartedPromise;
+      nextRegistry: next,
+    })();
+    try {
+      await Promise.race([
+        cleanupStarted.promise,
+        cleanupPromise.then((result) => {
+          expect(result.failures).toEqual([]);
+          throw new Error("Expected scheduler cleanup to start before retirement settled");
+        }),
+      ]);
 
-    const replacementFixture = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: replacementFixture.registry,
-      config: replacementFixture.config,
-      record: createPluginRecord({
-        id: "scheduler-race",
-        name: "Scheduler Race",
-      }),
-      register(api) {
-        api.registerSessionSchedulerJob({
+      const replacementFixture = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry: replacementFixture.registry,
+        config: replacementFixture.config,
+        record: createPluginRecord({
+          id: "scheduler-race",
+          name: "Scheduler Race",
+        }),
+        register(api) {
+          api.registerSessionSchedulerJob({
+            id: "shared-job",
+            sessionKey: "agent:main:main",
+            kind: "monitor",
+          });
+        },
+      });
+      setActivePluginRegistry(replacementFixture.registry.registry);
+
+      finishCleanup.resolve();
+      const cleanupResult = await cleanupPromise;
+      expect(cleanupResult.failures).toEqual([]);
+      expect(listPluginSessionSchedulerJobs("scheduler-race")).toEqual([
+        {
           id: "shared-job",
+          pluginId: "scheduler-race",
           sessionKey: "agent:main:main",
           kind: "monitor",
-        });
-      },
-    });
-
-    if (!releaseCleanup) {
-      throw new Error("Expected scheduler cleanup release callback to be initialized");
+        },
+      ]);
+    } finally {
+      finishCleanup.resolve();
+      await cleanupPromise;
     }
-    releaseCleanup();
-    const cleanupResult = await cleanupPromise;
-    expect(cleanupResult.failures).toEqual([]);
-    expect(listPluginSessionSchedulerJobs("scheduler-race")).toEqual([
-      {
-        id: "shared-job",
-        pluginId: "scheduler-race",
-        sessionKey: "agent:main:main",
-        kind: "monitor",
-      },
-    ]);
   });
 
   it("does not register scheduler jobs globally during non-activating registry loads", () => {
@@ -3324,11 +3555,11 @@ describe("host-hook fixture plugin contract", () => {
           return undefined;
         });
 
-        const cleanupResult = await cleanupReplacedPluginHostRegistry({
+        const cleanupResult = await createPluginHostRegistryRetirement({
           cfg: tempConfig,
           previousRegistry,
           nextRegistry: createEmptyPluginRegistry(),
-        });
+        })();
         expect(cleanupResult.failures).toEqual([]);
 
         const stored = loadSessionStore(storePath, { skipCache: true });

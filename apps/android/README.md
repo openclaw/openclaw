@@ -24,6 +24,38 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
+## Review changes
+
+When the connected Gateway advertises `sessions.diff`, open a conversation's
+three-dot **Chat actions** menu and choose **Review changes**. If the action is
+missing, update the Gateway before reviewing changes on Android.
+The full-screen native viewer loads the same `sessions.diff` snapshot as the web Review panel.
+Close it with Android Back or **Close review**; pulling down does not dismiss it.
+Review shows **Uncommitted** changes only. The scope label is static; branch-base
+and historical commit comparisons are outside this Android viewer's scope.
+Tap a file header to collapse it. Line numbers are hidden by default. Start a new
+rightward swipe of at least 64dp with the code already at its left edge to reveal them;
+swipe left at least 64dp to hide them, then start a fresh swipe to pan the code. A swipe that starts away
+from the left edge only pans, even after reaching that edge: lift your finger before swiping again to
+reveal numbers. Addition/deletion markers remain visible.
+Long-press a code line, then drag to select more lines. Release to choose **To
+chat** (append `path:start-end (Before | Uncommitted)` or the corresponding
+After context, followed by all selected text in a fenced
+code block, to your draft without sending it) or
+**Copy** (copy the selected text). A pulse marks the start of selection; a toast
+confirms either action. Drag any of the four selection handles to refine the range before
+choosing an action. Selection stays in one hunk and uses the starting line's
+side: **Before** for deleted lines, **After** otherwise. It skips the opposite
+side and never includes omitted context. Tap outside the actions to cancel.
+Use **Copy patch** to copy that file's returned patch.
+**Refresh changes** requests a new snapshot; the viewer does not stream updates.
+
+The Gateway owns repository selection and session-start filtering. This is a
+checkout snapshot, not an exact audit of the assistant's edits. Binary files,
+truncated patches, stopped workspaces, and unavailable repositories are identified
+in the viewer. Switching conversation or Gateway closes the review; safe fold
+layout changes preserve the opening.
+
 ## Foldable layout
 
 With a full-height vertical separator reported by AndroidX WindowManager, the

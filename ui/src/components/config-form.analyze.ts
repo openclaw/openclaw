@@ -619,6 +619,18 @@ function normalizeUnion(
       literals.includes("false") ||
       (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
     ) {
+      // The text editor can preserve string and boolean literals, but cannot
+      // recreate numeric, structured, or null sentinels from their displayed text.
+      if (
+        remaining.every((entry) => entry.type === "string") &&
+        literals.every((literal) => typeof literal === "string" || typeof literal === "boolean") &&
+        !schemaAllowsNull(schema)
+      ) {
+        return {
+          schema: { ...schema, nullable },
+          unsupportedPaths: [],
+        };
+      }
       return null;
     }
     remaining.pop();

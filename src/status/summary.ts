@@ -231,7 +231,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
         });
         const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
-        const resolvedModel = resolveSessionModelRef(cfg, entry, agentId);
+        const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
         const model = resolvedModel.model ?? configuredSessionModel ?? null;
         const lookupModel =
           resolveStatusModelLookupRef({

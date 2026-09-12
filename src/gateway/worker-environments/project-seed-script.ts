@@ -14,7 +14,14 @@ type ProjectSeedScriptInput = {
     setupRecipe?: string;
     runSetupScript?: boolean;
   };
-  pack?: { directory: string; sha256: string; bytes: number; retainedCommit?: string };
+  pack?: {
+    directory: string;
+    sha256: string;
+    bytes: number;
+    retainedCommit?: string;
+    repositoryUrl?: string;
+  };
+  repository?: { directory: string; url: string };
 };
 
 /** Only immutable Git content and non-secret preparation metadata enter the machine image. */
@@ -32,10 +39,10 @@ const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
 const selectSeedsToPrune = ${selectWorkspaceSeedsToPrune.toString()};
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 process.umask(0o077);
-const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
-const git = (root, args, stdin) => {
-  const result = spawnSync("git", ["-c", "core.hooksPath=" + os.devNull, "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "core.askPass=", "-c", "init.templateDir=", "-C", root, ...args], { env, encoding: "utf8", timeout: 600000, maxBuffer: 262144, stdio: [stdin ?? "ignore", "pipe", "pipe"] });
-  if (result.status !== 0) throw new Error("Project Git preparation failed: " + (result.stderr?.trim() || result.error?.message || "exit " + result.status));
+const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key))), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
+const git = (root, args, stdin, networkEnv) => {
+  const result = spawnSync("git", ["-c", "core.hooksPath=" + os.devNull, "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "core.askPass=", "-c", "init.templateDir=", "-C", root, ...args], { env: networkEnv ?? env, encoding: "utf8", timeout: 600000, maxBuffer: 262144, stdio: [stdin ?? "ignore", "pipe", "pipe"] });
+  if (result.status !== 0) throw new Error(networkEnv ? "Project repository fetch failed" : "Project Git preparation failed: " + (result.stderr?.trim() || result.error?.message || "exit " + result.status));
   return result.stdout.trim();
 };
 const ownedDirectory = (parent, target) => {
@@ -65,7 +72,8 @@ const ownedDirectory = (parent, target) => {
   };
   const seed = path.join(namespace, input.seedKey);
   const stagingPrefix = ".tmp-" + input.seedKey + "-";
-  const transport = input.pack;
+  if (input.pack && input.repository) throw new Error("Project seed transports are mutually exclusive");
+  const transport = input.pack ?? input.repository;
   const directory = transport?.directory;
   if (directory !== undefined) {
     if (path.dirname(directory) !== namespace || !path.basename(directory).startsWith(stagingPrefix)) throw new Error("Project staging path escaped its owner");
@@ -97,6 +105,19 @@ const ownedDirectory = (parent, target) => {
     const repository = path.join(directory, "repository");
     fs.mkdirSync(repository, { mode: 0o700 });
     git(repository, ["init", "--quiet", "--object-format=" + (input.baseCommit.length === 40 ? "sha1" : "sha256"), "."]);
+    const repositoryUrl = input.repository?.url ?? input.pack?.repositoryUrl;
+    if (repositoryUrl !== undefined) {
+      const url = new URL(repositoryUrl);
+      const segments = url.pathname.slice(1).split("/");
+      if (url.origin !== "https://github.com" || url.href !== repositoryUrl || url.username || url.password || url.search || url.hash || segments.length !== 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment)) || !segments[1].endsWith(".git") || !/^[a-f0-9]{40}$/.test(input.baseCommit)) throw new Error("Project repository source is invalid");
+    }
+    if (input.repository) {
+      // Public fetches cannot use ambient credentials, helpers, or redirects.
+      // Git enables libcurl's netrc lookup independently of credential helpers.
+      const authHome = fs.mkdtempSync(path.join(directory, ".fetch-home-"));
+      const networkEnv = { ...Object.fromEntries(Object.entries(env).filter(([key]) => !/^(HOME|USERPROFILE|NETRC)$/i.test(key))), HOME: authHome, USERPROFILE: authHome };
+      git(repository, ["-c", "http.followRedirects=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", repositoryUrl, input.baseCommit], undefined, networkEnv);
+    } else {
       const pack = path.join(directory, "base.pack");
       const stat = fs.lstatSync(pack);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== input.pack.bytes) throw new Error("Project pack size does not match");
@@ -112,6 +133,9 @@ const ownedDirectory = (parent, target) => {
       fs.writeFileSync(path.join(repository, ".git", "shallow"), [...new Set([input.baseCommit, input.pack.retainedCommit].filter(Boolean))].join("\\n") + "\\n", { mode: 0o600 });
       const fd = fs.openSync(pack, "r");
       try { git(repository, ["index-pack", "--stdin", "--fix-thin"], fd); } finally { fs.closeSync(fd); }
+    }
+    // Session workspace binding verifies this credential-free source identity.
+    if (repositoryUrl !== undefined) git(repository, ["remote", "add", "origin", repositoryUrl]);
     if (git(repository, ["rev-parse", "--verify", input.baseCommit + "^{commit}"]) !== input.baseCommit) throw new Error("Project seed commit does not match");
     git(repository, ["fsck", "--full", "--strict", "--no-reflogs", input.baseCommit]);
     git(repository, ["checkout", "--detach", "--force", input.baseCommit]);

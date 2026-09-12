@@ -24,7 +24,7 @@ import { resolveHookEntries } from "../hooks/policy.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plugin-ids.js";
-import { buildPluginDiagnosticsReport } from "../plugins/status.js";
+import { withPluginDiagnosticsReport } from "../plugins/status.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
@@ -87,7 +87,11 @@ function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): 
   return { agentId, workspaceDir: resolveAgentWorkspaceDir(config, agentId) };
 }
 
-function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): HookStatusReport {
+async function withHooksReport<T>(
+  config: OpenClawConfig,
+  target: HooksReportTarget,
+  consume: (report: HookStatusReport) => T,
+): Promise<T> {
   // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
   const workspaceDir = target.workspaceDir;
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
@@ -98,23 +102,31 @@ function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): Ho
     workspaceDir,
     env: process.env,
   });
-  const pluginReport = buildPluginDiagnosticsReport({
-    config,
-    workspaceDir,
-    onlyPluginIds: startup.plan.pluginIds,
-    metadataSnapshot: startup.metadataSnapshot,
-  });
-  const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
-  const entries = resolveHookEntries([...pluginEntries, ...workspaceEntries]);
-  return buildWorkspaceHookStatus(workspaceDir, { config, entries });
+  return withPluginDiagnosticsReport(
+    {
+      config,
+      workspaceDir,
+      onlyPluginIds: startup.plan.pluginIds,
+      metadataSnapshot: startup.metadataSnapshot,
+    },
+    (pluginReport) => {
+      const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
+      const entries = resolveHookEntries([...pluginEntries, ...workspaceEntries]);
+      return consume(buildWorkspaceHookStatus(workspaceDir, { config, entries }));
+    },
+  );
 }
 
-async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
+async function loadHooksReport<T>(
+  agentId: string | undefined,
+  consume: (report: HookStatusReport) => T,
+): Promise<T> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const target = resolveHooksReportTarget(config, agentId);
   const { callGateway } = await import("../gateway/call.js");
+  let report: HookStatusReport;
   try {
-    return await callGateway<HookStatusReport>({
+    report = await callGateway<HookStatusReport>({
       config,
       method: "hooks.status",
       params: { agentId: target.agentId },
@@ -134,8 +146,9 @@ async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
       throw error;
     }
     // Only implicit local Gateways may use offline or older-Gateway discovery.
-    return buildHooksReport(config, target);
+    return withHooksReport(config, target, consume);
   }
+  return consume(report);
 }
 
 function resolveHooksAgentOption(command: Command | undefined): string | undefined {
@@ -192,48 +205,46 @@ async function runOneShotHooksCliAction(
 }
 async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
   const committed = await transformConfigFile({
-    transform: (config) => {
-      const hook = resolveHookSelection(
-        buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
-        hookName,
-      );
-      if (!hook) {
-        throw new Error(
-          `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
-        );
-      }
-      if (hook.managedByPlugin) {
-        throw new Error(
-          `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-        );
-      }
-      if (enabled && !hook.requirementsSatisfied) {
-        const missing = formatHookMissingSummary(hook, 3);
-        const installHint = hook.install.length
-          ? ` Install options: ${summarizeStringEntries({
-              entries: hook.install.map((option) => option.label),
-              limit: 3,
-            })}.`
-          : "";
-        throw new Error(
-          `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
-        );
-      }
-      const entries = { ...config.hooks?.internal?.entries };
-      entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
-      const nextConfig: OpenClawConfig = {
-        ...config,
-        hooks: {
-          ...config.hooks,
-          internal: {
-            ...config.hooks?.internal,
-            ...(enabled ? { enabled: true } : {}),
-            entries,
+    transform: (config) =>
+      withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) => {
+        const hook = resolveHookSelection(report, hookName);
+        if (!hook) {
+          throw new Error(
+            `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+          );
+        }
+        if (hook.managedByPlugin) {
+          throw new Error(
+            `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+          );
+        }
+        if (enabled && !hook.requirementsSatisfied) {
+          const missing = formatHookMissingSummary(hook, 3);
+          const installHint = hook.install.length
+            ? ` Install options: ${summarizeStringEntries({
+                entries: hook.install.map((option) => option.label),
+                limit: 3,
+              })}.`
+            : "";
+          throw new Error(
+            `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
+          );
+        }
+        const entries = { ...config.hooks?.internal?.entries };
+        entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
+        const nextConfig: OpenClawConfig = {
+          ...config,
+          hooks: {
+            ...config.hooks,
+            internal: {
+              ...config.hooks?.internal,
+              ...(enabled ? { enabled: true } : {}),
+              entries,
+            },
           },
-        },
-      };
-      return { nextConfig, result: hook };
-    },
+        };
+        return { nextConfig, result: { name: hook.name, emoji: hook.emoji } };
+      }),
   });
   const selectedHook = expectDefined(committed.result, "hook mutation result");
   const prefix = enabled
@@ -283,9 +294,11 @@ export function registerHooksCli(program: Command): void {
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts: HooksListOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
-        writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
+        const output = await loadHooksReport(resolveHooksAgentOption(command), (report) =>
+          formatHooksList(report, { ...opts, json }),
+        );
+        writeHooksOutput(output, json);
       }, "root"),
     );
 
@@ -296,11 +309,13 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts: HookInfoOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
-        const hook = resolveHookSelection(report, name);
-        writeHooksOutput(formatHookInfo(hook, name, { ...opts, json }), json);
-        return hook ? 0 : 1;
+        const result = await loadHooksReport(resolveHooksAgentOption(command), (report) => {
+          const hook = resolveHookSelection(report, name);
+          return { output: formatHookInfo(hook, name, { ...opts, json }), exitCode: hook ? 0 : 1 };
+        });
+        writeHooksOutput(result.output, json);
+        return result.exitCode;
       }, "root"),
     );
 
@@ -311,9 +326,11 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (opts: HooksCheckOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
-        writeHooksOutput(formatHooksCheck(report, { ...opts, json }), json);
+        const output = await loadHooksReport(resolveHooksAgentOption(command), (report) =>
+          formatHooksCheck(report, { ...opts, json }),
+        );
+        writeHooksOutput(output, json);
       }, "root"),
     );
 
@@ -398,9 +415,11 @@ export function registerHooksCli(program: Command): void {
 
   hooks.action(async (opts: HooksListOptions, command: Command) =>
     runOneShotHooksCliAction(async () => {
-      const report = await loadHooksReport(resolveHooksAgentOption(command));
       const json = hasJsonOutput(opts);
-      writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
+      const output = await loadHooksReport(resolveHooksAgentOption(command), (report) =>
+        formatHooksList(report, { ...opts, json }),
+      );
+      writeHooksOutput(output, json);
     }, "root"),
   );
 }

@@ -117,7 +117,10 @@ function fetchPath(
 
 beforeAll(async () => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-http-"));
-  store = createTeamReportsStore({ stateDir: directory });
+  store = await createTeamReportsStore({
+    stateDir: directory,
+    workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+  });
   const avatarReport = report("day", "2026-08-19");
   avatarReport.members = avatarPeople.map((person) => ({
     login: person.github[0] ?? "",
@@ -139,15 +142,19 @@ beforeAll(async () => {
     report("week", "2026-W34"),
     report("month", "2026-08"),
   ]) {
-    store.upsertPeriod({ report: document, summary, markdown: renderMarkdown(document, summary) });
+    await store.upsertPeriod({
+      report: document,
+      summary,
+      markdown: renderMarkdown(document, summary),
+    });
   }
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
     displayTimezone: "UTC",
     assetsDir: fileURLToPath(new URL("../assets", import.meta.url)),
     getStore,
-    status: () => ({ running: false, lastRun: "fixture-run" }),
-    health: () => ({ running: false, warnings: 1 }),
+    status: async () => ({ running: false, lastRun: "fixture-run" }),
+    health: async () => ({ running: false, warnings: 1 }),
     orgs: () => currentOrgs,
     people: () => [
       {
@@ -160,7 +167,11 @@ beforeAll(async () => {
       ...avatarPeople,
     ],
   });
-  server = createServer(handler);
+  server = createServer((req, res) => {
+    void handler(req, res).catch((error: unknown) => {
+      res.destroy(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -174,7 +185,7 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-  store.close();
+  await store.close();
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -456,7 +467,10 @@ describe("Team Reports HTTP responses", () => {
   });
 
   it("reads current overview organizations and prefers the displayed report's organizations", async () => {
-    const emptyStore = createTeamReportsStore({ stateDir: path.join(directory, "empty") });
+    const emptyStore = await createTeamReportsStore({
+      stateDir: path.join(directory, "empty"),
+      workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+    });
     try {
       for (const name of ["first-organization", "new <organization>"]) {
         currentOrgs = [name];
@@ -471,7 +485,7 @@ describe("Team Reports HTTP responses", () => {
       expect(stored.body).toContain("example · team");
       expect(stored.body).not.toContain("new &lt;organization&gt; · team");
     } finally {
-      emptyStore.close();
+      await emptyStore.close();
     }
   });
 

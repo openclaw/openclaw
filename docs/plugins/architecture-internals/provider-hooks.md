@@ -285,8 +285,9 @@ static catalog rows automatically from `defaultModel`, `models`, and
 Compatibility:
 
 - `discovery` was a legacy alias for `catalog`. OpenClaw removed the alias and
-  the deprecation warnings it emitted
+  its deprecation warnings in 2026.4.26
 - rename `discovery` to `catalog`. A provider plugin that still registers
   `discovery` publishes no catalog rows
 - `augmentModelCatalog` is deprecated; bundled providers should publish
-  supplemental rows through `registerModelCatalogProvider`
+  supplemental rows through `registerModelCatalogProvider`. Its removal gate is
+  2026-10-01

@@ -302,7 +302,7 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
-/** Lines that need the operator's attention even when routine tool rows are hidden. */
+/** Approvals and failures that can start a draft when their rows are visible. */
 export function isChannelProgressAttentionLine(line: string | ChannelProgressDraftLine): boolean {
   if (typeof line === "string") {
     return false;
@@ -1260,11 +1260,12 @@ function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>
       resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      const replacement = mergeProgressDraftLineUpdate(
-        expectDefined(lines[existingIndex], "lines entry at existing index"),
-        line,
+      const existing = expectDefined(lines[existingIndex], "lines entry at existing index");
+      const replacement = keepProgressDraftLineId(
+        existing,
+        mergeProgressDraftLineUpdate(existing, line),
       );
-      if (replacement === lines[existingIndex]) {
+      if (replacement === existing) {
         return lines;
       }
       const next = [...lines];
@@ -1326,6 +1327,33 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
     progressDraftLineCorrelationKeys.get(line) ?? progressDraftLineCorrelationKeys.get(previous),
   );
   return replacement;
+}
+
+/**
+ * A line keeps the id it was created with. The agent keys one tool call's
+ * item families separately (`tool:<call>`, `command:<call>`) and correlation
+ * merges them into one line; a channel that keys native rows on the line id
+ * (Slack task cards) would otherwise open a new row when a later family
+ * takes the line over. Later events still match through the correlation key.
+ */
+function keepProgressDraftLineId<TLine extends string | ChannelProgressDraftLine>(
+  previous: TLine,
+  replacement: TLine,
+): TLine {
+  if (typeof previous !== "object" || typeof replacement !== "object") {
+    return replacement;
+  }
+  const previousId = previous.id?.trim();
+  if (!previousId || previousId === replacement.id) {
+    return replacement;
+  }
+  const kept = { ...replacement, id: previousId };
+  setProgressDraftLineCorrelationKey(
+    kept,
+    progressDraftLineCorrelationKeys.get(replacement) ??
+      progressDraftLineCorrelationKeys.get(previous),
+  );
+  return kept;
 }
 
 function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLine): string[] {

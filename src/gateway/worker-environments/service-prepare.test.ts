@@ -162,33 +162,71 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
-  it("cancels an in-flight build while retaining cleanup ownership until the provider settles", async () => {
-    const f = await fixture();
-    const entered = createDeferredCore<AbortSignal>();
-    const release = createDeferredCore();
-    f.provision.mockImplementation(async (_profile, _operation, options) => {
-      const signal = options!.signal!;
-      entered.resolve(signal);
-      await release.promise;
-      signal.throwIfAborted();
-      throw new Error("Synthetic provider unavailable");
-    });
-    const destroyProvider = vi.fn(async () => {});
-    f.provider.destroy = destroyProvider;
-    const { environmentId } = await f.service.prepare(f.request);
-    const signal = await entered.promise;
-    const destroyed = f.service.destroyUnattached(environmentId);
-    try {
-      expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(1_000);
-      expect(signal.aborted).toBe(true);
-      expect(destroyProvider).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await destroyed;
-    }
-    expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
-    expect(destroyProvider).toHaveBeenCalledOnce();
-  });
+  it.each(["build", "reserve", "expired reserve"] as const)(
+    "cancels an in-flight %s while retaining cleanup ownership until the provider settles",
+    async (purpose) => {
+      const f = await fixture();
+      const entered = createDeferredCore<AbortSignal>();
+      const release = createDeferredCore();
+      let provisionSettled = false;
+      f.provision.mockImplementation(async (_profile, _operation, options) => {
+        const signal = options!.signal!;
+        entered.resolve(signal);
+        try {
+          await release.promise;
+          signal.throwIfAborted();
+          throw new Error("Synthetic provider unavailable");
+        } finally {
+          provisionSettled = true;
+        }
+      });
+      const destroyProvider = vi.fn(async () => {
+        expect(provisionSettled).toBe(true);
+      });
+      f.provider.destroy = destroyProvider;
+      let environmentId: string;
+      if (purpose === "build") {
+        ({ environmentId } = await f.service.prepare(f.request));
+      } else {
+        const intent = await f.service.prepareProjectIntent("development", {
+          projectPath: f.projectPath,
+          executionMode: "worker-turn",
+          setupAuthorized: true,
+        });
+        ({ environmentId } = support.testState.store.createIntent({
+          environmentId: "automatic-reserve",
+          provisionOperationId: "automatic-reserve-operation",
+          providerId: intent.providerId,
+          profileId: "development",
+          profileSnapshot: intent.profileSnapshot,
+          preparation: {
+            purpose: "reserve",
+            key: intent.preparationKey!,
+            demandAtMs: 1_000,
+            expiresAtMs: 11_000,
+          },
+        }));
+        f.service.schedulePreparedRefill();
+      }
+      const signal = await entered.promise;
+      if (purpose === "expired reserve") {
+        support.testState.nowMs = 11_001;
+      }
+      const destroyed = f.service.destroyUnattached(environmentId);
+      try {
+        expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
+          support.testState.nowMs,
+        );
+        expect(signal.aborted).toBe(true);
+        expect(destroyProvider).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await destroyed;
+      }
+      expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
+      expect(destroyProvider).toHaveBeenCalledOnce();
+    },
+  );
 
   it("deduplicates concurrent fresh builds and fails closed at the global cap", async () => {
     const f = await fixture();

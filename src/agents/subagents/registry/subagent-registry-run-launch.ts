@@ -15,19 +15,14 @@ import {
 } from "../../../tasks/detached-task-runtime.js";
 import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
-import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { createSubagentRegistrationRecord } from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
-import type {
-  SubagentProgressOrigin,
-  SubagentRunRecord,
-  SwarmQueuedLaunch,
-} from "./subagent-registry.types.js";
+import type { RegisterSubagentRunParams, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
@@ -57,44 +52,7 @@ function resolveSwarmWaitOwnerSessionKeys(
   return ownerSessionKeys;
 }
 
-export type RegisterSubagentRunParams = {
-  runId: string;
-  requesterTurnRunId?: string;
-  childSessionKey: string;
-  controllerSessionKey?: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  progressOrigin?: SubagentProgressOrigin;
-  requesterDisplayKey: string;
-  task: string;
-  taskName?: string;
-  agentId?: string;
-  requesterAgentId?: string;
-  cleanup: "delete" | "keep";
-  label?: string;
-  model?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  runTimeoutSeconds?: number;
-  expectsCompletionMessage?: boolean;
-  spawnMode?: "run" | "session";
-  attachmentsDir?: string;
-  attachmentsRootDir?: string;
-  retainAttachmentsOnKeep?: boolean;
-  collect?: boolean;
-  swarmRequesterSessionKey?: string;
-  swarmLaunchIdempotencyKey?: string;
-  swarmLaunchReplayKey?: string;
-  swarmLaunchRequestFingerprint?: string;
-  groupId?: string;
-  outputSchema?: Record<string, unknown>;
-  queuedLaunch?: SwarmQueuedLaunch;
-  queued?: boolean;
-  /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
-      Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
-  taskRowOwnership?: "required" | "gateway_best_effort";
-  gatewayContextResolver?: GatewayContextResolver;
-};
+export type { RegisterSubagentRunParams } from "./subagent-registry.types.js";
 
 export class SubagentLaunchManager extends SubagentRecoveryManager {
   private findRunByIdentity(runId: string): SubagentRunRecord | undefined {
@@ -108,8 +66,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();
-    const requesterTurnRunId = registerParams.requesterTurnRunId?.trim();
-    const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
     if (!runId || !childSessionKey || !requesterSessionKey) {
       return;
     }
@@ -119,34 +75,16 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       childSessionKey,
     );
     const cfg = this.options.getRuntimeConfig();
-    const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = this.options.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
     const queued = registerParams.queued === true;
-    const entry: SubagentRunRecord = normalizeSubagentRunState({
-      runId,
-      taskRunId: runId,
-      ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
-      childSessionKey,
-      controllerSessionKey,
-      requesterSessionKey,
-      requesterOrigin,
-      progressOrigin: registerParams.progressOrigin,
-      requesterDisplayKey: registerParams.requesterDisplayKey,
+    const entry = createSubagentRegistrationRecord(registerParams, {
+      now,
+      generation,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
-      task: registerParams.task,
-      taskName: registerParams.taskName,
-      cleanup: registerParams.cleanup,
-      expectsCompletionMessage: registerParams.expectsCompletionMessage,
-      spawnMode,
-      label: registerParams.label,
-      model: registerParams.model,
-      agentDir: registerParams.agentDir,
-      workspaceDir: registerParams.workspaceDir,
-      runTimeoutSeconds,
-      collect: registerParams.collect,
-      swarmRequesterSessionKey: registerParams.swarmRequesterSessionKey,
+      requesterOrigin,
       swarmWaitOwnerSessionKeys:
         registerParams.collect && registerParams.swarmRequesterSessionKey
           ? resolveSwarmWaitOwnerSessionKeys(
@@ -154,36 +92,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               registerParams.swarmRequesterSessionKey,
             )
           : undefined,
-      swarmRunId: registerParams.collect ? runId : undefined,
-      schedulerSlotId: registerParams.collect ? runId : undefined,
-      swarmLaunchIdempotencyKey: registerParams.swarmLaunchIdempotencyKey,
-      swarmLaunchReplayKey: registerParams.swarmLaunchReplayKey,
-      swarmLaunchRequestFingerprint: registerParams.swarmLaunchRequestFingerprint,
-      swarmLaunchPending: registerParams.collect === true,
-      groupId: registerParams.groupId,
-      outputSchema: registerParams.outputSchema,
-      queuedLaunch: registerParams.queuedLaunch,
-      generation,
-      createdAt: now,
-      execution: {
-        status: queued ? "queued" : "running",
-        startedAt: queued ? undefined : now,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      },
-      completion: {
-        required: registerParams.expectsCompletionMessage === true,
-      },
-      delivery: {
-        status: registerParams.expectsCompletionMessage === false ? "not_required" : "pending",
-      },
-      sessionStartedAt: queued ? undefined : now,
-      accumulatedRuntimeMs: 0,
-      cleanupHandled: false,
-      wakeOnDescendantSettle: undefined,
-      requesterSettleWake: undefined,
-      attachmentsDir: registerParams.attachmentsDir,
-      attachmentsRootDir: registerParams.attachmentsRootDir,
-      retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     this.options.runs.set(runId, entry);
     bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);

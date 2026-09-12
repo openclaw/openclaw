@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { SQLITE_READONLY_CHILD_ARG } from "../infra/sqlite-readonly-worker.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import * as coordinators from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import {

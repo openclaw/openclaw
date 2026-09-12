@@ -50,7 +50,6 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "./performance.ts";
-import { consumeChatRouteStartup } from "./route-startup.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import {
@@ -122,22 +121,18 @@ export async function hydrateChatHistory(
   try {
     const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
     const requestKey = `${requestKeyPrefix}${requestModeKey}`;
-    const startup =
-      method === "chat.startup" ? consumeChatRouteStartup(client, sessionKey, sessions) : undefined;
-    let response =
-      (inputRunIds.length === 0 ? startup : undefined) ??
-      (await requestSharedHistory(
-        sessions,
-        client,
-        requestKey,
-        method,
-        sessionKey,
-        requestAgentId,
-        state,
-        isCurrent,
-        deltaCursor,
-        inputRunIds,
-      ));
+    let response = await requestSharedHistory(
+      sessions,
+      client,
+      requestKey,
+      method,
+      sessionKey,
+      requestAgentId,
+      state,
+      isCurrent,
+      deltaCursor,
+      inputRunIds,
+    );
     if (!isCurrent()) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,

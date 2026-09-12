@@ -1,5 +1,5 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./src/config.js";
 import { registerTeamReportsGatewayMethods } from "./src/gateway-methods.js";
@@ -23,18 +23,16 @@ export default definePluginEntry({
     let generation = 0;
     let retired = false;
     let stopping: Promise<void> | undefined;
+    let startingStore: Promise<void> | undefined;
     const stop = () => {
       generation++;
       const current = scheduler;
       scheduler = undefined;
-      const currentStore = store;
       store = undefined;
+      const pendingStart = startingStore;
       return (stopping ??= (async () => {
-        try {
-          await current?.stop();
-        } finally {
-          currentStore?.close();
-        }
+        await pendingStart?.catch(() => undefined);
+        await current?.stop();
       })());
     };
     const requireScheduler = () => {
@@ -78,15 +76,44 @@ export default definePluginEntry({
         if (policy?.allowModelOverride !== true) {
           delete summaryOptions.model;
         }
-        store = createTeamReportsStore({ stateDir: ctx.stateDir });
-        scheduler = new TeamReportsScheduler({
-          config: { ...config, summaries: summaryOptions },
-          resolved,
-          store,
-          llm: api.runtime.llm,
-          context: ctx,
-        });
-        scheduler.start();
+        startingStore = (async () => {
+          if (!api.runtimeSource) {
+            throw new Error(
+              "Team Reports requires an OpenClaw host with runtime entrypoint metadata",
+            );
+          }
+          const nextStore = await createTeamReportsStore({
+            stateDir: ctx.stateDir,
+            workerModuleUrl: new URL(
+              `./src/store.worker${path.extname(api.runtimeSource)}`,
+              pathToFileURL(api.runtimeSource),
+            ),
+          });
+          if (retired || currentGeneration !== generation) {
+            await nextStore.close();
+            return;
+          }
+          const nextScheduler = new TeamReportsScheduler({
+            config: { ...config, summaries: summaryOptions },
+            resolved,
+            store: nextStore,
+            llm: api.runtime.llm,
+            context: ctx,
+          });
+          try {
+            await nextScheduler.start();
+            if (retired || currentGeneration !== generation) {
+              await nextScheduler.stop();
+              return;
+            }
+            store = nextStore;
+            scheduler = nextScheduler;
+          } catch (error) {
+            await nextScheduler.stop();
+            throw error;
+          }
+        })();
+        await startingStore;
       },
       stop,
     });

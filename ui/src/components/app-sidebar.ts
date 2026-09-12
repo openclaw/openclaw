@@ -16,7 +16,11 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import {
+  buildCatalogSessionKey,
+  catalogSessionKeyFromSearch,
+  type CatalogSessionKey,
+} from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -35,7 +39,10 @@ import {
   renderAppSidebarZoneEntry,
 } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
-import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
+import type {
+  CatalogSessionMenuRequest,
+  SidebarSessionCatalog,
+} from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
 import type {
   SidebarNarrationSyncInput,
@@ -137,6 +144,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narrationLoad: Promise<void> | null = null;
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
+  private projectedSessionCatalogs: SidebarSessionCatalog[] = [];
   private projectedSessionSections: SidebarVisibleSections = {
     sections: [],
     expandedRows: [],
@@ -230,7 +238,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     ]);
     this.sessionNavigationState = super.getSessionNavigationState();
     this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
-    this.projectedSessionSections = super.zonedVisibleSections(this.projectedSessionRows);
+    const catalogs = this.sidebarSessionCatalogs();
+    this.projectedSessionCatalogs = catalogs;
+    this.projectedSessionSections = super.zonedVisibleSections(this.projectedSessionRows, catalogs);
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
     const identityIds =
@@ -527,16 +537,19 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const navigationState = this.getSessionNavigationState();
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
-    const liveRows = [
-      ...(this.sessionData.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionData.sessionResultsByAgent).flatMap((result) => result.sessions),
-    ];
-    const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
-    const catalogs = this.visibleSessionCatalogs();
-    const visibleCatalogIds = new Set(catalogs.map((catalog) => catalog.id));
-    const sections = allSections.filter(
-      (section) => !section.id.startsWith("catalog:") || visibleCatalogIds.has(section.id.slice(8)),
-    );
+    const terminalCatalog =
+      this.activeRouteId === "terminal"
+        ? catalogSessionKeyFromSearch(
+            this.context?.router.getState().matches[0]?.location.search ?? "",
+          )
+        : null;
+    const catalogRouteSessionKey = terminalCatalog
+      ? buildCatalogSessionKey(terminalCatalog, expandedAgentId)
+      : isSessionRouteId(this.activeRouteId)
+        ? this.getRouteSessionKey()
+        : "";
+    const catalogs = this.projectedSessionCatalogs;
+    const { sections } = this.zonedVisibleSections(visibleSessions);
     if (
       !this.catalogRenderer &&
       (catalogs.length > 0 || this.sessionData.sessionCatalogRefreshStatus.error !== null)
@@ -559,14 +572,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         catalogs: {
           catalogs,
           basePath: this.basePath,
-          routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
+          routeSessionKey: catalogRouteSessionKey,
           newSessionAgentId: expandedAgentId,
           mainKey: this.sessionMainKey(),
           loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
           projectGrouping: this.catalogProjectGrouping,
-          liveRows,
+          liveRows: this.catalogLiveRows(),
           toSidebarSession: navigationState.toSidebarSession,
-          ownerId: this.activeSessionOwnerId,
           catalogOpenTarget: this.catalogOpenTarget,
           terminalAvailable: this.terminalAvailable,
         },

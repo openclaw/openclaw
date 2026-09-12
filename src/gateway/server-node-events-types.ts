@@ -1,5 +1,6 @@
 // Gateway node event types.
 // Defines the narrowed context and event envelope for node-originated handlers.
+import type { DesktopAvailability } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { NodeHostStatsPayload } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -59,6 +60,11 @@ export type NodeEventContext = {
     connId?: string;
     stats: NodeHostStatsPayload;
   }) => NodeHostStats | null;
+  updateNodeDesktopAvailability?: (params: {
+    nodeId: string;
+    connId?: string;
+    availability: DesktopAvailability;
+  }) => boolean | null;
   logGateway: { warn: (msg: string) => void };
 };
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db.js";

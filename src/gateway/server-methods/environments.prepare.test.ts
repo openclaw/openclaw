@@ -94,7 +94,9 @@ describe("environments.prepare", () => {
       expiresAtMs: 60_000,
       consumedAtMs: null,
     };
-    expect(summarizeWorkerEnvironment(workerRecord({ preparation })).preparation).toEqual({
+    const summary = summarizeWorkerEnvironment(workerRecord({ preparation }));
+    expect(summary.worker?.profileId).toBe("development");
+    expect(summary.preparation).toEqual({
       purpose: "build",
       key: "project-key",
     });

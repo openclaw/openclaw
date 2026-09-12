@@ -4,6 +4,7 @@ import {
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
+import type { CodexAsyncQuestion } from "./async-questions.js";
 import type { CodexProviderRefusal } from "./event-projector-values.js";
 import {
   resolveCodexLocalRuntimeAttribution,
@@ -31,7 +32,7 @@ export type AssistantMessageOptions = {
 };
 
 export type CodexAsyncAssistantMessage = AssistantMessage & {
-  openclawAsyncDelivery: { itemId: string };
+  openclawAsyncDelivery: { itemId: string; questions?: CodexAsyncQuestion[] };
 };
 
 const ZERO_USAGE: Usage = {
@@ -142,10 +143,11 @@ export function createAssistantAsyncMessage(
   text: string,
   itemId: string,
   timestamp: number,
+  questions?: CodexAsyncQuestion[],
 ): CodexAsyncAssistantMessage {
   return {
     ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
-    openclawAsyncDelivery: { itemId },
+    openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) },
   };
 }
 

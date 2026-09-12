@@ -14,10 +14,72 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it("does not imply rollback when candidate repair stops before activation", async () => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "candidate-repair-refused",
+        target: "version 2026.9.4",
+        result: {
+          mode: "npm",
+          status: "error",
+          reason: "repair-requires-config-change",
+          before: { version: "2026.9.3" },
+          after: { version: "2026.9.3" },
+          steps: [
+            {
+              name: "repairing",
+              command: "repair staged candidate",
+              cwd: "/candidate",
+              durationMs: 1,
+              exitCode: 1,
+            },
+          ],
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          durationMs: 1,
+        },
+      },
+      context,
+    );
+
+    expect(report.body).toContain("Failed phase: repairing");
+    expect(report.body).toContain("After version: 2026.9.3");
+    expect(report.body).toContain("Recovery outcome: not verified (runtime-verification-failed)");
+    expect(report.body.toLowerCase()).not.toContain("rollback");
+  });
+
   it("records the running Node version in the reviewed report", async () => {
     const report = await prepareDiagnosticReport("node-runtime-preflight");
     expect(report.body).toContain(`- Node version: ${process.versions.node}\n`);
   });
+
+  it.each([
+    { service: undefined, outcome: "verified safe to restart" },
+    { service: "healthy", outcome: "verified safe to restart" },
+    {
+      service: "failed",
+      outcome:
+        "runtime files verified; Gateway restart failed. Run `openclaw gateway status --deep` before restarting manually.",
+    },
+  ] as const)(
+    "reports the observed recovery service outcome: $service",
+    async ({ service, outcome }) => {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "recovery-service-outcome",
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "runtime-verification-failed",
+            recovery: { serviceRestartSafe: true, version: "2026.9.4", service },
+            steps: [],
+            durationMs: 1,
+          },
+        },
+        context,
+      );
+      expect(report.body).toContain(`- Recovery outcome: ${outcome}\n`);
+    },
+  );
 
   it.each([
     'Command failed: python -c "private-customer-text"',
@@ -90,7 +152,7 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).not.toContain("private-customer-text");
     expect(report.body).toContain("exit 7");
     expect(report.body).toContain("Update mode: npm");
-    expect(report.body).toContain("Rollback outcome: not verified");
+    expect(report.body).toContain("Recovery outcome: not verified");
   });
 
   it.each([

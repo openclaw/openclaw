@@ -17,6 +17,7 @@ import {
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
@@ -25,7 +26,6 @@ import {
 } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -65,6 +65,7 @@ import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import {
   createPreparedSimpleCompletionResolverContext,
   type PreparedSimpleCompletionResolverContext,
+  type SimpleCompletionModelResolver,
 } from "./simple-completion-scope.js";
 import type {
   AgentSimpleCompletionSelection,
@@ -164,6 +165,7 @@ export type PrepareSimpleCompletionModelParams = {
   agentId?: string;
   provider: string;
   modelId: string;
+  modelIdSource?: "input" | "selected";
   agentDir?: string;
   profileId?: string;
   preferredProfile?: string;
@@ -171,7 +173,8 @@ export type PrepareSimpleCompletionModelParams = {
   allowBundledStaticCatalogFallback?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
-  modelResolver?: typeof resolveModelAsync;
+  modelResolver?: SimpleCompletionModelResolver;
+  signal?: AbortSignal;
   /** Internal caller-owned generation. Public plugin callers use the agent helper below. */
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   workspaceDir?: string;
@@ -184,6 +187,7 @@ export async function prepareSimpleCompletionModel(
     preparedModelRuntime: PreparedModelRuntimeSnapshot;
   },
 ): Promise<PreparedSimpleCompletionModel> {
+  params.signal?.throwIfAborted();
   const config = params.cfg ?? {};
   const preparedModelRuntime = params.preparedModelRuntime;
   const context = createPreparedSimpleCompletionResolverContext({
@@ -195,12 +199,14 @@ export async function prepareSimpleCompletionModel(
     modelResolver: params.modelResolver,
     agentRuntimeId: params.agentRuntimeId,
   });
-  return await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
+  const prepared = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
     prepareSimpleCompletionModelCore(
       { ...params, agentDir: preparedModelRuntime.agentDir },
       context,
     ),
   );
+  params.signal?.throwIfAborted();
+  return prepared;
 }
 
 async function prepareSimpleCompletionModelCore(
@@ -214,6 +220,7 @@ async function prepareSimpleCompletionModelCore(
     params.agentDir,
     params.cfg,
     {
+      modelIdSource: params.modelIdSource,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.allowBundledStaticCatalogFallback !== undefined
         ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
@@ -340,6 +347,7 @@ async function prepareSimpleCompletionModelCore(
           model: initialModel,
           resolveModel: ({ config, authProfileId, authProfileMode }) =>
             modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
+              modelIdSource: "selected",
               ...(params.agentId ? { agentId: params.agentId } : {}),
               skipAgentDiscovery: true,
               allowBundledStaticCatalogFallback: true,
@@ -452,13 +460,14 @@ async function acquirePreparedSimpleCompletionRuntime(
     cfg: OpenClawConfig | undefined;
     agentId?: string;
     agentDir?: string;
-    modelResolver?: typeof resolveModelAsync;
+    modelResolver?: SimpleCompletionModelResolver;
+    signal?: AbortSignal;
     workspaceDir?: string;
     agentRuntimeId?: string;
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
   runtimePluginSelections: readonly AgentHarnessPluginSelection[],
-  onAcquired: (release: () => void) => void,
+  onAcquired: (release: () => Promise<void>) => void,
 ): Promise<PreparedSimpleCompletionResolverContext> {
   const config = params.cfg ?? {};
   const agentId = params.agentId ?? resolveDefaultAgentId(config);
@@ -478,12 +487,13 @@ async function acquirePreparedSimpleCompletionRuntime(
     },
     {
       catalogMode: "static",
+      abortSignal: params.signal,
       ...(params.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
         : {}),
     },
   );
-  onAcquired(() => lease.release());
+  onAcquired(() => lease[Symbol.asyncDispose]());
   return createPreparedSimpleCompletionResolverContext({
     preparedModelRuntime: lease.snapshot,
     workspaceDir: params.workspaceDir ?? lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
@@ -493,7 +503,7 @@ async function acquirePreparedSimpleCompletionRuntime(
 }
 
 type AcquiredSimpleCompletionModel =
-  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & { release: () => void })
+  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & AsyncDisposable)
   | Extract<PreparedSimpleCompletionModel, { error: string }>;
 
 /** Acquire the exact provider/model already selected by a finite internal caller. */
@@ -518,7 +528,7 @@ export async function acquireSimpleCompletionModel(
 }
 
 type AcquiredSimpleCompletionModelForAgent =
-  | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & { release: () => void })
+  | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & AsyncDisposable)
   | Extract<PreparedSimpleCompletionModelForAgent, { error: string }>;
 
 /** Keeps prepared facts in use until the internal completion owner releases its lease. */
@@ -532,12 +542,30 @@ export async function acquireSimpleCompletionModelForAgent(
     modelRef: params.modelRef,
     useUtilityModel: params.useUtilityModel,
   };
-  const tentativeRequest = resolveSimpleCompletionSelectionRequest(selectionParams);
+  return await acquireSimpleCompletionModelWithSelection(params, (manifestPlugins) =>
+    resolveSimpleCompletionSelectionRequest({ ...selectionParams, manifestPlugins }),
+  );
+}
+
+/** Captures metadata before the caller selects the model to materialize. */
+export async function acquireSimpleCompletionModelWithSelection(
+  params: Omit<
+    PrepareSimpleCompletionModelForAgentParams,
+    "agentId" | "modelRef" | "useUtilityModel" | "useAsyncModelResolution"
+  > & { agentId?: string },
+  resolveRequest: (manifestPlugins?: PluginMetadataSnapshot) => {
+    selection: Omit<AgentSimpleCompletionSelection, "agentDir">;
+    shorthandModelId?: string;
+  } | null,
+): Promise<AcquiredSimpleCompletionModelForAgent> {
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const agentDir = params.agentDir?.trim() || resolveAgentDir(params.cfg, agentId);
+  const tentativeRequest = resolveRequest();
   if (!tentativeRequest) {
-    return { error: `No model configured for agent ${params.agentId}.` };
+    return { error: `No model configured for agent ${agentId}.` };
   }
   const tentativeSelection = tentativeRequest.selection;
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   const pluginIdScope = createAgentRuntimeMetadataPluginIdScope({
     config: params.cfg,
     workspaceDir,
@@ -545,7 +573,7 @@ export async function acquireSimpleCompletionModelForAgent(
       {
         provider: tentativeSelection.provider,
         modelId: tentativeSelection.modelId,
-        agentId: params.agentId,
+        agentId,
       },
     ],
     ...(tentativeRequest.shorthandModelId
@@ -559,14 +587,13 @@ export async function acquireSimpleCompletionModelForAgent(
     pluginIdScope,
     allowWorkspaceScopedCurrent: true,
   });
-  const resolveSelection = () =>
-    resolveSimpleCompletionSelectionForAgent({
-      ...selectionParams,
-      manifestPlugins: metadataSnapshot,
-    });
+  const resolveSelection = () => {
+    const request = resolveRequest(metadataSnapshot);
+    return request ? { ...request.selection, agentDir } : null;
+  };
   let selection = resolveSelection();
   if (!selection) {
-    return { error: `No model configured for agent ${params.agentId}.` };
+    return { error: `No model configured for agent ${agentId}.` };
   }
   const canonicalPluginIdScope = createAgentRuntimeMetadataPluginIdScope({
     config: params.cfg,
@@ -575,7 +602,7 @@ export async function acquireSimpleCompletionModelForAgent(
       {
         provider: selection.provider,
         modelId: selection.modelId,
-        agentId: params.agentId,
+        agentId,
       },
     ],
     ...(tentativeRequest.shorthandModelId &&
@@ -594,11 +621,11 @@ export async function acquireSimpleCompletionModelForAgent(
     });
     selection = resolveSelection();
     if (!selection) {
-      return { error: `No model configured for agent ${params.agentId}.` };
+      return { error: `No model configured for agent ${agentId}.` };
     }
   }
   const acquired = await acquirePreparedSimpleCompletionModel(
-    { ...params, agentDir: selection.agentDir, pluginMetadataSnapshot: metadataSnapshot },
+    { ...params, agentId, agentDir, pluginMetadataSnapshot: metadataSnapshot },
     [{ provider: selection.provider, modelId: selection.modelId }],
     (context) =>
       prepareSimpleCompletionModelCore(
@@ -607,6 +634,7 @@ export async function acquireSimpleCompletionModelForAgent(
           agentId: params.agentId,
           provider: selection.provider,
           modelId: selection.modelId,
+          modelIdSource: "selected",
           agentDir: selection.agentDir,
           profileId: selection.profileId,
           preferredProfile: params.preferredProfile,
@@ -630,22 +658,24 @@ async function acquirePreparedSimpleCompletionModel(
     context: PreparedSimpleCompletionResolverContext,
   ) => Promise<PreparedSimpleCompletionModel>,
 ): Promise<AcquiredSimpleCompletionModel> {
-  let releaseRuntime: (() => void) | undefined;
+  let releaseRuntime: (() => Promise<void>) | undefined;
   let setupSettled = false;
   let callerReleased = true;
+  let releaseCompletion: Promise<void> | undefined;
+  const setupCompletion = createDeferredCore();
   const releaseWhenUnused = () => {
     if (setupSettled && callerReleased) {
-      const release = releaseRuntime;
-      releaseRuntime = undefined;
-      release?.();
+      releaseCompletion ??= Promise.resolve().then(() => releaseRuntime?.());
     }
+    return releaseCompletion;
   };
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     // Host work includes setup only; host close releases adopted model claims after drainage.
     onAcquired({
       release: () => {
         setupSettled = true;
-        releaseWhenUnused();
+        setupCompletion.resolve();
+        return releaseWhenUnused();
       },
     });
     const context = await acquirePreparedSimpleCompletionRuntime(
@@ -659,15 +689,18 @@ async function acquirePreparedSimpleCompletionModel(
       captureWorkContext();
       return prepareModel(context);
     });
+    params.signal?.throwIfAborted();
     if ("error" in prepared) {
       return prepared;
     }
     callerReleased = false;
     return {
       ...prepared,
-      release: () => {
+      async [Symbol.asyncDispose]() {
         callerReleased = true;
-        releaseWhenUnused();
+        // Caller disposal joins setup tails; setup drainage never waits for an unreleased caller.
+        await setupCompletion.promise;
+        await releaseWhenUnused();
       },
     };
   });

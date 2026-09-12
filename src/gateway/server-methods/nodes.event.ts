@@ -108,6 +108,8 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         },
         clearNodePresenceActivity: (activity) =>
           context.nodeRegistry.clearPresenceActivity(activity),
+        updateNodeDesktopAvailability: (availability) =>
+          context.nodeRegistry.updateDesktopAvailability(availability),
         updateNodeHostStats: (stats) => {
           const hostStats = context.nodeRegistry.updateHostStats(stats);
           if (hostStats && eventPairingGeneration) {

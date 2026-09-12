@@ -7,7 +7,7 @@ read_when:
 title: "Backups"
 ---
 
-# Backups
+<a id="backups" />
 
 OpenClaw keeps its authoritative state in SQLite: one global control-plane
 database under the state directory (usually `~/.openclaw`), plus one database
@@ -17,6 +17,10 @@ it. See [Database schemas](/reference/database-schemas) for the exact layout.
 This guide covers protecting that state: one-off archives, per-database
 snapshots, scheduling, offsite copies, and continuous replication for installs
 that should not re-upload whole databases on every backup.
+
+When [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
+is enabled, older transcript payloads also live in immutable compressed files.
+Use an OpenClaw backup command to capture those payloads with the database.
 
 Never copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a backup.
 The databases are written while the Gateway runs, and raw file copies of a
@@ -96,6 +100,37 @@ agent to exist in the current configuration.
 Snapshot repositories are local directories. Scheduling, upload, retention,
 and restore-on-boot are intentionally left to the operator; the sections
 below cover them.
+
+### Cold transcript backups
+
+Full archives, per-database SQLite snapshots, and Git backups include every
+cold transcript referenced by their captured database. Before publication,
+the backup owner reads each immutable archive, verifies its size and SHA-256,
+and embeds the compressed bytes in the private snapshot. It does not change
+the live database's storage policy. A missing or corrupt archive fails backup
+creation rather than producing a successful backup with incomplete history.
+
+The resulting database is self-contained: restoring it on another machine
+does not need the source `sessions/cold/` directory. Embedded compressed
+payloads add backup bytes and can make a backup larger than the live database;
+compaction may still make it smaller overall. Full archives may also contain
+retained immutable files alongside their self-contained database snapshots.
+
+After restore, the compressed payloads initially remain inside SQLite. If cold
+storage is enabled, the background worker publishes and verifies their archive
+files before releasing the embedded database bytes. The restored history stays
+available throughout this transition. Settings distinguishes embedded archive
+bytes, which are included in the database size, from archive file bytes, and
+reports how many embedded archives moved back to files.
+
+Litestream and `sqlite3_rsync` copy database bytes only and do not perform this
+embedding step. If any file-backed cold archives remain, also capture the
+immutable `cold/` directory under each agent's session artifact directory,
+even if automatic archival is disabled. Capture the database first, then the
+files, and retain every file referenced by that database
+snapshot. A database replica without its referenced cold files is incomplete.
+Prefer the supported OpenClaw snapshot commands when you need one portable
+recovery artifact.
 
 ## Schedule backups
 

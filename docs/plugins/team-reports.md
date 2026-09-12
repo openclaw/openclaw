@@ -97,7 +97,7 @@ To request a report immediately, use:
 openclaw team-reports generate --intraday
 ```
 
-Generation returns a run ID before collection and summarization finish. Check
+Generation returns a run ID after recording the run, before collection and summarization finish. Check
 `status` for the result, then open **Reports** in the Control UI.
 
 ## Read reports in the Control UI
@@ -303,7 +303,9 @@ call. Collection is stored before summarization, which may take several minutes.
 Only one run executes at a time. Scheduled work waits for an active run;
 manual generation is rejected while another run is active. Runs have a
 45-minute deadline. Stopping the service cancels its timers and waits up to
-30 seconds for active work before closing storage.
+30 seconds for active work, then cancels remote collection and summarization.
+Any database operation already in progress and the final run outcome finish
+before storage closes.
 
 ## Understand report windows and counts
 

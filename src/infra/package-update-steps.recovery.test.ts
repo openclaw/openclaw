@@ -2,6 +2,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import {
@@ -303,6 +304,7 @@ describe("package update recovery safety", () => {
           const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
           await writePackageRoot(stageRoot, "1.0.0");
           await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "new runtime\n");
+          await writePackageDistInventory(stageRoot);
           await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
           await fs.writeFile(path.join(stagePrefix, "bin", "openclaw"), "new launcher\n");
           return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };

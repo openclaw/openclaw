@@ -1,7 +1,7 @@
 type MarkdownCodeBlockChrome = "copy" | "none";
 type MarkdownCodeBlockInteraction = "interactive" | "static";
 type MarkdownTableInteractions = "enabled" | "none";
-type MarkdownRenderMode = "document" | "message";
+type MarkdownRenderMode = "document" | "message" | "full-message";
 
 export type MarkdownRenderOptions = {
   assistantTranscriptRoleHeaders?: boolean;

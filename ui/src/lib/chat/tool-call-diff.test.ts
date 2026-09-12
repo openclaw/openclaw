@@ -60,6 +60,40 @@ describe("parseDiffDetailsString", () => {
 });
 
 describe("computeLineDiff", () => {
+  it.each([
+    ["", ""],
+    ["", "one\n\ntwo\n"],
+    ["one\n\ntwo\n", ""],
+    ["a\nb\na", "b\na\nb"],
+    ["a\n\nb\n", "a\n \nb\n"],
+    ["a\r\nb\r", "a\nb\n"],
+  ])("preserves both normalized sides for %j -> %j", (oldText, newText) => {
+    const result = computeLineDiff(oldText, newText);
+    expect(result.kind).toBe("complete");
+    const normalize = (text: string) => text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+    expect(
+      result.lines
+        .filter((line) => line.kind !== "add")
+        .map((line) => line.text)
+        .join("\n"),
+    ).toBe(normalize(oldText));
+    expect(
+      result.lines
+        .filter((line) => line.kind !== "del")
+        .map((line) => line.text)
+        .join("\n"),
+    ).toBe(normalize(newText));
+  });
+
+  it("retains complete statistics for wholly replaced bounded inputs", () => {
+    const oldText = Array.from({ length: 600 }, (_, index) => `old ${index}`).join("\n");
+    const newText = Array.from({ length: 600 }, (_, index) => `new ${index}`).join("\n");
+    const result = computeLineDiff(oldText, newText);
+    expect(result).toMatchObject({ kind: "complete", stat: { added: 600, removed: 600 } });
+    expect(result.lines).toHaveLength(401);
+    expect(result.lines.at(-1)).toEqual({ kind: "skip", text: "" });
+  });
+
   it("reports an incomplete comparison when the only change is beyond the work budget", () => {
     const oldLines = Array.from({ length: 700 }, (_, index) => `line ${index}`);
     const newLines = [...oldLines];

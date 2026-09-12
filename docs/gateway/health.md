@@ -6,7 +6,9 @@ read_when:
 title: "Health checks"
 ---
 
-Short guide to verify channel connectivity without guessing.
+Short guide to verify Gateway and channel health without guessing. It covers the
+CLI health checks, the HTTP probe endpoints, the dedicated `health` command, and
+uptime monitoring.
 
 ## Quick checks
 

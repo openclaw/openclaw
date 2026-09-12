@@ -1,7 +1,7 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -685,7 +685,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
     destroyUnattached: async (environmentId: string) => {
-      preparedPool.cancelBuild(environmentId);
+      preparedPool.cancelPreparation(environmentId);
       return environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),
       );

@@ -3,8 +3,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
@@ -420,59 +421,243 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("delivers a queued WebChat reply over the live Gateway WebSocket after its source ends", async () => {
-    await withMainSessionStore(async () => {
-      let options: InternalGetReplyOptions | undefined;
-      const releaseDispatch = createDeferred();
-      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
-        options?.turnAdoptionLifecycle?.onDeferred?.();
-        await releaseDispatch.promise;
-        return {};
-      });
+  test.each([
+    {
+      name: "text",
+      completion: { kind: "completed" as const },
+      payloads: [{ text: "late answer arrived over the live WebSocket" }],
+      state: "final",
+    },
+    { name: "empty", completion: { kind: "completed" as const }, payloads: [], state: "final" },
+    {
+      name: "canvas",
+      completion: { kind: "completed" as const, allowCanvasOnly: true as const },
+      payloads: [],
+      state: "final",
+    },
+    {
+      name: "silent-canvas",
+      completion: { kind: "completed" as const, allowCanvasOnly: true as const },
+      payloads: [],
+      state: "final",
+    },
+    {
+      name: "suppressed-canvas",
+      completion: { kind: "completed" as const },
+      payloads: [],
+      state: "final",
+    },
+    {
+      name: "failure",
+      completion: { kind: "failed" as const, error: "follow-up failed" },
+      payloads: [],
+      state: "error",
+    },
+    {
+      name: "timeout",
+      completion: {
+        kind: "failed" as const,
+        error: "provider timed out",
+        errorKind: "timeout" as const,
+        stopReason: "timeout",
+      },
+      payloads: [],
+      state: "error",
+    },
+    {
+      name: "abort",
+      completion: { kind: "aborted" as const, stopReason: "restart" },
+      payloads: [],
+      state: "aborted",
+    },
+  ])(
+    "completes a queued WebChat $name once after its source ends",
+    async ({ name, completion, payloads, state }) => {
+      await withMainSessionStore(async () => {
+        let options: InternalGetReplyOptions | undefined;
+        const releaseDispatch = createDeferred();
+        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+          options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+          options?.turnAdoptionLifecycle?.onDeferred?.();
+          await releaseDispatch.promise;
+          return {};
+        });
 
-      const sourceRunId = "idem-live-webchat-late-source";
-      const sourceFinal = onceMessage(
-        ws,
-        (event) =>
-          event.type === "event" &&
-          event.event === "chat" &&
-          event.payload?.state === "final" &&
-          event.payload?.runId === sourceRunId,
-        CHAT_RESPONSE_TIMEOUT_MS,
-      );
-      const response = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "queue a reply while the previous run is active",
-        idempotencyKey: sourceRunId,
-      });
-      expect(response.ok).toBe(true);
-      await waitForFast(() => expect(options?.onQueuedFollowupReplyBatch).toBeTypeOf("function"));
-      releaseDispatch.resolve();
-      await sourceFinal;
+        const sourceRunId = `idem-live-webchat-late-source-${name}`;
+        const sourceFinal = onceMessage(
+          ws,
+          (event) =>
+            event.type === "event" &&
+            event.event === "chat" &&
+            event.payload?.state === "final" &&
+            event.payload?.runId === sourceRunId,
+          CHAT_RESPONSE_TIMEOUT_MS,
+        );
+        const response = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "queue a reply while the previous run is active",
+          idempotencyKey: sourceRunId,
+        });
+        expect(response.ok).toBe(true);
+        await waitForFast(() => expect(options?.onQueuedFollowupReplyBatch).toBeTypeOf("function"));
+        releaseDispatch.resolve();
+        await sourceFinal;
 
-      const followupRunId = "idem-live-webchat-late-followup";
-      const queuedFinal = onceMessage(
-        ws,
-        (event) =>
-          event.type === "event" &&
-          event.event === "chat" &&
-          event.payload?.state === "final" &&
-          event.payload?.runId === followupRunId,
-        CHAT_RESPONSE_TIMEOUT_MS,
-      );
-      await options?.onQueuedFollowupReplyBatch?.({
-        kind: "queued-followup",
-        runId: followupRunId,
-        originatingChannel: "webchat",
-        payloads: [{ text: "late answer arrived over the live WebSocket" }],
+        const followupRunId = `idem-live-webchat-late-followup-${name}`;
+        const terminalFrames: unknown[] = [];
+        const deltaFrames: unknown[] = [];
+        const recordFollowup = (raw: RawData) => {
+          const frame = JSON.parse(rawDataToString(raw));
+          if (
+            frame.event === "chat" &&
+            frame.payload?.runId === followupRunId &&
+            frame.payload?.state !== "delta"
+          ) {
+            terminalFrames.push(frame.payload);
+          } else if (frame.event === "chat" && frame.payload?.runId === followupRunId) {
+            deltaFrames.push(frame.payload);
+          }
+        };
+        ws.on("message", recordFollowup);
+        const queuedFinal = onceMessage(
+          ws,
+          (event) =>
+            event.type === "event" &&
+            event.event === "chat" &&
+            event.payload?.state === state &&
+            event.payload?.runId === followupRunId,
+          CHAT_RESPONSE_TIMEOUT_MS,
+        );
+        registerAgentRunContext(followupRunId, { sessionKey: "main" });
+        registerAgentRunContext(followupRunId, { completionSource: "reply-dispatch" });
+        if (
+          name === "canvas" ||
+          name === "silent-canvas" ||
+          name === "suppressed-canvas" ||
+          name === "abort"
+        ) {
+          emitAgentEvent({
+            runId: followupRunId,
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: "show_widget",
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      kind: "canvas",
+                      presentation: {
+                        target: "assistant_message",
+                        title: "Result",
+                        sandbox: "scripts",
+                      },
+                      view: {
+                        id: "result",
+                        url: "/__openclaw__/canvas/documents/result/index.html",
+                      },
+                    }),
+                  },
+                ],
+              },
+            },
+          });
+        }
+        if (name === "text") {
+          await options?.onQueuedFollowupReplyBatch?.({
+            kind: "queued-followup",
+            completion: { kind: "progress" },
+            runId: followupRunId,
+            originatingChannel: "webchat",
+            payloads: [{ text: "working" }],
+          });
+        }
+        emitAgentEvent({
+          runId: followupRunId,
+          stream: "assistant",
+          data: {
+            text:
+              name === "canvas" || name === "suppressed-canvas"
+                ? ""
+                : name === "silent-canvas"
+                  ? "NO_REPLY"
+                  : "late answer arrived over the live WebSocket",
+          },
+        });
+        if (completion.kind === "failed" || completion.kind === "aborted") {
+          emitAgentEvent({
+            runId: followupRunId,
+            stream: "assistant",
+            data: {
+              text: "late answer arrived over the live WebSocket tail",
+              delta: " tail",
+            },
+          });
+        }
+        emitAgentEvent({
+          runId: followupRunId,
+          stream: "lifecycle",
+          data: {
+            phase: completion.kind === "failed" ? "error" : "end",
+            executionSettled: true,
+            ...(completion.kind === "aborted" ? { aborted: true, stopReason: "restart" } : {}),
+          },
+        });
+        await options?.onQueuedFollowupReplyBatch?.({
+          kind: "queued-followup",
+          completion,
+          runId: followupRunId,
+          originatingChannel: "webchat",
+          payloads,
+        });
+        const completed = await queuedFinal;
+        expect(completed.payload?.state).toBe(state);
+        if (name === "timeout") {
+          expect(completed.payload).toMatchObject({ errorKind: "timeout", stopReason: "timeout" });
+        }
+        if (name === "abort") {
+          expect(completed.payload).toMatchObject({ stopReason: "restart" });
+        }
+        if (name === "canvas" || name === "abort") {
+          expect(completed.payload?.message).toMatchObject({
+            content: expect.arrayContaining([expect.objectContaining({ type: "canvas" })]),
+          });
+        }
+        if (name === "silent-canvas" || name === "suppressed-canvas") {
+          expect(completed.payload?.message).toBeUndefined();
+        }
+        if (name === "text") {
+          expect(completed.payload?.message).toMatchObject({
+            content: [
+              { type: "text", text: "working" },
+              { type: "text", text: "late answer arrived over the live WebSocket" },
+            ],
+          });
+        }
+        await rpcReq(ws, "health", {});
+        expect(terminalFrames).toHaveLength(1);
+        if (completion.kind === "failed" || completion.kind === "aborted") {
+          expect(deltaFrames.at(-1)).toMatchObject({
+            message: {
+              content: expect.arrayContaining([
+                { type: "text", text: "late answer arrived over the live WebSocket tail" },
+              ]),
+            },
+          });
+        }
+        if (completion.kind === "aborted") {
+          expect(completed.payload?.message).toMatchObject({
+            content: expect.arrayContaining([
+              { type: "text", text: "late answer arrived over the live WebSocket tail" },
+            ]),
+          });
+        }
+        ws.off("message", recordFollowup);
+        options?.turnAdoptionLifecycle?.onSettled?.();
       });
-      expect((await queuedFinal).payload?.message).toMatchObject({
-        content: [{ type: "text", text: "late answer arrived over the live WebSocket" }],
-      });
-      options?.turnAdoptionLifecycle?.onSettled?.();
-    });
-  });
+    },
+  );
 
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
     const res = await rpcReq(ws, "agent.wait", {

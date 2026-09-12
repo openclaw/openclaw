@@ -13,6 +13,8 @@
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
-    "../../src/cli/daemon-cli/**"
+    "../../src/cli/daemon-cli/**",
+    "../../src/config/sessions/session-cold-storage*.test.ts",
+    "../../src/config/sessions/session-accessor.sqlite-cold-read.test.ts"
   ]
 }

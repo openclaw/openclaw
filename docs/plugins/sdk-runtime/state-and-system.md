@@ -132,13 +132,13 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
 
     Current host factories provide `lookupMany`, but the public store types keep it optional for existing third-party adapters and declared older host versions. A plugin supporting those hosts must check the method and use its existing sequential `lookup` path when absent; never retry a failed bulk read through that path. Matrix, Microsoft Teams, and Voice Call retain this compatibility until their declared minimum host supplies the capability. Do not import a new helper export from an older host just to detect this method.
 
-    `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `deleteIf`, `lookup`, `lookupMany`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
+    `openSyncKeyedStore<T>(...)` remains available for callers that cannot await, with its existing synchronous return values and errors. It is deprecated through the `next-plugin-sdk-major` compatibility gate. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
-    Plugin-state leases were removed. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
+    Plugin-state leases were removed in 2026.8.1. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
 
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
 
@@ -148,3 +148,39 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
 
   </Accordion>
 </AccordionGroup>
+
+## Synchronous keyed store migration
+
+`api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore` are deprecated
+as of September 11, 2026. The existing `createPluginStateSyncKeyedStore` factory is
+the named `plugin-state-sync-keyed-store` compatibility adapter. Existing methods
+remain supported through the next Plugin SDK major; removal also requires a
+supported external-plugin migration and explicit breaking-release approval.
+
+Use `api.runtime.state.openKeyedStore` with the same namespace and options, then
+await its operations. The opener itself still returns a store synchronously.
+Both interfaces use the same plugin-scoped data, so no data migration is needed.
+
+```typescript
+const store = api.runtime.state.openKeyedStore<MyRecord>({
+  namespace: "my-feature",
+  maxEntries: 200,
+});
+await store.register("key-1", { value: "hello" });
+const value = await store.lookup("key-1");
+```
+
+The async store's `update` updater and `deleteIf` predicate remain synchronous
+callbacks inside the transaction containing the authoritative read and mutation.
+Finish asynchronous planning before calling these methods; do not make their
+callbacks async or replace atomic operations with separate lookups and writes.
+Returning `undefined` from an updater leaves the entry unchanged. `update`,
+`deleteIf`, and `lookupMany` remain optional in public store types, so preserve
+capability checks for supported older hosts and third-party adapters.
+
+This deprecation adds editor annotations, documentation, and compatibility
+inventory metadata. It adds no runtime warning and changes no trust eligibility:
+the runtime openers remain limited to bundled plugins and trusted official
+installations. Runtime warnings should wait for an actionable supported upgrade.
+The async interface does not promise off-thread SQL or change callback execution;
+callback-free worker capabilities are a separate contract.

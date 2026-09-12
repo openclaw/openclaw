@@ -1,16 +1,9 @@
 // Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { publishPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import type { ModelApi } from "../config/types.models.js";
@@ -133,7 +126,6 @@ function catalogRouteObservation(
 }
 
 type DefaultModelCatalogFacts = {
-  found: boolean;
   observedRoutes?: readonly ModelRouteObservation[];
 };
 
@@ -154,63 +146,25 @@ export function resolveDefaultModelCatalogFacts(
     .filter(matches)
     .map(catalogRouteObservation)
     .filter((route): route is ModelRouteObservation => route !== undefined);
-  return {
-    found: catalog.some(matches) || routeVariants.some(matches),
-    ...(observedRoutes.length > 0 ? { observedRoutes } : {}),
-  };
+  return observedRoutes.length > 0 ? { observedRoutes } : {};
 }
 
-/** Warn when the selected default model is unknown or has no usable credentials. */
+/** Warn when the selected default model does not have confirmed usable credentials. */
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
   prompter: WizardPrompter,
-  options?: DefaultModelAuthOptions & { validateCatalog?: boolean },
+  options?: DefaultModelAuthOptions,
 ) {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
     agentId: options?.agentId,
   });
   const warnings: string[] = [];
-  const validationAgentId = options?.agentId ?? resolveDefaultAgentId(config);
-  const snapshot =
-    options?.validateCatalog === false
-      ? { entries: [], routeVariants: [] }
-      : (
-          await publishPreparedModelRuntimeSnapshot(
-            {
-              config,
-              agentId: validationAgentId,
-              agentDir:
-                options?.agentDir ??
-                (options?.agentId
-                  ? resolveAgentDir(config, options.agentId)
-                  : resolveDefaultAgentDir(config)),
-              workspaceDir: resolveAgentWorkspaceDir(config, validationAgentId),
-            },
-            { force: true, provenance: "explicit" },
-          )
-        ).modelCatalog;
-  const catalog = snapshot.entries;
-  const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog, {
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    routeVariants: snapshot.routeVariants,
-  });
-  const observedRoutes = options?.observedRoutes ?? catalogFacts.observedRoutes;
-  if (options?.validateCatalog !== false) {
-    if (catalog.length > 0) {
-      if (!catalogFacts.found) {
-        warnings.push(
-          `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
-        );
-      }
-    }
-  }
-
   const authStatus = resolveDefaultModelAuthStatus(config, {
     ...(options?.agentId ? { agentId: options.agentId } : {}),
     ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
     ...(options?.env ? { env: options.env } : {}),
-    ...(observedRoutes ? { observedRoutes } : {}),
+    ...(options?.observedRoutes ? { observedRoutes: options.observedRoutes } : {}),
     ...(options?.pendingAuthProfiles ? { pendingAuthProfiles: options.pendingAuthProfiles } : {}),
   });
   if (authStatus.status === "missing") {

@@ -1,115 +1,20 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import { describe, expect, it, vi } from "vitest";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { i18n } from "../../i18n/index.ts";
-import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { showToast } from "../../lib/toast.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import {
+  button,
+  mountPage,
+  setupSnapshotsDomSuite,
+} from "./cloud-worker-snapshots-dom.test-support.ts";
 import { snapshotListFixture } from "./cloud-worker-snapshots.test-support.ts";
-import "./cloud-workers-page.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
-function button(container: Element, label: string) {
-  return expectDefined(
-    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (entry) => entry.textContent?.trim() === label,
-    ),
-    label,
-  );
-}
-
-beforeEach(async () => {
-  vi.clearAllMocks();
-  vi.mocked(showConfirmDialog).mockResolvedValue(true);
-  await i18n.setLocale("en");
-});
-afterEach(() => {
-  document.body.replaceChildren();
-});
-
-function mountPage(
-  methods: string[],
-  options: {
-    result?: ReturnType<typeof snapshotListFixture>;
-    config?: Record<string, unknown>;
-    failMutation?: boolean;
-  } = {},
-) {
-  let result = options.result ?? snapshotListFixture();
-  let config = options.config ?? {};
-  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "config.get") {
-      return {
-        config,
-        sourceConfig: config,
-        raw: JSON.stringify(config),
-        hash: "snapshot-config",
-        valid: true,
-        issues: [],
-      };
-    }
-    if (method === "crabbox.images.list") {
-      return result;
-    }
-    if (method === "config.patch") {
-      config = { ...config, ...JSON.parse(String(params?.raw)) };
-      return { ok: true, config, hash: "snapshot-config-updated" };
-    }
-    if (
-      ["crabbox.images.pin", "crabbox.images.delete", "crabbox.images.rollback"].includes(method)
-    ) {
-      if (options.failMutation) {
-        throw new Error("Provider is unavailable");
-      }
-      if (method === "crabbox.images.delete") {
-        result = {
-          ...result,
-          images: result.images.filter((image) => image.checkpointId !== params?.checkpointId),
-        };
-        return { status: "deleted" };
-      }
-      result = {
-        ...result,
-        images: result.images.map((image) =>
-          image.checkpointId === params?.checkpointId
-            ? { ...image, pinned: params?.pinned ? { atMs: 1234 } : undefined }
-            : image,
-        ),
-      };
-      return result.images.find((image) => image.checkpointId === params?.checkpointId);
-    }
-    throw new Error(`Unexpected request ${method}`);
-  });
-  const client = { request } as unknown as GatewayBrowserClient;
-  const harness = createGatewayHarness(client);
-  harness.publish(true, client, gatewayHelloForMethods(methods));
-  const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-  const context = {
-    gateway: harness.gateway,
-    runtimeConfig,
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-cloud-workers-page");
-  provider.append(page);
-  document.body.append(provider);
-  return {
-    page,
-    request,
-    dispose: () => {
-      provider.remove();
-      runtimeConfig.dispose();
-    },
-  };
-}
+setupSnapshotsDomSuite();
 
 describe("Cloud worker snapshots", () => {
   it("keeps the segment discoverable without calling an unadvertised plugin method", async () => {

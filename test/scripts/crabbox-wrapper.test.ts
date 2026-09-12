@@ -1,4 +1,3 @@
-// Crabbox Wrapper tests cover crabbox wrapper script behavior.
 import { spawn, spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -38,6 +37,7 @@ const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
+let bundledSetupPath: string;
 const fakeCrabboxBinDirs = new Map<string, string>();
 const fakeGitBinDirs = new Map<string, string>();
 const timingPreloads = new Map<string, string>();
@@ -123,7 +123,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.55.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.56.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -209,7 +209,10 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
       crabboxPath,
       [
         'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then',
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.55.0}"`,
+        '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
+        `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
+        "  fi",
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.56.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -253,7 +256,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.55.0");
+  console.log("crabbox 0.56.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -812,6 +815,15 @@ describe("scripts/crabbox-wrapper", () => {
       ...bundleOptions,
       outfile: realBundledWrapperPath,
     });
+    bundledSetupPath = path.join(
+      makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
+      "openclaw/scripts/crabbox-setup.mjs",
+    );
+    buildSync({
+      ...bundleOptions,
+      entryPoints: [path.join(repoRoot, "scripts/crabbox-setup.mts")],
+      outfile: bundledSetupPath,
+    });
     // Argument routing tests isolate source preparation; the real-Git fixture below
     // executes the unmocked producer and generated receiver together.
     const producerStub = path.join(
@@ -847,6 +859,34 @@ describe("scripts/crabbox-wrapper", () => {
       outfile: bundledWrapperPath,
     });
     runSourceWrapper("provider: aws\n", ["--version"]);
+  });
+
+  it("prepares the supported executable for later workflow steps", () => {
+    const directory = invocationLogTempDirs.make("openclaw-crabbox-setup-path-");
+    const githubPath = path.join(directory, "github-path");
+    const invocationLog = makeInvocationLog();
+    const result = spawnSync(process.execPath, [bundledSetupPath], {
+      cwd: directory,
+      encoding: "utf8",
+      env: wrapperEnv(defaultProviderHelp, {
+        env: {
+          GITHUB_PATH: githubPath,
+          OPENCLAW_STATE_DIR: path.join(directory, "state"),
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.56.0",
+          OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+        },
+      }),
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const binary = path.join(
+      makeFakeCrabbox(defaultProviderHelp),
+      process.platform === "win32" ? "crabbox.cmd" : "crabbox",
+    );
+    expect(JSON.parse(result.stdout)).toEqual({ binary, version: "0.56.0" });
+    expect(readFileSync(githubPath, "utf8")).toBe(`${path.dirname(binary)}\n`);
+    expect(readInvocations(invocationLog)).toEqual([["--version"]]);
+    expect(existsSync(path.join(directory, "state"))).toBe(false);
   });
 
   it("routes CI workloads through the first ready provider", () => {
@@ -1050,13 +1090,14 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("chain=aws");
   });
 
-  it("uses one provider-scoped doctor per candidate and never calls standalone whoami", () => {
+  it("reuses the admitted version and runs one provider-scoped doctor per candidate", () => {
     const invocationLog = makeInvocationLog();
     const { output, result } = runSuccessfulBrokerWrapper(
       ["run", "--workload", "desktop", "--", "echo ok"],
       {
         env: {
           OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.56.0",
           OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "azure",
           OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
         },
@@ -1066,6 +1107,8 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("aws");
     expect(result.stderr).toContain("selected=aws chain=azure,aws");
     const invocations = readInvocations(invocationLog);
+    expect(invocations.filter(([command]) => command === "--version")).toEqual([["--version"]]);
+    expect(result.stderr).toContain("version=0.56.0");
     expect(invocations.filter(([command]) => command === "doctor").map((args) => args[2])).toEqual([
       "azure",
       "aws",
@@ -1280,7 +1323,7 @@ describe("scripts/crabbox-wrapper", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("crabbox 0.55.0");
+    expect(result.stdout.trim()).toBe("crabbox 0.56.0");
     expect(result.stderr).not.toContain("route workload=");
   });
 
@@ -1288,7 +1331,7 @@ describe("scripts/crabbox-wrapper", () => {
     const result = runDefaultWrapper(["--version", "--workload", "surprise"]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("crabbox 0.55.0");
+    expect(result.stdout.trim()).toBe("crabbox 0.56.0");
     expect(result.stderr).not.toContain("unsupported Crabbox workload");
   });
 
@@ -3289,9 +3332,7 @@ esac
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("could not parse provider list");
-    expect(result.stderr).not.toContain(
-      "selected binary failed basic --version/--help sanity checks",
-    );
+    expect(result.stderr).not.toContain("selected binary failed --help sanity checks");
     expect(result.stderr).toContain(
       "providers=hetzner,aws,local-container,blacksmith-testbox,cloudflare",
     );

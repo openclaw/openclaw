@@ -8,6 +8,53 @@ describe("summarizeToolGroup", () => {
   it.each<[string, ToolGroupSummaryInput[], string]>([
     ["a single command", [{ name: "bash", args: { command: "ls" } }], "Ran a command"],
     [
+      "the operations inside a wrapper, without counting the wrapper twice",
+      [
+        { name: "exec", callId: "outer", runId: "run", args: { title: "Inspect project" } },
+        {
+          name: "read",
+          callId: "child",
+          parentToolCallId: "outer",
+          runId: "run",
+          args: { path: "README.md" },
+        },
+      ],
+      "Read a file",
+    ],
+    [
+      "unrelated runs that reuse a call id",
+      [
+        { name: "exec", callId: "outer", runId: "previous" },
+        {
+          name: "read",
+          callId: "child",
+          parentToolCallId: "outer",
+          runId: "current",
+          args: { path: "README.md" },
+        },
+      ],
+      "Ran a command, read a file",
+    ],
+    [
+      "a failed wrapper even when its child succeeded",
+      [
+        { name: "exec", callId: "outer", runId: "run", isError: true },
+        {
+          name: "read",
+          callId: "child",
+          parentToolCallId: "outer",
+          runId: "run",
+          args: { path: "README.md" },
+        },
+      ],
+      "Ran a command, read a file",
+    ],
+    [
+      "an ordinary exec with code-shaped arguments",
+      [{ name: "exec", args: { code: "a business value", command: "echo ok" } }],
+      "Ran a command",
+    ],
+    [
       "distinct paths over call count",
       [
         { name: "read", args: { path: "/repo/a.ts" } },

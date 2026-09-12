@@ -174,6 +174,13 @@ export async function cancelTaskById(params: {
             ? { expectedInstanceId: managedBacking.instanceId, expectedOwnerKey: task.ownerKey }
             : {}),
         });
+        // The run owns terminal outcomes published while backend cancellation waits.
+        const current = tasks.get(task.taskId);
+        if (current && isTerminalTaskStatus(current.status)) {
+          return current.status === "cancelled"
+            ? { found: true, cancelled: true, task: cloneTaskRecord(current) }
+            : notCancelled(`Task became ${current.status} while cancellation was in progress.`);
+        }
       } else if (task.runtime === "subagent") {
         const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
         const reconcile = (result: Awaited<ReturnType<typeof killSubagentRunAdmin>>) => {

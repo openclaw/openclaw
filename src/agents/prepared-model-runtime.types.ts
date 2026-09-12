@@ -12,17 +12,29 @@ import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-prov
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
-import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
+export type PreparedConfiguredRuntimeModel = Readonly<{
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+}>;
+
+/**
+ * A concrete runtime contract attached to the logical provider/model ref that
+ * selects it. Prepared catalog rows retain this fact after runtime-only rows
+ * are intentionally omitted from the configured view.
+ */
+export type PreparedRuntimeCapabilityModel = PreparedConfiguredRuntimeModel;
+
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
 
-export type PreparedModelRuntimeResourceClaim = { release: () => void };
+export type PreparedModelRuntimeResourceClaim = { release: () => Promise<void> };
 
 export type PreparedMediaCapabilityProviderSource = Readonly<{
   registry: PluginRegistry;
-  resources: Pick<PluginRegistryInspectionResources, "retain">;
+  resources: Pick<PluginRegistryInspectionResources, "retain" | "createInvocationScope">;
 }>;
 
 export type PreparedMediaCapabilityProviderAcquisition = Readonly<{
@@ -127,7 +139,7 @@ export type PreparedModelRuntimeInput = {
 export type PreparedModelRuntimeLease = Readonly<{
   snapshot: PreparedModelRuntimeSnapshot;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
-  release: () => void;
+  [Symbol.asyncDispose](): Promise<void>;
 }>;
 
 export type PreparedModelRuntimeLeaseOptions = {
@@ -217,7 +229,6 @@ export type PreparedModelRuntimeOwner = {
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
-  resourceClaim?: PreparedModelRuntimeResourceClaim;
   /** Explicit generation admitted for the current publication, when known. */
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;

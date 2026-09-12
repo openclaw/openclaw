@@ -6,6 +6,7 @@ import {
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import { createResult } from "./attempt-config.js";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
+import { userText } from "./attempt-transcript-replay.js";
 import { withPromptFailure } from "./attempt-types.js";
 import type {
   AgentHarnessAttemptResult,
@@ -237,17 +238,4 @@ function isSamePreparedUser(
     candidate.timestamp === prepared.timestamp &&
     userText(candidate.content) === userText(prepared.content)
   );
-}
-
-function userText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content.length === 1) {
-    const part = content[0] as { text?: unknown; type?: unknown };
-    if (part?.type === "text" && typeof part.text === "string") {
-      return part.text;
-    }
-  }
-  return JSON.stringify(content) ?? "";
 }

@@ -22,7 +22,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function runUpdateCommandRepair(params: {
   root: string;
@@ -93,9 +93,11 @@ export async function runUpdateCommandRepair(params: {
         runId,
         requester: requesterAuthority?.requester,
         nodeRunner: params.nodeRunner,
+        admissionEnv: options.env,
         target: {
-          installRoot: params.root,
-          candidateRoot: params.candidateRoot,
+          // Rehearsal state carries the candidate's schema, so the candidate must
+          // host the repair. After activation that same owner is the replaced install.
+          installRoot: params.candidateRoot ?? params.root,
           stateDir: rehearsal?.stateDir ?? target.stateDir,
           configPath: rehearsal?.configPath ?? target.configPath,
           workspaceDir: rehearsal?.workspaceDir ?? target.defaultWorkspaceDir,

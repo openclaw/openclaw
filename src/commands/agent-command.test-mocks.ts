@@ -209,7 +209,6 @@ vi.mock("../agents/model-selection.js", () => {
           hasProviderWildcards: wildcardModelKeys.size > 0,
           allowConfigPath: policy.configPath,
           allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
-          allowsKey,
           allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
           allowsByWildcard: ({ provider, model }: ModelRef) =>
             isModelKeyAllowedBySet(wildcardModelKeys, modelKey(provider, model)),

@@ -294,6 +294,7 @@ const loadTtsCore = createLazyRuntimeModule(() => import("../../plugin-sdk/speec
 
 function createPrepareSimpleCompletionModelMock(): SummarizeTextDeps["prepareSimpleCompletionModel"] {
   return vi.fn(async ({ provider, modelId }) => ({
+    async [Symbol.asyncDispose]() {},
     model: createResolvedModel(provider, modelId).model,
     auth: {
       apiKey: "test-api-key",

@@ -19,6 +19,7 @@ import { renderSlackRichText } from "./rich-text.js";
 type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
 
 type RenderSlackBlockFallbackOptions = {
+  includeSelectOptions?: boolean;
   nativeDataFormat?: SlackNativeDataFallbackFormat;
   nativeReferenceFormat?: SlackNativeDataFallbackFormat;
 };
@@ -110,7 +111,16 @@ function readControlElementText(
     return readTextValue(element?.text, options);
   }
   if (type && SLACK_SELECT_ELEMENT_TYPES.has(type)) {
-    return readTextObject(element?.placeholder, options);
+    if (!options.includeSelectOptions) {
+      return readTextObject(element?.placeholder, options);
+    }
+    const choices = Array.isArray(element?.options) ? element.options : [];
+    return [
+      readTextObject(element?.placeholder, options),
+      ...choices.map((choice) => readTextObject(asOptionalRecord(choice)?.text, options)),
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   return undefined;
 }
@@ -216,9 +226,12 @@ export function buildSlackBlocksFallbackText(blocks: readonly unknown[]): string
   return "Shared a Block Kit message";
 }
 
-export function buildSlackCompleteBlocksFallbackText(blocks: readonly unknown[]): string {
+export function buildSlackCompleteBlocksFallbackText(
+  blocks: readonly unknown[],
+  options: RenderSlackBlockFallbackOptions = {},
+): string {
   const text = blocks
-    .map((block) => renderSlackBlockFallbackText(block))
+    .map((block) => renderSlackBlockFallbackText(block, options))
     .filter(Boolean)
     .join("\n\n")
     .trim();

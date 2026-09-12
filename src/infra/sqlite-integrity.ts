@@ -2,26 +2,30 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
-import { isSqliteCorruptionError } from "./sqlite-transaction.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
 };
 
-export type SqliteIntegrityOperation<T> = Generator<
-  { database: DatabaseSync; databaseLabel: string },
-  T,
-  void
->;
+export type SqliteIntegrityCheck = {
+  database: DatabaseSync;
+  databaseLabel: string;
+  timing?: { syncElapsedMs?: number };
+};
+
+export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed";
+  integrityCheckSyncMs?: number;
+  integrityOutsideCheckMs?: number;
   canonicalIndexMs?: number;
   repairedIndexCount?: number;
 };
@@ -33,8 +37,15 @@ export function* sqliteIntegrityCheckSteps(
   diagnostics?: SqliteIntegrityDiagnostics,
 ): SqliteIntegrityOperation<void> {
   const startedAt = performance.now();
+  const check: SqliteIntegrityCheck = { database, databaseLabel };
+  if (diagnostics) {
+    check.timing = {};
+    // A later async driver must not inherit an earlier gate's synchronous measurement.
+    delete diagnostics.integrityCheckSyncMs;
+    delete diagnostics.integrityOutsideCheckMs;
+  }
   try {
-    yield { database, databaseLabel };
+    yield check;
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "healthy";
     }
@@ -46,6 +57,24 @@ export function* sqliteIntegrityCheckSteps(
   } finally {
     if (diagnostics) {
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
+      if (check.timing?.syncElapsedMs !== undefined) {
+        diagnostics.integrityCheckSyncMs = Math.floor(check.timing.syncElapsedMs);
+        diagnostics.integrityOutsideCheckMs =
+          diagnostics.integrityGateMs - diagnostics.integrityCheckSyncMs;
+      }
+    }
+  }
+}
+
+/** Measure only the calling driver's synchronous check, excluding admission and resumption. */
+export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
+  const timing = check.timing;
+  const startedAt = timing ? performance.now() : 0;
+  try {
+    assertSqliteIntegrity(check.database, check.databaseLabel);
+  } finally {
+    if (timing) {
+      timing.syncElapsedMs = performance.now() - startedAt;
     }
   }
 }
@@ -55,7 +84,7 @@ export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOpe
   let step = operation.next();
   while (!step.done) {
     try {
-      assertSqliteIntegrity(step.value.database, step.value.databaseLabel);
+      runSqliteIntegrityCheckSync(step.value);
     } catch (error) {
       step = operation.throw(error);
       continue;

@@ -57,6 +57,10 @@ export const RELEASE_PATH_PROFILE = "release-path";
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
+type InertTargetContract = {
+  mode: "inert";
+  source: { readText: (relativePath: string) => string | null };
+};
 // Inert postbuild declarations: shipped 9.1/9.2 literal outputs and the mapped
 // catalog that followed. Selection must not execute a frozen target's build code.
 const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
@@ -69,6 +73,7 @@ const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
 const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
+  frozenTarget?: InertTargetContract;
   includeOpenWebUI: boolean;
   liveMode: LiveMode;
   liveRetries: number;
@@ -198,8 +203,7 @@ const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
   ],
 ]);
 
-function readLegacyFrozenScenarioContract(assertionsFile: string): string[] | undefined {
-  const source = readFileSync(assertionsFile, "utf8");
+function readLegacyFrozenScenarioContract(source: string): string[] | undefined {
   const startMarker = "const SCENARIOS = new Set([";
   const start = source.indexOf(startMarker);
   if (start < 0 || source.lastIndexOf(startMarker) !== start) {
@@ -220,7 +224,7 @@ function readFrozenScenarioContract(
   allowExecutableContract: boolean,
 ): string[] {
   if (!allowExecutableContract) {
-    const inertScenarios = readLegacyFrozenScenarioContract(assertionsFile);
+    const inertScenarios = readLegacyFrozenScenarioContract(readFileSync(assertionsFile, "utf8"));
     if (inertScenarios) {
       return inertScenarios;
     }
@@ -237,7 +241,9 @@ function readFrozenScenarioContract(
   if (result.status !== 0) {
     const errorLines = result.stderr.trim().split("\n");
     if (result.stderr.includes("unknown upgrade-survivor assertion command: list-scenarios")) {
-      const legacyScenarios = readLegacyFrozenScenarioContract(assertionsFile);
+      const legacyScenarios = readLegacyFrozenScenarioContract(
+        readFileSync(assertionsFile, "utf8"),
+      );
       if (legacyScenarios) {
         return legacyScenarios;
       }
@@ -277,8 +283,9 @@ function filterUpgradeSurvivorScenariosForTarget(
   scenarios: string[],
   targetRoot: string | undefined,
   allowExecutableContract: boolean,
+  frozenTarget?: InertTargetContract,
 ): string[] {
-  if (!targetRoot) {
+  if (!targetRoot && !frozenTarget) {
     return scenarios;
   }
   const targetOwnedScenarios = scenarios.filter(
@@ -287,13 +294,25 @@ function filterUpgradeSurvivorScenariosForTarget(
   if (targetOwnedScenarios.length === 0) {
     return scenarios;
   }
-  const assertionsFile = resolve(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+  const relativePath = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
+  if (frozenTarget) {
+    const source = frozenTarget.source.readText(relativePath);
+    const catalog = source === null ? undefined : readLegacyFrozenScenarioContract(source);
+    if (!catalog) {
+      throw new Error(`unrecognized required inert scenario catalog: ${relativePath}`);
+    }
+    return scenarios.filter(
+      (scenario) =>
+        isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) || catalog.includes(scenario),
+    );
+  }
+  const assertionsFile = resolve(targetRoot!, relativePath);
   if (!existsSync(assertionsFile)) {
     return scenarios.filter(isTrustedHarnessOwnedUpgradeSurvivorScenario);
   }
   const targetScenarios = readFrozenScenarioContract(
     assertionsFile,
-    targetRoot,
+    targetRoot!,
     allowExecutableContract,
   );
   const supportedScenarios = new Set(targetScenarios);
@@ -303,15 +322,29 @@ function filterUpgradeSurvivorScenariosForTarget(
   );
 }
 
-function supportsUpdateFirstHopCompatForTarget(targetRoot: string | undefined): boolean {
-  if (!targetRoot) {
+function readTargetMetadata(
+  targetRoot: string | undefined,
+  relativePath: string,
+  frozenTarget?: InertTargetContract,
+): string | null {
+  if (frozenTarget) {
+    return frozenTarget.source.readText(relativePath);
+  }
+  const file = resolve(targetRoot!, relativePath);
+  return existsSync(file) ? readFileSync(file, "utf8") : null;
+}
+
+function supportsUpdateFirstHopCompatForTarget(
+  targetRoot: string | undefined,
+  frozenTarget?: InertTargetContract,
+): boolean {
+  if (!targetRoot && !frozenTarget) {
     return true;
   }
-  const runtimePostbuild = resolve(targetRoot, "scripts/runtime-postbuild.mts");
-  if (!existsSync(runtimePostbuild)) {
+  const source = readTargetMetadata(targetRoot, "scripts/runtime-postbuild.mts", frozenTarget);
+  if (source === null) {
     return false;
   }
-  const source = readFileSync(runtimePostbuild, "utf8");
   const startMarker = "const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [";
   const start = source.indexOf(startMarker);
   if (start < 0 || source.lastIndexOf(startMarker) !== start) {
@@ -325,15 +358,17 @@ function supportsUpdateFirstHopCompatForTarget(targetRoot: string | undefined): 
   return UPDATE_FIRST_HOP_COMPAT_CATALOGS.has(createHash("sha256").update(block).digest("hex"));
 }
 
-function supportsMobilePairingReconnectForTarget(targetRoot: string | undefined): boolean {
-  if (!targetRoot) {
+function supportsMobilePairingReconnectForTarget(
+  targetRoot: string | undefined,
+  frozenTarget?: InertTargetContract,
+): boolean {
+  if (!targetRoot && !frozenTarget) {
     return true;
   }
-  const policy = resolve(targetRoot, "src/gateway/node-command-policy.ts");
-  if (!existsSync(policy)) {
+  const source = readTargetMetadata(targetRoot, "src/gateway/node-command-policy.ts", frozenTarget);
+  if (source === null) {
     return false;
   }
-  const source = readFileSync(policy, "utf8");
   return (
     IOS_WATCH_RELAY_COMMANDS.every((command) => source.includes(command)) &&
     source.includes('platformId === "ios"') &&
@@ -342,10 +377,17 @@ function supportsMobilePairingReconnectForTarget(targetRoot: string | undefined)
   );
 }
 
-function supportsCorruptPluginUpdateForTarget(targetRoot: string | undefined): boolean {
+function supportsCorruptPluginUpdateForTarget(
+  targetRoot: string | undefined,
+  frozenTarget?: InertTargetContract,
+): boolean {
   return (
-    !targetRoot ||
-    existsSync(resolve(targetRoot, "src/cli/update-cli/update-command-plugin-preflight.ts"))
+    (!targetRoot && !frozenTarget) ||
+    readTargetMetadata(
+      targetRoot,
+      "src/cli/update-cli/update-command-plugin-preflight.ts",
+      frozenTarget,
+    ) !== null
   );
 }
 
@@ -368,6 +410,7 @@ function expandUpgradeSurvivorBaselineLanes(
   targetRoot: string | undefined,
   rawScenarios = "",
   allowExecutableContract = false,
+  frozenTarget?: InertTargetContract,
 ): UpgradeSurvivorExpansion {
   const hasUpgradeSurvivorLane = poolLanes.some(
     (poolLane) =>
@@ -386,11 +429,13 @@ function expandUpgradeSurvivorBaselineLanes(
     requestedScenarios,
     targetRoot,
     allowExecutableContract,
+    frozenTarget,
   );
   const supportedScenarioSet = new Set(supportedScenarios);
-  const unsupportedScenarios = targetRoot
-    ? requestedScenarios.filter((scenario) => !supportedScenarioSet.has(scenario))
-    : [];
+  const unsupportedScenarios =
+    targetRoot || frozenTarget
+      ? requestedScenarios.filter((scenario) => !supportedScenarioSet.has(scenario))
+      : [];
   const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
   const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
   const survivorLanes = poolLanes.filter(
@@ -750,6 +795,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       options.upgradeSurvivorTargetRoot,
       upgradeSurvivorScenarios,
       options.allowFrozenTargetScenarioOmissions,
+      options.frozenTarget,
     );
     for (const laneName of expansion.omittedLaneNames) {
       omittedUnsupportedLaneNames.add(laneName);
@@ -807,6 +853,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
               options.upgradeSurvivorTargetRoot,
               upgradeSurvivorScenarios,
               options.allowFrozenTargetScenarioOmissions,
+              options.frozenTarget,
             );
             const supportedLane = targetExpansion.lanes.find(
               (poolLane) => poolLane.name === selectedName,
@@ -832,19 +879,31 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
     const unsupportedLaneRules = [
       {
         matches: (lane: DockerE2eLane) => lane.name === "update-first-hop-compat",
-        supported: supportsUpdateFirstHopCompatForTarget(options.upgradeSurvivorTargetRoot),
+        supported: () =>
+          supportsUpdateFirstHopCompatForTarget(
+            options.upgradeSurvivorTargetRoot,
+            options.frozenTarget,
+          ),
       },
       {
         matches: (lane: DockerE2eLane) => lane.name.includes("mobile-pairing-reconnect"),
-        supported: supportsMobilePairingReconnectForTarget(options.upgradeSurvivorTargetRoot),
+        supported: () =>
+          supportsMobilePairingReconnectForTarget(
+            options.upgradeSurvivorTargetRoot,
+            options.frozenTarget,
+          ),
       },
       {
         matches: (lane: DockerE2eLane) => lane.name === "update-corrupt-plugin",
-        supported: supportsCorruptPluginUpdateForTarget(options.upgradeSurvivorTargetRoot),
+        supported: () =>
+          supportsCorruptPluginUpdateForTarget(
+            options.upgradeSurvivorTargetRoot,
+            options.frozenTarget,
+          ),
       },
     ];
     for (const rule of unsupportedLaneRules) {
-      if (rule.supported) {
+      if (!configuredLanes.some(rule.matches) || rule.supported()) {
         continue;
       }
       const retainedLanes = configuredLanes.filter((lane) => !rule.matches(lane));
@@ -855,6 +914,9 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
         configuredLanes = retainedLanes;
       }
     }
+  }
+  if (omittedUnsupportedLaneNames.size > 0 && !options.allowFrozenTargetScenarioOmissions) {
+    throw new Error("unsupported frozen target lanes require authorized scenario omissions");
   }
   const configuredTailLanes =
     selectedLanes || releaseLanes

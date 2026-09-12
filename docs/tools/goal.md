@@ -37,8 +37,12 @@ a separate sandbox policy session.
 ```
 
 `start` is optional: `/goal get CI green for PR 87469` also creates a goal,
-since any text after `/goal` that is not a known action word is treated as a
+OpenClaw treats any text after `/goal` that is not a known action word as a
 new objective.
+
+Explicit actions such as `start` and `edit` preserve line breaks, indentation,
+and repeated spaces inside the objective. Leading and trailing whitespace is
+trimmed.
 
 ## What goals are for
 
@@ -90,22 +94,22 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 Only one goal can exist on a session at a time. Starting a second goal fails
 with `Goal error: goal already exists` until the current one is cleared.
 
-`/goal start` does not take a token-budget flag; a budget can only be set
-through the model-facing `create_goal` tool.
+`/goal start` does not take a token-budget flag. Only the model-facing `create_goal` tool can set a budget.
 
 ## Statuses
 
 - `active`: the session is pursuing the goal.
-- `paused`: the operator paused the goal; `/goal resume` makes it active
+- `paused`: the operator paused the goal. `/goal resume` makes it active
   again.
-- `blocked`: the agent or operator reported a real blocker; `/goal resume`
+- `blocked`: the agent or operator reported a real blocker. `/goal resume`
   makes it active again when new information or state is available.
-- `budget_limited`: the configured token budget was reached; `/goal resume`
+- `budget_limited`: the configured token budget was reached. `/goal resume`
   restarts pursuit from the same objective with a fresh budget window.
-- `usage_limited`: reserved for a future usage-limit stop state; `/goal
+- `usage_limited`: reserved for a future usage-limit stop state. `/goal
 resume` restarts pursuit the same way.
-- `complete`: the goal was achieved. Complete goals are terminal; use `/goal
-clear` before starting another goal.
+- `complete`: the goal was achieved. Complete goals are terminal. Use `/goal
+clear` before starting another goal. Repeating completion preserves the original
+  completion time, including when you add a status note.
 
 `/new` and `/reset` clear the current session goal, since they intentionally
 start fresh session context.
@@ -119,8 +123,11 @@ stale or unknown token snapshot when the goal starts, OpenClaw waits for the
 next fresh snapshot and uses that as the baseline, so tokens spent before the
 goal existed are not charged to it.
 
+The model should omit `token_budget` unless you explicitly request a budget.
+Transports that require every tool argument can pass `null` for no budget.
+
 When usage reaches the budget, the goal moves to `budget_limited`. This does
-not delete the goal or erase the objective; it tells the operator and the
+not delete the goal or erase the objective. It tells the operator and the
 agent that the goal is no longer actively being pursued until it is resumed or
 cleared. Resuming starts a new budget window at the current fresh token
 count.
@@ -145,10 +152,14 @@ can report achievement or a genuine blocker without quietly moving the
 target.
 
 `update_goal` should mark a goal `complete` only when the objective is
-actually achieved. It should mark a goal `blocked` only after the same
-blocking condition recurs for at least three consecutive goal turns, not for
-ordinary difficulty or missing polish. Updating goal status does not send a
-chat reply; the agent must still provide the user's requested final response.
+verified against the full objective with no required work remaining. It should
+mark a goal `blocked` only after the same blocking condition recurs for at least
+three consecutive goal turns, not for ordinary difficulty or missing polish.
+Resuming a blocked goal starts a fresh count of three consecutive turns. Earlier
+blocked turns do not count toward it.
+A nearly exhausted budget does not justify marking unfinished work complete.
+Updating goal status does not send a chat reply. The agent must still provide
+the user's requested final response.
 
 ## Goal context on every turn
 
@@ -172,7 +183,7 @@ commands in Goal mode. Cancel leaves the objective as a normal chat draft.
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and
 does not create a Goal. Start and Resume require an idle local session with
-recoverable history; they are not queued or steered into another run. The UI
+recoverable history. They are not queued or steered into another run. The UI
 reports unsupported or busy sessions rather than creating an inactive Goal.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
@@ -182,20 +193,20 @@ objective, and a live elapsed timer.
 The pill carries inline controls:
 
 - **Pencil** opens an Edit Goal composer with the current objective. Saving
-  changes only the objective; cancelling restores the previous chat draft.
+  changes only the objective. Cancelling restores the previous chat draft.
 - **Pause / resume** updates the current Goal. Resume also starts a continuation
   through normal chat admission. Its internal input stays in model history
-  without appearing as a human chat message; the assistant reply remains visible.
+  without appearing as a human chat message. The assistant reply remains visible.
 - **Trash** clears the current Goal.
 - **Chevron** expands the pill to show the full objective, the latest status
   note, token usage, and elapsed time.
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
-Goal. If a request is interrupted, retry it unchanged; a successful replay
+Goal. If a request is interrupted, retry it unchanged. A successful replay
 refreshes the current state instead of restoring an old Goal snapshot.
 
-The action buttons are unavailable without a connection; the expand chevron
+The action buttons are unavailable without a connection. The expand chevron
 keeps working. Concurrent Goal actions are rejected while an operation is
 pending. These controls require
 a Gateway advertising the structured Goal capability. Text `/goal` commands
@@ -206,29 +217,29 @@ remain available for CLI and other command-capable surfaces.
 Goal start uses `chat.send` with the ordinary `message` as the objective and
 `intent: { kind: "session-goal-start", version: 1, issuedAtMs }`. It keeps the
 normal `idempotencyKey`, attachment, and reply fields. Per-request runtime or
-delivery-route overrides are rejected; Goal work uses the session settings and
+delivery-route overrides are rejected. Goal work uses the session settings and
 local delivery so recovery keeps the same contract. Objectives
 must contain non-whitespace text and are limited to 16,000 characters.
 
 `sessions.goal.update` accepts `edit` with `objective`, or `pause`, `resume`,
 `block`, and `complete` with an optional `note` of at most 2,000 characters.
 `sessions.goal.clear` removes the Goal. Both methods require `sessionKey`,
-`goalId`, `operationId`, and `issuedAtMs`; `agentId` and `sessionId` can pin the
+`goalId`, `operationId`, and `issuedAtMs`. `agentId` and `sessionId` can pin the
 target. They require normal session participation and `operator.write` scope.
 
 Keep the original operation ID, timestamp, target, and payload for retries.
-Receipts remain valid for 24 hours from `issuedAtMs`; timestamps more than
+Receipts remain valid for 24 hours from `issuedAtMs`. Timestamps more than
 five minutes ahead of the Gateway clock are rejected. Reusing an ID with a
 different request is rejected. Expired requests cannot recreate a cleared
-Goal. The per-session limit is 4,096 unexpired receipts; hitting it rejects
+Goal. The per-session limit is 4,096 unexpired receipts. Hitting it rejects
 new operations until receipts expire rather than evicting valid retry state.
 
 Results include `operationId`, `action`, `sessionId`, `goalId`, and `status`
 (`started`, `updated`, or `cleared`), plus the resulting `goal` when present
 and `runId` for start/resume. A replay adds `replayed: true`: this is the
 original operation result, not the current Goal state. Refresh the session
-after replay. Receipts prevent duplicate Goal mutations and input turns;
-they do not promise exactly-once external tool or provider effects.
+after replay. Receipts prevent duplicate Goal mutations and input turns.
+They do not promise exactly-once external tool or provider effects.
 
 ## TUI
 
@@ -250,7 +261,7 @@ note, token budget, and available commands.
 ## Channel behavior
 
 `/goal` works in command-capable OpenClaw sessions, including the TUI and
-chat surfaces that permit text commands. Goal state is attached to the
+chat surfaces that permit text commands. Goal state attaches to the
 session key, not the transport, so two surfaces sharing a session key see the
 same goal.
 

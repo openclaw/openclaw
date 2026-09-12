@@ -510,3 +510,10 @@ thread/reply relations, restart resume). Neither is implemented yet.
   bot is reused?
 - How long should GitHub retain Mantis artifacts for PRs?
 - Should screenshots be redacted or cropped before upload for public PRs?
+
+## Related
+
+- [QA overview](/concepts/qa-e2e-automation) — where Mantis sits among the QA lanes
+- [Mantis Slack desktop runbook](/concepts/mantis-slack-desktop-runbook) — the real-UI Slack lane driven by Mantis
+- [CI pipeline](/ci) — the jobs that run Mantis scenarios
+- [Pull request review flow](/reference/pull-request-review-flow) — how Mantis evidence lands on a PR

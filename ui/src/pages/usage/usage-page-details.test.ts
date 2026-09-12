@@ -13,6 +13,7 @@ import {
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWithClient,
+  contextWeight,
   createPage,
   deferred,
   focusDocument,
@@ -22,17 +23,6 @@ import {
 import type { UsageRouteData } from "./usage-page.ts";
 
 afterEach(cleanupUsagePageTest);
-
-function contextWeight(name: string): NonNullable<UsageSessionEntry["contextWeight"]> {
-  return {
-    source: "run",
-    generatedAt: 1,
-    systemPrompt: { chars: 80, projectContextChars: 20, nonProjectContextChars: 60 },
-    skills: { promptChars: 10, entries: [{ name, blockChars: 10 }] },
-    tools: { listChars: 0, schemaChars: 0, entries: [] },
-    injectedWorkspaceFiles: [],
-  };
-}
 
 describe("UsagePage detail requests", () => {
   it.each([
@@ -71,82 +61,12 @@ describe("UsagePage detail requests", () => {
       for (const method of ["sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]) {
         const detail = request.mock.calls.find(([name, params]) => name === method && params?.key);
         expect.soft(detail?.[1], method).toMatchObject({ key });
+        expect.soft(detail?.[1], method).not.toHaveProperty("sessionId");
         if (needsOwnerHint) {
           expect.soft(detail?.[1], method).toHaveProperty("agentId", agentId);
         } else {
           expect.soft(detail?.[1], method).not.toHaveProperty("agentId");
         }
-      }
-    },
-  );
-
-  it.each(["manual", "automatic"])(
-    "retires old-owner details and pending recovery during %s overview refresh",
-    async (refresh) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
-      const retired = deferred<SessionUsageTimeSeries>();
-      let agentId = "main";
-      let holdMain = false;
-      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-        if (method === "sessions.usage") {
-          return {
-            ...snapshot.result,
-            sessions: [
-              { key: "global", agentId, label: `${agentId} global`, usage: snapshot.result.totals },
-            ],
-          };
-        }
-        if (method === "sessions.usage.logs" || method === "sessions.usage.timeseries") {
-          if (params?.agentId === "opus") {
-            throw new Error("Opus details unavailable");
-          }
-          if (holdMain) {
-            return retired.promise;
-          }
-          return method === "sessions.usage.logs"
-            ? { logs: [{ timestamp: 1, role: "user", content: "Main turn" }] }
-            : { sessionId: "main-instance", points: [] };
-        }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
-      });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, true, context);
-      await preloadUsage(page);
-      page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-      await vi.waitFor(() => expect(page.textContent).toContain("Main turn"));
-      expect(page.details.timeSeries.data?.sessionId).toBe("main-instance");
-
-      holdMain = true;
-      const oldLoad = page.details.timeSeries.load("global");
-      context.setGatewaySnapshot({ suspensionPhase: "draining" });
-      context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-      agentId = "opus";
-      if (refresh === "manual") {
-        refreshButton(page).click();
-      } else {
-        await page.loadUsage();
-      }
-      await vi.waitFor(() =>
-        expect(page.querySelector(".session-bar-selection")?.textContent).toContain("opus global"),
-      );
-      expect.soft(page.details.timeSeries.data).toBeNull();
-      expect.soft(page.details.sessionLogs.data).toBeNull();
-      retired.resolve({ sessionId: "retired-main", points: [] });
-      await oldLoad;
-      await vi.waitFor(() => {
-        expect(page.details.timeSeries.loading).toBe(false);
-        expect(page.details.sessionLogs.loading).toBe(false);
-      });
-      expect.soft(page.details.timeSeries.data).toBeNull();
-      expect.soft(page.details.sessionLogs.data).toBeNull();
-      expect.soft(page.details.timeSeries.status.error).toBe("Opus details unavailable");
-      expect.soft(page.details.sessionLogs.status.error).toBe("Opus details unavailable");
-      for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
-        const ownerRequests = request.mock.calls.filter(
-          ([name, params]) => name === method && params?.agentId === "opus",
-        );
-        expect.soft(ownerRequests, method).toHaveLength(1);
       }
     },
   );

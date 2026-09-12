@@ -56,6 +56,12 @@
   background: transparent;
 }
 
+/* Keep the route's initial skeleton in the full transcript region as the real composer mounts. */
+.chat-thread:has(> .lazy-view-state--loading) {
+  display: flex;
+  padding: 0;
+}
+
 /* The transcript stays keyboard-focusable for scroll keys, but the owner chose
    no focus box: a ring around the whole main content reads as a broken border. */
 .chat-thread:focus-visible {
@@ -122,6 +128,10 @@
   display: none;
 }
 
+.chat-position-rail__item {
+  display: contents;
+}
+
 .chat-position-rail__marker {
   position: relative;
   z-index: 1;
@@ -162,29 +172,29 @@
 }
 
 /* The wave is pointer-only; resting and keyboard-focused marks stay uniform. */
-.chat-position-rail__marker:has(
-    + .chat-position-rail__marker + .chat-position-rail__marker + .chat-position-rail__marker:hover
+.chat-position-rail__item:has(
+    + .chat-position-rail__item + .chat-position-rail__item + .chat-position-rail__item:hover
   )
   .chat-position-rail__tick,
-.chat-position-rail__marker:hover
-  + .chat-position-rail__marker
-  + .chat-position-rail__marker
-  + .chat-position-rail__marker
+.chat-position-rail__item:hover
+  + .chat-position-rail__item
+  + .chat-position-rail__item
+  + .chat-position-rail__item
   .chat-position-rail__tick {
   width: 12px;
 }
 
-.chat-position-rail__marker:has(+ .chat-position-rail__marker + .chat-position-rail__marker:hover)
+.chat-position-rail__item:has(+ .chat-position-rail__item + .chat-position-rail__item:hover)
   .chat-position-rail__tick,
-.chat-position-rail__marker:hover
-  + .chat-position-rail__marker
-  + .chat-position-rail__marker
+.chat-position-rail__item:hover
+  + .chat-position-rail__item
+  + .chat-position-rail__item
   .chat-position-rail__tick {
   width: 16px;
 }
 
-.chat-position-rail__marker:has(+ .chat-position-rail__marker:hover) .chat-position-rail__tick,
-.chat-position-rail__marker:hover + .chat-position-rail__marker .chat-position-rail__tick {
+.chat-position-rail__item:has(+ .chat-position-rail__item:hover) .chat-position-rail__tick,
+.chat-position-rail__item:hover + .chat-position-rail__item .chat-position-rail__tick {
   width: 24px;
 }
 
@@ -243,6 +253,13 @@
 
 .chat-position-rail__preview-copy :where(code) {
   font-family: var(--mono);
+}
+
+/* The inert preview cannot open links; the marker jumps to the full message. */
+.chat-position-rail__preview-copy a {
+  color: inherit;
+  text-decoration: none;
+  cursor: inherit;
 }
 
 .chat-thread-inner > :first-child {

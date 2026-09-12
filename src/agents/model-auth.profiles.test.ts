@@ -19,12 +19,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import type {
-  AuthProfileCredential,
-  AuthProfileStore,
-  OAuthCredential,
-  RuntimeAuthProfileStore,
-} from "./auth-profiles/types.js";
+import type { OAuthCredential, RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import { upsertAuthProfileWithLockOrThrow } from "./auth-profiles/upsert-with-lock.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
@@ -34,12 +29,12 @@ import {
   getApiKeyForModelCore,
   hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth,
+  prepareRuntimeAvailableProviderAuth,
   isConfigBackedInlineProviderApiKey,
   resolveApiKeyForProviderCore,
   resolveEnvApiKey,
   resolveModelAuthMode,
 } from "./model-auth.js";
-import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function expectVertexAdcEnvApiKey(params: {
   provider: string;
@@ -870,7 +865,7 @@ describe("getApiKeyForModelCore", () => {
       },
     );
 
-    expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
     expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
@@ -1103,14 +1098,14 @@ describe("getApiKeyForModelCore", () => {
     try {
       await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
         await expect(
-          hasAuthForModelProvider({
+          prepareRuntimeAvailableProviderAuth({
             provider: "workspace-cloud",
             cfg: { plugins: { allow: ["workspace-cloud"] } },
             store,
           }),
         ).resolves.toBe(true);
         await expect(
-          hasAuthForModelProvider({
+          prepareRuntimeAvailableProviderAuth({
             provider: "workspace-cloud",
             cfg: { plugins: {} },
             store,
@@ -1142,7 +1137,7 @@ describe("getApiKeyForModelCore", () => {
     } as OpenClawConfig;
 
     await expect(
-      hasAuthForModelProvider({
+      prepareRuntimeAvailableProviderAuth({
         provider: "amazon-bedrock",
         cfg: {} as OpenClawConfig,
         env: {},
@@ -1150,7 +1145,7 @@ describe("getApiKeyForModelCore", () => {
       }),
     ).resolves.toBe(false);
     await expect(
-      hasAuthForModelProvider({
+      prepareRuntimeAvailableProviderAuth({
         provider: "vllm",
         cfg: localNoKeyConfig,
         env: {},
@@ -1158,71 +1153,13 @@ describe("getApiKeyForModelCore", () => {
       }),
     ).resolves.toBe(true);
     await expect(
-      hasAuthForModelProvider({
+      prepareRuntimeAvailableProviderAuth({
         provider: "remote",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
     ).resolves.toBe(false);
-  });
-
-  it("hasAuthForModelProvider respects inline api key cooldown (visibility check)", async () => {
-    const store = {
-      version: 1 as const,
-      profiles: {},
-      usageStats: {},
-    } as unknown as AuthProfileStore;
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "anthropic-local": {
-            apiKey: "demo-key",
-            baseUrl: "http://127.0.0.1:8000/v1",
-            models: [testModelDefinition("demo-model")],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    // Initially available
-    await expect(
-      hasAuthForModelProvider({
-        provider: "anthropic-local",
-        cfg,
-        store,
-      }),
-    ).resolves.toBe(true);
-
-    // Mark failure to trigger cooldown
-    const usageId = resolveInlineProviderApiKeyUsageId("anthropic-local");
-    store.usageStats![usageId] = {
-      disabledUntil: Date.now() + 60_000,
-      disabledReason: "billing",
-    };
-
-    // Now unavailable for visibility listing (cooldown)
-    await expect(
-      hasAuthForModelProvider({
-        provider: "anthropic-local",
-        cfg,
-        store,
-      }),
-    ).resolves.toBe(false);
-
-    // But still available if there is a healthy stored profile
-    store.profiles["test-profile"] = {
-      type: "api_key",
-      provider: "anthropic-local",
-      key: "profile-key",
-    } as unknown as AuthProfileCredential;
-    await expect(
-      hasAuthForModelProvider({
-        provider: "anthropic-local",
-        cfg,
-        store,
-      }),
-    ).resolves.toBe(true);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {

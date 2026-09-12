@@ -318,6 +318,67 @@ describe("chat transcript invalidation", () => {
     expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
   });
 
+  it("keeps history cached during worker setup and clears its notice when placement becomes active", async () => {
+    const props = threadProps("pane-worker-setup", "agent:main:worker-setup", [
+      { role: "user", content: "Earlier request", timestamp: 1_000 },
+      { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
+    ]);
+    props.pendingInputs = [
+      {
+        id: "queued-follow-up",
+        runId: "queued-run",
+        acceptedAt: 3_000,
+        state: "queued",
+        message: { role: "user", content: "Queued follow-up", timestamp: 3_000 },
+      },
+    ];
+    const timing = { generation: 1, createdAtMs: 1, updatedAtMs: 1, stateChangedAtMs: 1 };
+    props.selectedSession = {
+      key: props.sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      placement: { state: "requested", ...timing },
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.textContent).toContain("Received · waiting for worker setup");
+      expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
+      expect(buildSpy).toHaveBeenCalledOnce();
+
+      rerender();
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(container.textContent).toContain("Received · waiting for worker setup");
+
+      props.selectedSession = {
+        ...props.selectedSession,
+        placement: {
+          state: "active",
+          ...timing,
+          environmentId: "worker:fixture",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/worker/repo",
+        },
+      };
+      rerender();
+      expect(buildSpy).toHaveBeenCalledTimes(2);
+      expect(container.textContent).not.toContain("Received · waiting for worker setup");
+      expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
   it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
     const props = threadProps("pane-session-metadata");

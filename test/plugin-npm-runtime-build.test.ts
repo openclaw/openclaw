@@ -7,15 +7,19 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPluginNpmRuntime,
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../scripts/lib/plugin-npm-runtime-build.mts";
+import { defineBundledChannelSetupEntry } from "../src/plugin-sdk/channel-entry-contract.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -37,6 +41,46 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it("builds a private worker without registering it as a plugin entry", async () => {
+    const packageDir = tempDirs.make("openclaw-plugin-runtime-worker-");
+    mkdirSync(path.join(packageDir, "src"));
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/worker-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          compat: { pluginApi: "1.0.0" },
+          build: { workerEntries: ["./src/store.worker.ts"] },
+        },
+      }),
+    );
+    writeFileSync(path.join(packageDir, "index.ts"), 'export default { id: "worker-fixture" };\n');
+    writeFileSync(
+      path.join(packageDir, "src/store.worker.ts"),
+      'import { parentPort, isMainThread } from "node:worker_threads";\n' +
+        "const value: number = 42; parentPort!.postMessage({ value, isMainThread });\n",
+    );
+
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
+    );
+    expect(plan.runtimeExtensions).toEqual(["./dist/index.js"]);
+    const worker = new Worker(path.join(packageDir, "dist/src/store.worker.js"));
+    try {
+      const result = await new Promise((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+        worker.once("exit", (code) => reject(new Error(`Worker exited before replying: ${code}`)));
+      });
+      expect(result).toEqual({ value: 42, isMainThread: false });
+    } finally {
+      await worker.terminate();
+    }
+  });
+
   it.each(["index.tsx", "src/index.tsx"])(
     "builds an executable %s package entry",
     async (entry) => {
@@ -225,12 +269,42 @@ describe("plugin npm runtime build planning", () => {
     expect(indexText).toContain('specifier: "./secret-contract-api.cjs"');
     expect(indexText).toContain('specifier: "./runtime-api.cjs"');
 
-    const setupEntryText = readFileSync(
-      path.join(repoRoot, "extensions/msteams/dist/setup-entry.cjs"),
-      "utf8",
-    );
-    expect(setupEntryText).toContain('specifier: "./setup-plugin-api.cjs"');
-    expect(setupEntryText).toContain('specifier: "./secret-contract-api.cjs"');
+    const setupEntryPath = path.join(plan.outDir, "setup-entry.cjs");
+    const defineSetupEntry = vi.fn(defineBundledChannelSetupEntry);
+    const setupModule: { exports: Partial<ReturnType<typeof defineBundledChannelSetupEntry>> } = {
+      exports: {},
+    };
+    const require = createRequire(import.meta.url);
+    // Execute the emitted URL expressions and load companions through the host SDK;
+    // hashed inventory chunks are private, while the setup entry remains stable.
+    runInNewContext(readFileSync(setupEntryPath, "utf8"), {
+      __filename: setupEntryPath,
+      __dirname: plan.outDir,
+      module: setupModule,
+      exports: setupModule.exports,
+      URL,
+      require: (specifier: string) =>
+        specifier === "openclaw/plugin-sdk/channel-entry-contract"
+          ? { defineBundledChannelSetupEntry: defineSetupEntry }
+          : require(specifier),
+    });
+    expect(defineSetupEntry).toHaveBeenCalledOnce();
+    const options = defineSetupEntry.mock.calls[0]?.[0];
+    for (const reference of [options?.plugin, options?.secrets]) {
+      if (!reference) {
+        throw new Error("Missing setup companion reference");
+      }
+      expect(path.dirname(reference.specifier)).toBe(path.join(plan.outDir, ".setup"));
+      expect(path.extname(reference.specifier)).toBe(".cjs");
+      expect(existsSync(reference.specifier)).toBe(true);
+    }
+    expect(setupModule.exports).toBe(defineSetupEntry.mock.results[0]?.value);
+    expect(setupModule.exports.kind).toBe("bundled-channel-setup-entry");
+    expect(setupModule.exports.loadSetupPlugin?.()).toMatchObject({ id: "msteams" });
+    expect(setupModule.exports.loadSetupSecrets?.()).toMatchObject({
+      collectRuntimeConfigAssignments: expect.any(Function),
+      secretTargetRegistryEntries: expect.any(Array),
+    });
   });
 
   it("builds Tencent setup metadata for installed-package migrations", () => {

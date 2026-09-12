@@ -19,6 +19,7 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import { shouldUseFromAsSenderFallback } from "./sender-identity.js";
 import type { MsgContext } from "./templating.js";
 
@@ -376,6 +377,7 @@ function resolveSenderCandidates(
   params: AllowFromParams & {
     senderId?: string | null;
     senderE164?: string | null;
+    commandSenderId?: string;
     from?: string | null;
     chatType?: string | null;
   },
@@ -403,6 +405,7 @@ function resolveSenderCandidates(
     pushCandidate(params.from);
   }
 
+  pushCandidate(params.commandSenderId);
   const normalized: string[] = [];
   for (const sender of candidates) {
     const entries = normalizeAllowFromEntry({ plugin, cfg, accountId, value: sender });
@@ -515,6 +518,7 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     accountId: ctx.AccountId,
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
+    commandSenderId: getCommandSenderAuthority(ctx)?.(),
     from,
     chatType: ctx.ChatType,
   });

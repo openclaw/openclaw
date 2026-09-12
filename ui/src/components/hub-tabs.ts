@@ -15,6 +15,8 @@ export type HubTabOption<T extends string> = {
 type HubTabsProps<T extends string> = {
   id: string;
   active: T | null;
+  /** Owning selection when active is a provisional display fallback. */
+  requestedActive?: T;
   tabs: ReadonlyArray<HubTabOption<T>>;
   ariaLabel: string;
   panelId: string;
@@ -66,6 +68,7 @@ function reclaimFocus(hubId: string, tab: string, element: Element | undefined) 
 
 export function renderHubTabs<T extends string>(props: HubTabsProps<T>): TemplateResult {
   const variant = props.variant ?? "primary";
+  const requestedActive = props.requestedActive ?? props.active;
   const className = `hub-tabs hub-tabs--${variant} ${props.id}-hub-tabs${props.carapace ? " oc-segmented" : ""}${props.className ? ` ${props.className}` : ""}`;
   const fallbackFocusValue =
     props.active === null ? props.tabs.find((tab) => !tab.disabled)?.value : null;
@@ -99,7 +102,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
               if (
                 !tab.disabled &&
                 (event.detail > 0 || event.isTrusted) &&
-                tab.value !== props.active
+                tab.value !== requestedActive
               ) {
                 props.onSelect(tab.value);
                 props.onActivate?.(activeElement);
@@ -114,7 +117,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                 !tab.disabled &&
                 !event.repeat &&
                 (event.key === "Enter" || event.key === " ") &&
-                tab.value !== props.active
+                tab.value !== requestedActive
               ) {
                 event.preventDefault();
                 pendingFocus = {

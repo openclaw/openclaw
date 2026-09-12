@@ -144,6 +144,18 @@ function buildProfileHealth(params: {
   const healthCredential = runtimeCredential ?? credential;
   const provider = normalizeProviderId(healthCredential.provider);
 
+  if (credential.setup?.replacement) {
+    return {
+      profileId,
+      provider,
+      type: credential.type,
+      status: "missing",
+      reasonCode: "setup_inactive",
+      source,
+      label: `${label} (saved, inactive)`,
+    };
+  }
+
   if (healthCredential.type === "api_key") {
     const eligibility = evaluateStoredCredentialEligibility({
       credential: healthCredential,

@@ -393,7 +393,7 @@ export async function agentsDeleteCommand(
             quietRuntime.log(warning);
           }
           deletion.assertCurrent();
-          deleteWorkspaceState(statePlan);
+          await deleteWorkspaceState(statePlan, { assertCurrent: deletion.assertCurrent });
         } catch (error) {
           workspaceCleanupError = error instanceof Error ? error : new Error(String(error));
         }

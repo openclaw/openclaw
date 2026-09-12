@@ -422,6 +422,7 @@ export async function updateGitCheckout(params: {
         steps,
         beforeCandidate: inspectTarget,
         validateCandidate: opts.validateCandidate,
+        inspectGitCandidate: opts.inspectGitCandidate,
         prepareGitExposure: opts.prepareGitExposure,
         prepareCandidate: async (root, cleanupRoot) => {
           const candidate = await runInspectionCommand(["git", "-C", root, "rev-parse", "HEAD"], {
@@ -431,9 +432,7 @@ export async function updateGitCheckout(params: {
           if (candidate.code !== 0 || !candidate.stdout.trim()) {
             throw new Error("Cannot inspect the validated Git candidate");
           }
-          if (opts.inspectGitTarget) {
-            await inspectTarget(candidate.stdout.trim(), root);
-          }
+          await inspectTarget(candidate.stdout.trim(), root);
           if (opts.publishGitCheckout) {
             // A new checkout must settle its destination before runtime relocation
             // records absolute paths. Candidate build/validation has already finished.
@@ -553,6 +552,7 @@ export async function updateGitCheckout(params: {
         steps,
         step,
         validateCandidate: opts.validateCandidate,
+        inspectGitCandidate: opts.inspectGitCandidate,
         prepareGitExposure: opts.prepareGitExposure,
         prepareCandidate: async (root, cleanupRoot) => {
           runtimePromotion = await prepareGitRuntimePromotion(

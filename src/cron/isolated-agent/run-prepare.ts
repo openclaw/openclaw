@@ -702,8 +702,11 @@ export async function prepareCronRunContext(params: {
       },
     };
   } catch (error) {
-    preparedModelRuntimeLease?.release();
-    sessionWorkAdmission.release();
-    throw error;
+    try {
+      await using _ = preparedModelRuntimeLease;
+      throw error;
+    } finally {
+      sessionWorkAdmission.release();
+    }
   }
 }

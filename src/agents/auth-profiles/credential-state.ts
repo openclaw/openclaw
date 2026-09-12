@@ -11,6 +11,7 @@ import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 /** Reason code for why a stored auth credential can or cannot be used. */
 export type AuthCredentialReasonCode =
   | "ok"
+  | "setup_inactive"
   | "missing_credential"
   | "invalid_expires"
   | "expired"

@@ -571,7 +571,7 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("advertises visible sessions with terse UI guidance", () => {
+  it("reserves visible sessions for independently user-facing work", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
       properties?: Record<
@@ -581,13 +581,19 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
+      "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; no thread/thinking/lightContext or attachment staging.",
     );
     expect(schema.properties?.cwd?.description).toContain(
       "outside configured agent workspaces require operator.admin",
     );
     expect(tool.description).toContain("`visible=true`: durable visible session");
-    expect(tool.description).toContain("Default for coding, multi-step work");
+    expect(tool.description).toContain(
+      "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task",
+    );
+    expect(tool.description).toContain(
+      "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session",
+    );
+    expect(tool.description).not.toContain("Default for coding, multi-step work");
     expect(tool.description).toContain("announcing runs report back");
     expect(tool.description).toContain('`mode="run"` is also accepted');
     expect(tool.description).toContain(
@@ -670,7 +676,7 @@ describe("sessions_spawn tool", () => {
         label: "Issue review",
         category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
-        task: "inspect issue",
+        task: expect.stringContaining("[Subagent Task]\n\ninspect issue"),
         timeoutMs: 120000,
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
@@ -1671,7 +1677,7 @@ describe("sessions_spawn tool", () => {
         expect.objectContaining({
           parentSessionKey: childKey,
           spawnDepth: 2,
-          task: "inspect from the grandchild",
+          task: expect.stringContaining("[Subagent Task]\n\ninspect from the grandchild"),
         }),
       );
     });

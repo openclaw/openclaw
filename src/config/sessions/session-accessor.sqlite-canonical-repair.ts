@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -25,6 +26,7 @@ import { bindSessionWindowEntryProjection } from "./session-accessor.sqlite-sess
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   deleteSessionTranscriptIndexInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
@@ -103,15 +105,20 @@ export function copySqliteSessionOwnedStateForCanonicalRepair(params: {
     agentId: params.source.agentId,
   });
   const sourceDatabase = openOpenClawAgentDatabase(toDatabaseOptions(source));
-  copySqliteSessionOwnedStateForRepair({
-    canonicalKey: params.canonicalKey,
-    destination: params.destinationDatabase,
-    ...(params.preferredEntry ? { preferredEntry: params.preferredEntry } : {}),
-    ...(params.preferredSessionKey ? { preferredSessionKey: params.preferredSessionKey } : {}),
-    source: sourceDatabase,
-    sourceEntries: params.sourceEntries,
-    sourceKeys: params.sourceKeys,
-  });
+  runSqliteDeferredTransactionSync(
+    sourceDatabase.db,
+    () =>
+      copySqliteSessionOwnedStateForRepair({
+        canonicalKey: params.canonicalKey,
+        destination: params.destinationDatabase,
+        ...(params.preferredEntry ? { preferredEntry: params.preferredEntry } : {}),
+        ...(params.preferredSessionKey ? { preferredSessionKey: params.preferredSessionKey } : {}),
+        source: sourceDatabase,
+        sourceEntries: params.sourceEntries,
+        sourceKeys: params.sourceKeys,
+      }),
+    { databaseLabel: sourceDatabase.path, operationLabel: "session canonical repair source" },
+  );
 }
 
 /** Doctor-only inventory of every generation copied for one canonical-key group. */
@@ -163,6 +170,9 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
             ),
           ]);
           const db = getSessionKysely(database.db);
+          for (const sessionId of sessionIds) {
+            assertSessionTranscriptHot(database.db, sessionId);
+          }
           const eventSessionIds = executeSqliteQuerySync(
             database.db,
             db
@@ -278,6 +288,10 @@ function copySqliteSessionOwnedStateForRepair(params: {
       ),
   ).rows;
   const sessionIds = uniqueStrings([...windows.map((row) => row.session_id), ...entrySessionIds]);
+  for (const sessionId of sessionIds) {
+    assertSessionTranscriptHot(params.source.db, sessionId);
+    assertSessionTranscriptHot(params.destination.db, sessionId);
+  }
   const sessionLinks =
     sessionIds.length === 0
       ? []

@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { expectObjectFields } from "../test-utils/mock-call-assertions.js";
 import { registerDevicesCli } from "./devices-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -199,19 +200,13 @@ const nodeApprovalErrorCases = [
   },
 ];
 
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
 function requireGatewayCall(index: number): Record<string, unknown> {
   const call = (callGateway.mock.calls as unknown[][])[index]?.[0];
   return requireRecord(call, `gateway call ${index + 1}`);
 }
 
 function expectGatewayCall(index: number, fields: Record<string, unknown>) {
-  expectRecordFields(requireGatewayCall(index), fields);
+  expectObjectFields(requireGatewayCall(index), fields);
 }
 
 function hasGatewayMethod(method: string): boolean {

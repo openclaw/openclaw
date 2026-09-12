@@ -18,7 +18,7 @@ import {
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
-import { ensureOutboundSessionEntry } from "./outbound-session.js";
+import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 const requireLabeledRecord = createRequireRecord("record", "expected-label");
@@ -71,6 +71,43 @@ describe("runMessageAction plugin dispatch", () => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
       vi.unstubAllEnvs();
+    });
+    it("does not persist a route for Gateway-relayed suppression", async () => {
+      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+        sessionKey: "agent:main:gatewaychat:direct:user-123",
+        baseSessionKey: "agent:main:gatewaychat:direct:user-123",
+        peer: { kind: "direct", id: "user-123" },
+        chatType: "direct",
+        from: "gatewaychat:user-123",
+        to: "user-123",
+      });
+      setTestPlugin(
+        createGatewayActionPlugin({
+          pluginId: "gatewaychat",
+          label: "Gateway Chat",
+          blurb: "Gateway Chat send test plugin.",
+          actions: ["send"],
+          messaging: { targetResolver: { looksLikeId: () => true } },
+          handleAction: vi.fn(),
+        }),
+        "gatewaychat",
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+      });
+      const result = await runMessageAction({
+        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        params: { channel: "gatewaychat", target: "user-123", message: "omitted" },
+        agentId: "main",
+        gateway: { clientName: "cli", mode: "cli" },
+      });
+      expect(result.payload).toEqual({
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+      });
+      expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
     });
     it.each([
       { name: "raw base64", buffer: "SGVsbG8=" },

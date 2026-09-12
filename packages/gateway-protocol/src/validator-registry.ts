@@ -255,6 +255,7 @@ export const validateSessionsCatalogStartTerminalParams = compile(
 );
 export const validateSessionsSearchParams = compile(S.SessionsSearchParamsSchema);
 export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSchema);
+export const validateSessionsStorageParams = compile(S.SessionsStorageParamsSchema);
 export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);
 export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSchema);
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
@@ -401,6 +402,7 @@ export const validateChannelsStopParams = compile(S.ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = compile(S.ChannelsLogoutParamsSchema);
 export const validateModelsAuthLogoutParams = compile(S.ModelsAuthLogoutParamsSchema);
 export const validateModelsAuthOrderSetParams = compile(S.ModelsAuthOrderSetParamsSchema);
+export const validateModelsAuthRefreshParams = compile(S.ModelsAuthRefreshParamsSchema);
 export const validateModelsAuthStatusParams = compile(S.ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = compile(S.ModelsListParamsSchema);
 export const validateSkillsStatusParams = compile(S.SkillsStatusParamsSchema);

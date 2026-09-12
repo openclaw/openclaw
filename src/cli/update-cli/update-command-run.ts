@@ -1,16 +1,22 @@
 import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
+import { resolveConfigPath } from "../../config/paths.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import {
@@ -22,7 +28,10 @@ import {
   type DevUpdateTarget,
   UPDATE_DEV_TARGET_REF_ENV,
 } from "../../infra/update-dev-target.js";
-import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
+import {
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "../../infra/update-install-root.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -54,18 +63,22 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
+import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   resolveOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
+  assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
   isGatewayServiceManagementAllowedForUpdate,
   resolveManagedServicePackageUpdatePlan,
@@ -78,7 +91,7 @@ const previewAdmissions = new WeakMap<
   { record: UpdateRunRecord; env: NodeJS.ProcessEnv }
 >();
 
-async function resolveUpdateCommandAdmissionEnv(params: {
+export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
@@ -91,19 +104,20 @@ async function resolveUpdateCommandAdmissionEnv(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
-    // Admission must not load native units or turn unavailable ownership into
-    // an absent service and a write to the caller's unrelated profile.
-    const command = await resolveGatewayService()
-      .readCommand(env, {
-        requireEffective: true,
-        requireLoaded: true,
-      })
-      .catch((cause: unknown) => {
-        throw new GatewayServiceUpdateOwnershipError(
-          "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
-          cause,
-        );
-      });
+    // Admission needs only the command owner. Leave runtime/status inspection to
+    // the safety preflight, after persisted service selectors have been validated.
+    const service = resolveGatewayService();
+    const absent = await service.isAbsent?.({ env }).catch(() => false);
+    const command = absent
+      ? null
+      : await service
+          .readCommand(env, { requireEffective: true, requireLoaded: true })
+          .catch((cause: unknown) => {
+            throw new GatewayServiceUpdateOwnershipError(
+              "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
+              cause,
+            );
+          });
     if (command) {
       const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
       if (usesRoot === null) {
@@ -119,17 +133,55 @@ async function resolveUpdateCommandAdmissionEnv(params: {
           serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
           invocationCwd: params.invocationCwd,
         });
+        // Contradictory native identity must refuse before database or target selection.
+        if (resolveGatewayNativeServiceIdentityConflict(env)) {
+          assertGatewayServiceManagementAllowedForUpdate(env);
+        }
       }
     }
   }
   return env;
 }
 
+/** Package admission must not open history or launch diagnostics on a retained operation. */
+export function assertUpdatePackageActivationAdmission(
+  root: string,
+  options?: Parameters<typeof assertNoPendingPackageActivation>[1],
+): void {
+  try {
+    assertNoPendingPackageActivation(resolveUpdateInstallRoot(root), options);
+  } catch (cause) {
+    throw new UpdateCommandPendingRecoveryFailure(
+      {
+        status: "error",
+        mode: "unknown",
+        root,
+        reason: "update-recovery-pending",
+        steps: [],
+        durationMs: 0,
+      },
+      formatErrorMessage(cause),
+      { cause },
+    );
+  }
+}
+
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
+  initialization?: {
+    env: NodeJS.ProcessEnv;
+    runId: string;
+    databasePath: string;
+    configPath: string;
+    target: {
+      configSnapshot: ConfigFileSnapshot;
+      legacyConfigPlan?: LegacyConfigUpdatePlan;
+    };
+  };
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
+  assertUpdatePackageActivationAdmission(params.root);
   const env = await resolveUpdateCommandAdmissionEnv(params);
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
@@ -140,10 +192,32 @@ export async function admitUpdateCommandRun(params: {
     env,
     recoverOrphanedSidecars: false,
   });
+  if (params.initialization) {
+    const initialized = params.initialization;
+    if (
+      resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) !==
+        initialized.databasePath ||
+      resolvePathViaExistingAncestorSync(resolveConfigPath(env)) !== initialized.configPath
+    ) {
+      throw new GatewayServiceUpdateOwnershipError(
+        "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
+        undefined,
+      );
+    }
+    await revalidateUpdateDatabaseContext({
+      env,
+      readEnv: env,
+      config: initialized.target.configSnapshot.sourceConfig,
+      configSnapshot: initialized.target.configSnapshot,
+      ...(initialized.target.legacyConfigPlan
+        ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
+        : {}),
+    });
+  }
   const driver = readUpdateRunDriver();
   const created = createUpdateRun(
     {
-      runId: env[UPDATE_RUN_ID_ENV]?.trim() || undefined,
+      runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
       trigger: "cli",
       origin: { driver },
       supersedeStaleIdentityless:
@@ -250,7 +324,7 @@ export function failUpdateCommandRun(
 
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
-  progress: UpdateStepProgress,
+  progress: UpdateDisplayProgress,
 ): UpdateStepProgress & {
   deferLedgerWrites: () => void;
   flushLedgerWrites: () => void;
@@ -262,9 +336,9 @@ export function createUpdateRunProgress(
   const record = (step: UpdateRunStep) => {
     if (deferred) {
       pendingSteps.push(step);
-    } else {
-      recordUpdateRunStep(run.runId, step, { env: run.env });
+      return undefined;
     }
+    return recordUpdateRunStep(run.runId, step, { env: run.env });
   };
   return {
     pendingSteps,
@@ -285,15 +359,21 @@ export function createUpdateRunProgress(
       }
     },
     onStepStart(step) {
-      record({ step: step.name, status: "in_progress", startedAtMs: Date.now() });
-      progress.onStepStart?.(step);
+      const committed = record({ step: step.name, status: "in_progress", startedAtMs: Date.now() });
+      progress.onStepStart?.(step, committed);
     },
     onStepComplete(step) {
       const endedAtMs = Date.now();
+      // A completed step may persist warnings; display its final committed row.
+      let committed: UpdateRunRecord | undefined;
       for (const entry of updateRunStepsFromResultStep(step)) {
-        record({ ...entry, startedAtMs: Math.max(0, endedAtMs - step.durationMs), endedAtMs });
+        committed = record({
+          ...entry,
+          startedAtMs: Math.max(0, endedAtMs - step.durationMs),
+          endedAtMs,
+        });
       }
-      progress.onStepComplete?.(step);
+      progress.onStepComplete?.(step, committed);
     },
   };
 }
@@ -301,7 +381,7 @@ export function createUpdateRunProgress(
 export function completeUpdateCommandRun(
   result: UpdateRunResult,
   run: UpdateCommandOptions["run"],
-  downtimeMs?: number,
+  completion: { rolledBack?: boolean; downtimeMs?: number } = {},
 ): UpdateRunResult {
   if (!run) {
     return result;
@@ -366,15 +446,16 @@ export function completeUpdateCommandRun(
     finishUpdateRun(
       run.runId,
       {
-        status:
-          normalized.status === "ok"
+        status: completion.rolledBack
+          ? "rolled-back"
+          : normalized.status === "ok"
             ? "succeeded"
             : normalized.status === "error"
               ? "failed"
               : "skipped",
         reason: normalized.reason,
         after: normalized.after,
-        downtimeMs,
+        downtimeMs: completion.downtimeMs,
       },
       recordOptions,
     );
@@ -434,6 +515,23 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     throw new Error(formatExternalSupervisorUpdateRequired());
   }
+  const discoveredRoot = await resolveUpdateRoot();
+  const installKind = await resolveUpdateInstallKind(discoveredRoot);
+  // A post-core marker cannot bypass pending recovery without the live original
+  // owner. Check both roots before config/autostart preparation or history.
+  assertUpdatePackageActivationAdmission(discoveredRoot, {
+    continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
+  });
+  const servicePlan =
+    installKind === "package"
+      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
+      : undefined;
+  if (servicePlan?.rootRedirect) {
+    assertUpdatePackageActivationAdmission(servicePlan.rootRedirect.root, {
+      continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
+    });
+  }
+  opts.run?.executorFence?.assertCurrent();
   if (opts.dryRun !== true) {
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
@@ -441,18 +539,13 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     });
   }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
-  const discoveredRoot = await resolveUpdateRoot();
+  opts.run?.executorFence?.assertCurrent();
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
   if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
     throw new Error(
       `Managed update handoff root mismatch: expected ${handoffRoot}, running from ${discoveredRoot}.`,
     );
   }
-  const installKind = await resolveUpdateInstallKind(discoveredRoot);
-  const servicePlan =
-    installKind === "package"
-      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
-      : undefined;
   if (opts.dryRun !== true) {
     try {
       assertConfigWriteAllowedInCurrentMode();

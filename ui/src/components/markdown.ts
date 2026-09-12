@@ -548,8 +548,8 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   const activeSanitizeOptions = renderOptions.progressBars
     ? progressSanitizeOptions
     : sanitizeOptions;
-  const documentMode = renderOptions.mode === "document";
-  const truncated = documentMode
+  const uncapped = renderOptions.mode !== "message";
+  const truncated = uncapped
     ? { text: renderInput, truncated: false, total: renderInput.length }
     : truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
   const input = renderOptions.progressBars
@@ -561,7 +561,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
       activeSanitizeOptions,
     );
   }
-  if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
+  if (!uncapped && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.

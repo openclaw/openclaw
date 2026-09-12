@@ -41,6 +41,7 @@ import type {
   CliBackendPlugin,
 } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
@@ -192,7 +193,6 @@ vi.mock("../media-generation-task-status.js", () => ({
   buildActiveImageGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => ""),
-  findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
   MUSIC_GENERATION_TASK_KIND: "music_generation",
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
@@ -671,9 +671,9 @@ describe("prepareCliRunContext", () => {
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
-    mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(undefined);
-    mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
-    mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(undefined);
+    mockBuildActiveImageGenerationTaskPromptContextForSession.mockResolvedValue(undefined);
+    mockBuildActiveVideoGenerationTaskPromptContextForSession.mockResolvedValue(undefined);
+    mockBuildActiveMusicGenerationTaskPromptContextForSession.mockResolvedValue(undefined);
     ensureSandboxWorkspaceForSessionMock.mockReset();
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
     fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
@@ -774,7 +774,7 @@ describe("prepareCliRunContext", () => {
       };
       try {
         const before = await fixture.prepare(input);
-        persistHeartbeatOutcome({
+        await persistHeartbeatOutcome({
           ...sessionTarget,
           runSessionKey: "agent:main:main:heartbeat",
           occurredAt: 1,
@@ -828,7 +828,7 @@ describe("prepareCliRunContext", () => {
     "does not consume silent heartbeat context for %s CLI preparation",
     async (kind) => {
       const { sessionTarget, dir } = fixture.session;
-      persistHeartbeatOutcome({
+      await persistHeartbeatOutcome({
         ...sessionTarget,
         runSessionKey: "agent:main:main:heartbeat",
         occurredAt: 1,
@@ -856,9 +856,9 @@ describe("prepareCliRunContext", () => {
             "Retained CLI outcome",
           );
         }
-        expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
-          "Retained CLI outcome",
-        );
+        expect(
+          (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
+        ).toBe("Retained CLI outcome");
       } finally {
         admission.close();
       }
@@ -867,7 +867,7 @@ describe("prepareCliRunContext", () => {
 
   it("does not renew an explicitly revoked CLI owner to claim silent heartbeat context", async () => {
     const { sessionTarget } = fixture.session;
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...sessionTarget,
       runSessionKey: "agent:main:main:heartbeat",
       occurredAt: 1,
@@ -889,9 +889,9 @@ describe("prepareCliRunContext", () => {
         sessionKey: sessionTarget.sessionKey,
       }),
     ).rejects.toThrow("authority");
-    expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
-      "Keep revoked-owner outcome",
-    );
+    expect(
+      (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
+    ).toBe("Keep revoked-owner outcome");
   });
 
   it("carries the session-key-derived workspace owner into prepared params", async () => {
@@ -2529,6 +2529,18 @@ describe("prepareCliRunContext", () => {
     expect(context.params.prompt).toContain("isUser=false");
     expect(context.params.prompt).toContain("trusted hook context");
     expect(context.params.prompt).toContain("foreign reply text");
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        trigger: "user",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:slack:dm:U123",
+          sourceChannel: "slack",
+          sourceTool: "sessions_send",
+        },
+      }),
+    );
   });
 
   it("applies agent_turn_prepare-only context on the CLI path", async () => {
@@ -2582,7 +2594,7 @@ describe("prepareCliRunContext", () => {
   it("applies before_prompt_build hook context for CLI preparation", async () => {
     const hookRunner = {
       hasHooks: vi.fn((_hookName: string) => true),
-      runBeforePromptBuild: vi.fn(async () => ({
+      runBeforePromptBuild: vi.fn<HookRunner["runBeforePromptBuild"]>(async () => ({
         prependContext: "prompt prepend",
         systemPrompt: "prompt system",
         prependSystemContext: "prompt prepend system",
@@ -2602,15 +2614,11 @@ describe("prepareCliRunContext", () => {
       `${wrappedPluginSystemContext("prompt prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
     );
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
-    const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
-      [unknown, unknown]
-    >;
-    const promptContext = beforePromptBuildCalls[0]?.[1] as
-      | { channel?: string; chatId?: string; senderId?: string }
-      | undefined;
+    const promptContext = hookRunner.runBeforePromptBuild.mock.calls[0]?.[1];
     expect(promptContext?.channel).toBe("discord");
     expect(promptContext?.chatId).toBe("room-1");
     expect(promptContext?.senderId).toBe("user-789");
+    expect(promptContext?.inputProvenance).toBeUndefined();
   });
 
   it("applies turn-authorized prompt enrichment after CLI tool preparation", async () => {
@@ -2700,6 +2708,80 @@ describe("prepareCliRunContext", () => {
     expect(factory).not.toHaveBeenCalled();
     expect(dispose).not.toHaveBeenCalled();
   });
+
+  it.each(["cancelled", "retired", "lookup-failed"] as const)(
+    "rechecks CLI ownership after a delayed media lookup is %s",
+    async (scenario) => {
+      const lookupStarted = createDeferred();
+      const lookup = createDeferred<string | undefined>();
+      const abort = new AbortController();
+      let current = true;
+      const engineId = `cli-media-lookup-${scenario}`;
+      const factory = vi.fn((): ContextEngine => ({
+        info: { id: engineId, name: "CLI media lookup" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+      }));
+      registerTestContextEngine(engineId, factory);
+      const config = createCliBackendConfig({ bundleMcp: true });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: [
+            {
+              name: "image_generate",
+              label: "image_generate",
+              description: "image_generate",
+              parameters: Type.Object({}),
+              execute: vi.fn(),
+            },
+          ],
+        })),
+      });
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockImplementation(() => {
+        lookupStarted.resolve();
+        return lookup.promise;
+      });
+      const preparation = fixture.prepare({
+        config: { ...config, plugins: { slots: { contextEngine: engineId } } },
+        sessionKey: "agent:main:test",
+        abortSignal: abort.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("CLI owner retired");
+          }
+        },
+      });
+      const outcome = preparation.then(
+        (context) => ({ prompt: context.params.prompt }),
+        (error: unknown) => ({ error: String(error) }),
+      );
+      await lookupStarted.promise;
+      expect(factory).not.toHaveBeenCalled();
+      if (scenario === "cancelled") {
+        abort.abort(new Error("CLI lookup cancelled"));
+      } else if (scenario === "retired") {
+        current = false;
+      }
+      if (scenario === "lookup-failed") {
+        lookup.reject(new Error("optional media lookup failed"));
+        expect(await outcome).toEqual({ prompt: "latest ask" });
+        expect(factory).toHaveBeenCalledOnce();
+      } else {
+        lookup.resolve("active image task");
+        expect(await outcome).toEqual({
+          error: `Error: ${scenario === "cancelled" ? "CLI lookup cancelled" : "CLI owner retired"}`,
+        });
+        expect(factory).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("cleans up prepared CLI backend when context-engine host validation fails", async () => {
     installTestPluginRegistry();
@@ -3511,7 +3593,7 @@ describe("prepareCliRunContext", () => {
           }),
         });
       }
-      mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
+      mockBuildActiveVideoGenerationTaskPromptContextForSession.mockResolvedValue(
         "active video task",
       );
       const hookRunner = {
@@ -3531,11 +3613,11 @@ describe("prepareCliRunContext", () => {
           prompt: "latest ask",
           transcriptPrompt: "latest ask",
         });
-      mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockResolvedValue(
         "image task queued",
       );
       const first = await prepareTurn();
-      mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockResolvedValue(
         "image task running",
       );
       const second = await prepareTurn();

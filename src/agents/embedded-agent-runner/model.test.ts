@@ -1929,6 +1929,20 @@ describe("resolveModel", () => {
     expect(model.api).toBe("openai-completions");
   });
 
+  it("does not inherit an unrelated configured row's maxTokens for an unlisted fallback model", async () => {
+    const cfg = makeProviderConfig("custom", {
+      baseUrl: "http://localhost:9000",
+      models: [{ id: "listed-model", name: "listed-model", contextWindow: 32_768, maxTokens: 128 }],
+    });
+
+    const result = await resolveModelForTest("custom", "missing-model", state.agentDir(), cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.id).toBe("missing-model");
+    expect(model.maxTokens).toBeUndefined();
+    expect(model).not.toHaveProperty("maxTokensSource");
+  });
+
   it("defaults baseUrl-only Google fallback models to native Gemini transport", async () => {
     const cfg = makeProviderConfig("google", {
       baseUrl: "https://generativelanguage.googleapis.com",

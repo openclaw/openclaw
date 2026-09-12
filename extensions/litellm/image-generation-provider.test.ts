@@ -16,21 +16,21 @@ const {
 installProviderHttpMockCleanup();
 
 function mockGeneratedPngResponse() {
-  postJsonRequestMock.mockResolvedValue({
+  postJsonRequestMock.mockImplementation(async () => ({
     response: Response.json({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
     release: vi.fn(async () => {}),
-  });
+  }));
 }
 
 function mockEditedPngResponse() {
-  postMultipartRequestMock.mockResolvedValue({
+  postMultipartRequestMock.mockImplementation(async () => ({
     response: Response.json({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
     release: vi.fn(async () => {}),
-  });
+  }));
 }
 
 function mockObjectArg(mock: unknown, index = -1): Record<string, unknown> {

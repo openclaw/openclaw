@@ -75,40 +75,6 @@ fallbacks without pinning that primary. In **Settings → Agents → Overview**,
 fallback chips preserves primary inheritance. Removing every chip saves an empty
 chain instead of restoring the shared fallbacks.
 
-Outside group and channel conversations, OpenClaw sends a visible notice when a turn moves onto fallback. It sends another notice when a later turn succeeds on the selected primary. Group and channel conversations keep the same fallback state and lifecycle events without posting these notices. Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
-
-## Auth failure skip cache
-
-By default, every new turn keeps the existing fallback retry behavior. OpenClaw retries each configured fallback candidate again. This includes non-primary candidates that recently failed with `auth` or `auth_permanent`.
-
-Opt in to suppress repeat auth failures with:
-
-```bash
-OPENCLAW_FALLBACK_SKIP_TTL_MS=60000
-```
-
-When enabled, OpenClaw records an in-memory, session-scoped skip marker for a non-primary fallback candidate after an auth-class failure. The key includes the session, provider, model, and selected automatic or explicit profile ID. Switching profiles does not inherit another profile's failure marker. Primary candidates are never skipped, so an explicit user model selection still surfaces the real auth error. The cache is process-local and clears on Gateway restart.
-
-The value is a TTL in milliseconds. `0` or unset disables the cache. Positive values are clamped between 1 second and 10 minutes.
-
-## User-visible fallback notices
-
-Outside group and channel conversations, OpenClaw sends a status notice in the same reply surface when a session moves onto an auto-selected fallback:
-
-```text
-↪️ Model Fallback: <fallback> (selected <primary>; <reason>)
-```
-
-When a later probe succeeds and the session returns to the selected primary, OpenClaw sends:
-
-```text
-↪️ Model Fallback cleared: <primary> (was <fallback>)
-```
-
-These notices are operational messages, not assistant content. They deliver once per state change outside group and channel conversations, including side-effect-only turns when feasible, but repeated turn-local fallback transitions do not repeat them. Group and channel conversations suppress the visible notices while retaining the same fallback state and lifecycle events. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech.
-
-When a fallback answers, the Control UI shows the successful answer once and removes empty failed-attempt placeholders from that same run. The raw transcript retains the failed attempts for troubleshooting. Failed turns and attempts that produced partial visible output remain visible.
-
 ## Auth storage (keys + OAuth)
 
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
@@ -253,6 +219,20 @@ State is stored in the per-agent SQLite auth state under `usageStats`:
 }
 ```
 
+## Auth failure skip cache
+
+By default, every new turn keeps the existing fallback retry behavior. OpenClaw retries each configured fallback candidate again. This includes non-primary candidates that recently failed with `auth` or `auth_permanent`.
+
+Opt in to suppress repeat auth failures with:
+
+```bash
+OPENCLAW_FALLBACK_SKIP_TTL_MS=60000
+```
+
+When enabled, OpenClaw records an in-memory, session-scoped skip marker for a non-primary fallback candidate after an auth-class failure. The key includes the session, provider, model, and selected automatic or explicit profile ID. Switching profiles does not inherit another profile's failure marker. Primary candidates are never skipped, so an explicit user model selection still surfaces the real auth error. The cache is process-local and clears on Gateway restart.
+
+The value is a TTL in milliseconds. `0` or unset disables the cache. Positive values are clamped between 1 second and 10 minutes.
+
 ## Billing disables
 
 Billing/credit failures (for example "insufficient credits" / "credit balance too low") are treated as failover-worthy. OpenClaw marks the credential as **disabled** for ten minutes initially and rotates to the next eligible profile/provider.
@@ -376,6 +356,26 @@ Live model switching follows these rules:
 - A live switch can select a model outside the active fallback chain. OpenClaw then returns the original switch to the agent, reply, or isolated-cron retry owner. The selected model can complete the same turn.
 
 The active run carries its chosen candidate directly. Live reconciliation changes that candidate only for an explicit pending user switch, so no temporary fallback override or rollback is needed.
+
+## User-visible fallback notices
+
+Outside group and channel conversations, OpenClaw sends a status notice in the same reply surface when a session moves onto an auto-selected fallback:
+
+```text
+↪️ Model Fallback: <fallback> (selected <primary>; <reason>)
+```
+
+When a later probe succeeds and the session returns to the selected primary, OpenClaw sends:
+
+```text
+↪️ Model Fallback cleared: <primary> (was <fallback>)
+```
+
+These notices are operational messages, not assistant content. They deliver once per state change outside group and channel conversations, including side-effect-only turns when feasible, but repeated turn-local fallback transitions do not repeat them. Group and channel conversations suppress the visible notices while retaining the same fallback state and lifecycle events. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech.
+
+Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
+
+When a fallback answers, the Control UI shows the successful answer once and removes empty failed-attempt placeholders from that same run. The raw transcript retains the failed attempts for troubleshooting. Failed turns and attempts that produced partial visible output remain visible.
 
 ## Observability and failure summaries
 

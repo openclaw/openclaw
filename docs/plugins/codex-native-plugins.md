@@ -49,6 +49,10 @@ for the OpenAI account and admin model.
 
 ## Quickstart
 
+The source Codex home is the Codex CLI state directory you are migrating from:
+`~/.codex` by default, or `CODEX_HOME` when that variable is set. See
+[`openclaw migrate`](/cli/migrate) to point at a different one with `--from`.
+
 Preview migration from the source Codex home:
 
 ```bash

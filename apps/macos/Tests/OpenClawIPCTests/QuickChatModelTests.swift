@@ -248,7 +248,7 @@ struct QuickChatModelTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         await self.prepare(model)
         #expect(model.missingPermissions == [.screenRecording])
 
@@ -277,7 +277,7 @@ struct QuickChatModelTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         await self.prepare(model)
 
         model.grantMissingPermissions()
@@ -655,7 +655,7 @@ struct QuickChatModelTests {
             },
             connectionGateProvider: { gate },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
     }
 
     private static func agentsResult(

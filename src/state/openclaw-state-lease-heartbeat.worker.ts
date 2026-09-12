@@ -1,10 +1,8 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { runWithSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import {
-  isSqliteLockError,
-  runSqliteImmediateTransactionSync,
-} from "../infra/sqlite-transaction.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   acquireStateDatabaseCoordinator,
   StateDatabaseCoordinatorContentionError,

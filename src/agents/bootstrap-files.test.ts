@@ -191,7 +191,7 @@ async function createHeartbeatAgentsWorkspace() {
 }
 
 async function writeCompletedWorkspaceState(workspaceDir: string): Promise<void> {
-  mergeWorkspaceSetupState(workspaceDir, {
+  await mergeWorkspaceSetupState(workspaceDir, {
     bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
     setupCompletedAt: "2026-05-16T00:00:01.000Z",
   });

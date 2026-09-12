@@ -83,7 +83,7 @@ function testGatewayCaller(
 ): NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]> {
   const operationalRunInstance = createOperationalRunInstanceRef("run-gateway-tool-test");
   testDelegatedAuthorities.push(claimAgentRunDelegatedAuthority(operationalRunInstance));
-  const context = {} as GatewayRequestContext;
+  const context = { getRuntimeConfig: () => mocks.configState.value } as GatewayRequestContext;
   return {
     gatewayContextResolver: () => context,
     ...identity,
@@ -569,26 +569,30 @@ describe("gateway tool defaults", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it("fails contextual cron calls closed for configured remote gateways", async () => {
+  it("keeps hosted agent cron calls on the local Gateway with a remote primary", async () => {
     mocks.configState.value = {
       gateway: {
         mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-          token: "remote-token",
-        },
+        auth: { mode: "token", token: "local-token" },
+        remote: { url: "wss://gateway.example", token: "remote-token" },
       },
     };
+    process.env.OPENCLAW_GATEWAY_URL = "wss://env.example";
+    mocks.callGateway.mockResolvedValueOnce({ removed: true });
 
-    await expect(
-      withGatewayToolCallerIdentity(
-        testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
-        async () => {
-          await callGatewayTool("cron.remove", {}, { id: "job-1" });
-        },
-      ),
-    ).rejects.toThrow("agent gateway calls require the trusted local gateway context");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
+    await withGatewayToolCallerIdentity(
+      testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
+      () => callGatewayTool("cron.remove", {}, { id: "job-1" }),
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.localPortOverride).toBe(18789);
+    expect(call.ignoreEnvUrlOverride).toBe(true);
+    expect(call.config).toBe(mocks.configState.value);
+    expect(call.url).toBeUndefined();
+    expect(call.token).toBeUndefined();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+    expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
   it("marks local approval wait calls as approval runtime calls", async () => {

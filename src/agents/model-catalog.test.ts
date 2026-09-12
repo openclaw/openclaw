@@ -11,7 +11,6 @@ import {
   buildPreparedModelCatalogSnapshot,
   findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsDocument,
   modelSupportsVision,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -100,6 +99,28 @@ describe("prepared model catalog builder", () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockReset();
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
   });
+
+  it.each(["static", "refreshable", "runtime"] as const)(
+    "keeps replace publication closed to %s manifest and augmented inventory",
+    async (discovery) => {
+      mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
+        { provider: "manifest-provider", id: "augmented-only", name: "Augmented" },
+      ]);
+      const snapshot = await build({
+        config: { models: { mode: "replace", providers: {} } },
+        metadataSnapshot: providerManifestSnapshot({
+          provider: "manifest-provider",
+          discovery,
+          modelIds: ["manifest-only"],
+        }),
+        readOnly: false,
+        includeProviderPluginAugmentation: true,
+      });
+      expect(snapshot.entries).toEqual([]);
+      expect(snapshot.routeVariants).toEqual([]);
+      expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["ready", "unavailable", "auth-rejected"] as const)(
     "preserves %s provider membership without replenishing it from metadata",
@@ -603,6 +624,7 @@ describe("prepared model catalog builder", () => {
     "keeps %s manifest models available without runtime account discovery",
     async (discovery) => {
       const snapshot = await build({
+        includeProviderPluginAugmentation: false,
         metadataSnapshot: providerManifestSnapshot({
           provider: "manifest-provider",
           discovery,
@@ -962,7 +984,7 @@ describe("prepared model catalog builder", () => {
     );
   });
 
-  it("reports media capabilities from the prepared row", () => {
+  it("reports image capability from the prepared row", () => {
     const entry: ModelCatalogEntry = {
       id: "media",
       name: "Media",
@@ -970,6 +992,5 @@ describe("prepared model catalog builder", () => {
       input: ["text", "image", "document"],
     };
     expect(modelSupportsVision(entry)).toBe(true);
-    expect(modelSupportsDocument(entry)).toBe(true);
   });
 });

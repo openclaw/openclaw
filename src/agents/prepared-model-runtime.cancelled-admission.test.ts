@@ -79,7 +79,10 @@ const coldAdmissionCases: Array<{
   {
     name: "ephemeral",
     acquire: async (input, signal) =>
-      await acquireReadOnlyPreparedModelRuntime(input, signal, "static"),
+      await acquireReadOnlyPreparedModelRuntime(input, {
+        abortSignal: signal,
+        catalogMode: "static",
+      }),
   },
 ];
 
@@ -162,7 +165,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
 
-    lease.release();
+    await lease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
   });
 
@@ -191,7 +194,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     secondBuild.release.resolve();
     const lease = await replacement;
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-    lease.release();
+    await lease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
   });
 
@@ -220,7 +223,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     const lease = await survivor;
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
 
-    lease.release();
+    await lease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
   });
 
@@ -254,7 +257,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
 
-    retainedLease.release();
+    await retainedLease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
 
     await refreshPreparedModelRuntimeSnapshots(config, {
@@ -331,24 +334,35 @@ describe("prepared model runtime cancelled admission ownership", () => {
     },
   );
 
-  it("preserves immutable leased data and allows a fresh standalone activation after close", async () => {
+  it("preserves immutable leased data while close drains and allows a fresh standalone activation", async ({
+    signal,
+  }) => {
     const input = { config: {}, agentDir: state.agentDir("direct") };
-    const previous = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+    const options = { retainIdleRunOwner: true, abortSignal: signal };
+    const previous = await acquireAgentRunPreparedModelRuntime(input, options);
+    let closed = false;
+    const closing = drainGlobalSingletonLifecycleState("close").then(() => {
+      closed = true;
+    });
     try {
-      await drainGlobalSingletonLifecycleState("close");
+      await nextTurn(undefined, { signal });
+      expect(closed).toBe(false);
       expect(previous.snapshot.isCurrent()).toBe(false);
       expect(previous.snapshot.createStores()).toBeDefined();
-      const next = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+      await previous[Symbol.asyncDispose]();
+      await closing;
+      const next = await acquireAgentRunPreparedModelRuntime(input, options);
       try {
         expect(next.snapshot).not.toBe(previous.snapshot);
-        previous.release();
+        await previous[Symbol.asyncDispose]();
         expect(getPreparedModelRuntimeSnapshot(input)).toBe(next.snapshot);
         expect(next.snapshot.isCurrent()).toBe(true);
       } finally {
-        next.release();
+        await next[Symbol.asyncDispose]();
       }
     } finally {
-      previous.release();
+      await previous[Symbol.asyncDispose]();
+      await closing;
     }
   });
 

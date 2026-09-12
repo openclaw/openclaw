@@ -5,7 +5,7 @@ read_when:
 title: "Zalo"
 ---
 
-Status: experimental. Direct messages and group chats are both implemented; the [Capabilities](#capabilities) table below reflects verified behavior on Zalo Bot Creator / Marketplace bots.
+Status: experimental. Direct messages and group chats are both implemented. The [Capabilities](#capabilities) table below reflects verified behavior on Zalo Bot Creator / Marketplace bots.
 
 ## Bundled plugin
 
@@ -14,13 +14,13 @@ Zalo ships as a bundled plugin in current OpenClaw releases, so packaged builds 
 On an older build or a custom install that excludes Zalo, install the npm package directly:
 
 - Install: `openclaw plugins install @openclaw/zalo`
-- Pinned version: `openclaw plugins install @openclaw/zalo@2026.6.11`
+- Pinned version: `openclaw plugins install @openclaw/zalo@<version>` (pin only for reproducible installs)
 - From a local checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
 - Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
-1. Create a bot token at [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) (sign in, create a bot, configure settings). The token is `numeric_id:secret`; for Marketplace bots the usable runtime token may appear in the bot's welcome message.
+1. Create a bot token at [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) (sign in, create a bot, configure settings). The token is `numeric_id:secret`. For Marketplace bots the usable runtime token may appear in the bot's welcome message.
 2. Set the token, either as env `ZALO_BOT_TOKEN=...` (default account only) or in config.
 3. Restart the gateway.
 4. Approve the pairing code on first DM contact (default DM policy is pairing).
@@ -43,20 +43,20 @@ Minimal config:
 }
 ```
 
-Multi-account: add more entries under `channels.zalo.accounts.<id>`, each with its own `botToken`/`name`. `channels.zalo.botToken` (flat, no `accounts`) is a legacy single-account shorthand; prefer `accounts.<id>.*` for new configs.
+Multi-account: add more entries under `channels.zalo.accounts.<id>`, each with its own `botToken`/`name`. `channels.zalo.botToken` (flat, no `accounts`) is a legacy single-account shorthand. Prefer `accounts.<id>.*` for new configs.
 
 ## What it is
 
-Zalo is a Vietnam-focused messaging app. Its Bot API lets the Gateway run a bot for both 1:1 conversations and group chats, with deterministic routing back to Zalo (the model never chooses channels).
+Zalo is a Vietnam-focused messaging app. Its Bot API lets the Gateway run a bot for both 1:1 conversations and group chats. Routing back to Zalo is deterministic. The model never chooses channels.
 
-This page covers **Zalo Bot Creator / Marketplace bots**. **Zalo Official Account (OA) bots** are a different product surface and may behave differently; this page does not cover them.
+This page covers **Zalo Bot Creator / Marketplace bots**. **Zalo Official Account (OA) bots** are a different product surface and may behave differently. This page does not cover them.
 
 ## How it works
 
 - Inbound messages are normalized into the shared channel envelope with media placeholders.
-- Replies always route back to the same Zalo chat; quote-reply is not used (`replyToMode` is fixed off).
-- Long-polling (`getUpdates`) by default; webhook mode available via `channels.zalo.webhookUrl`.
-- Groups require an @mention to trigger the bot; this is not configurable per channel.
+- Replies always route back to the same Zalo chat. Quote-reply is not used (`replyToMode` is fixed off).
+- Long-polling (`getUpdates`) by default. Webhook mode available via `channels.zalo.webhookUrl`.
+- Groups require an @mention to trigger the bot. This is not configurable per channel.
 
 ## Limits
 
@@ -73,7 +73,7 @@ This page covers **Zalo Bot Creator / Marketplace bots**. **Zalo Official Accoun
 ### Direct messages
 
 - `channels.zalo.dmPolicy`: `pairing` (default) | `allowlist` | `open` | `disabled`.
-- Pairing: unknown senders get a pairing code; messages are ignored until approved. Codes expire after 1 hour.
+- Pairing: unknown senders get a pairing code. Messages are ignored until approved. Codes expire after 1 hour.
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
   - Details: [Pairing](/channels/pairing)
@@ -84,9 +84,9 @@ This page covers **Zalo Bot Creator / Marketplace bots**. **Zalo Official Accoun
 Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and gated by mention plus group policy:
 
 - `channels.zalo.groupPolicy`: `open` | `allowlist` | `disabled`.
-- `channels.zalo.groupAllowFrom` restricts which sender IDs can trigger the bot in groups; falls back to `allowFrom` when unset.
+- `channels.zalo.groupAllowFrom` restricts which sender IDs can trigger the bot in groups. Falls back to `allowFrom` when unset.
 - Default resolution: when `channels.zalo` is configured, an unset `groupPolicy` resolves to `open`. When `channels.zalo` is missing entirely, runtime fails closed to `allowlist`.
-- Reported real-world caveat: on some Marketplace-bot setups the bot could not be added to a group at all. If you hit that, verify with your bot's Zalo Bot Platform settings; it is a platform-side constraint, not an OpenClaw policy.
+- Reported real-world caveat: on some Marketplace-bot setups the bot could not be added to a group at all. If you hit that, verify with your bot's Zalo Bot Platform settings. It is a platform-side constraint, not an OpenClaw policy.
 
 ## Long-polling vs webhook
 
@@ -97,7 +97,7 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
   - Zalo sends events with an `X-Bot-Api-Secret-Token` header, checked with a constant-time comparison.
   - Gateway HTTP handles webhook requests at `channels.zalo.webhookPath` (defaults to the webhook URL's path).
   - Requests must use `Content-Type: application/json` (or a `+json` media type).
-  - HTTP 200 is returned only after the raw event is durably stored; storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable`, so reverse proxies can require it to distinguish OpenClaw acceptance from a generic `200` (authentication, validation, and storage-error responses omit it).
+  - OpenClaw returns HTTP 200 only after it durably stores the raw event. Storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable`. Reverse proxies can require that header to distinguish OpenClaw acceptance from a generic `200`. Authentication, validation, and storage-error responses omit it.
   - getUpdates polling and webhook are mutually exclusive per Zalo API docs.
 
 ## Supported message types
@@ -105,7 +105,7 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
 - Text: full support, chunked to 2000 characters.
 - Media: inbound/outbound, capped by `mediaMaxMb`.
 - Reactions, threads, polls, native commands: not supported by the plugin.
-- Streaming: the plugin declares block-streaming capability, but Zalo has no dedicated outbound queue/merge-text tuning knobs (unlike some other regional channels); verify current behavior in your environment if this matters for your use case.
+- Streaming: the plugin declares block-streaming capability. Zalo has no dedicated outbound queue/merge-text tuning knobs, unlike some other regional channels. Verify current behavior in your environment if this matters for your use case.
 
 ## Capabilities
 
@@ -142,7 +142,7 @@ openclaw message send --channel zalo --target 123456789 --message "hi"
 - Confirm the secret is 8-256 characters
 - Confirm the gateway HTTP endpoint is reachable on the configured path
 - Confirm getUpdates polling is not also running (they are mutually exclusive)
-- A burst of requests can return HTTP 429 (120 requests / 60s per path+IP); back off and retry
+- A burst of requests can return HTTP 429 (120 requests / 60s per path+IP). Back off and retry
 
 ## Configuration reference
 
@@ -167,7 +167,7 @@ Full configuration: [Configuration](/gateway/configuration)
 | `channels.zalo.accounts.<id>.responsePrefix` | Outbound response prefix override                 | -                     |
 | `channels.zalo.defaultAccount`               | Default account when multiple are configured      | `default`             |
 
-`channels.zalo.botToken`, `channels.zalo.dmPolicy`, and other flat top-level keys are the legacy single-account shorthand for the fields above; both forms are supported.
+`channels.zalo.botToken`, `channels.zalo.dmPolicy`, and other flat top-level keys are the legacy single-account shorthand for the fields above. Both forms are supported.
 
 Env option: `ZALO_BOT_TOKEN=...` resolves the default account's token only.
 

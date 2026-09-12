@@ -17,7 +17,7 @@ field is required. Use a square PNG that remains recognizable at 16 px; 512×512
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
 OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
-an open Agent Plugins spec proposal ([agent-plugins-spec#66](https://github.com/agentplugins/agent-plugins-spec/pull/66)). OpenClaw itself implements Agent Plugins 1.0.0. Other Agent Plugins
+Agent Plugins spec proposal [agent-plugins-spec#66](https://github.com/agentplugins/agent-plugins-spec/pull/66). OpenClaw itself implements Agent Plugins 1.0.0. Other Agent Plugins
 consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
 portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
 render the icon without a runtime network request. Top-level plugin-branding icon URLs are not
@@ -34,6 +34,14 @@ migration window.
 Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
+
+When Doctor renames saved credentials, it updates exact `authProfileId` and
+`defaultAuthProfileId` references inside plugin config and channel config. This
+preserves the shipped `authProfileId` migration and also covers defaults such as
+LLM Task's `defaultAuthProfileId`, including older installed plugins. Reference
+lookup trims surrounding whitespace, as the credential reader does. Unmapped
+values and literal strings elsewhere remain unchanged. Plugins do not need to
+implement the host's credential rename in their compatibility callbacks.
 
 Bundled plugins declare each state migration in execution order so Doctor can
 plan its owner and receipt without loading plugin code:

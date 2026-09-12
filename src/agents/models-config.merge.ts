@@ -13,11 +13,6 @@ import type {
 } from "../config/types.models.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
-import {
-  modelKey,
-  createConfiguredProviderCatalogModelIdNormalizer,
-  type ModelManifestNormalizationContext,
-} from "./model-ref-shared.js";
 
 export function normalizeProviderMapKeys<T>(
   providers: Record<string, T> | null | undefined,
@@ -53,12 +48,13 @@ export type ExistingProviderConfig = ProviderConfig & {
   api?: string;
 };
 
+/** Authored fields keyed by exact provider/model tuples, independent of display ref syntax. */
 export type SourceModelFields = ReadonlyMap<
   string,
   { inputOmitted: boolean; cost: ProviderConfig["models"][number]["cost"] | undefined }
 >;
 
-type ProviderModelCatalog = {
+export type ProviderModelCatalog = {
   api?: string;
   baseUrl?: string;
   headers?: ProviderConfig["headers"];
@@ -76,9 +72,24 @@ type ProviderModelMergeOptions = {
   providerId: string;
   modelIdMatching?: "exact";
   sourceModelFields?: SourceModelFields;
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   preserveConfiguredModelMembership?: boolean;
 };
+
+export function buildSourceModelFields(
+  sourceProviders: Record<string, ProviderConfig> | undefined,
+): SourceModelFields {
+  return new Map(
+    Object.entries(normalizeProviderMapKeys(sourceProviders)).flatMap(([providerId, provider]) =>
+      (provider.models ?? []).map(
+        (model) =>
+          [
+            JSON.stringify([providerId, model.id.trim()]),
+            { inputOmitted: !Object.hasOwn(model, "input"), cost: model.cost },
+          ] as const,
+      ),
+    ),
+  );
+}
 
 function getProviderModelId(model: unknown): string {
   if (!model || typeof model !== "object") {
@@ -132,7 +143,6 @@ export function mergeProviderModels(
       .filter(([id]) => Boolean(id)),
   );
   const seen = new Set<string>();
-  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
 
   const mergedModels = explicitModels.map((explicitModel) => {
     const id = getModelId(explicitModel);
@@ -145,7 +155,7 @@ export function mergeProviderModels(
       return explicitModel;
     }
     const sourceFields = options?.sourceModelFields?.get(
-      modelKey(normalizeProviderId(options.providerId), normalizeModelId(options.providerId, id)),
+      JSON.stringify([normalizeProviderId(options.providerId), id]),
     );
     // Materialized defaults are not authored pins. Reuse raw source cost in both
     // merge passes so the final pass cannot restore an older catalog schedule.
@@ -249,7 +259,6 @@ export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
   sourceModelFields?: SourceModelFields;
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): Record<string, ProviderConfig> {
   const out = normalizeProviderMapKeys(params.implicit);
   for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
@@ -258,7 +267,6 @@ export function mergeProviders(params: {
       ? mergeProviderModels(implicit, explicit, {
           providerId: providerKey,
           sourceModelFields: params.sourceModelFields,
-          manifestPlugins: params.manifestPlugins,
         })
       : explicit;
   }

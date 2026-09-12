@@ -37,8 +37,8 @@ const readonlyPreparation = vi.hoisted(() => ({
   turns: [] as Promise<void>[],
 }));
 
-vi.mock("../infra/sqlite-readonly-location.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/sqlite-readonly-location.js")>();
+vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
   const observe = (pathname: string) => {
     let progressed = false;
     readonlyPreparation.turns.push(

@@ -120,8 +120,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
                   { provider: providerId, modelId: "model", agentId: "main" },
                 ],
               },
-              options?.abortSignal,
-              "static",
+              { abortSignal: options?.abortSignal, catalogMode: "static" },
             );
       try {
         expect(current.registrations.length).toBe(1);
@@ -138,7 +137,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
         current.source = expectDefined(current.registrations[0], "selected registration");
         return lease;
       } catch (error) {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         throw error;
       }
     },

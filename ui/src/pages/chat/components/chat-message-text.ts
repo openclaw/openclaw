@@ -152,7 +152,7 @@ export function renderMessageMarkdown(
   const text = renderMarkdownText(
     recovered ? (disclosure.markdown ?? markdown) : markdown,
     opts.isStreaming,
-    recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
+    recovered ? { ...markdownRenderOptions, mode: "full-message" } : markdownRenderOptions,
     duplicateSuffix,
     isAssistant && opts.isStreaming ? messageKey : undefined,
   );

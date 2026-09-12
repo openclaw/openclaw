@@ -66,6 +66,122 @@ describe("minimax provider hooks", () => {
     expect(headers.get("x-api-key")).toBeNull();
   });
 
+  it.each([
+    {
+      name: "CN configuration",
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      expectedEndpoint: "https://api.minimaxi.com/anthropic/v1/models",
+    },
+    {
+      name: "Global configuration ahead of the CN environment",
+      baseUrl: "https://api.minimax.io/anthropic",
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimax.io/anthropic/v1/models",
+    },
+    {
+      name: "custom proxy configuration",
+      baseUrl: " https://minimax-proxy.example.com/prefix/anthropic/ ",
+      expectedEndpoint: "https://minimax-proxy.example.com/prefix/anthropic/v1/models",
+    },
+    {
+      name: "default Global endpoint",
+      baseUrl: undefined,
+      expectedEndpoint: "https://api.minimax.io/anthropic/v1/models",
+    },
+    {
+      name: "environment endpoint without configuration",
+      baseUrl: undefined,
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimaxi.com/anthropic/v1/models",
+    },
+    {
+      name: "environment endpoint with blank configuration",
+      baseUrl: " ",
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimaxi.com/anthropic/v1/models",
+    },
+    {
+      name: "OpenAI-compatible Global configuration ahead of the CN environment",
+      baseUrl: "https://api.minimax.io/v1",
+      api: "openai-completions" as const,
+      host: "https://api.minimaxi.com",
+      expectedEndpoint: "https://api.minimax.io/v1/models",
+    },
+    {
+      name: "OpenAI-compatible CN configuration",
+      baseUrl: "https://api.minimaxi.com/v1/",
+      api: "openai-completions" as const,
+      expectedEndpoint: "https://api.minimaxi.com/v1/models",
+    },
+    {
+      name: "OpenAI-compatible proxy configuration",
+      baseUrl: " https://minimax-proxy.example.com/prefix/v1/ ",
+      api: "openai-completions" as const,
+      expectedEndpoint: "https://minimax-proxy.example.com/prefix/v1/models",
+    },
+    {
+      name: "OpenAI-compatible proxy with a custom base path",
+      baseUrl: "https://minimax-proxy.example.com/gateway",
+      api: "openai-completions" as const,
+      expectedEndpoint: "https://minimax-proxy.example.com/gateway/models",
+    },
+  ])(
+    "keeps API catalog discovery on the $name",
+    async ({ baseUrl, host, api, expectedEndpoint }) => {
+      const expectedBaseUrl = baseUrl?.trim() || `${host ?? "https://api.minimax.io"}/anthropic`;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+        input === expectedEndpoint
+          ? Response.json({ data: [{ id: "MiniMax-M3" }] })
+          : new Response(null, { status: 401 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { providers } = await registerProviderPlugin({
+        plugin: minimaxProviderPlugin,
+        id: "minimax",
+        name: "MiniMax Provider",
+      });
+      const result = await runProviderCatalog({
+        provider: requireRegisteredProvider(providers, "minimax"),
+        config: {
+          models: {
+            providers: {
+              ...(baseUrl !== undefined
+                ? { minimax: { baseUrl, ...(api ? { api } : {}), models: [] } }
+                : {}),
+              "minimax-portal": {
+                baseUrl: "https://other-account.example.com/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+        env: host ? { MINIMAX_API_HOST: host } : {},
+        resolveProviderApiKey: () => ({
+          apiKey: "MINIMAX_API_KEY",
+          discoveryApiKey: "selected-api-key",
+          profileId: "minimax:selected",
+        }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedEndpoint);
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("x-api-key")).toBe(api ? null : "selected-api-key");
+      expect(headers.get("authorization")).toBe(api ? "Bearer selected-api-key" : null);
+      expect(result).toMatchObject({
+        provider: {
+          baseUrl: expectedBaseUrl,
+          api: api ?? "anthropic-messages",
+          authHeader: true,
+          apiKey: "MINIMAX_API_KEY",
+          models: [expect.objectContaining({ id: "MiniMax-M3" })],
+        },
+        outcomes: [{ provider: "minimax", profileId: "minimax:selected", status: "ready" }],
+      });
+    },
+  );
+
   it("keeps explicit portal API keys ahead of stored OAuth profiles", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>

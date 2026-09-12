@@ -103,15 +103,15 @@ suite.define(() => {
     }
   });
 
-  it("blocks non-chat page actions visibly while reconnecting", async () => {
+  it("blocks server settings actions visibly while reconnecting", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
     try {
-      await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
+      await page.goto(new URL("settings/talk", suite.server.baseUrl).href);
       await page.locator("openclaw-app-shell").waitFor();
-      await page.locator("openclaw-connection-page .content-header").waitFor();
+      await page.locator("openclaw-config-page .content-header").waitFor();
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
@@ -131,7 +131,7 @@ suite.define(() => {
         const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
         const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
         const headerRect = document
-          .querySelector("openclaw-connection-page .content-header")
+          .querySelector("openclaw-config-page .content-header")
           ?.getBoundingClientRect();
         return {
           headerTop: headerRect?.top,
@@ -221,7 +221,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
 
     try {
-      await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
+      await page.goto(new URL("settings/talk", suite.server.baseUrl).href);
       await page.locator("openclaw-app-shell").waitFor();
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");

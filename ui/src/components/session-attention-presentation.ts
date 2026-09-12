@@ -4,7 +4,6 @@ import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sideba
 import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
-import { renderSessionGlyph } from "./session-glyph.ts";
 
 function keepQuestionFocusOnTooltip(event: FocusEvent) {
   // The hand is its own tooltip target; bubbling would also open the row hovercard.
@@ -61,11 +60,7 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionState(session: SidebarRecentSession) {
-  if (session.hasActiveRun) {
-    const queued = session.hasActiveRun && session.status === "queued";
-    return renderSessionGlyph({ content: nothing, running: true, queued });
-  }
+export function renderSessionIdleState(session: SidebarRecentSession) {
   if (!session.isChild) {
     return session.unread
       ? html`<span

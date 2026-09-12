@@ -124,6 +124,9 @@ function summarizeNodeEnvironment(
     ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
+    ...(liveNode?.desktopAvailability
+      ? { desktopAvailability: { ...liveNode.desktopAvailability } }
+      : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
     ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
@@ -147,6 +150,7 @@ export function summarizeWorkerEnvironment(
       ? { preparation: { purpose: record.preparation.purpose, key: record.preparation.key } }
       : {}),
     worker: {
+      profileId: record.profileId,
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
       state: record.state,

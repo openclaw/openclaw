@@ -68,6 +68,7 @@ import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-c
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
@@ -89,7 +90,11 @@ import {
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import {
+  buildCliSessionDriftNote,
+  hashCliSessionText,
+  resolveCliSessionReuse,
+} from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -271,7 +276,7 @@ function prependCliSessionDriftUserContext(
   if (reusableCliSession.mode !== "reuse-with-drift") {
     return context;
   }
-  const note = `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
+  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
   if (!context) {
     return { text: note };
   }
@@ -478,6 +483,11 @@ function buildCliAuthProfileResolutionError(params: {
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
+  if (!inputParams.sessionManager && inputParams.sessionTarget) {
+    const { restoreSessionColdTranscript } =
+      await import("../../config/sessions/session-cold-storage.js");
+    await restoreSessionColdTranscript(inputParams.sessionTarget);
+  }
   // Fallbacks may already have admitted this user turn; recover only prior history.
   return runWithSessionTranscriptReadFence(
     inputParams.sessionManager
@@ -828,6 +838,17 @@ async function prepareCliRunContextWithinReadFence(
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
   }
+  if (
+    effectiveAuthProfileId &&
+    authCredential &&
+    !isSetupCredentialAccessible({
+      profileId: effectiveAuthProfileId,
+      credential: authCredential,
+      agentDir,
+    })
+  ) {
+    throw new Error("This saved sign-in is inactive. Test and activate it in Model Setup.");
+  }
   // Claude owns its native login and single-use refresh-token family. Never
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude
   // process validates and refreshes its own current login.
@@ -1007,6 +1028,7 @@ async function prepareCliRunContextWithinReadFence(
     modelProviderId: params.provider,
     modelId,
     trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
     ...buildAgentHookContextChannelFields(params),
   };
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
@@ -2056,16 +2078,15 @@ async function prepareCliRunContextWithinReadFence(
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
+        const mediaTaskContext = await buildMediaTaskRuntimeContext({
+          capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
+          sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
+        });
         const appendContext = [
           hookResult?.appendContext,
           authorizedPromptBuildResult?.appendContext,
-          buildRuntimeContextCustomMessage(
-            buildMediaTaskRuntimeContext({
-              capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
-              sessionKey: params.sessionKey,
-              agentId: sessionAgentId,
-            }),
-          )?.content,
+          buildRuntimeContextCustomMessage(mediaTaskContext)?.content,
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
@@ -2096,6 +2117,8 @@ async function prepareCliRunContextWithinReadFence(
       } catch (error) {
         cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
       }
+      params.assertCurrent?.();
+      params.abortSignal?.throwIfAborted();
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
@@ -2304,7 +2327,7 @@ async function prepareCliRunContextWithinReadFence(
       fallbackReason: params.modelRoutingProvenance?.fallbackReason,
     });
 
-    const note = claimHeartbeatContextForUserRun({
+    const note = await claimHeartbeatContextForUserRun({
       ...preparedParams,
       agentId: sessionAgentId,
       storePath: params.sessionTarget?.storePath ?? params.storePath,

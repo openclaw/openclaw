@@ -137,8 +137,8 @@ Agents must use `skill_workshop` for generated skill work and must not create or
 change skill or proposal files directly during foreground authoring. Automatic
 background maintenance uses the rooted file-tool path described in
 [Self-learning and approval settings](/tools/skill-workshop/configuration) instead.
-The foreground rule is advisory and prompt-enforced. A hard guard is not
-currently possible at the tool-policy seam.
+The foreground rule is advisory and prompt-enforced. The tool-policy seam does
+not enforce it.
 
 <Note>
 `skill_workshop` is a built-in agent tool and is included in

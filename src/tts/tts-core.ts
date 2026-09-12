@@ -1,13 +1,15 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  type ModelRef,
 } from "../agents/model-selection.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
@@ -31,7 +33,7 @@ type SummarizeTextDeps = {
 };
 
 type DefaultSummarizeTextDeps = Omit<SummarizeTextDeps, "prepareSimpleCompletionModel"> & {
-  acquireSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModel;
+  acquireSimpleCompletionModelWithSelection: typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelWithSelection;
 };
 
 let defaultSummarizeTextDepsPromise: Promise<DefaultSummarizeTextDeps> | undefined;
@@ -45,7 +47,8 @@ function loadDefaultSummarizeTextDeps(): Promise<DefaultSummarizeTextDeps> {
   ]).then(([completionRuntime, { requireApiKey }]) => ({
     completeWithPreparedSimpleCompletionModel:
       completionRuntime.completeWithPreparedSimpleCompletionModel,
-    acquireSimpleCompletionModel: completionRuntime.acquireSimpleCompletionModel,
+    acquireSimpleCompletionModelWithSelection:
+      completionRuntime.acquireSimpleCompletionModelWithSelection,
     requireApiKey,
   })));
 }
@@ -57,31 +60,33 @@ type SummarizeResult = {
   outputLength: number;
 };
 
-type SummaryModelSelection = {
-  ref: ModelRef;
-  source: "summaryModel" | "default";
-};
-
-function resolveSummaryModelRef(
+function resolveSummaryModelSelection(
   cfg: OpenClawConfig,
   config: ResolvedTtsConfig,
-): SummaryModelSelection {
-  const defaultRef = resolveDefaultModelForAgent({ cfg });
+  manifestPlugins?: PluginMetadataSnapshot,
+) {
+  const defaultRef = resolveDefaultModelForAgent({ cfg, manifestPlugins });
   const override = normalizeOptionalString(config.summaryModel);
-  if (!override) {
-    return { ref: defaultRef, source: "default" };
-  }
-
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: defaultRef.provider });
-  const resolved = resolveModelRefFromString({
-    raw: override,
-    defaultProvider: defaultRef.provider,
-    aliasIndex,
-  });
-  if (!resolved) {
-    return { ref: defaultRef, source: "default" };
-  }
-  return { ref: resolved.ref, source: "summaryModel" };
+  const resolved = override
+    ? resolveModelRefFromString({
+        cfg,
+        raw: override,
+        defaultProvider: defaultRef.provider,
+        aliasIndex: buildModelAliasIndex({
+          cfg,
+          defaultProvider: defaultRef.provider,
+          manifestPlugins,
+        }),
+        manifestPlugins,
+      })
+    : null;
+  const raw = resolved ? override : resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
+  const model = raw ? splitTrailingAuthProfile(raw).model : undefined;
+  const ref = resolved?.ref ?? defaultRef;
+  return {
+    selection: { provider: ref.provider, modelId: ref.model },
+    ...(model && !model.includes("/") ? { shorthandModelId: model } : {}),
+  };
 }
 
 /** Summarize long text before synthesis using the configured summary model. */
@@ -103,7 +108,7 @@ export async function summarizeText(
   const startTime = Date.now();
   const completeSummary = async (
     prepared: Awaited<ReturnType<SummarizeTextDeps["prepareSimpleCompletionModel"]>>,
-    provider: string,
+    provider: string | undefined,
     completionDeps: Pick<
       SummarizeTextDeps,
       "completeWithPreparedSimpleCompletionModel" | "requireApiKey"
@@ -113,7 +118,10 @@ export async function summarizeText(
       throw new Error(prepared.error);
     }
     const completionModel = prepared.model;
-    const providerKey = completionDeps.requireApiKey(prepared.auth, provider);
+    const providerKey = completionDeps.requireApiKey(
+      prepared.auth,
+      provider ?? completionModel.provider,
+    );
 
     try {
       const controller = new AbortController();
@@ -180,27 +188,25 @@ export async function summarizeText(
 
   // The shipped dependency-injection argument keeps its caller-owned prepared model contract.
   if (deps) {
-    const { ref } = resolveSummaryModelRef(cfg, config);
+    const { selection } = resolveSummaryModelSelection(cfg, config);
     const prepared = await deps.prepareSimpleCompletionModel({
       cfg,
-      provider: ref.provider,
-      modelId: ref.model,
+      provider: selection.provider,
+      modelId: selection.modelId,
     });
-    return await completeSummary(prepared, ref.provider, deps);
+    return await completeSummary(prepared, selection.provider, deps);
   }
 
   const resolvedDeps = await loadDefaultSummarizeTextDeps();
-  const { ref } = resolveSummaryModelRef(cfg, config);
   return await runWithAsyncWorkResources(async (onAcquired) => {
     // Preparation precedes the request timer; the completion and its cleanup own the model.
-    const prepared = await resolvedDeps.acquireSimpleCompletionModel({
-      cfg,
-      provider: ref.provider,
-      modelId: ref.model,
-    });
+    const prepared = await resolvedDeps.acquireSimpleCompletionModelWithSelection(
+      { cfg },
+      (manifestPlugins) => resolveSummaryModelSelection(cfg, config, manifestPlugins),
+    );
     if (!("error" in prepared)) {
-      onAcquired(prepared);
+      onAcquired({ release: async () => await prepared[Symbol.asyncDispose]() });
     }
-    return await completeSummary(prepared, ref.provider, resolvedDeps);
+    return await completeSummary(prepared, prepared.selection?.provider, resolvedDeps);
   });
 }

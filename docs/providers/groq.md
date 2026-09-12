@@ -36,8 +36,8 @@ openclaw gateway restart
   </Step>
   <Step title="Set the API key">
     ```bash
-export GROQ_API_KEY=gsk_...
-```
+    export GROQ_API_KEY=gsk_...
+    ```
   </Step>
   <Step title="Set a default model">
     ```json5

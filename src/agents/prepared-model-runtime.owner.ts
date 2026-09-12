@@ -1,27 +1,13 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveSubagentSpawnModelFallbacksOverride,
-  resolveAgentWorkspaceDir,
-} from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   resolveSelectedAgentHarnessRuntime,
   type AgentHarnessPluginSelection,
 } from "./harness/runtime-plugin-load-plan.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
-import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
-import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "./model-selection-config.js";
-import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
@@ -32,6 +18,11 @@ import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
+import {
+  publishPreparedPluginGeneration,
+  releasePreparedPluginPublication,
+  discardPreparedPluginGeneration,
+} from "./prepared-model-runtime.plugin-lifetime.js";
 import { retirePreparedModelRuntimeOwnerIfUnused } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeBuildStats,
@@ -384,66 +375,6 @@ export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeRep
   return { gateId: Symbol("prepared-model-runtime-replacement"), promise, resolve, reject };
 }
 
-export function listConfiguredOwnerInputs(
-  config: OpenClawConfig,
-  defaultWorkspaceDir?: string,
-  allowGatewaySubagentBinding?: boolean,
-): PreparedModelRuntimeInput[] {
-  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
-  const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
-  return listAgentIds(config).map((agentId) => {
-    const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
-    const input: PreparedModelRuntimeInput = {
-      agentId,
-      agentDir: resolveAgentDir(config, agentId),
-      config,
-      inheritedAuthDir,
-      workspaceDir: preserveWorkspaceDirOnRefresh
-        ? defaultWorkspaceDir
-        : resolveAgentWorkspaceDir(config, agentId),
-      runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
-    };
-    if (allowGatewaySubagentBinding === true) {
-      input.allowGatewaySubagentBinding = true;
-    }
-    if (preserveWorkspaceDirOnRefresh) {
-      input.preserveWorkspaceDirOnRefresh = true;
-    }
-    return input;
-  });
-}
-
-function resolveConfiguredRuntimePluginSelections(
-  config: OpenClawConfig,
-  agentId: string,
-): PreparedModelRuntimeInput["runtimePluginSelections"] {
-  const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
-  const subagentModel = resolveSubagentConfiguredModelSelection({
-    cfg: config,
-    agentId,
-    includeAgentPrimary: false,
-  });
-  return resolveModelCandidateChain({
-    cfg: config,
-    agentId,
-    manifestPlugins: [],
-    provider: configured.provider || DEFAULT_PROVIDER,
-    model: configured.model || DEFAULT_MODEL,
-    requestedRouteResolution: "resolved",
-    // Session policy can narrow either configured chain after admission waits. Prepare
-    // their owners once so nested execution never expands an already frozen generation.
-    fallbacksOverride: [
-      ...resolveConfiguredModelFallbacks({ cfg: config, agentId }),
-      ...(subagentModel ? [subagentModel] : []),
-      ...(resolveSubagentSpawnModelFallbacksOverride(config, agentId) ?? []),
-    ],
-  }).map((candidate) => ({
-    provider: candidate.provider,
-    modelId: candidate.model,
-    agentId,
-  }));
-}
-
 export async function publishPreparedModelRuntimeOwnerBatch(params: {
   entries: Array<{
     owner: PreparedModelRuntimeOwner;
@@ -514,10 +445,22 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     }
   }
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
-  const unpublishedClaims = new Set<
-    NonNullable<PreparedModelRuntimeBuildResult["resourceClaim"]>
-  >();
   const publication = (async () => {
+    await using _ = {
+      [Symbol.asyncDispose]: async () => {
+        const cleanup = await Promise.allSettled(
+          [...results.values()].map((result) =>
+            discardPreparedPluginGeneration(result.pluginGeneration),
+          ),
+        );
+        const failures = cleanup.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length) {
+          throw new AggregateError(failures, "Prepared publication cleanup failed");
+        }
+      },
+    };
     try {
       while (true) {
         const attempt = candidates.filter(
@@ -549,7 +492,11 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               if (params.registerEntriesAfterBuildStart === true) {
                 // First-build hooks may emit auth mutations. Publish the owner only after those
                 // hooks start so an event cannot refresh a generation that was not visible yet.
+                const previous = params.owners.get(candidate.key);
                 params.owners.set(candidate.key, candidate.owner);
+                if (previous && previous !== candidate.owner) {
+                  releasePreparedPluginPublication(previous);
+                }
                 candidate.markRegistered();
               }
               candidate.owner.buildCompletion = build.completion;
@@ -561,11 +508,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
             }
             const built = await build.pending;
             for (const [index, candidate] of currentGroup.entries()) {
-              const result = built[index]!;
-              if (result.resourceClaim) {
-                unpublishedClaims.add(result.resourceClaim);
-              }
-              results.set(candidate.owner, result);
+              results.set(candidate.owner, built[index]!);
             }
           }
           break;
@@ -596,15 +539,10 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
             `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
           );
         }
+        publishPreparedPluginGeneration(candidate.owner, result.pluginGeneration);
         const snapshot = publishPreparedModelRuntimeOwnerSnapshot(candidate.owner, result.snapshot);
         results.set(candidate.owner, { ...result, snapshot });
         candidate.owner.pluginGeneration = result.pluginGeneration;
-        const previousClaim = candidate.owner.resourceClaim;
-        candidate.owner.resourceClaim = result.resourceClaim;
-        if (result.resourceClaim) {
-          unpublishedClaims.delete(result.resourceClaim);
-        }
-        previousClaim?.release();
         candidate.owner.needsRefresh = false;
       }
     } catch (error) {
@@ -620,12 +558,9 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         candidate.owner.refreshError = refreshError;
       }
       throw refreshError;
-    } finally {
-      for (const claim of unpublishedClaims) {
-        claim.release();
-      }
     }
   })();
+  // Retired generations remain owned by terminal cleanup, never by the replacement gate.
   await publication;
 }
 
@@ -675,23 +610,30 @@ export async function publishModelRuntimeSnapshot(
       owner.buildCompletion = undefined;
     }
   });
+  const previous = owners.get(key);
   owners.set(key, owner);
+  if (previous && previous !== owner) {
+    releasePreparedPluginPublication(previous);
+  }
+  let built: PreparedModelRuntimeBuildResult | undefined;
   const publication = (async () => {
-    let result: PreparedModelRuntimeBuildResult | undefined;
-    let transferred = false;
+    await using _ = {
+      [Symbol.asyncDispose]: async () => {
+        if (built) {
+          await discardPreparedPluginGeneration(built.pluginGeneration);
+        }
+      },
+    };
     try {
-      result = (await build.pending)[0]!;
+      const result = (built = (await build.pending)[0]!);
       if (!isGenerationCurrent()) {
         throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
         );
       }
+      publishPreparedPluginGeneration(owner, result.pluginGeneration);
       const snapshot = publishPreparedModelRuntimeOwnerSnapshot(owner, result.snapshot);
       owner.pluginGeneration = result.pluginGeneration;
-      const previousClaim = owner.resourceClaim;
-      owner.resourceClaim = result.resourceClaim;
-      transferred = true;
-      previousClaim?.release();
       owner.pendingPluginGeneration = undefined;
       owner.pending = undefined;
       owner.needsRefresh = false;
@@ -710,10 +652,6 @@ export async function publishModelRuntimeSnapshot(
         }
       }
       throw refreshError;
-    } finally {
-      if (!transferred) {
-        result?.resourceClaim?.release();
-      }
     }
   })();
   // Every waiter observes the publication guard, not the underlying discovery result. This keeps

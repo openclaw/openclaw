@@ -366,6 +366,20 @@ export interface SessionTranscriptArchives {
   session_key: string;
 }
 
+export interface SessionTranscriptColdArchives {
+  archive_blob: Uint8Array | null;
+  archive_bytes: number;
+  archive_name: string;
+  archive_sha256: string;
+  archived_at: number;
+  event_count: number;
+  generation: string;
+  last_seq: number;
+  raw_bytes: number;
+  session_id: string;
+  storage: string;
+}
+
 export interface SessionTranscriptFts {
   message_id: string | null;
   role: string | null;
@@ -551,6 +565,7 @@ export interface DB {
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_archives: SessionTranscriptArchives;
+  session_transcript_cold_archives: SessionTranscriptColdArchives;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;

@@ -261,3 +261,19 @@ export function surfaceChatDeliveryFailure(
   );
   showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
 }
+
+export function prependReplyQuote(
+  message: string,
+  replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
+): string {
+  const label = (replyTarget.senderLabel ?? "User").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
+  const text = replyTarget.text.trim();
+  if (!text.includes("\n")) {
+    return `> **${label}:** ${text}\n\n${message}`;
+  }
+  const quoted = text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  return `> **${label}:**\n${quoted}\n\n${message}`;
+}

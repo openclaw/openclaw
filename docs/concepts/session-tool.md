@@ -142,6 +142,13 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
+`timeoutSeconds` limits the sending tool's wait, not the receiver's execution
+budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.
+The low-level Gateway `sessions.send` RPC has a different contract: its JSON
+`timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
+to keep the receiver's configured budget; bound the CLI wait separately with
+[`gateway call --timeout`](/cli/gateway/query#gateway-call-method).
+
 An accepted result keeps target admission separate from announcement delivery.
 `targetDisposition` is `queued` for a new turn or `steered` for an active turn;
 `delivery.status` describes only the later announcement as `pending` or `skipped`.
@@ -232,16 +239,14 @@ tool clamp stays limited to its spawn subtree. Incognito sessions remain hidden
 from every cross-session tool. Ambient group watches still add activity notices
 and prompt hints; they do not grant access.
 
-## Further reading
-
-- [Session Management](/concepts/session): routing, lifecycle, maintenance
-- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
-- [ACP Agents](/tools/acp-agents): external harness spawning
-- [Multi-agent](/concepts/multi-agent): multi-agent architecture
-- [Gateway Configuration](/gateway/configuration): session tool config knobs
+<a id="further-reading" />
 
 ## Related
 
-- [Session management](/concepts/session)
+- [Session Management](/concepts/session): routing, lifecycle, maintenance
 - [Session pruning](/concepts/session-pruning)
+- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
+- [ACP Agents](/tools/acp-agents): external harness spawning
+- [Multi-agent](/concepts/multi-agent): multi-agent architecture
 - [Goal](/tools/goal) — durable per-session objectives, read and updated through the dedicated `get_goal`, `create_goal`, and `update_goal` tools
+- [Gateway Configuration](/gateway/configuration): session tool config knobs

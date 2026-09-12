@@ -246,6 +246,13 @@ register a small wrapper backend plugin.
 - Fresh CLI sessions can recover OpenClaw history from the canonical session SQLite database when its independent account boundary matches the selected credential. Compacted recovery includes the latest summary, retained messages, and subsequent turns on the active branch. A backend can opt in to bounded recovery before compaction with `reseedFromRawTranscriptWhenUncompacted: true`, including after its native session binding is cleared. Recovery includes saved tool-result text and error markers. It does not execute past tools. The current user turn is sent once, outside the recovered history.
 - Helper runs with a caller-owned in-memory transcript use that history for hooks, bounded session notes, and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume. Resumed turns send the current prompt and bounded session notes without replaying the conversation history.
 
+When prompt content changes, a compatible CLI session can resume with an OpenClaw
+context note before the current user prompt. Chat history first matches imported
+Claude user turns against the full local text, including any literal quote of the
+note. If that does not match, it ignores one exact context note for comparison, so
+the same turn appears once. Stored transcript text and unmatched imported turns
+remain intact.
+
 ### History account boundaries
 
 Native session compatibility and permission to replay saved OpenClaw history are separate. Clearing or replacing a native binding does not establish ownership of older transcript rows. OpenClaw records a private account fingerprint and contiguous transcript coverage before an admitted CLI turn, then advances coverage with that turn’s canonical writes. It never stores credential values in this metadata.

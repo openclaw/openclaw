@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { backupCreateCommand } from "./backup.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const createBackupArchiveMock = vi.hoisted(() => vi.fn());
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
@@ -29,14 +30,6 @@ vi.mock("../runtime.js", async () => {
 vi.mock("../state/backup-run-records.js", () => ({
   recordBackupRunOutcome: recordBackupRunOutcomeMock,
 }));
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } satisfies RuntimeEnv;
-}
 
 function requireBackupVerifyCall(): [RuntimeEnv, Record<string, unknown>] {
   const call = backupVerifyCommandMock.mock.calls[0];
@@ -75,7 +68,7 @@ describe("backupCreateCommand verify wrapper", () => {
       archivePath: "/tmp/openclaw-backup.tar.gz",
     });
 
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     const result = await backupCreateCommand(runtime, { verify: true });
 
     expect(result.verified).toBe(true);
@@ -101,7 +94,7 @@ describe("backupCreateCommand verify wrapper", () => {
     recordBackupRunOutcomeMock.mockImplementation(() => {
       throw new Error("record failed");
     });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     await expect(backupCreateCommand(runtime)).rejects.toBe(backupError);
 

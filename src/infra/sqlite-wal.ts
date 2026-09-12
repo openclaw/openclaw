@@ -11,7 +11,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
-import { isSqliteLockError, runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
