@@ -65,6 +65,7 @@ export type ManagedServiceCommandTiming = {
 export type ManagedServiceManagerBoundaryResult = {
   helperExitCode?: number | null;
   repairEffects?: {
+    packagedReadOnly: boolean;
     firstSpawn: boolean;
     secondSpawn: boolean;
     firstExec: boolean;

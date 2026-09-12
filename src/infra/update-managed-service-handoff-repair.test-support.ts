@@ -10,7 +10,10 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import {
+  runtimeProcessEntrypoints,
+  SQLITE_READONLY_CHILD_ARG,
+} from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import type {
   ManagedRepairBoundary,
@@ -19,6 +22,7 @@ import type {
 
 export function readManagedRepairEffects(root: string) {
   return {
+    packagedReadOnly: existsSync(path.join(root, "repair-readonly-packaged")),
     firstSpawn: existsSync(path.join(root, "repair-spawn-first")),
     secondSpawn: existsSync(path.join(root, "repair-spawn-second")),
     firstExec: existsSync(path.join(root, "candidate", "repair-first-exec.txt")),
@@ -87,9 +91,30 @@ function managedRepairSpawnPreload(root: string): string {
   const snapshotWorkerArgs = resolveRuntimeWorkerArgv(
     new URL("./update-candidate-state.worker.ts", import.meta.url),
   );
+  const readOnlyWorkerArgs = resolveRuntimeWorkerArgv(
+    new URL(`./${runtimeProcessEntrypoints.sqliteReadOnly.sourceWorkerName}.ts`, import.meta.url),
+  );
   return `const fs = require("node:fs");
     const childProcess = require("node:child_process");
     const spawn = childProcess.spawn;
+    const spawnSync = childProcess.spawnSync;
+    const readOnlyWorkerArgs = ${JSON.stringify(readOnlyWorkerArgs)};
+    childProcess.spawnSync = function(command, args, options) {
+      // Keep each fresh, source-neutral snapshot; only replace its TS loader with this build's worker.
+      if (command !== process.execPath || !Array.isArray(args) ||
+          args.length !== readOnlyWorkerArgs.length + 4 ||
+          !readOnlyWorkerArgs.every((arg, index) => args[index] === arg) ||
+          args[readOnlyWorkerArgs.length] !== ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)} ||
+          args[readOnlyWorkerArgs.length + 1] !== "sync") {
+        return spawnSync.apply(this, arguments);
+      }
+      const result = spawnSync.call(this, command,
+        [${JSON.stringify(path.resolve("dist", runtimeProcessEntrypoints.sqliteReadOnly.distWorkerPath))}, ...args.slice(readOnlyWorkerArgs.length)], options);
+      if (result.status === 0 && result.pid > 0) {
+        fs.writeFileSync(${JSON.stringify(path.join(root, "repair-readonly-packaged"))}, String(result.pid));
+      }
+      return result;
+    };
     const snapshotWorkerArgs = ${JSON.stringify(snapshotWorkerArgs)};
     childProcess.spawn = function(command, args, options) {
       // Rehearsal strips NODE_OPTIONS; carry the recorder only to its owned repair and supervisor workers.
