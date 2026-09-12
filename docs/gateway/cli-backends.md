@@ -267,7 +267,7 @@ Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs seriali
 
 ## Fallback prelude from claude-cli sessions
 
-A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover). OpenClaw then seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript. That transcript lives under `~/.claude/projects/`, keyed per workspace. This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
+A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover). OpenClaw then seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript. That transcript lives under `$CLAUDE_CONFIG_DIR/projects/` when `CLAUDE_CONFIG_DIR` is set, or `~/.claude/projects/` otherwise, keyed per workspace. This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
 
 - The prelude prefers the latest `/compact` summary or `compact_boundary` marker, then appends the most recent post-boundary turns up to a char budget. Pre-boundary turns are dropped because the summary already represents them.
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest. An oversized summary is truncated and labeled `(truncated)`.
@@ -468,6 +468,22 @@ For `claude-cli`, the installed Claude Code process uses its current native
 login. OpenClaw uses a non-secret route marker and never reads, persists,
 refreshes, selects, or forwards the native tokens.
 Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+Transcript checks, Doctor diagnostics, fallback context, and imported chat history
+use that same selected directory. They do not search the default `~/.claude`
+directory when another directory is selected.
+
+Prefer an absolute path. Claude Code resolves relative values against its own
+working directory, which can differ from the Gateway's working directory.
+Empty values and spaces are preserved: an empty value selects the working
+directory, and spaces are part of the path. Unset the variable to restore the
+`~/.claude` default.
+
+After a successful Claude CLI turn, OpenClaw retains that turn's working directory
+with the native session binding so fallback and chat history can resolve relative
+paths after a restart. Existing bindings without this directory use the available
+session or agent configuration; an earlier ad-hoc directory cannot be recovered
+from its stored hash. A subsequent successful turn records the directory.
+
 Explicit OpenClaw-managed API-key and token profiles continue to use the
 protected, per-invocation credential-forwarding CLI path.
 

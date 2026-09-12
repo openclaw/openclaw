@@ -604,6 +604,8 @@ describe("CLI attempt execution", () => {
     body?: string;
     transcriptBody?: string;
     providerOverride?: string;
+    originalProvider?: string;
+    cwd?: string;
     modelOverride?: string;
     isFallbackRetry?: boolean;
     fallbackRuntimeState?: RunAgentAttemptParams["fallbackRuntimeState"];
@@ -645,7 +647,7 @@ describe("CLI attempt execution", () => {
 
     await runAgentAttempt({
       providerOverride,
-      originalProvider: "openai",
+      originalProvider: overrides?.originalProvider ?? "openai",
       modelOverride: overrides?.modelOverride ?? "gpt-5.4",
       configuredAuthProfileId: overrides?.configuredAuthProfileId,
       cfg: overrides?.config ?? ({ session: { store: storePath } } as OpenClawConfig),
@@ -653,6 +655,7 @@ describe("CLI attempt execution", () => {
       sessionKey,
       sessionFile: path.join(tmpDir, `${runId}.jsonl`),
       workspaceDir: tmpDir,
+      cwd: overrides?.cwd,
       body: overrides?.body ?? "stream gate",
       transcriptBody: overrides?.transcriptBody,
       isFallbackRetry: overrides?.isFallbackRetry ?? false,
@@ -3535,6 +3538,55 @@ describe("CLI attempt execution", () => {
       model: "claude-sonnet-4-6",
     });
   });
+
+  it.each(["absolute", "relative", "bound"] as const)(
+    "seeds the actual fallback prompt from the %s Claude config directory",
+    async (kind) => {
+      const homeDir = path.join(tmpDir, "fallback-home");
+      const childCwd = path.join(tmpDir, "task-subdirectory");
+      await fs.mkdir(childCwd, { recursive: true });
+      const configDir =
+        kind === "absolute" ? path.join(tmpDir, "alternate Claude") : "alternate Claude";
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+      const cliSessionId = "configured-fallback-session";
+      const projectKey = (await fs.realpath(childCwd)).replace(/[^a-zA-Z0-9]/g, "-");
+      for (const [root, text] of [
+        [path.resolve(childCwd, configDir), "Native configured history"],
+        [path.join(homeDir, ".claude"), "Wrong default history"],
+      ] as const) {
+        const projectDir = path.join(root, "projects", projectKey);
+        await fs.mkdir(projectDir, { recursive: true });
+        await fs.writeFile(
+          path.join(projectDir, `${cliSessionId}.jsonl`),
+          JSON.stringify({
+            type: "assistant",
+            message: { role: "assistant", content: text },
+          }) + "\n",
+        );
+      }
+      const attempt = await runOpenClawEmbeddedAttemptForTest({
+        originalProvider: "claude-cli",
+        isFallbackRetry: true,
+        cwd: kind === "bound" ? tmpDir : childCwd,
+        body: "Continue this task",
+        sessionEntry: {
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: cliSessionId,
+              ...(kind === "bound" ? { cwd: childCwd } : {}),
+            },
+          },
+        },
+      });
+      if (typeof attempt.prompt !== "string") {
+        throw new Error("Expected the fallback model to receive a text prompt");
+      }
+      expect(attempt.prompt).toContain("Native configured history");
+      expect(attempt.prompt).not.toContain("Wrong default history");
+      expect(attempt.prompt.match(/Continue this task/g)).toHaveLength(1);
+    },
+  );
 
   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-claude-cli";

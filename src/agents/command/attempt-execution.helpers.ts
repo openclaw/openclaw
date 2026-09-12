@@ -455,13 +455,18 @@ function formatClaudeCliFallbackPrelude(
 export function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
   homeDir?: string;
+  cwd?: string;
   charBudget?: number;
 }): string {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
     return "";
   }
-  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
+  const seed = readClaudeCliFallbackSeed({
+    cliSessionId: sessionId,
+    homeDir: params.homeDir,
+    cwd: params.cwd,
+  });
   if (!seed) {
     return "";
   }

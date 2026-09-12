@@ -141,6 +141,8 @@ export type CliSessionBinding = {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  /** Native working directory for locating relative external transcript roots after restart. */
+  cwd?: string;
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;

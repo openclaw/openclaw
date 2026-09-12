@@ -641,6 +641,9 @@ export function buildCliRunResult(params: {
                 ...(context.promptToolNamesHash
                   ? { promptToolNamesHash: context.promptToolNamesHash }
                   : {}),
+                ...(isClaudeCliBackend(runParams.provider) && context.cwd
+                  ? { cwd: context.cwd }
+                  : {}),
                 ...(context.cwdHash ? { cwdHash: context.cwdHash } : {}),
                 ...(context.preparedBackend.mcpConfigHash
                   ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }

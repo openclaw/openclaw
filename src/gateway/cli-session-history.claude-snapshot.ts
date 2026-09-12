@@ -62,6 +62,7 @@ type Message = Record<string, unknown>;
 type HistoryParams = {
   cliSessionId: string;
   homeDir?: string;
+  cwd?: string;
   localSessionId?: string;
   reseedReceipt?: CliSessionReseedReceipt;
 };

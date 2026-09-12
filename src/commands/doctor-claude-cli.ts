@@ -10,6 +10,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
+  resolveAgentRunCwd,
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
@@ -139,8 +140,9 @@ function resolveClaudeCliWorkspaceTargets(params: {
           ? params.workspaceDir
           : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
       const projectDir = resolveClaudeCliProjectDirForWorkspace({
-        workspaceDir,
+        workspaceDir: resolveAgentRunCwd(params.cfg, agentId, params.env) ?? workspaceDir,
         homeDir: params.homeDir,
+        env: params.env,
       });
       return {
         agentId,

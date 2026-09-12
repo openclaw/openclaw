@@ -683,6 +683,7 @@ describe("prepareCliRunContext", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
     defaultTestCliBackend = buildDefaultTestCliBackend();
@@ -6314,6 +6315,51 @@ describe("prepareCliRunContext", () => {
     expect(transcriptCheck).not.toHaveBeenCalled();
     expect(orphanCheck).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "resumes a configured-root transcript without requiring a live generation (warm=%s)",
+    async (warm) => {
+      const taskDir = path.join(fixture.session.dir, "task");
+      fs.mkdirSync(taskDir);
+      const canonicalCwd = fs.realpathSync.native(taskDir);
+      const configDir = path.join(fixture.session.dir, "selected Claude");
+      const projectDir = path.join(
+        configDir,
+        "projects",
+        canonicalCwd.replace(/[^a-zA-Z0-9]/g, "-"),
+      );
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, "configured-session.jsonl"),
+        `${JSON.stringify({
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "text", text: "prior answer" }] },
+        })}\n`,
+      );
+      vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+      setCliBackendForPrepareTest({ liveSession: true });
+      setCliRunnerPrepareTestDeps({
+        getCliLiveSessionGeneration: () => (warm ? "existing-generation" : undefined),
+      });
+
+      // Keep both transcript probes real: a false miss either invalidates the
+      // cold binding or unnecessarily pins the warm process generation.
+      const context = await fixture.prepare({
+        cwd: taskDir,
+        provider: "claude-cli",
+        model: "opus",
+        cliSessionBinding: {
+          sessionId: "configured-session",
+          cwdHash: hashCliSessionText(taskDir),
+        },
+      });
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "configured-session",
+      });
+      expect(context.requiredClaudeLiveSessionGeneration).toBeUndefined();
+    },
+  );
 
   it("checks claude-cli transcript content under the resolved cwd", async () => {
     const { dir } = fixture.session;

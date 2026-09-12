@@ -4,11 +4,15 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
+import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
+import { applyCliSessionBindingResult } from "../../agents/cli-session.js";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
@@ -44,6 +48,7 @@ async function withImportedHistory(
     read: (params: HistoryRequest) => Promise<HistoryPage>;
     importedIds: string[];
   }) => Promise<void>,
+  configKind: "default" | "absolute" | "relative" | "bound" = "default",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
@@ -52,12 +57,20 @@ async function withImportedHistory(
       sessionId: randomUUID(),
     };
     const cliSessionId = randomUUID();
+    const childCwd = path.join(state.root, "configured child cwd");
+    if (configKind === "relative" || configKind === "bound") {
+      await fs.mkdir(childCwd, { recursive: true });
+      await state.writeConfig({
+        agents: { defaults: { cwd: configKind === "bound" ? state.workspaceDir : childCwd } },
+      });
+    }
     const timestamp = Date.parse("2026-09-01T10:00:00Z");
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: timestamp,
       providerOverride: "claude-cli",
       modelOverride: "claude-sonnet-4-6",
+      spawnedWorkspaceDir: state.workspaceDir,
       cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
     });
     await appendTranscriptMessage(scope, {
@@ -66,8 +79,39 @@ async function withImportedHistory(
     await appendTranscriptMessage(scope, {
       message: { role: "assistant", content: "Local answer", timestamp: timestamp + 1 },
     });
+    if (configKind === "bound") {
+      // The original local transcript and current config do not own the later native cwd.
+      const context = buildPreparedCliRunContext({ provider: "claude-cli", ...scope });
+      context.cwd = childCwd;
+      const result = buildCliRunResult({
+        context,
+        output: { text: "Native turn completed" },
+        effectiveCliSessionId: cliSessionId,
+        bindingFlushOk: true,
+        usedHistoryPrompt: false,
+        userTurnHandled: true,
+        sessionBindingDisabled: false,
+        preparedContextAgentMeta: {},
+      });
+      const entry = { sessionId: scope.sessionId, updatedAt: timestamp + 2 };
+      applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
+      await upsertSessionEntryCore(scope, entry);
+      closeOpenClawAgentDatabasesForTest(state.stateDir);
+    }
     const importedIds = Array.from({ length: importedCount }, () => randomUUID());
-    const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
+    const configDir = path.join(
+      configKind === "relative" || configKind === "bound" ? childCwd : state.home,
+      configKind === "default" ? ".claude" : "alternate-claude",
+    );
+    vi.stubEnv(
+      "CLAUDE_CONFIG_DIR",
+      configKind === "relative" || configKind === "bound"
+        ? "alternate-claude"
+        : configKind === "absolute"
+          ? configDir
+          : undefined,
+    );
+    const projectDir = path.join(configDir, "projects", "synthetic-history");
     await fs.mkdir(projectDir, { recursive: true });
     await fs.writeFile(
       path.join(projectDir, `${cliSessionId}.jsonl`),
@@ -192,6 +236,28 @@ function projectImportedSnapshot(messages: Record<string, unknown>[]) {
 }
 
 describe("CLI-imported history anchors", () => {
+  it.each([
+    ["chat.history", "absolute"],
+    ["chat.startup", "absolute"],
+    ["chat.history", "relative"],
+    ["chat.startup", "relative"],
+    ["chat.history", "bound"],
+    ["chat.startup", "bound"],
+  ] as const)("%s returns native history from %s CLAUDE_CONFIG_DIR", async (method, configKind) => {
+    await withImportedHistory(
+      method,
+      2,
+      "Configured Claude history",
+      async ({ read, importedIds }) => {
+        const page = await read({ limit: 20 });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(
+          expect.arrayContaining(importedIds),
+        );
+        expect(JSON.stringify(page.messages)).toContain("Configured Claude history");
+      },
+      configKind,
+    );
+  });
   it.each(["chat.history", "chat.startup"] as const)(
     "%s keeps conversation and structured outcomes before trimming terminal tool history",
     async (method) => {

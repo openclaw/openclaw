@@ -38,6 +38,8 @@ import {
 } from "./attempt-execution.helpers.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
+beforeEach(() => vi.stubEnv("CLAUDE_CONFIG_DIR", undefined));
+
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
 
@@ -485,6 +487,33 @@ describe("claudeCliSessionTranscriptHasContent", () => {
   }
 
   const GRACE_MS = 250;
+
+  it("probes only the configured Claude root for content and orphaned tools", async () => {
+    const workspaceDir = await fs.realpath(await makeWorkspace());
+    const configDir = path.join(tmpDir, "selected Claude");
+    const projectKey = workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
+    const sessionId = "configured-session";
+    const selectedFile = path.join(configDir, "projects", projectKey, `${sessionId}.jsonl`);
+    const defaultFile = path.join(tmpDir, ".claude", "projects", projectKey, `${sessionId}.jsonl`);
+    for (const [file, content] of [
+      [selectedFile, [{ type: "tool_use", id: "unanswered", name: "Read", input: {} }]],
+      [defaultFile, [{ type: "text", text: "default-root decoy" }]],
+    ] as const) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, `${JSON.stringify({ message: { role: "assistant", content } })}\n`);
+    }
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+    try {
+      const target = { sessionId, workspaceDir, homeDir: tmpDir };
+      expect(await claudeCliSessionTranscriptHasContent(target)).toBe(true);
+      expect(await claudeCliSessionTranscriptHasOrphanedToolUse(target)).toBe(true);
+      await fs.unlink(selectedFile);
+      expect(await claudeCliSessionTranscriptHasContent(target)).toBe(false);
+      expect(await claudeCliSessionTranscriptHasOrphanedToolUse(target)).toBe(false);
+    } finally {
+      vi.mocked(cliBackendLog.warn).mockClear();
+    }
+  });
 
   it("returns true when the Claude project transcript has an assistant message", async () => {
     const workspaceDir = await makeWorkspace();

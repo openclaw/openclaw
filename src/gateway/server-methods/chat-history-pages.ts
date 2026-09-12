@@ -273,6 +273,7 @@ export async function readChatHistoryPage(params: {
   offset: number | undefined;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;
+  cwd?: string;
 }): Promise<ChatHistoryPage> {
   const {
     entry,
@@ -443,6 +444,7 @@ export async function readChatHistoryPage(params: {
         entry,
         provider,
         localMessages: localMessagesWithBoundaryFilter,
+        cwd: params.cwd,
       });
   const cliHistory = params.ignoreCliSessionImports
     ? { messages: localMessagesWithBoundaryFilter, imported: false, expanded: false }
@@ -451,6 +453,7 @@ export async function readChatHistoryPage(params: {
         provider,
         localMessages: localMessagesWithBoundaryFilter,
         preparedImportedMessages: importedMessages,
+        cwd: params.cwd,
       });
   if ((offset !== undefined || messageId) && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
@@ -471,6 +474,7 @@ export async function readChatHistoryPage(params: {
       provider,
       localMessages: completeLocalMessages,
       preparedImportedMessages: importedMessages,
+      cwd: params.cwd,
     });
     if (!completeCliHistory.imported) {
       return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });

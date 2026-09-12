@@ -725,13 +725,17 @@ export function runAgentAttempt(params: {
     completionToolPolicies !== undefined &&
     isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
     isRuntimeToolAllowed("message", params.opts.toolsAllow);
+  const claudeCliBinding = getCliSessionBinding(params.sessionEntry, "claude-cli");
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
     isClaudeCliProvider(params.originalProvider) &&
     !isClaudeCliProvider(params.providerOverride)
       ? buildClaudeCliFallbackContextPrelude({
-          cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
+          cliSessionId: claudeCliBinding?.sessionId,
+          cwd:
+            claudeCliBinding?.cwd ??
+            (params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir),
         })
       : "";
   const resolvedPrompt = resolveFallbackRetryPrompt({

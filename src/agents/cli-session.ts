@@ -111,6 +111,7 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.promptToolNamesHash)
         ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
         : {}),
+      ...(typeof binding.cwd === "string" && binding.cwd ? { cwd: binding.cwd } : {}),
       ...(normalizeOptionalString(binding.cwdHash)
         ? { cwdHash: normalizeOptionalString(binding.cwdHash) }
         : {}),

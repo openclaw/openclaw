@@ -1,7 +1,6 @@
 // Claude CLI session history importer.
 // Converts Claude project JSONL into OpenClaw transcript-compatible messages.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   asFiniteNumber,
@@ -13,6 +12,10 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import {
+  resolveClaudeCliProjectsRoot,
+  resolveClaudeCliProjectsRootAsync,
+} from "../agents/command/claude-cli-project-dir.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
@@ -29,7 +32,6 @@ import {
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
-const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 export type ClaudeCliProjectEntry = {
   type?: unknown;
@@ -74,13 +76,11 @@ export function redactClaudeCliHistoryMessage(
   ) as unknown as TranscriptLikeMessage;
 }
 
-function resolveHistoryHomeDir(homeDir?: string): string {
-  return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
-}
-
-function resolveClaudeProjectsDir(homeDir?: string): string {
-  return path.join(resolveHistoryHomeDir(homeDir), CLAUDE_PROJECTS_RELATIVE_DIR);
-}
+type ClaudeCliHistoryLookupParams = {
+  cliSessionId: string;
+  homeDir?: string;
+  cwd?: string;
+};
 
 function normalizeClaudeCliSessionId(value: string): string | undefined {
   const sessionId = value.trim();
@@ -452,15 +452,15 @@ export function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-function resolveClaudeCliSessionFilePath(params: {
-  cliSessionId: string;
-  homeDir?: string;
-}): string | undefined {
+function resolveClaudeCliSessionFilePath(params: ClaudeCliHistoryLookupParams): string | undefined {
   const sessionId = normalizeClaudeCliSessionId(params.cliSessionId);
   if (!sessionId) {
     return undefined;
   }
-  const projectsDir = resolveClaudeProjectsDir(params.homeDir);
+  const projectsDir = resolveClaudeCliProjectsRoot(params);
+  if (!projectsDir) {
+    return undefined;
+  }
   let projectEntries: fs.Dirent[];
   try {
     projectEntries = fs.readdirSync(projectsDir, { withFileTypes: true });
@@ -481,15 +481,17 @@ function resolveClaudeCliSessionFilePath(params: {
   return undefined;
 }
 
-export async function resolveClaudeCliSessionFilePathAsync(params: {
-  cliSessionId: string;
-  homeDir?: string;
-}): Promise<string | undefined> {
+export async function resolveClaudeCliSessionFilePathAsync(
+  params: ClaudeCliHistoryLookupParams,
+): Promise<string | undefined> {
   const sessionId = normalizeClaudeCliSessionId(params.cliSessionId);
   if (!sessionId) {
     return undefined;
   }
-  const projectsDir = resolveClaudeProjectsDir(params.homeDir);
+  const projectsDir = await resolveClaudeCliProjectsRootAsync(params);
+  if (!projectsDir) {
+    return undefined;
+  }
   let projectEntries: fs.Dirent[];
   try {
     projectEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
@@ -529,12 +531,12 @@ export async function resolveClaudeCliSessionFilePathAsync(params: {
 }
 
 /** Reads visible messages for a bound Claude CLI session. */
-export function readClaudeCliSessionMessages(params: {
-  cliSessionId: string;
-  homeDir?: string;
-  localSessionId?: string;
-  reseedReceipt?: CliSessionReseedReceipt;
-}): TranscriptLikeMessage[] {
+export function readClaudeCliSessionMessages(
+  params: ClaudeCliHistoryLookupParams & {
+    localSessionId?: string;
+    reseedReceipt?: CliSessionReseedReceipt;
+  },
+): TranscriptLikeMessage[] {
   const filePath = resolveClaudeCliSessionFilePath(params);
   if (!filePath) {
     return [];
@@ -625,10 +627,9 @@ function extractSummaryText(entry: ClaudeCliProjectEntry): string | undefined {
   return typeof summary === "string" && summary.trim() ? summary.trim() : undefined;
 }
 
-export function readClaudeCliFallbackSeed(params: {
-  cliSessionId: string;
-  homeDir?: string;
-}): ClaudeCliFallbackSeed | undefined {
+export function readClaudeCliFallbackSeed(
+  params: ClaudeCliHistoryLookupParams,
+): ClaudeCliFallbackSeed | undefined {
   const filePath = resolveClaudeCliSessionFilePath(params);
   if (!filePath) {
     return undefined;
