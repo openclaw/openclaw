@@ -49,7 +49,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import type { ClawRemovePlanAction } from "./lifecycle-remove-contract.js";
 import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
@@ -192,7 +191,11 @@ export function planClawWorkspaceRemoval(params: {
   adopted: boolean;
   modified: boolean;
   untracked: boolean;
-}): Pick<ClawRemovePlanAction, "action" | "details" | "reason"> {
+}): {
+  action: "retain" | "trash";
+  details: { retained: boolean; sharedWith: string[] };
+  reason?: string;
+} {
   const retained = params.sharedWorkspace || params.adopted || params.modified || params.untracked;
   const reason = params.sharedWorkspace
     ? "Workspace contains state owned by another agent."

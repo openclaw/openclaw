@@ -690,7 +690,11 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
     await expect(readFile(join(workspace, "BOOTSTRAP.md"))).rejects.toThrow();
     await expect(readFile(join(workspace, "HEARTBEAT.md"))).rejects.toThrow();
     expect(readClawWorkspaceFiles("worker", { env })).toEqual([]);
-    expect(readWorkspaceStateSnapshot(workspace, { env }).setup.bootstrapSeededAt).toBeUndefined();
+    // readWorkspaceStateSnapshot is synchronous on this base and awaited on newer ones; resolve both.
+    expect(
+      (await Promise.resolve(readWorkspaceStateSnapshot(workspace, { env }))).setup
+        .bootstrapSeededAt,
+    ).toBeUndefined();
     expect(config.agents?.entries?.worker).toBeUndefined();
   });
 
@@ -727,7 +731,10 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
     // not stamped for a file this install never wrote: the receipt stays false.
     expect((await stat(bootstrapPath)).mtimeMs).toBe(before.mtimeMs);
     await expect(readFile(join(workspace, "HEARTBEAT.md"))).rejects.toThrow();
-    expect(readWorkspaceStateSnapshot(workspace, { env }).setup.bootstrapSeededAt).toBeUndefined();
+    expect(
+      (await Promise.resolve(readWorkspaceStateSnapshot(workspace, { env }))).setup
+        .bootstrapSeededAt,
+    ).toBeUndefined();
     expect(readClawWorkspaceAdoption("worker", workspace, { env })).toMatchObject({
       adopted: true,
       bootstrapSeeded: false,
