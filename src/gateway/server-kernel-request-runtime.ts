@@ -31,7 +31,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     gatewayInstanceRuntimeRef,
     lifecycle,
     startupState,
-    kernel,
     shutdownRuntime,
   } = runtime;
   const chatMetadataLifecycle = await createGatewayChatMetadataLifecycle({
@@ -56,7 +55,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
-  kernel.addGatewayLifetimeSidecar({
+  runtime.registerGatewayLifetimeSidecars({
     stop: async () => {
       // Received mutations and their finalizers join before lifetime sidecars stop.
       // Retire this exact context too when no request ever bound its coordinator.
@@ -75,7 +74,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     ...(!workerPlacementRuntime && githubPublicationRuntime
       ? { reconcileGitHubPublications: githubPublicationRuntime.reconcilePublications }
       : {}),
-    sidecars: runtimeState.gatewayLifetimeSidecars,
+    publishSidecars: runtimeState.gatewayLifetimeSidecars.publish,
   });
   pluginGatewayContext.current = gatewayRequestContext;
   gatewayRequestContext.dispatchHookAgentTurn = async (pluginId, hookParams) => {

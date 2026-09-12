@@ -346,7 +346,7 @@ export async function reloadGatewayPlugins(
     params.prepareConfigEffects({ pluginIds: changedPluginIds, channels: channelTargets });
     releaseChannelStarts = channelManager.pauseChannelStarts(channelTargets);
     phase = "drain";
-    for (const sidecar of runtimeState.gatewayLifetimeSidecars) {
+    for (const sidecar of runtimeState.gatewayLifetimeSidecars.snapshot()) {
       const prepared = sidecar.preparePluginReload?.({
         previousRegistry,
         nextRegistry,

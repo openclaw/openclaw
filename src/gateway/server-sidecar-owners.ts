@@ -1,23 +1,26 @@
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
-export function createGatewaySidecarStopOwner(params: {
-  getRegistered: () => GatewayPostReadySidecarHandle[];
-  setRegistered: (sidecars: GatewayPostReadySidecarHandle[]) => void;
-}) {
+export type GatewaySidecarStopOwner = ReturnType<typeof createGatewaySidecarStopOwner>;
+
+export function createGatewaySidecarStopOwner() {
+  let registered = new Set<GatewayPostReadySidecarHandle>();
   let activeStop: Promise<void> | null = null;
   let failure: Error | undefined;
   let phase: "open" | "closing" | "sealed" = "open";
-  const publish = (sidecars: readonly GatewayPostReadySidecarHandle[]) => {
+  const remove = (sidecar: GatewayPostReadySidecarHandle) => {
+    registered.delete(sidecar);
+  };
+  const publish = (...sidecars: GatewayPostReadySidecarHandle[]) => {
     if (phase === "sealed") {
       throw new Error("cannot publish a Gateway sidecar after shutdown sealed its owner");
     }
-    params.setRegistered([...new Set([...params.getRegistered(), ...sidecars])]);
+    for (const sidecar of sidecars) {
+      registered.add(sidecar);
+    }
     if (phase === "closing") {
       void stop().catch(() => {});
     }
-    return () => {
-      params.setRegistered(params.getRegistered().filter((sidecar) => !sidecars.includes(sidecar)));
-    };
+    return () => sidecars.forEach(remove);
   };
   const beginClose = () => {
     if (phase === "open") {
@@ -34,14 +37,12 @@ export function createGatewaySidecarStopOwner(params: {
       const failedSidecars = new Set<GatewayPostReadySidecarHandle>();
       failure = undefined;
       try {
-        while (params.getRegistered().some((sidecar) => !failedSidecars.has(sidecar))) {
-          const sidecars = [
-            ...new Set(params.getRegistered().filter((sidecar) => !failedSidecars.has(sidecar))),
-          ];
-          const ownedSidecars = new Set(sidecars);
-          params.setRegistered(
-            params.getRegistered().filter((sidecar) => !ownedSidecars.has(sidecar)),
-          );
+        for (;;) {
+          const sidecars = [...registered].filter((sidecar) => !failedSidecars.has(sidecar));
+          if (sidecars.length === 0) {
+            break;
+          }
+          sidecars.forEach(remove);
           let pending = sidecars;
           let results: PromiseSettledResult<void>[] = [];
           for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -55,9 +56,7 @@ export function createGatewaySidecarStopOwner(params: {
           }
           // A late publisher can report a handle already being stopped. Keep its new owners,
           // but remove duplicate ownership of this batch before draining the next batch.
-          params.setRegistered(
-            params.getRegistered().filter((sidecar) => !ownedSidecars.has(sidecar)),
-          );
+          sidecars.forEach(remove);
           if (pending.length > 0) {
             const rejected = results.find((result) => result.status === "rejected");
             failure ??=
@@ -71,7 +70,7 @@ export function createGatewaySidecarStopOwner(params: {
         }
         if (failure) {
           // Preserve ownership after the bounded shutdown retry. A later close can try again.
-          params.setRegistered([...failedSidecars, ...params.getRegistered()]);
+          registered = new Set([...failedSidecars, ...registered]);
           throw failure;
         }
       } finally {
@@ -93,10 +92,17 @@ export function createGatewaySidecarStopOwner(params: {
     }
     phase = "sealed";
     // A settled failed stop still owns its handles and original failure until a retry succeeds.
-    if (failure || params.getRegistered().length > 0) {
+    if (failure || registered.size > 0) {
       throw failure ?? new Error("Gateway sidecar cleanup did not complete");
     }
   };
 
-  return { publish, beginClose, stop, sealAndJoin };
+  return {
+    publish,
+    remove,
+    snapshot: (): readonly GatewayPostReadySidecarHandle[] => [...registered],
+    beginClose,
+    stop,
+    sealAndJoin,
+  };
 }

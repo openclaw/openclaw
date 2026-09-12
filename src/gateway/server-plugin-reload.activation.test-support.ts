@@ -48,7 +48,7 @@ export async function verifyPreparedSidecarRecovery(
   });
   let paused = false;
   const preparationError = new Error("later sidecar preparation failed");
-  fixture.runtime.runtimeState.gatewayLifetimeSidecars = [
+  fixture.runtime.runtimeState.gatewayLifetimeSidecars.publish(
     {
       stop: async () => {},
       preparePluginReload: () => {
@@ -67,7 +67,7 @@ export async function verifyPreparedSidecarRecovery(
         throw preparationError;
       },
     },
-  ];
+  );
   const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   let stopping: Promise<void> | undefined;
@@ -263,18 +263,20 @@ export async function verifyIndependentPostCommitActivation(
     },
   });
   const resumed = vi.fn();
-  fixture.runtime.runtimeState.gatewayLifetimeSidecars = [0, 1].map((index) => ({
-    stop: async () => {},
-    preparePluginReload: () => ({
-      drain: async () => {},
-      resume: () => {
-        if (boundary === "sidecar" && index === 0) {
-          throw failure;
-        }
-        resumed(index);
-      },
-    }),
-  }));
+  fixture.runtime.runtimeState.gatewayLifetimeSidecars.publish(
+    ...[0, 1].map((index) => ({
+      stop: async () => {},
+      preparePluginReload: () => ({
+        drain: async () => {},
+        resume: () => {
+          if (boundary === "sidecar" && index === 0) {
+            throw failure;
+          }
+          resumed(index);
+        },
+      }),
+    })),
+  );
   if (boundary === "notification") {
     fixture.runtime.broadcast = () => {
       throw failure;
@@ -459,18 +461,20 @@ export async function verifyIndependentRollbackRestoration(
       }
     },
   });
-  fixture.runtime.runtimeState.gatewayLifetimeSidecars = [0, 1].map((index) => ({
-    stop: async () => {},
-    preparePluginReload: () => ({
-      drain: async () => {},
-      resume: () => {
-        resumed.push(index);
-        if (boundary === "services" && index === 0) {
-          throw sidecarFailure;
-        }
-      },
-    }),
-  }));
+  fixture.runtime.runtimeState.gatewayLifetimeSidecars.publish(
+    ...[0, 1].map((index) => ({
+      stop: async () => {},
+      preparePluginReload: () => ({
+        drain: async () => {},
+        resume: () => {
+          resumed.push(index);
+          if (boundary === "services" && index === 0) {
+            throw sidecarFailure;
+          }
+        },
+      }),
+    })),
+  );
   const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   try {

@@ -528,16 +528,24 @@ describe("plugins cli update", () => {
   });
 
   it.each([
+    { failure: "plugin install", settlement: "rollback" },
     { failure: "later hook install", settlement: "rollback" },
     { failure: "config write", settlement: "rollback" },
     { failure: "backup cleanup", settlement: "commit" },
-  ])("settles hook updates when $failure fails", async ({ failure, settlement }) => {
+  ])("settles package updates when $failure fails", async ({ failure, settlement }) => {
     primeUpdateConfigSnapshot({ config: {} });
-    setHookInstallRecords({
-      "demo-hooks": { source: "npm", spec: "@acme/demo-hooks@1.0.0" },
-    });
+    const pluginInstall = failure === "plugin install";
+    if (pluginInstall) {
+      setInstalledPluginIndexInstallRecords({
+        alpha: { source: "npm", spec: "@acme/alpha@1.0.0", installPath: "/tmp/alpha" },
+      });
+    } else {
+      setHookInstallRecords({
+        "demo-hooks": { source: "npm", spec: "@acme/demo-hooks@1.0.0" },
+      });
+    }
     const events: string[] = [];
-    updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
+    const install = async (params: { config: OpenClawConfig }) => {
       resolvePluginInstallTransactionRequest(params)?.transactionSink?.push({
         commit: async () => {
           events.push("commit");
@@ -549,16 +557,21 @@ describe("plugins cli update", () => {
           events.push("rollback");
         },
       });
-      if (failure === "later hook install") {
+      if (pluginInstall || failure === "later hook install") {
         throw new Error(failure);
       }
       return { config: params.config, changed: true, outcomes: [] };
-    });
+    };
+    if (pluginInstall) {
+      updateNpmInstalledPluginsMock.mockImplementation(install);
+    } else {
+      updateNpmInstalledHookPacksMock.mockImplementation(install);
+    }
     if (failure === "config write") {
       replaceConfigFileMock.mockRejectedValueOnce(new Error(failure));
     }
 
-    const update = runPluginsCommand(["plugins", "update", "demo-hooks"]);
+    const update = runPluginsCommand(["plugins", "update", pluginInstall ? "alpha" : "demo-hooks"]);
     if (settlement === "commit") {
       await update;
       expectOfflineNoticeLogged();

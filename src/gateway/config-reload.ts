@@ -197,9 +197,9 @@ export function startGatewayConfigReloader(opts: {
     sourceConfig: OpenClawConfig,
     acceptance: {
       runtimeApplied: boolean;
-      publishSource?: () => Promise<() => Promise<void>>;
+      publishSource?: () => Promise<void>;
     },
-  ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
+  ) => void | Promise<void>;
   /** Publishes a newer source snapshot when effective runtime bytes are unchanged. */
   onEffectiveConfigUnchanged?: (
     nextConfig: OpenClawConfig,
@@ -300,7 +300,6 @@ export function startGatewayConfigReloader(opts: {
     );
   let watcherReload: Promise<void> | undefined;
   const activeReloads = new Set<Promise<unknown>>();
-  let activeReloadCompletion: Promise<unknown> = Promise.resolve();
   let pluginOperationTail: Promise<unknown> = Promise.resolve();
   let missingConfigRetries = 0;
   let sourceObservation: {
@@ -320,12 +319,15 @@ export function startGatewayConfigReloader(opts: {
   };
   let startupInternalWriteHash = opts.initialInternalWriteHash ?? null;
   let lastAppliedWriteHash: string | null = null;
-  let lastSourceOnlyWriteHash: string | null = null;
-  let lastSourceOnlyReapplyRuntimeOverlays: ((config: OpenClawConfig) => OpenClawConfig) | null =
-    null;
-  let lastSourceOnlyRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
-  let lastSourceOnlyRuntimeConfig: OpenClawConfig | null = null;
-  let lastSourceOnlySourceConfig: OpenClawConfig | null = null;
+  let lastSourceOnly:
+    | {
+        hash: string | null;
+        config: OpenClawConfig;
+        sourceConfig: OpenClawConfig;
+        reapplyRuntimeOverlays: GatewayConfigReloadTransactionOwnership["reapplyRuntimeOverlays"];
+        runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
+      }
+    | undefined;
 
   const appendExternalAudit = (
     record: Omit<ConfigExternalChangeAuditRecord, "ts" | "source" | "event" | "configPath">,
@@ -725,12 +727,18 @@ export function startGatewayConfigReloader(opts: {
         }
       }
     }
-    const commitReloadBaseline = async (
-      options: {
-        runtimeApplied?: boolean;
-        publishSource?: () => Promise<() => Promise<void>>;
-      } = {},
-    ) => {
+    let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
+    const publishSource =
+      changedPaths.length === 0 && !pluginLifecycle && opts.onEffectiveConfigUnchanged
+        ? async () => {
+            publishedSource ??= await opts.onEffectiveConfigUnchanged!(
+              nextConfig,
+              ownership,
+              nextSourceConfig,
+            );
+          }
+        : undefined;
+    const commitReloadBaseline = async (options: { runtimeApplied?: boolean } = {}) => {
       await checkpoint();
       assertCurrent();
       // A prior transaction may publish runtime state immediately before a
@@ -750,23 +758,21 @@ export function startGatewayConfigReloader(opts: {
           });
         }
       };
-      let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
-        const acceptedSourceRollback = await opts.onConfigAccepted?.(
+        await opts.onConfigAccepted?.(
           committedRuntimeConfig ?? nextConfig,
           ownership,
           nextSourceConfig,
           {
             runtimeApplied: options.runtimeApplied !== false,
-            ...(options.publishSource ? { publishSource: options.publishSource } : {}),
+            ...(publishSource ? { publishSource } : {}),
           },
         );
-        if (typeof acceptedSourceRollback === "function") {
-          rollbackAcceptedSource = acceptedSourceRollback;
-        }
         await checkpoint();
         assertCurrent();
-        rollbackAcceptedSource ??= await options.publishSource?.();
+        if (!publishedSource) {
+          await publishSource?.();
+        }
         await checkpoint();
         assertCurrent();
         currentSourceConfig = nextSourceConfig;
@@ -774,11 +780,13 @@ export function startGatewayConfigReloader(opts: {
         if (options.runtimeApplied === false) {
           // Persisted-but-skipped candidates are not runtime truth. Keep the
           // effective baseline so a later safe edit cannot publish them indirectly.
-          lastSourceOnlyWriteHash = persistedHash ?? null;
-          lastSourceOnlyReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
-          lastSourceOnlyRuntimeRefresh = ownership.runtimeRefresh;
-          lastSourceOnlyRuntimeConfig = nextConfig;
-          lastSourceOnlySourceConfig = nextSourceConfig;
+          lastSourceOnly = {
+            hash: persistedHash ?? null,
+            config: nextConfig,
+            sourceConfig: nextSourceConfig,
+            reapplyRuntimeOverlays: ownership.reapplyRuntimeOverlays,
+            runtimeRefresh: ownership.runtimeRefresh,
+          };
           notifyCommitted();
           return;
         }
@@ -787,12 +795,8 @@ export function startGatewayConfigReloader(opts: {
         // dedicated runtime publication callback.
         ownership.publishRuntimeEnv();
         currentRuntimeEnvSourceConfig = nextSourceConfig;
-        if (persistedHash === lastSourceOnlyWriteHash) {
-          lastSourceOnlyWriteHash = null;
-          lastSourceOnlyReapplyRuntimeOverlays = null;
-          lastSourceOnlyRuntimeRefresh = undefined;
-          lastSourceOnlyRuntimeConfig = null;
-          lastSourceOnlySourceConfig = null;
+        if (persistedHash === lastSourceOnly?.hash) {
+          lastSourceOnly = undefined;
         }
         currentConfig = committedRuntimeConfig ?? nextConfig;
         currentCompareConfig = nextCompareConfig;
@@ -803,33 +807,14 @@ export function startGatewayConfigReloader(opts: {
         commitPublishedRuntimeEnv();
       } catch (error) {
         ownership.rollbackRuntimeEnv();
-        await rollbackAcceptedSource?.();
+        await publishedSource?.rollback();
         throw error;
       }
       notifyCommitted();
     };
     if (changedPaths.length === 0 && !pluginLifecycle) {
-      let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
-      let publishedSourceRollback: (() => Promise<void>) | undefined;
-      let publishedSourceRolledBack = false;
-      const publishSource = opts.onEffectiveConfigUnchanged
-        ? async () => {
-            publishedSource ??= await opts.onEffectiveConfigUnchanged!(
-              nextConfig,
-              ownership,
-              nextSourceConfig,
-            );
-            publishedSourceRollback ??= async () => {
-              publishedSourceRolledBack = true;
-              await publishedSource?.rollback();
-            };
-            return publishedSourceRollback;
-          }
-        : undefined;
-      await commitReloadBaseline(publishSource ? { publishSource } : {});
-      if (!publishedSourceRolledBack) {
-        publishedSource?.commit?.();
-      }
+      await commitReloadBaseline();
+      publishedSource?.commit?.();
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       settleRuntimeApplication();
       return completeApplication();
@@ -954,7 +939,8 @@ export function startGatewayConfigReloader(opts: {
     runtimeApplied: boolean,
     assertLeaseOwned: () => void,
   ) => {
-    const runtimeRefresh = runtimeApplied ? currentRuntimeRefresh : lastSourceOnlyRuntimeRefresh;
+    const sourceOnly = runtimeApplied ? undefined : lastSourceOnly;
+    const runtimeRefresh = runtimeApplied ? currentRuntimeRefresh : sourceOnly?.runtimeRefresh;
     const checkpointOwned = async (assertOwned: () => void) => {
       if (stopped || sourceObservation.epoch !== transactionEpoch) {
         throw new GatewayConfigReloadSupersededError();
@@ -965,9 +951,7 @@ export function startGatewayConfigReloader(opts: {
       isCurrent: () => !stopped && sourceObservation.epoch === transactionEpoch,
       checkpoint: () => checkpointOwned(assertLeaseOwned),
       withRestartPreparation: (run) => withRestartPreparation(ownership, checkpointOwned, run),
-      reapplyRuntimeOverlays: runtimeApplied
-        ? currentReapplyRuntimeOverlays
-        : (lastSourceOnlyReapplyRuntimeOverlays ?? currentReapplyRuntimeOverlays),
+      reapplyRuntimeOverlays: sourceOnly?.reapplyRuntimeOverlays ?? currentReapplyRuntimeOverlays,
       publishRuntimeEnv: () => {},
       rollbackRuntimeEnv: () => {},
       commitRuntimeEnv: () => {},
@@ -981,9 +965,9 @@ export function startGatewayConfigReloader(opts: {
         throw new GatewayConfigReloadSupersededError();
       }
       await opts.onConfigAccepted?.(
-        runtimeApplied ? currentConfig : (lastSourceOnlyRuntimeConfig ?? currentConfig),
+        sourceOnly?.config ?? currentConfig,
         ownership,
-        runtimeApplied ? currentSourceConfig : (lastSourceOnlySourceConfig ?? currentSourceConfig),
+        sourceOnly?.sourceConfig ?? currentSourceConfig,
         { runtimeApplied },
       );
       assertLeaseOwned();
@@ -1164,7 +1148,7 @@ export function startGatewayConfigReloader(opts: {
           await acceptCurrentRuntimeEcho(
             transactionEpoch,
             snapshot,
-            snapshot.hash !== lastSourceOnlyWriteHash,
+            snapshot.hash !== lastSourceOnly?.hash,
             assertLeaseOwned,
           );
           return;
@@ -1242,7 +1226,7 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  function trackReload(reload: Promise<void>): void {
+  function trackReload(reload: Promise<unknown>): void {
     activeReloads.add(reload);
     void reload.then(
       () => activeReloads.delete(reload),
@@ -1267,7 +1251,6 @@ export function startGatewayConfigReloader(opts: {
       }
     });
     watcherReload = reload;
-    activeReloadCompletion = reload;
     activeReloads.add(reload);
     void reload.then(() => {
       activeReloads.delete(reload);
@@ -1288,17 +1271,17 @@ export function startGatewayConfigReloader(opts: {
       params.assertInvokerOwned?.();
       // The awaited reload releases `running` in finally; a queued reload may take ownership next.
       for (;;) {
-        if (!running) {
+        const reload = watcherReload;
+        if (!running || !reload) {
           break;
         }
-        await activeReloadCompletion;
+        await reload;
       }
       params.assertInvokerOwned?.();
       if (stopped) {
         throw new Error("Gateway plugin lifecycle is stopped.");
       }
       running = true;
-      activeReloadCompletion = operation;
       clearReloadTimer();
       let candidate = pendingInProcessConfig ?? watcherIntentCandidate;
       let committed = false;
@@ -1400,11 +1383,7 @@ export function startGatewayConfigReloader(opts: {
       }
     });
     pluginOperationTail = operation.catch(() => {});
-    activeReloads.add(operation);
-    void operation.then(
-      () => activeReloads.delete(operation),
-      () => activeReloads.delete(operation),
-    );
+    trackReload(operation);
     return operation;
   };
 

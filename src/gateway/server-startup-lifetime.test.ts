@@ -765,7 +765,7 @@ describe("Gateway startup lifetime", () => {
           throw new Error("Expected the real Gateway kernel");
         }
         const activeKernel = kernel;
-        activeKernel.registerGatewayLifetimeSidecars([cleanupOwner]);
+        activeKernel.registerGatewayLifetimeSidecars(cleanupOwner);
         const terminalDispose = vi.spyOn(activeKernel.terminalSessions, "disposeAll");
         const drain = activeKernel.connectionWork.drain.bind(activeKernel.connectionWork);
         vi.spyOn(activeKernel.connectionWork, "drain").mockImplementation(async () => {

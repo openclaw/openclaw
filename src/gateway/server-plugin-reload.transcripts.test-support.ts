@@ -13,7 +13,6 @@ import type {
 } from "../transcripts/provider-types.js";
 import type { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import type { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
-import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 
 export async function startTranscriptReloadFixtureSidecars(
@@ -30,12 +29,7 @@ export async function startTranscriptReloadFixtureSidecars(
 ) {
   const { runtime } = fixture;
   const startupWork = new AsyncWorkScope();
-  const sidecars = createGatewaySidecarStopOwner({
-    getRegistered: () => runtime.runtimeState.gatewayLifetimeSidecars,
-    setRegistered: (handles) => {
-      runtime.runtimeState.gatewayLifetimeSidecars = handles;
-    },
-  });
+  const sidecars = runtime.runtimeState.gatewayLifetimeSidecars;
   cleanups.push(async () => {
     startupWork.beginClose();
     await sidecars.stop().catch(() => {});
@@ -79,6 +73,7 @@ export async function startTranscriptReloadFixtureSidecars(
       pluginRuntimeClaim: fixture.owner.currentClaim(),
       getCurrentPluginRegistry: () => fixture.registryOwner.registry,
       getCurrentPluginServices: () => fixture.owner.currentServices() ?? null,
+      onPostReadySidecars: runtime.runtimeState.postReadySidecars.publish,
       onGatewayLifetimeSidecars: sidecars.publish,
       unregisterConnectionDependentSidecar: vi.fn(),
       trackStartupWork: (run) => {
@@ -99,9 +94,7 @@ export async function startTranscriptReloadFixtureSidecars(
         start: () => {},
         stop: async () => {},
       }),
-      startGatewaySidecars: async () => ({
-        postReadySidecars: [],
-      }),
+      startGatewaySidecars: async () => 0,
       warmSystemCa: async () => {},
       loadSubagentRegistryActivation: () => () => {},
     },

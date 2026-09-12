@@ -300,13 +300,11 @@ describe("public Gateway close request lifetime", () => {
           await drain();
           drainFinished = true;
         });
-        kernel.registerGatewayLifetimeSidecars([
-          {
-            stop: () => {
-              order.push("dependencies stopped");
-            },
+        kernel.registerGatewayLifetimeSidecars({
+          stop: () => {
+            order.push("dependencies stopped");
           },
-        ]);
+        });
         return kernel;
       });
       gateway = await createGatewaySuiteHarness({

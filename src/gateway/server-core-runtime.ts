@@ -122,7 +122,7 @@ export async function startGatewayCoreRuntime(input: {
     workerEnvironmentStartup,
     activateRuntimeSecrets,
   } = runtime;
-  kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
+  runtime.registerGatewayLifetimeSidecars({ stop: () => desktopSessionRegistry.stopAll() });
   const secretEgressProxy =
     cfgAtStart.secrets?.egressProxy?.enabled === true
       ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
@@ -137,7 +137,7 @@ export async function startGatewayCoreRuntime(input: {
         )
       : undefined;
   if (secretEgressProxy) {
-    kernel.addGatewayLifetimeSidecar(secretEgressProxy);
+    runtime.registerGatewayLifetimeSidecars(secretEgressProxy);
   }
   let pendingThawRestartTargets: readonly ThawRestartTarget[] | undefined;
   let earlyRuntimePromise: Promise<GatewayEarlyRuntime> | undefined;
@@ -328,7 +328,7 @@ export async function startGatewayCoreRuntime(input: {
   if (requestLifetime.aborted) {
     beginCloseApprovalObservers();
   }
-  kernel.addGatewayLifetimeSidecar({
+  runtime.registerGatewayLifetimeSidecars({
     stop: async () => {
       requestLifetime.removeEventListener("abort", beginCloseApprovalObservers);
       await stopOperatorInteractions();

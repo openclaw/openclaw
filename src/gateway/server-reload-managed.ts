@@ -390,7 +390,6 @@ export function startManagedGatewayConfigReloader(
         prepareRuntimeConfig: () =>
           prepareRestartRuntimeConfig(nextConfig, sourceConfig, transactionOwnership),
       });
-      let rollbackSource: (() => Promise<void>) | undefined;
       let acceptedTargetOwnership: AcceptedRestartTargetOwnership | undefined;
       let lateConservativeDebt: ReturnType<
         typeof publishAcceptedRestartTarget
@@ -410,7 +409,7 @@ export function startManagedGatewayConfigReloader(
             retireRejectedRestart: acceptedRestart.retireRejectedRestart,
           });
           publishDeferredAppliedConfigHash();
-          return undefined;
+          return;
         }
         if (acceptedRestart.debt) {
           await runManagedRestart(
@@ -421,12 +420,10 @@ export function startManagedGatewayConfigReloader(
             {
               retainDebtAcrossConfigChanges: acceptedRestart.debt.retainDebtAcrossConfigChanges,
             },
-            async () => {
-              rollbackSource = await acceptance.publishSource?.();
-            },
+            acceptance.publishSource,
           );
         } else {
-          rollbackSource = await acceptance.publishSource?.();
+          await acceptance.publishSource?.();
         }
         await transactionOwnership.checkpoint();
         assertCurrent();
@@ -452,13 +449,11 @@ export function startManagedGatewayConfigReloader(
           retireRejectedRestart: acceptedRestart.retireRejectedRestart && !lateConservativeDebt,
         });
         publishDeferredAppliedConfigHash();
-        return rollbackSource;
       } catch (error) {
         if (lateConservativeDebt) {
           restoreConservativeRestartDebt(lateConservativeDebt);
         }
         acceptedTargetOwnership?.reject();
-        await rollbackSource?.();
         throw error;
       }
     },

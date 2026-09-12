@@ -60,13 +60,8 @@ export function createPluginCacheSdk() {
       PluginSdkAliasMap,
       {
         normalizedJiti?: PluginSdkAliasMap;
-        normalizedTargets?: PluginSdkAliasMap;
         moduleKey?: string;
       }
-    >(),
-    mergedAliases: new WeakMap<
-      PluginSdkAliasMap,
-      WeakMap<PluginSdkAliasMap, WeakMap<PluginSdkAliasMap, PluginSdkAliasMap>>
     >(),
     native: {
       sdkProviders: new Map<

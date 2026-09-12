@@ -508,7 +508,7 @@ export async function startGatewaySidecars(params: {
   onChannelsStarted?: () => Awaitable<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
-  onPostReadySidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+  onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
   shouldCreatePostReadySidecars?: () => boolean;
   shouldStartPluginServices?: (pendingOwner?: PluginServicesHandle) => boolean;
   pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
@@ -747,7 +747,7 @@ export async function startGatewaySidecars(params: {
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (params.shouldCreatePostReadySidecars?.() === false) {
-    return { postReadySidecars };
+    return 0;
   }
   if (shouldDispatchGatewayStartupInternalHook) {
     params.startupOutcomes?.record({
@@ -933,8 +933,8 @@ export async function startGatewaySidecars(params: {
 
   // These handles schedule later tasks but do not yield after creation. Transfer
   // ownership in the same turn so close cannot seal between creation and publication.
-  params.onPostReadySidecars?.(postReadySidecars);
-  return { postReadySidecars };
+  params.onPostReadySidecars(...postReadySidecars);
+  return postReadySidecars.length;
 }
 
 type GatewayPostAttachRuntimeDeps = {
@@ -1167,8 +1167,8 @@ export async function startGatewayPostAttachRuntime(
     getCronService?: () => PluginServiceCronHost | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
-    onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
-    onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+    onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
+    onGatewayLifetimeSidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
     unregisterConnectionDependentSidecar: (sidecar: GatewayPostReadySidecarHandle) => void;
     trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
@@ -1200,7 +1200,7 @@ export async function startGatewayPostAttachRuntime(
   if (controlUiAssetsSidecar) {
     // Publish before the first await: slow CA/plugin startup must not strand
     // the dashboard or hide its running builder from Gateway shutdown.
-    params.onGatewayLifetimeSidecars?.([controlUiAssetsSidecar]);
+    params.onGatewayLifetimeSidecars(controlUiAssetsSidecar);
   }
 
   if (!params.minimalTestGateway) {
@@ -1329,7 +1329,7 @@ export async function startGatewayPostAttachRuntime(
         });
   if (!params.minimalTestGateway) {
     // Startup failure can precede publication of the post-attach return handle.
-    params.onGatewayLifetimeSidecars?.([updateCheck]);
+    params.onGatewayLifetimeSidecars(updateCheck);
   }
 
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
@@ -1350,23 +1350,18 @@ export async function startGatewayPostAttachRuntime(
       setImmediate(resolve);
     });
 
-  const emptySidecarResult = () => ({
-    pluginRegistry,
-    postReadySidecars: [],
-    gatewayLifetimeSidecars: [],
-  });
   const startSidecars = () =>
     params.minimalTestGateway
-      ? startStartupLog().then(emptySidecarResult)
+      ? startStartupLog().then(() => pluginRegistry)
       : waitForSidecarStartTurn().then(async () => {
           if (params.isClosing?.()) {
             skipStartupLog();
-            return emptySidecarResult();
+            return pluginRegistry;
           }
           await loadStartupPluginsIfNeeded();
           if (params.isClosing?.()) {
             skipStartupLog();
-            return emptySidecarResult();
+            return pluginRegistry;
           }
           const startupLog = startStartupLog();
           if (candidateCanary) {
@@ -1382,7 +1377,7 @@ export async function startGatewayPostAttachRuntime(
             params.unlockStartupMethods();
             params.onSidecarsReady?.();
             params.log.info("candidate gateway ready; autonomous sidecars suppressed");
-            return emptySidecarResult();
+            return pluginRegistry;
           }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
@@ -1392,11 +1387,11 @@ export async function startGatewayPostAttachRuntime(
             ? null
             : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
           if (params.isClosing?.()) {
-            return emptySidecarResult();
+            return pluginRegistry;
           }
           params.log.info("starting channels and sidecars...");
           const loaderStatsBefore = getPluginModuleLoaderStats();
-          const result = await (async () => {
+          const postReadySidecarCount = await (async () => {
             try {
               const startupRuntimeCurrent = params.pluginRuntimeClaim?.isCurrent() !== false;
               const pluginMetadataSnapshot = startupRuntimeCurrent
@@ -1422,9 +1417,7 @@ export async function startGatewayPostAttachRuntime(
                   startupTrace: params.startupTrace,
                   onChannelsStarted: params.onChannelsStarted,
                   onPluginServices: reportPluginServices,
-                  onPostReadySidecars: (sidecars) => {
-                    params.onPostReadySidecars?.(sidecars);
-                  },
+                  onPostReadySidecars: params.onPostReadySidecars,
                   shouldCreatePostReadySidecars: () => params.isClosing?.() !== true,
                   shouldStartPluginServices: (pendingOwner) => {
                     const current = params.getCurrentPluginServices?.();
@@ -1456,18 +1449,8 @@ export async function startGatewayPostAttachRuntime(
               throw error;
             }
           })();
-          const retainStartupSidecars = (
-            mainSessionRecoverySidecar?: GatewayPostReadySidecarHandle,
-          ) => {
-            // Published owners stop only after the outer Gateway joins received work.
-            // Retain a just-created recovery handle too; closing must not strand it.
-            if (mainSessionRecoverySidecar) {
-              params.onGatewayLifetimeSidecars?.([mainSessionRecoverySidecar]);
-            }
-            return emptySidecarResult();
-          };
           if (params.isClosing?.()) {
-            return retainStartupSidecars();
+            return pluginRegistry;
           }
           const loaderStatsAfter = getPluginModuleLoaderStats();
           params.startupTrace?.detail("sidecars.plugin-loader", [
@@ -1487,7 +1470,7 @@ export async function startGatewayPostAttachRuntime(
           let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
           await startupLog;
           if (params.isClosing?.()) {
-            return retainStartupSidecars(mainSessionRecoverySidecar);
+            return pluginRegistry;
           }
           try {
             const { scheduleRestartAbortedMainSessionRecovery } =
@@ -1506,12 +1489,14 @@ export async function startGatewayPostAttachRuntime(
             params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
           }
           if (params.isClosing?.()) {
-            return retainStartupSidecars(mainSessionRecoverySidecar);
+            if (mainSessionRecoverySidecar) {
+              params.onGatewayLifetimeSidecars(mainSessionRecoverySidecar);
+            }
+            return pluginRegistry;
           }
           // Capture the orphan-recovery cutoff before new startup-gated agent
           // work can create sessions that the recovery scan must leave alone.
           params.unlockStartupMethods();
-          const postReadySidecars = [...result.postReadySidecars];
           const newGatewayLifetimeSidecars = [
             scheduleContextCachePrewarm(params),
             scheduleGatewayHandlerPrewarm(params),
@@ -1532,11 +1517,7 @@ export async function startGatewayPostAttachRuntime(
               shouldRun: () => params.isClosing?.() !== true,
             }),
           );
-          params.onGatewayLifetimeSidecars?.(newGatewayLifetimeSidecars);
-          const gatewayLifetimeSidecars = [
-            ...(controlUiAssetsSidecar ? [controlUiAssetsSidecar] : []),
-            ...newGatewayLifetimeSidecars,
-          ];
+          params.onGatewayLifetimeSidecars(...newGatewayLifetimeSidecars);
           params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
           params.onSidecarsReady?.();
           try {
@@ -1548,25 +1529,30 @@ export async function startGatewayPostAttachRuntime(
             params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
           }
           if (params.isClosing?.()) {
-            return retainStartupSidecars(mainSessionRecoverySidecar);
+            return pluginRegistry;
           }
           params.startupTrace?.detail("sidecars.ready", [
             [
               "loadedPluginCount",
               pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded").length,
             ],
-            ["postReadySidecarCount", postReadySidecars.length + gatewayLifetimeSidecars.length],
+            [
+              "postReadySidecarCount",
+              postReadySidecarCount +
+                newGatewayLifetimeSidecars.length +
+                (controlUiAssetsSidecar ? 1 : 0),
+            ],
           ]);
           params.startupTrace?.mark("sidecars.ready");
           params.log.info("gateway ready");
-          return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
+          return pluginRegistry;
         });
   // Track original startup producers and their post-ready continuation so close
   // retains dependency loads and hooks even when readiness has already settled.
   const sidecarsPromise = params.trackStartupWork(startSidecars);
   void params
     .trackStartupWork(async (signal) => {
-      const sidecarsResult = await sidecarsPromise;
+      const sidecarRegistry = await sidecarsPromise;
       if (params.minimalTestGateway || candidateCanary) {
         return;
       }
@@ -1595,7 +1581,7 @@ export async function startGatewayPostAttachRuntime(
       });
       try {
         sweepSessionStateWatchNotices();
-        const hookRunner = await runtimeDeps.createHookRunner(sidecarsResult.pluginRegistry, {
+        const hookRunner = await runtimeDeps.createHookRunner(sidecarRegistry, {
           logger: params.logHooks,
         });
         if (params.isClosing?.() || !hookRunner.hasHooks("gateway_start")) {
@@ -1610,7 +1596,7 @@ export async function startGatewayPostAttachRuntime(
             if (params.isClosing?.()) {
               return;
             }
-            await withPluginHttpRouteRegistry(sidecarsResult.pluginRegistry, () =>
+            await withPluginHttpRouteRegistry(sidecarRegistry, () =>
               hookRunner.runGatewayStart(
                 { port: params.port },
                 {

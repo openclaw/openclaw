@@ -578,20 +578,34 @@ export function createPluginPackageMetadataCapture(params: {
         manifest: Record<string, unknown>;
         aliases: Set<string>;
       };
-      const packageScopes = new Map<string, PackageScope | undefined>();
-      const capturedScopes = new Map<string, { source: string; target: string } | undefined>();
-      const captureScopeMetadata = (
-        scopeDirectory: string,
-      ): { source: string; target: string } | undefined => {
+      const capturedScopes = new Map<string, (() => PackageScope) | undefined>();
+      const captureScopeMetadata = (scopeDirectory: string): (() => PackageScope) | undefined => {
         if (capturedScopes.has(scopeDirectory)) {
           return capturedScopes.get(scopeDirectory);
         }
-        let scope: { source: string; target: string } | undefined;
+        let scope: (() => PackageScope) | undefined;
         const source = path.join(scopeDirectory, "package.json");
         if (hasSource(source) || fs.existsSync(source)) {
           const target = path.join(destination, path.relative(root, source));
           copy(source, target);
-          scope = { source, target };
+          let parsed: PackageScope | undefined;
+          scope = () => {
+            if (!parsed) {
+              const metadata = metadataScopes.get(target)!;
+              const data =
+                asOptionalRecord(metadata.manifest) ??
+                asOptionalRecord(JSON.parse(fs.readFileSync(target, "utf8"))) ??
+                {};
+              metadata.manifest = data;
+              metadata.prepareAliases(data);
+              parsed = {
+                source,
+                manifest: data,
+                aliases: new Set(importTargetNames(data.imports)),
+              };
+            }
+            return parsed;
+          };
         } else if (
           scopeDirectory !== boundary &&
           isPathInside(boundary, path.dirname(scopeDirectory))
@@ -601,28 +615,10 @@ export function createPluginPackageMetadataCapture(params: {
         capturedScopes.set(scopeDirectory, scope);
         return scope;
       };
-      const packageScope = (scopeDirectory: string): PackageScope | undefined => {
-        if (packageScopes.has(scopeDirectory)) {
-          return packageScopes.get(scopeDirectory);
-        }
-        let scope: PackageScope | undefined;
-        const capturedScope = captureScopeMetadata(scopeDirectory);
-        if (capturedScope) {
-          const { source: manifest, target } = capturedScope;
-          const data = asOptionalRecord(JSON.parse(fs.readFileSync(target, "utf8"))) ?? {};
-          metadataScopes.get(target)!.manifest = data;
-          scope = {
-            source: manifest,
-            manifest: data,
-            aliases: new Set(importTargetNames(data.imports)),
-          };
-          // Conditional aliases need stable metadata, but unused optional package bodies stay lazy.
-          metadataScopes.get(target)!.prepareAliases(data);
-        }
-        packageScopes.set(scopeDirectory, scope);
-        return scope;
+      return {
+        captureMetadata: captureScopeMetadata,
+        resolve: (scopeDirectory: string) => captureScopeMetadata(scopeDirectory)?.(),
       };
-      return { captureMetadata: captureScopeMetadata, resolve: packageScope };
     },
     clear() {
       metadataScopes.clear();

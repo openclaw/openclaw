@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -122,13 +122,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
   return {
     attachContext: async (
       next: GatewayRequestContext,
-      sidecars: GatewayPostReadySidecarHandle[],
+      publishSidecars: GatewaySidecarStopOwner["publish"],
     ) => {
       context = next;
       const unregister = await registerRefreshListeners();
       // Minimal Gateways still own read-triggered preparation. Every lifetime
       // must join it before shutdown retires the config and model owners.
-      sidecars.push({
+      publishSidecars({
         stop: async () => {
           unregister?.();
           await runtime.stop();

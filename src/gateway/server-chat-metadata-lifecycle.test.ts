@@ -5,6 +5,7 @@ import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const mocks = vi.hoisted(() => ({
   createRuntime: vi.fn(),
@@ -73,6 +74,7 @@ function createLifecycle(minimalTestGateway: boolean, warn = vi.fn()) {
       minimalTestGateway,
       log: { warn } as never,
     }),
+    sidecarOwner: createGatewaySidecarStopOwner(),
     warn,
   };
 }
@@ -115,11 +117,13 @@ async function createRealMetadataLifecycle(
       };
     },
   );
-  const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
+  const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
   const lifecycle = await pendingLifecycle;
-  const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
   const attach = () =>
-    lifecycle.attachContext({ broadcast: vi.fn() } as unknown as GatewayRequestContext, sidecars);
+    lifecycle.attachContext(
+      { broadcast: vi.fn() } as unknown as GatewayRequestContext,
+      sidecarOwner.publish,
+    );
   if (options.attach !== false) {
     await attach();
   }
@@ -169,9 +173,7 @@ async function createRealMetadataLifecycle(
         modelEvent({ phase: "catalog-failed", error: new Error("catalog failed") }),
       owner: () => modelEvent({ phase: "invalidated" }),
     },
-    async stop() {
-      await Promise.all(sidecars.map((sidecar) => Promise.resolve(sidecar.stop())));
-    },
+    stop: sidecarOwner.stop,
   };
 }
 
@@ -383,7 +385,8 @@ describe("gateway chat metadata lifecycle", () => {
         },
       }),
     );
-    const lifecycle = await createLifecycle(false).lifecycle;
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
     const outcomes: unknown[] = [];
     const reads: Promise<void>[] = [];
     const broadcast = vi.fn(() => {
@@ -399,7 +402,10 @@ describe("gateway chat metadata lifecycle", () => {
         ),
       );
     });
-    await lifecycle.attachContext({ broadcast } as unknown as GatewayRequestContext, []);
+    await lifecycle.attachContext(
+      { broadcast } as unknown as GatewayRequestContext,
+      sidecarOwner.publish,
+    );
     await Promise.all(reads);
     expect(outcomes).toEqual([expect.stringContaining("owner is unavailable")]);
     expect(broadcast).toHaveBeenCalledOnce();
@@ -497,11 +503,17 @@ describe("gateway chat metadata lifecycle", () => {
             },
           }),
       );
-      const { lifecycle: pendingLifecycle, warn } = createLifecycle(minimalTestGateway);
+      const {
+        lifecycle: pendingLifecycle,
+        sidecarOwner,
+        warn,
+      } = createLifecycle(minimalTestGateway);
       const lifecycle = await pendingLifecycle;
-      const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
       const broadcast = vi.fn();
-      await lifecycle.attachContext({ broadcast } as unknown as GatewayRequestContext, sidecars);
+      await lifecycle.attachContext(
+        { broadcast } as unknown as GatewayRequestContext,
+        sidecarOwner.publish,
+      );
       held = true;
       revision += 1;
       if (!minimalTestGateway) {
@@ -519,9 +531,7 @@ describe("gateway chat metadata lifecycle", () => {
       );
       try {
         await entered.promise;
-        const stopping = Promise.all(
-          sidecars.map((sidecar) => Promise.resolve(sidecar.stop())),
-        ).then(() => {
+        const stopping = sidecarOwner.stop().then(() => {
           ownerAvailable = false;
           events.push("shutdown completed");
         });
@@ -543,11 +553,10 @@ describe("gateway chat metadata lifecycle", () => {
   );
 
   it("keeps minimal Gateway attachment lazy while owning shutdown", async () => {
-    const { lifecycle: pendingLifecycle } = createLifecycle(true);
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(true);
     const lifecycle = await pendingLifecycle;
-    const sidecars: Array<{ stop: () => Promise<void> }> = [];
 
-    await lifecycle.attachContext(context, sidecars);
+    await lifecycle.attachContext(context, sidecarOwner.publish);
 
     expect(mocks.createRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -559,23 +568,22 @@ describe("gateway chat metadata lifecycle", () => {
     expect(mocks.registerAuthListener).not.toHaveBeenCalled();
     expect(mocks.registerModelListener).not.toHaveBeenCalled();
     expect(mocks.registerSkillsListener).not.toHaveBeenCalled();
-    expect(sidecars).toHaveLength(1);
-    await sidecars[0]!.stop();
+    expect(sidecarOwner.snapshot()).toHaveLength(1);
+    await sidecarOwner.stop();
     expect(mocks.stop).toHaveBeenCalledOnce();
   });
 
   it("treats an unavailable catch-up snapshot as expected before owner publication", async () => {
     mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
-    const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
-    const sidecars: Array<{ stop: () => Promise<void> }> = [];
 
-    await lifecycle.attachContext(context, sidecars);
+    await lifecycle.attachContext(context, sidecarOwner.publish);
 
     expect(mocks.registerAuthListener).toHaveBeenCalledOnce();
     expect(mocks.registerModelListener).toHaveBeenCalledOnce();
     expect(mocks.registerSkillsListener).toHaveBeenCalledOnce();
-    expect(sidecars).toHaveLength(1);
+    expect(sidecarOwner.snapshot()).toHaveLength(1);
     expect(mocks.refresh).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
 
@@ -588,10 +596,10 @@ describe("gateway chat metadata lifecycle", () => {
 
   it("logs unexpected catch-up failures without rejecting startup", async () => {
     mocks.refresh.mockRejectedValueOnce(new Error("metadata unavailable"));
-    const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
-    await expect(lifecycle.attachContext(context, [])).resolves.toBeUndefined();
+    await expect(lifecycle.attachContext(context, sidecarOwner.publish)).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
       "chat metadata catch-up refresh failed: Error: metadata unavailable",
     );
@@ -599,10 +607,10 @@ describe("gateway chat metadata lifecycle", () => {
 
   it("retries subordinate changes after a published owner's catch-up build fails", async () => {
     mocks.refresh.mockRejectedValueOnce(new Error("projection failed"));
-    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
-    await lifecycle.attachContext(context, []);
+    await lifecycle.attachContext(context, sidecarOwner.publish);
     const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
 
     authListener();
@@ -612,10 +620,10 @@ describe("gateway chat metadata lifecycle", () => {
 
   it("defers subordinate changes until an invalidated model owner publishes", async () => {
     mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
-    const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
-    await lifecycle.attachContext(context, []);
+    await lifecycle.attachContext(context, sidecarOwner.publish);
     expect(mocks.refresh).toHaveBeenCalledOnce();
 
     const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
@@ -641,10 +649,10 @@ describe("gateway chat metadata lifecycle", () => {
   });
 
   it("refreshes subordinate changes immediately while the model owner is published", async () => {
-    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
-    await lifecycle.attachContext(context, []);
+    await lifecycle.attachContext(context, sidecarOwner.publish);
     const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
     const skillsListener = mocks.registerSkillsListener.mock.calls[0]?.[0];
 
@@ -669,10 +677,10 @@ describe("gateway chat metadata lifecycle", () => {
   });
 
   it("refreshes after the prepared owner publishes a completed full catalog", async () => {
-    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
-    await lifecycle.attachContext(context, []);
+    await lifecycle.attachContext(context, sidecarOwner.publish);
     const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
     modelListener({ phase: "published" });
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
@@ -687,10 +695,10 @@ describe("gateway chat metadata lifecycle", () => {
   it("keeps an owner available when a subordinate catalog publishes during attachment", async () => {
     const pendingRefresh = createDeferred();
     mocks.refresh.mockReturnValueOnce(pendingRefresh.promise);
-    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
-    const attachment = lifecycle.attachContext(context, []);
+    const attachment = lifecycle.attachContext(context, sidecarOwner.publish);
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
     const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
     modelListener({ phase: "catalog-published" });
@@ -704,10 +712,10 @@ describe("gateway chat metadata lifecycle", () => {
   });
 
   it("propagates a failed model publication without starting a refresh", async () => {
-    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
-    await lifecycle.attachContext(context, []);
+    await lifecycle.attachContext(context, sidecarOwner.publish);
     const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
     const publicationError = new Error("replacement failed");
 

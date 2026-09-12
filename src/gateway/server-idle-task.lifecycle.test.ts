@@ -10,7 +10,6 @@ import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -60,13 +59,8 @@ it.each(["idle", "handler", "context"] as const)(
                 },
               },
             });
-    let registered: GatewayPostReadySidecarHandle[] = [handle];
-    const owner = createGatewaySidecarStopOwner({
-      getRegistered: () => registered,
-      setRegistered: (next) => {
-        registered = next;
-      },
-    });
+    const owner = createGatewaySidecarStopOwner();
+    owner.publish(handle);
     let stopping: Promise<void> | undefined;
     try {
       await vi.advanceTimersByTimeAsync(kind === "context" ? 5_000 : 0);

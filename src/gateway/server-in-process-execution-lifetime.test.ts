@@ -152,13 +152,11 @@ describe("in-process Gateway original execution ownership", () => {
           payload: { status: "accepted", runId: "in-process-tail" },
         });
         expect(order).toEqual([]);
-        kernel.registerGatewayLifetimeSidecars([
-          {
-            stop: () => {
-              order.push("dependencies stopped");
-            },
+        kernel.registerGatewayLifetimeSidecars({
+          stop: () => {
+            order.push("dependencies stopped");
           },
-        ]);
+        });
         const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
         vi.spyOn(kernel.connectionWork, "drain").mockImplementationOnce(() => {
           const operation = drain();

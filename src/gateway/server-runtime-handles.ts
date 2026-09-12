@@ -14,7 +14,10 @@ import {
 } from "./server-media-cleanup-lifecycle.js";
 import { createNoopHeartbeatRunner } from "./server-runtime-service-shared.js";
 import type { GatewayMaintenanceHandles } from "./server-runtime-services.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import {
+  createGatewaySidecarStopOwner,
+  type GatewaySidecarStopOwner,
+} from "./server-sidecar-owners.js";
 
 // Mutable server handles track timers, sidecars, subscriptions, and service
 // cleanup hooks that shutdown/reload code must stop exactly once.
@@ -38,8 +41,8 @@ export type GatewayServerMutableState = {
   stopDeliveryRecovery: () => Promise<void>;
   stopGatewayUpdateCheck: () => Promise<void>;
   tailscaleCleanup: (() => Promise<void>) | null;
-  postReadySidecars: GatewayPostReadySidecarHandle[];
-  gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[];
+  readonly postReadySidecars: GatewaySidecarStopOwner;
+  readonly gatewayLifetimeSidecars: GatewaySidecarStopOwner;
   skillsRefreshTimer: ReturnType<typeof setTimeout> | null;
   skillsRefreshDelayMs: number;
   skillsChangeUnsub: () => Promise<void>;
@@ -62,8 +65,8 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     stopDeliveryRecovery: async () => {},
     stopGatewayUpdateCheck: async () => {},
     tailscaleCleanup: null as (() => Promise<void>) | null,
-    postReadySidecars: [],
-    gatewayLifetimeSidecars: [],
+    postReadySidecars: createGatewaySidecarStopOwner(),
+    gatewayLifetimeSidecars: createGatewaySidecarStopOwner(),
     skillsRefreshTimer: null as ReturnType<typeof setTimeout> | null,
     skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: async () => {},
