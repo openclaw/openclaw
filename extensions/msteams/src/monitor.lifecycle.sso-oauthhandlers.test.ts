@@ -18,7 +18,9 @@ const registerMSTeamsHandlers = vi.hoisted(() =>
 const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const runMSTeamsFileConsentInvokeHandler = vi.hoisted(() => vi.fn(async () => {}));
-const loadMSTeamsSdkWithAuth = vi.hoisted(() => vi.fn(async () => ({ app: {} })));
+const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
+  vi.fn(async (_creds?: unknown, _options?: Record<string, unknown>) => ({ app: {} })),
+);
 
 const ssoTokenStore = vi.hoisted(() => ({
   get: vi.fn(async () => null),
@@ -175,7 +177,7 @@ describe("monitorMSTeamsProvider SSO oauthHandlers delegate", () => {
       on: ReturnType<typeof vi.fn>;
     };
     const tokenExchangeHandler = app.on.mock.calls.find(
-      (call: [string, unknown]) => call[0] === "signin.token-exchange",
+      (call: unknown[]) => call[0] === "signin.token-exchange",
     )?.[1];
     if (typeof tokenExchangeHandler !== "function") {
       throw new Error("expected signin token-exchange handler");
