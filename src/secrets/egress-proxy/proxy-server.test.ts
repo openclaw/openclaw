@@ -1,13 +1,16 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { request as httpRequest, type Server } from "node:http";
-import { createServer as createHttpsServer } from "node:https";
+import { createServer as createHttpsServer, request as httpsRequest } from "node:https";
 import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   mintSecretSentinel,
   SECRET_SENTINEL_MAX_LENGTH,
@@ -22,6 +25,7 @@ type SecretEgressProxyAuditEvent = Parameters<
   : never;
 
 type OriginRequest = {
+  bytes: Buffer;
   body: string;
   headers: Record<string, string | string[] | undefined>;
   url: string;
@@ -132,7 +136,8 @@ async function rawConnect(params: {
 async function requestThroughTunnel(params: {
   path?: string;
   headers?: Record<string, string>;
-  bodyChunks?: readonly string[];
+  bodyChunks?: readonly (string | Buffer)[];
+  contentLength?: number;
   caPath?: string;
   proxyEnv?: Record<string, string>;
 }): Promise<{ body: string; status: number }> {
@@ -155,11 +160,29 @@ async function requestThroughTunnel(params: {
     secureSocket.once("secureConnect", resolve);
     secureSocket.once("error", reject);
   });
+  expect(secureSocket.authorized).toBe(true);
+  const continued = createDeferredCore();
+  const received = new Promise<string>((resolve, reject) => {
+    let output = "";
+    secureSocket.setEncoding("utf8");
+    secureSocket.on("data", (chunk) => {
+      output += chunk.toString();
+      if (output.startsWith("HTTP/1.1 100 Continue\r\n\r\n")) {
+        continued.resolve();
+      }
+    });
+    secureSocket.once("end", () => resolve(output));
+    secureSocket.once("error", reject);
+  });
   const bodyChunks = params.bodyChunks ?? [];
   const headers = {
     Host: `localhost:${originPort}`,
     Connection: "close",
-    ...(bodyChunks.length > 0 ? { "Transfer-Encoding": "chunked" } : {}),
+    ...(params.contentLength !== undefined
+      ? { "Content-Length": String(params.contentLength) }
+      : bodyChunks.length > 0
+        ? { "Transfer-Encoding": "chunked" }
+        : {}),
     ...params.headers,
   };
   secureSocket.write(`POST ${params.path ?? "/"} HTTP/1.1\r\n`);
@@ -167,21 +190,27 @@ async function requestThroughTunnel(params: {
     secureSocket.write(`${name}: ${value}\r\n`);
   }
   secureSocket.write("\r\n");
-  for (const chunk of bodyChunks) {
-    secureSocket.write(`${Buffer.byteLength(chunk).toString(16)}\r\n${chunk}\r\n`);
+  if (params.headers?.Expect === "100-continue") {
+    await Promise.race([
+      continued.promise,
+      received.then(() => {
+        throw new Error("Proxy did not acknowledge 100-continue");
+      }),
+    ]);
   }
-  if (bodyChunks.length > 0) {
+  for (const chunk of bodyChunks) {
+    if (params.contentLength === undefined) {
+      secureSocket.write(`${Buffer.byteLength(chunk).toString(16)}\r\n`);
+    }
+    secureSocket.write(chunk);
+    if (params.contentLength === undefined) {
+      secureSocket.write("\r\n");
+    }
+  }
+  if (bodyChunks.length > 0 && params.contentLength === undefined) {
     secureSocket.write("0\r\n\r\n");
   }
-  const raw = await new Promise<string>((resolve, reject) => {
-    let output = "";
-    secureSocket.setEncoding("utf8");
-    secureSocket.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-    secureSocket.once("end", () => resolve(output));
-    secureSocket.once("error", reject);
-  });
+  const raw = (await received).replace(/^(?:HTTP\/1\.1 100 Continue\r\n\r\n)+/u, "");
   const [head = "", body = ""] = raw.split("\r\n\r\n", 2);
   const status = Number(/^HTTP\/1\.1 (\d{3})/u.exec(head)?.[1]);
   return { body, status };
@@ -201,6 +230,8 @@ async function forwardedRequest(
         port: proxyUrl.port,
         path: requestTarget ?? `${protocol}://localhost:${originPort}/forwarded-auth`,
         method: "GET",
+        // Exercise this fixture directly even when Node enables environment proxies.
+        agent: false,
         headers: auth ? { "Proxy-Authorization": auth } : undefined,
       },
       (response) => {
@@ -244,12 +275,22 @@ beforeEach(async () => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       request.on("end", () => {
+        const bytes = Buffer.concat(chunks);
         originRequests.push({
-          body: Buffer.concat(chunks).toString("utf8"),
+          bytes,
+          body: bytes.toString("utf8"),
           headers: { ...request.headers },
           url: request.url ?? "",
         });
-        response.writeHead(200, { Connection: "close", "Content-Length": 2 });
+        const status =
+          request.url === "/fixed-length" && request.headers["content-length"] === undefined
+            ? 411
+            : 200;
+        response.writeHead(request.url === "/redirect" ? 307 : status, {
+          Connection: "close",
+          "Content-Length": 2,
+          ...(request.url === "/redirect" ? { Location: "/fixed-length" } : {}),
+        });
         response.end("ok");
       });
     }),
@@ -288,6 +329,169 @@ afterEach(async () => {
 });
 
 describe("secret egress proxy", () => {
+  // Real local HTTPS contract, not a GitHub upload or a reconstruction of one.
+  it.each([
+    {
+      label: "binary",
+      contentType: "application/octet-stream",
+      bytes: Buffer.from(Array.from({ length: 8192 }, (_, index) => index % 256)),
+      headerSecret: false,
+    },
+    {
+      label: "PNG with header substitution",
+      contentType: "image/png",
+      bytes: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+      headerSecret: true,
+    },
+    {
+      label: "MP4 with header substitution",
+      contentType: "video/mp4",
+      bytes: createPlaybackMediaFixture("mp4"),
+      headerSecret: true,
+    },
+  ])("preserves fixed-length $label uploads", async ({ bytes, contentType, headerSecret }) => {
+    const value = "synthetic-upload-credential";
+    const sentinel = mintSecretSentinel(value, { label: "fixed-length-upload" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    const directStatus = await new Promise<number>((resolve, reject) => {
+      const request = httpsRequest(
+        {
+          hostname: "localhost",
+          port: originPort,
+          path: "/fixed-length",
+          method: "POST",
+          ca: fs.readFileSync(proxy.caCertPath),
+          // The control request goes only to this fixture, not an environment proxy.
+          agent: false,
+          headers: { "Content-Type": contentType, "Content-Length": bytes.length },
+        },
+        (response) => {
+          response.resume();
+          response.once("end", () => resolve(response.statusCode ?? 0));
+        },
+      );
+      request.once("error", reject);
+      request.end(bytes);
+    });
+    expect(directStatus).toBe(200);
+    const result = await requestThroughTunnel({
+      path: "/fixed-length",
+      headers: {
+        "Content-Type": contentType,
+        ...(headerSecret ? { "X-Credential": sentinel } : {}),
+      },
+      contentLength: bytes.length,
+      bodyChunks: [bytes.subarray(0, 11), bytes.subarray(11)],
+    });
+    // Assert byte identity independently of framing, including on the broken base.
+    expect(originRequests).toHaveLength(2);
+    for (const record of originRequests) {
+      expect(record.bytes).toEqual(bytes);
+      expect(createHash("sha256").update(record.bytes).digest("hex")).toBe(
+        createHash("sha256").update(bytes).digest("hex"),
+      );
+    }
+    if (headerSecret) {
+      expect(originRequests[1]?.headers["x-credential"]).toBe(value);
+    }
+    expect(result.status).toBe(200);
+    expect(originRequests[1]?.headers["content-length"]).toBe(String(bytes.length));
+    expect(originRequests[1]?.headers["transfer-encoding"]).toBeUndefined();
+  });
+
+  it.each<Record<string, string>>([{ Expect: "100-continue" }, { Trailer: "X-Checksum" }])(
+    "chooses fixed-length framing after handling %j",
+    async (headers) => {
+      expect(
+        await requestThroughTunnel({
+          path: "/fixed-length",
+          headers,
+          contentLength: 5,
+          bodyChunks: ["hello"],
+        }),
+      ).toMatchObject({ status: 200 });
+      expect(originRequests[0]?.body).toBe("hello");
+      expect(originRequests[0]?.headers["content-length"]).toBe("5");
+      expect(originRequests[0]?.headers["transfer-encoding"]).toBeUndefined();
+      expect(originRequests[0]?.headers.expect).toBeUndefined();
+      expect(originRequests[0]?.headers.trailer).toBeUndefined();
+    },
+  );
+
+  it("forwards an explicitly empty fixed-length body", async () => {
+    expect(await requestThroughTunnel({ path: "/fixed-length", contentLength: 0 })).toMatchObject({
+      status: 200,
+    });
+    expect(originRequests[0]?.bytes).toHaveLength(0);
+    expect(originRequests[0]?.headers["content-length"]).toBe("0");
+    expect(originRequests[0]?.headers["transfer-encoding"]).toBeUndefined();
+  });
+
+  it.each(["unregistered", "truncated", "overlong", "wrong-host"] as const)(
+    "refuses %s sentinels inside fixed-length binary content",
+    async (kind) => {
+      const sentinel = mintSecretSentinel("synthetic-body-credential", { label: kind });
+      proxyEnv = registerSentinel({
+        sentinel,
+        allowedHosts: kind === "wrong-host" ? ["other.example"] : ["localhost"],
+      });
+      const body = Buffer.concat([
+        Buffer.from([0, 255, 128]),
+        Buffer.from(
+          kind === "truncated"
+            ? sentinel.slice(0, -2)
+            : kind === "overlong"
+              ? SECRET_SENTINEL_PREFIX + "x".repeat(SECRET_SENTINEL_MAX_LENGTH)
+              : kind === "unregistered"
+                ? tamperSentinel(sentinel)
+                : sentinel,
+        ),
+      ]);
+      const result = await requestThroughTunnel({
+        headers: { "Content-Type": "application/octet-stream" },
+        contentLength: body.length,
+        bodyChunks: [body],
+      });
+      expect(result.status).toBe(502);
+      expect(originRequests).toEqual([]);
+      expect(auditEvents.at(-1)).toMatchObject({
+        kind: "refused",
+        reason: kind === "wrong-host" ? "destination-not-allowed" : "unresolved-sentinel",
+      });
+    },
+  );
+
+  it.each<Record<string, string>>([
+    { "Content-Length": "1", "Transfer-Encoding": "chunked" },
+    { "Content-Length": "1\r\nContent-Length: 2" },
+    { "Content-Length": "-1" },
+    { "Content-Length": "1x" },
+  ])("rejects ambiguous or invalid request framing %j", async (headers) => {
+    const result = await requestThroughTunnel({ headers });
+    expect(result.status).toBe(400);
+    expect(originRequests).toEqual([]);
+  });
+
+  it("returns an upload redirect without replaying the body or credential", async () => {
+    const sentinel = mintSecretSentinel("synthetic-redirect-credential", { label: "redirect" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    expect(
+      await requestThroughTunnel({
+        path: "/redirect",
+        headers: { "X-Credential": sentinel },
+        bodyChunks: ["binary-body"],
+        contentLength: 11,
+      }),
+    ).toMatchObject({ status: 307 });
+    expect(originRequests).toHaveLength(1);
+    expect(originRequests[0]?.url).toBe("/redirect");
+    expect(originRequests[0]?.body).toBe("binary-body");
+    expect(originRequests[0]?.headers["content-length"]).toBe("11");
+  });
+
   it.each(["https://bad_host/", "https://[invalid]/"])(
     "refuses malformed target %s on direct and TLS requests without escaping the handler",
     async (target) => {
@@ -531,23 +735,37 @@ describe("secret egress proxy", () => {
     },
   );
 
-  it("substitutes a streamed body larger than the maximum carry window", async () => {
-    const secret = "stream-boundary-secret";
-    const sentinel = mintSecretSentinel(secret, { label: "egress-stream" });
-    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
-    const split = SECRET_SENTINEL_PREFIX.length + 3;
-    const prefix = "x".repeat(SECRET_SENTINEL_MAX_LENGTH + 1024);
-    const suffix = "y".repeat(2048);
+  it.each(["chunked", "fixed-length"] as const)(
+    "substitutes a %s body larger than the maximum carry window",
+    async (framing) => {
+      const secret = "stream-boundary-🦞-secret";
+      const sentinel = mintSecretSentinel(secret, { label: "egress-stream" });
+      proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+      const split = SECRET_SENTINEL_PREFIX.length + 3;
+      const prefix = "x".repeat(SECRET_SENTINEL_MAX_LENGTH + 1024);
+      const suffix = "y".repeat(2048);
 
-    await expect(
-      requestThroughTunnel({
-        bodyChunks: [prefix, sentinel.slice(0, split), sentinel.slice(split), suffix],
-      }),
-    ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        requestThroughTunnel({
+          path: framing === "fixed-length" ? "/fixed-length" : "/",
+          contentLength:
+            framing === "fixed-length" ? Buffer.byteLength(prefix + sentinel + suffix) : undefined,
+          bodyChunks: [prefix, sentinel.slice(0, split), sentinel.slice(split), suffix],
+        }),
+      ).resolves.toMatchObject({ status: 200 });
 
-    expect(originRequests.at(-1)?.body).toBe(`${prefix}${secret}${suffix}`);
-    expect(originRequests.at(-1)?.body).not.toContain(sentinel);
-  });
+      expect(originRequests.at(-1)?.body).toBe(`${prefix}${secret}${suffix}`);
+      expect(originRequests.at(-1)?.body).not.toContain(sentinel);
+      expect(originRequests.at(-1)?.headers["content-length"]).toBe(
+        framing === "fixed-length"
+          ? String(Buffer.byteLength(prefix + secret + suffix))
+          : undefined,
+      );
+      expect(originRequests.at(-1)?.headers["transfer-encoding"]).toBe(
+        framing === "chunked" ? "chunked" : undefined,
+      );
+    },
+  );
 
   it("blind-tunnels bypassed hosts without substituting sentinels", async () => {
     const bypassEvents: SecretEgressProxyAuditEvent[] = [];

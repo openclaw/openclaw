@@ -25,6 +25,7 @@ import {
   type SecretEgressTlsContext,
 } from "./certificates.js";
 import {
+  createSecretEgressBodyBudget,
   forwardSecretEgressRequest,
   handleUpgradeRequest,
   REFUSAL_BODY,
@@ -227,8 +228,6 @@ function swapRequestHeaders(params: {
       output[name] = swapped.value;
     }
   }
-  delete output["content-length"];
-  delete output["transfer-encoding"];
   return { headers: output, substituted };
 }
 
@@ -252,6 +251,7 @@ export async function startSecretEgressProxyServer(params: {
       ? undefined
       : new Set(params.allowedHosts.map(normalizeHostname));
   const registrations = new Map<string, RegisteredRun>();
+  const acquireBody = createSecretEgressBodyBudget();
   const sockets = new Set<Socket>();
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
@@ -382,46 +382,38 @@ export async function startSecretEgressProxyServer(params: {
       forward.request.resume();
       return;
     }
-    let substituted = false;
-    let target: URL;
-    let headers: IncomingHttpHeaders;
-    try {
-      const swappedUrl = swapRequestText({
-        value: forward.target.toString(),
-        urlMode: true,
-        host,
-        registered: forward.registered,
-      });
-      target = new URL(swappedUrl.value);
-      const swappedHeaders = swapRequestHeaders({
-        headers: forward.request.headers,
-        host,
-        registered: forward.registered,
-      });
-      headers = swappedHeaders.headers;
-      headers.host = target.host;
-      substituted = swappedUrl.substituted || swappedHeaders.substituted;
-    } catch (error) {
-      const reason =
-        error instanceof SecretEgressSubstitutionError ? error.reason : "unresolved-sentinel";
-      audit({ kind: "refused", host, substituted, reason });
-      sendHttpRefusal(
-        forward.response,
-        502,
-        error instanceof SecretEgressSubstitutionError ? `${error.message}\n` : REFUSAL_BODY,
-      );
-      forward.request.resume();
-      return;
-    }
 
     forwardSecretEgressRequest({
       request: forward.request,
       response: forward.response,
       upgrade: forward.upgrade,
-      target,
-      headers,
       host,
-      substituted,
+      acquireBody,
+      prepareRequest: () => {
+        if (!hostAllowed(host, forward.registered)) {
+          const error = new SecretEgressSubstitutionError("host-not-allowed");
+          error.message = hostNotAllowedBody(host).trimEnd();
+          throw error;
+        }
+        const swappedUrl = swapRequestText({
+          value: forward.target.toString(),
+          urlMode: true,
+          host,
+          registered: forward.registered,
+        });
+        const target = new URL(swappedUrl.value);
+        const swappedHeaders = swapRequestHeaders({
+          headers: forward.request.headers,
+          host,
+          registered: forward.registered,
+        });
+        swappedHeaders.headers.host = target.host;
+        return {
+          target,
+          headers: swappedHeaders.headers,
+          substituted: swappedUrl.substituted || swappedHeaders.substituted,
+        };
+      },
       upstreamTlsAgent,
       isActive: forward.registered.isActive,
       ownResource: (resource) => ownResource(forward.registered, resource),

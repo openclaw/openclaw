@@ -50,6 +50,8 @@ function connectTunnel(auth = new URL(proxyEnv.HTTPS_PROXY!).password) {
       hostname: proxyUrl.hostname,
       port: proxyUrl.port,
       method: "CONNECT",
+      // CONNECT targets this test proxy, never Node's environment proxy.
+      agent: false,
       path: `localhost:${port}`,
       headers: auth
         ? { "Proxy-Authorization": `Basic ${Buffer.from(`openclaw:${auth}`).toString("base64")}` }
@@ -84,7 +86,7 @@ async function websocket(
 ) {
   const socket = params.direct ? undefined : await connectTls();
   const client = new WebSocket(`wss://localhost:${port}${params.pathname ?? "/"}`, {
-    ...(socket ? { createConnection: () => socket } : {}),
+    ...(socket ? { createConnection: () => socket } : { agent: false }),
     ca: fs.readFileSync(proxy.caCertPath),
     headers: { Authorization: `Bearer ${params.credential ?? sentinel}` },
     handshakeTimeout: 2_000,
