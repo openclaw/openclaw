@@ -172,6 +172,61 @@ describe("Git database admission", () => {
     },
   );
 
+  it.each([false, true])(
+    "retains the imported pack through repack before checkout (publish=%s)",
+    async (publish) => {
+      const state = fixture();
+      const published = path.join(state.root, "published");
+      let repacked = false;
+      const command: CommandRunner = async (argv, options) => {
+        const result = await state.runCommand(argv, options);
+        if (argv[2] === state.install && argv[3] === "index-pack" && result.code === 0) {
+          state.git(state.install, "repack", "-a", "-d");
+          repacked = true;
+          expect(state.git(state.install, "cat-file", "-t", state.target)).toBe("commit");
+        }
+        return result;
+      };
+      const result = await state.run(
+        {
+          beforeGitMutation: async () => undefined,
+          ...(publish
+            ? {
+                publishGitCheckout: async () => {
+                  fs.renameSync(state.install, published);
+                  return published;
+                },
+              }
+            : {}),
+        },
+        command,
+      );
+      const installed = publish ? published : state.install;
+      expect(repacked).toBe(true);
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(state.git(installed, "rev-parse", "HEAD")).toBe(state.target);
+      const packs = path.join(installed, ".git", "objects", "pack");
+      expect(fs.readdirSync(packs).filter((name) => name.endsWith(".keep"))).toEqual([]);
+    },
+  );
+
+  it("does not release another owner's keep file after import", async () => {
+    const state = fixture();
+    let keepPath = "";
+    const command: CommandRunner = async (argv, options) => {
+      if (argv[2] === state.install && argv[3] === "index-pack") {
+        const pack = options.input as Buffer;
+        const hash = pack.subarray(-20).toString("hex");
+        keepPath = path.join(state.install, ".git", "objects", "pack", `pack-${hash}.keep`);
+        fs.writeFileSync(keepPath, "operator retention\n");
+      }
+      return state.runCommand(argv, options);
+    };
+    const result = await state.run({ beforeGitMutation: async () => undefined }, command);
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(fs.readFileSync(keepPath, "utf8")).toBe("operator retention\n");
+  });
+
   it("stages divergent history blobs and delta bases before taking upstream offline", async () => {
     const state = fixture(false, true);
     const historical = Array.from({ length: 2000 }, (_, index) =>
@@ -206,13 +261,14 @@ describe("Git database admission", () => {
     expect(fs.readFileSync(path.join(state.install, "unchanged.txt"), "utf8")).toBe(historical);
   });
 
-  it.each(
-    (["staging", "import"] as const).flatMap((phase) =>
-      [false, true].map((validRuntime) => ({ phase, validRuntime })),
+  it.each([
+    ...(["staging", "import"] as const).flatMap((phase) =>
+      [false, true].map((validRuntime) => ({ phase, validRuntime, sourceChanged: false })),
     ),
-  )(
-    "preserves the retained runtime on $phase failure (validRuntime=$validRuntime)",
-    async ({ phase, validRuntime }) => {
+    { phase: "import" as const, validRuntime: true, sourceChanged: true },
+  ])(
+    "preserves the retained runtime on $phase failure (validRuntime=$validRuntime, sourceChanged=$sourceChanged)",
+    async ({ phase, validRuntime, sourceChanged }) => {
       const state = fixture();
       const beforeSha = state.git(state.install, "rev-parse", "HEAD");
       const dist = path.join(state.install, "dist");
@@ -238,6 +294,9 @@ describe("Git database admission", () => {
             : argv[2] === state.install && argv[3] === "index-pack";
         if (argv[0] === "git" && fail) {
           expect(admission).toHaveBeenCalledTimes(phase === "staging" ? 0 : 1);
+          if (sourceChanged) {
+            fs.appendFileSync(path.join(state.install, "package.json"), "\n");
+          }
           return { code: 128, stdout: "", stderr: "synthetic target transport failure" };
         }
         return state.runCommand(argv, options);
@@ -246,9 +305,10 @@ describe("Git database admission", () => {
       expect(result).toMatchObject({
         status: "error",
         reason: "fetch-failed",
-        recovery: validRuntime
-          ? { serviceRestartSafe: true, version: "2026.7.1", buildId: "retained-build" }
-          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery:
+          validRuntime && !sourceChanged
+            ? { serviceRestartSafe: true, version: "2026.7.1", buildId: "retained-build" }
+            : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
       expect(admission).toHaveBeenCalledTimes(phase === "staging" ? 0 : 1);
       expect(state.git(state.install, "rev-parse", "HEAD")).toBe(beforeSha);

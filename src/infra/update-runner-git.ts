@@ -107,6 +107,7 @@ export async function updateGitCheckout(params: {
   let mutationPrepared = false;
   let sourceMutationStarted = false;
   let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
+  let candidateTransfer: Awaited<ReturnType<typeof prepareGitCandidateTransfer>>;
   let stateMigrationStarted = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
   const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
@@ -420,6 +421,7 @@ export async function updateGitCheckout(params: {
           return sourceChanged;
         }
         await prepareMutation(candidateSha, inspectionRoot, runInspectionCommand);
+        candidateTransfer = transfer;
         const imported = await transfer.importInto(step("git import admitted target", [], gitRoot));
         if (!imported) {
           return { status: "error" as const, reason: "fetch-failed" };
@@ -709,6 +711,7 @@ export async function updateGitCheckout(params: {
     });
     return await rollbackError("unexpected-error");
   } finally {
+    await candidateTransfer?.cleanup(step("git candidate pack cleanup", [], gitRoot));
     await runtimePromotion?.cleanup();
   }
 }
