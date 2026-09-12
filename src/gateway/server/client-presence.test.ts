@@ -284,6 +284,8 @@ describe("live person presence timing", () => {
 
   it("keeps heartbeat freshness and cache eviction independent of person timing", async () => {
     const first = await connect("heartbeat@timing.test", "heartbeat-person");
+    first.client.connect.client.id = "openclaw-tui";
+    first.client.connect.client.mode = "ui";
     const started = Date.now();
     first.handler.setClient(first.client);
     recordClientPresenceActivity(clients, first.client);
@@ -295,6 +297,8 @@ describe("live person presence timing", () => {
       lastInputSeconds: 0,
     });
     expect(row("heartbeat@timing.test")).toMatchObject({
+      clientId: "openclaw-tui",
+      mode: "ui",
       ts: started + 10_000,
       onlineSince: started,
       lastActivityAt: started,
@@ -306,8 +310,13 @@ describe("live person presence timing", () => {
     }
     expect(row("heartbeat@timing.test")).toBeUndefined();
     const overlap = await connect("eviction@timing.test", "heartbeat-person");
+    overlap.client.connect.client.id = "openclaw-macos";
+    overlap.client.connect.client.mode = "ui";
     overlap.handler.setClient(overlap.client);
+    expect(row("heartbeat@timing.test")).toMatchObject({ clientId: "openclaw-tui", mode: "ui" });
     expect(row("eviction@timing.test")).toMatchObject({
+      clientId: "openclaw-macos",
+      mode: "ui",
       onlineSince: started,
       lastActivityAt: started,
     });
@@ -315,7 +324,10 @@ describe("live person presence timing", () => {
     vi.setSystemTime(started + 400_000);
     expect(row("eviction@timing.test")).toBeUndefined();
     expect(recordClientPresenceActivity(clients, overlap.client)).toBe(true);
+    expect(row("heartbeat@timing.test")).toMatchObject({ clientId: "openclaw-tui", mode: "ui" });
     expect(row("eviction@timing.test")).toMatchObject({
+      clientId: "openclaw-macos",
+      mode: "ui",
       onlineSince: started,
       lastActivityAt: started + 400_000,
     });

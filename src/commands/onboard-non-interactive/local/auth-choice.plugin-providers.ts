@@ -4,7 +4,13 @@
  * This path resolves trusted plugin providers, delegates setup to their
  * non-interactive method, and installs runtime plugins required by the model.
  */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
+import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
@@ -127,6 +133,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       includeUntrustedWorkspacePlugins: false,
     }),
     choice: params.authChoice,
+    manifestChoice: trustedManifestMatch,
   });
   if (!providerChoice) {
     if (prefixedProviderId) {
@@ -213,6 +220,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         includeUntrustedWorkspacePlugins: false,
       }),
       choice: params.authChoice,
+      manifestChoice: installCatalogEntry,
     });
     if (!providerChoice) {
       return reject(
@@ -252,7 +260,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     agentScopedModels
       ? projectAgentModelDefaults(enableResult.config, params.target, updated)
       : updated;
-  const result = await method.runNonInteractive({
+  const runNonInteractive = method.runNonInteractive;
+  const context = {
     authChoice: params.authChoice,
     config: providerConfig,
     baseConfig: params.baseConfig,
@@ -262,7 +271,132 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     workspaceDir,
     resolveApiKey: params.resolveApiKey,
     toApiKeyCredential: params.toApiKeyCredential,
-  });
+  };
+  const { isSetupCredentialReplacement, saveSetupCredential, selectSetupCredential } =
+    await import("../../../system-agent/setup-inference-credentials.js");
+  let result: OpenClawConfig | null;
+  if (
+    isSetupCredentialReplacement({
+      provider: providerChoice.provider.id,
+      baseConfig: params.baseConfig,
+      agentDir,
+    })
+  ) {
+    const [
+      { withAuthProfileStoreAgentDir, clearRuntimeAuthProfileStoreSnapshot },
+      { loadAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore },
+      { loadPersistedAuthProfileStore },
+      { closeAuthProfileReadPool },
+      { closeOpenClawAgentDatabases },
+      { splitTrailingAuthProfile },
+      { resolveSetupModel },
+      { prepareCustomSetupCredentials },
+    ] = await Promise.all([
+      import("../../../agents/auth-profiles/store.js"),
+      import("../../../agents/auth-profiles/store-runtime.js"),
+      import("../../../agents/auth-profiles/persisted.js"),
+      import("../../../agents/auth-profiles/sqlite.js"),
+      import("../../../state/openclaw-agent-db.js"),
+      import("../../../agents/model-ref-profile.js"),
+      import("../../../system-agent/setup-inference-core.js"),
+      import("../../../system-agent/setup-inference-custom.js"),
+    ]);
+    const realStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+    // This is preparation for the same owner, not a new agent. Preserve static
+    // metadata even when cross-agent copying is disabled; never clone refresh material.
+    const seeded = {
+      version: realStore.version,
+      ...(realStore.order ? { order: structuredClone(realStore.order) } : {}),
+      profiles: Object.fromEntries(
+        Object.entries(realStore.profiles).filter(
+          ([, credential]) => credential.type !== "oauth" && !credential.setup?.replacement,
+        ),
+      ),
+    };
+    const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-credential-"));
+    const stagingAgentDir = path.join(stagingRoot, "agents", "setup", "agent");
+    let savedProfileId: string | undefined;
+    try {
+      await fs.mkdir(stagingAgentDir, { recursive: true });
+      result = await withAuthProfileStoreAgentDir(stagingAgentDir, stagingRoot, async () => {
+        saveAuthProfileStore(seeded, stagingAgentDir, { syncExternalCli: false });
+        return await runNonInteractive({
+          ...context,
+          agentDir: stagingAgentDir,
+          runtime: {
+            ...params.runtime,
+            exit: (code) => {
+              throw new Error(`Provider setup exited with code ${code}; see its error above.`);
+            },
+          },
+        });
+      });
+      if (!result) {
+        return null;
+      }
+      const prepared = prepareCustomSetupCredentials({
+        config: structuredClone(result),
+        providerId: providerChoice.provider.id,
+      });
+      const profiles = Object.entries(
+        loadPersistedAuthProfileStore(stagingAgentDir)?.profiles ?? {},
+      )
+        .filter(
+          ([profileId, credential]) => !isDeepStrictEqual(credential, seeded.profiles[profileId]),
+        )
+        .map(([profileId, credential]) => ({ profileId, credential }));
+      if (
+        !isDeepStrictEqual(
+          result.models?.providers?.[providerChoice.provider.id]?.apiKey,
+          providerConfig.models?.providers?.[providerChoice.provider.id]?.apiKey,
+        )
+      ) {
+        profiles.push(...prepared.profiles);
+      }
+      if (profiles.length > 0) {
+        const selected = resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
+        const modelRef = resolveSetupModel({
+          label: providerChoice.provider.label,
+          providerId: providerChoice.provider.id,
+          defaultModel:
+            selected && selectSetupCredential(profiles, selected, prepared.config)
+              ? splitTrailingAuthProfile(selected).model
+              : method.starterModel,
+        });
+        if (typeof modelRef !== "string") {
+          throw new Error(modelRef.error);
+        }
+        const profile = selectSetupCredential(profiles, modelRef, prepared.config);
+        if (!profile) {
+          throw new Error(
+            "Provider setup did not save a replacement credential. Your connection is unchanged.",
+          );
+        }
+        const saved = await saveSetupCredential({
+          profile,
+          config: projectProviderResult(prepared.config),
+          baseConfig: params.baseConfig,
+          agentDir,
+          modelRef,
+          authChoice: trustedManifestMatch?.choiceId ?? providerChoice.wizard?.choiceId,
+          pluginId: providerChoice.provider.pluginId,
+        });
+        savedProfileId = saved.profile.profileId;
+      }
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshot(stagingAgentDir);
+      closeAuthProfileReadPool({ kind: "root", rootPath: stagingRoot });
+      closeOpenClawAgentDatabases(stagingRoot);
+      await fs.rm(stagingRoot, { recursive: true, force: true });
+    }
+    if (savedProfileId) {
+      return reject(
+        `Replacement credential saved but inactive. Your connection is unchanged. Test and activate it with:\n${formatCliCommand(`openclaw models auth activate ${quoteCliArg(savedProfileId)} --agent ${quoteCliArg(params.target.agentId)}`)}`,
+      );
+    }
+  } else {
+    result = await runNonInteractive(context);
+  }
   if (!result) {
     return result;
   }

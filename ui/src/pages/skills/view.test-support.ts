@@ -1,7 +1,5 @@
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
-import type { renderSkills } from "./view.ts";
-
-type SkillsProps = Parameters<typeof renderSkills>[0];
+import type { SkillsProps } from "./view-types.ts";
 
 export function normalizeText(node: Element | DocumentFragment): string {
   return node.textContent?.replace(/\s+/g, " ").trim() ?? "";

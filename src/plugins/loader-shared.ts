@@ -5,8 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
@@ -47,17 +45,14 @@ import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
   commitStagedPluginRegistry,
+  getActivePluginRegistry,
+  getActivePluginRegistryVersion,
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { PluginLogger } from "./types.js";
-
-export function createPluginLoaderLogger(): PluginLogger {
-  return createSubsystemLogger("plugins");
-}
 
 export function detailPluginStartupTrace(
   startupTrace: PluginLoadOptions["startupTrace"] | undefined,
@@ -150,7 +145,7 @@ function isAuthorizedDreamingSidecarPlugin(params: {
   return params.sidecar?.engineId === params.pluginId;
 }
 
-function matchesScopedPluginOrDreamingSidecar(params: {
+export function matchesScopedPluginOrDreamingSidecar(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   pluginId: string;
   sidecar: AuthorizedDreamingSidecar | null;
@@ -381,9 +376,7 @@ export function preparePluginLoadRecord(params: {
       enabled: false,
       activationState,
     });
-    duplicate.status = "disabled";
-    duplicate.error = `overridden by ${existingOrigin} plugin`;
-    markPluginActivationDisabled(duplicate, duplicate.error);
+    markPluginActivationDisabled(duplicate, `overridden by ${existingOrigin} plugin`);
     params.registry.plugins.push(duplicate);
     return null;
   }
@@ -442,27 +435,47 @@ export function activatePluginRegistry(
   cacheKey: string | null,
   runtimeSubagentMode: PluginRuntimeSubagentMode,
   workspaceDir?: string,
+  previousRegistry?: PluginRegistry,
 ): void {
   const activeSnapshot = captureActivePluginRegistrySnapshot();
+  const retainedRegistry = previousRegistry ?? activeSnapshot.activeRegistry;
   const previousHookRegistry = getGlobalPluginRegistry();
+  let stagedVersion: number | undefined;
+  const isCurrentStage = () =>
+    stagedVersion !== undefined &&
+    getActivePluginRegistry() === registry &&
+    getActivePluginRegistryVersion() === stagedVersion;
   try {
-    // Install the complete bundle before hook-runner initialization so hook composition never
-    // observes contributions from two loads. Activation failure restores the prior selection.
-    stageActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+    // Install the complete bundle before hooks, but never resume a displaced activation.
+    stagedVersion = stageActivePluginRegistry(
+      registry,
+      cacheKey,
+      runtimeSubagentMode,
+      workspaceDir,
+    );
+    if (!isCurrentStage()) {
+      throw new Error("Plugin registry activation was superseded");
+    }
     initializeGlobalHookRunner(registry);
     activateContextEngineRegistrations(registry);
-    commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
+    commitStagedPluginRegistry(retainedRegistry, registry);
+    if (!isCurrentStage()) {
+      throw new Error("Plugin registry activation was superseded");
+    }
   } catch (error) {
-    rollbackStagedPluginRegistry(activeSnapshot);
-    if (previousHookRegistry) {
-      initializeGlobalHookRunner(previousHookRegistry);
-    } else {
-      resetGlobalHookRunner();
+    if (isCurrentStage()) {
+      const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot, retainedRegistry);
+      if (
+        getActivePluginRegistry() === activeSnapshot.activeRegistry &&
+        getActivePluginRegistryVersion() === rollbackVersion
+      ) {
+        if (previousHookRegistry) {
+          initializeGlobalHookRunner(previousHookRegistry);
+        } else {
+          resetGlobalHookRunner();
+        }
+      }
     }
     throw error;
   }
-}
-
-export function safeRealpathOrResolve(value: string): string {
-  return resolveRealpathOrAbsolute(value);
 }

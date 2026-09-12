@@ -236,10 +236,10 @@ export class TerminalPanelUploadController {
         return;
       }
 
-      let uploadedPath: string;
+      let uploaded: Awaited<ReturnType<typeof uploadTerminalFile>>;
       const uploadStartedAtMs = Date.now();
       try {
-        const result = await uploadTerminalFile(
+        uploaded = await uploadTerminalFile(
           client,
           batch.tab.gatewaySessionId,
           { name: file.name, contentBase64 },
@@ -248,13 +248,17 @@ export class TerminalPanelUploadController {
         if (!this.ensureCurrent(batch)) {
           return;
         }
-        uploadedPath = result.path;
       } catch (error) {
         this.failBatch(batch, error, isRetryableUploadError(error));
         return;
       }
+      let uploadedPath: string;
       try {
-        uploadedPath = quoteTerminalUploadPath(uploadedPath, batch.tab.shell);
+        uploadedPath = quoteTerminalUploadPath(
+          uploaded.path,
+          batch.tab.shell,
+          uploaded.uploadPathStyle,
+        );
       } catch (error) {
         this.failBatch(batch, error, false);
         return;

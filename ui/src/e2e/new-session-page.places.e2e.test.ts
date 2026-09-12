@@ -380,14 +380,35 @@ suite.define(() => {
       const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
       const whereTrigger = page.locator("#new-session-where-trigger");
       await whereTrigger.click();
-      await pollLocatorText(whereSelect.locator(".new-session-page__menu-title").first()).toBe(
-        "Environments",
+      const environmentSearch = whereSelect.getByRole("searchbox", { name: "Search environments" });
+      await expect
+        .poll(() => environmentSearch.getAttribute("placeholder"))
+        .toBe("Search environments");
+      await expect
+        .poll(() => environmentSearch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      const localEnvironment = whereSelect.locator('[data-value="gateway"]');
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
+      await environmentSearch.fill("no-such-environment");
+      await whereSelect
+        .getByRole("status")
+        .getByText("No matching environments", { exact: true })
+        .waitFor();
+      expect(await whereTrigger.locator(".new-session-page__trigger-label").textContent()).toBe(
+        "Local",
       );
-      await captureProjectUiProof(suite, page, "new-session-environment-menu-label.png", {
+      await environmentSearch.fill("");
+      await expect.poll(() => localEnvironment.isVisible()).toBe(true);
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
+      await captureProjectUiProof(suite, page, "new-session-environment-search.png", {
         surface: whereSelect.locator('wa-popup [part="popup"]'),
-        content: [whereSelect.locator(".new-session-page__menu-title").first()],
+        content: [environmentSearch],
       });
       await page.keyboard.press("Escape");
+      await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("false");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.id))
+        .toBe("new-session-where-trigger");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
@@ -635,6 +656,8 @@ suite.define(() => {
       await gateway.waitForRequest("fs.listDir");
       const input = place.locator("input.new-session-page__browser-path");
       await expect.poll(() => input.inputValue()).toBe(WORKSPACE);
+      // The draft path is set before the request finishes; filter only after its listing arrives.
+      await place.locator(".new-session-page__browser-entry", { hasText: "packages" }).waitFor();
       const requestsBefore = await gateway.getRequests("fs.listDir");
       await input.fill(`${WORKSPACE}/pa`);
       await expect

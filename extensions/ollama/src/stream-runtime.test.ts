@@ -21,6 +21,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import {
   buildOllamaChatRequest,
@@ -664,16 +665,20 @@ describe("convertToOllamaMessages", () => {
     });
   });
 
-  it("converts assistant messages with toolCall content blocks", () => {
+  it("preserves assistant thinking alongside text and tool calls", () => {
     const result = convertAssistantContent([
+      { type: "thinking", thinking: "Check the directory.\n" },
+      { type: "thinking", thinking: "Then report its contents." },
+      { type: "thinking", thinking: "redacted reasoning", redacted: true },
       { type: "text", text: "Let me check." },
       { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
     ]);
-    expect(requireEntry(result, 0, "first converted Ollama message").role).toBe("assistant");
-    expect(requireEntry(result, 0, "first converted Ollama message").content).toBe("Let me check.");
-    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
-      { id: "call_1", function: { name: "bash", arguments: { command: "ls" } } },
-    ]);
+    expect(requireEntry(result, 0, "first converted Ollama message")).toEqual({
+      role: "assistant",
+      content: "Let me check.",
+      thinking: "Check the directory.\nThen report its contents.",
+      tool_calls: [{ id: "call_1", function: { name: "bash", arguments: { command: "ls" } } }],
+    });
   });
 
   it("preserves assistant tool-call ids before Ollama replay", () => {
@@ -1687,28 +1692,6 @@ function getGuardedFetchJsonBody(
     throw new Error("Expected string request body");
   }
   return requireRecord(JSON.parse(body), "Ollama request body");
-}
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 async function createOllamaTestStream(params: {
@@ -3508,7 +3491,7 @@ describe("createOllamaStreamFn", () => {
   });
 
   it("surfaces bounded non-2xx HTTP response text as a status-prefixed error", async () => {
-    const tracked = cancelTrackedResponse(`${"Service Unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"Service Unavailable ".repeat(1024)}tail`, {
       status: 503,
       statusText: "Service Unavailable",
     });
@@ -3543,7 +3526,7 @@ describe("createOllamaStreamFn", () => {
     const configuredSecret = "stream-boundary-credential-secret";
     const retainedPrefix = configuredSecret.slice(0, -5);
     const safeMarker = "bounded stream diagnostic: ";
-    const tracked = cancelTrackedResponse(
+    const tracked = cancelTrackedTextResponse(
       `${safeMarker}${"x".repeat(8 * 1024 - safeMarker.length - retainedPrefix.length)}${configuredSecret} trailing text`,
       { status: 503, statusText: "Service Unavailable" },
     );

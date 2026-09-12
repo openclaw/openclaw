@@ -35,7 +35,7 @@ vi.mock("./discovery.js", async (importOriginal) => {
   };
 });
 
-const { buildPluginDiagnosticsReport } = await import("./status.js");
+const { withPluginDiagnosticsReport } = await import("./status.js");
 const { resolveEffectivePluginIds } = await import("./effective-plugin-ids.js");
 const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
 
@@ -65,19 +65,21 @@ const config: OpenClawConfig = {
   },
 } as OpenClawConfig;
 
-function countReport(params: { effectiveOnly: boolean; onlyPluginIds?: readonly string[] }): {
+async function countReport(params: {
+  effectiveOnly: boolean;
+  onlyPluginIds?: readonly string[];
+}): Promise<{
   rebuilds: number;
   scans: number;
   ids: string[];
-} {
+}> {
   counters.manifestRegistryRebuilds = 0;
   counters.discoveryScans = 0;
-  const report = buildPluginDiagnosticsReport({ config, env: process.env, ...params });
-  return {
+  return withPluginDiagnosticsReport({ config, env: process.env, ...params }, (report) => ({
     rebuilds: counters.manifestRegistryRebuilds,
     scans: counters.discoveryScans,
     ids: report.plugins.map((plugin) => plugin.id).toSorted(),
-  };
+  }));
 }
 
 function countResolve(metadataSnapshot: PluginMetadataSnapshot): {
@@ -107,10 +109,10 @@ afterAll(() => {
   vi.unstubAllEnvs();
 });
 
-it("does not re-derive discovery when reporting effective-only plugins", () => {
-  const all = countReport({ effectiveOnly: false });
+it("does not re-derive discovery when reporting effective-only plugins", async () => {
+  const all = await countReport({ effectiveOnly: false });
   clearPluginMetadataLifecycleCaches();
-  const effective = countReport({ effectiveOnly: true });
+  const effective = await countReport({ effectiveOnly: true });
 
   // The effective-only filter still selects the configured channel owner.
   expect(effective.ids).toEqual(["cold-plugin", "other-plugin"]);

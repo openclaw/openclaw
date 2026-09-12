@@ -9,8 +9,10 @@ import {
   execLaunchctl,
   formatLaunchctlResultDetail,
   isLaunchctlNotLoaded,
+  launchctlInspectionReason,
   type LaunchctlResult,
 } from "./launchd-exec.js";
+import type { ServiceInspectionReason } from "./service-inspection-error.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 const PLUTIL_PATH = "/usr/bin/plutil";
@@ -24,6 +26,7 @@ type SystemLaunchDaemonOwnership =
       serviceTarget: string;
       operation: "launchctl" | "filesystem";
       detail: string;
+      reason?: ServiceInspectionReason;
     };
 
 type SystemLaunchDaemonConflict = Exclude<SystemLaunchDaemonOwnership, { status: "absent" }>;
@@ -209,6 +212,7 @@ function classifySystemLaunchDaemonQuery(
         serviceTarget,
         operation: "launchctl",
         detail: formatLaunchctlResultDetail(result) || `exit code ${result.code}`,
+        reason: launchctlInspectionReason(result, serviceTarget),
       };
 }
 

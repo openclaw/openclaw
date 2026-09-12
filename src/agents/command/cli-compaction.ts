@@ -444,7 +444,7 @@ async function compactNativeHarnessCliTranscript(params: {
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     const modelSelectionLocked = params.sessionEntry.modelSelectionLocked === true;
     const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const preparedRuntimeLease = await cliCompactionDeps.acquirePreparedModelRuntime(
+    await using preparedRuntimeLease = await cliCompactionDeps.acquirePreparedModelRuntime(
       {
         config: params.cfg,
         ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
@@ -462,79 +462,75 @@ async function compactNativeHarnessCliTranscript(params: {
       },
       params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {},
     );
-    try {
-      const preparedModelRuntime = preparedRuntimeLease.snapshot;
-      result = await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
-        await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
-          provider: params.provider,
-          modelId: params.model,
-          config: params.cfg,
-          sessionKey: params.sessionKey,
-          workspaceDir: params.workspaceDir,
-          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-          ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
-          pluginRegistry: preparedModelRuntime.pluginRegistry,
-        });
-        params.assertActive();
-        return await cliCompactionDeps.maybeCompactAgentHarnessSession(
-          {
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-            workspaceDir: params.workspaceDir,
-            cwd: params.cwd,
-            agentDir: params.agentDir,
-            config: params.cfg,
-            skillsSnapshot: params.skillsSnapshot,
-            provider: params.provider,
-            model: params.model,
-            authProfileId,
-            contextTokenBudget: params.contextTokenBudget,
-            currentTokenCount: params.currentTokenCount,
-            trigger: "budget",
-            force: true,
-            messageChannel: params.messageChannel,
-            agentAccountId: params.agentAccountId,
-            senderIsOwner: params.senderIsOwner,
-            thinkLevel: params.thinkLevel,
-            extraSystemPrompt: params.extraSystemPrompt,
-            modelSelectionLocked,
-            allowGatewaySubagentBinding: true,
-            ...(params.contextEngine
-              ? {
-                  contextEngine: params.contextEngine,
-                  contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
-                    sessionKey: params.sessionKey,
-                    messageChannel: params.messageChannel,
-                    agentAccountId: params.agentAccountId,
-                    authProfileId,
-                    workspaceDir: params.workspaceDir,
-                    cwd: params.cwd,
-                    agentDir: params.agentDir,
-                    cfg: params.cfg,
-                    skillsSnapshot: params.skillsSnapshot,
-                    senderIsOwner: params.senderIsOwner,
-                    provider: params.provider,
-                    model: params.model,
-                    harnessRuntime: nativeHarnessId,
-                    modelSelectionLocked,
-                    thinkLevel: params.thinkLevel,
-                    extraSystemPrompt: params.extraSystemPrompt,
-                    currentTokenCount: params.currentTokenCount,
-                    contextTokenBudget: params.contextTokenBudget,
-                    trigger: "cli_native_budget",
-                  }),
-                }
-              : {}),
-            ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
-            abortSignal: params.abortSignal,
-          },
-          { preparedModelRuntime },
-        );
+    const preparedModelRuntime = preparedRuntimeLease.snapshot;
+    result = await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
+      await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
+        provider: params.provider,
+        modelId: params.model,
+        config: params.cfg,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+        ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
+        pluginRegistry: preparedModelRuntime.pluginRegistry,
       });
-    } finally {
-      preparedRuntimeLease.release();
-    }
+      params.assertActive();
+      return await cliCompactionDeps.maybeCompactAgentHarnessSession(
+        {
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          workspaceDir: params.workspaceDir,
+          cwd: params.cwd,
+          agentDir: params.agentDir,
+          config: params.cfg,
+          skillsSnapshot: params.skillsSnapshot,
+          provider: params.provider,
+          model: params.model,
+          authProfileId,
+          contextTokenBudget: params.contextTokenBudget,
+          currentTokenCount: params.currentTokenCount,
+          trigger: "budget",
+          force: true,
+          messageChannel: params.messageChannel,
+          agentAccountId: params.agentAccountId,
+          senderIsOwner: params.senderIsOwner,
+          thinkLevel: params.thinkLevel,
+          extraSystemPrompt: params.extraSystemPrompt,
+          modelSelectionLocked,
+          allowGatewaySubagentBinding: true,
+          ...(params.contextEngine
+            ? {
+                contextEngine: params.contextEngine,
+                contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
+                  sessionKey: params.sessionKey,
+                  messageChannel: params.messageChannel,
+                  agentAccountId: params.agentAccountId,
+                  authProfileId,
+                  workspaceDir: params.workspaceDir,
+                  cwd: params.cwd,
+                  agentDir: params.agentDir,
+                  cfg: params.cfg,
+                  skillsSnapshot: params.skillsSnapshot,
+                  senderIsOwner: params.senderIsOwner,
+                  provider: params.provider,
+                  model: params.model,
+                  harnessRuntime: nativeHarnessId,
+                  modelSelectionLocked,
+                  thinkLevel: params.thinkLevel,
+                  extraSystemPrompt: params.extraSystemPrompt,
+                  currentTokenCount: params.currentTokenCount,
+                  contextTokenBudget: params.contextTokenBudget,
+                  trigger: "cli_native_budget",
+                }),
+              }
+            : {}),
+          ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
+          abortSignal: params.abortSignal,
+        },
+        { preparedModelRuntime },
+      );
+    });
   } catch (error) {
     log.warn(
       `CLI native harness compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,

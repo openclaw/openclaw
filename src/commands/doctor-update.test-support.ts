@@ -3,14 +3,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../config/materialize.js";
+import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../daemon/service-update-authority.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 
 const mocks = vi.hoisted(() => ({
+  realLedger: false,
   createUpdateProgress: vi.fn(),
   admitUpdateCommandRun:
     vi.fn<typeof import("../cli/update-cli/update-command-run.js").admitUpdateCommandRun>(),
@@ -29,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   readUpdateStateSchemaVersions:
     vi.fn<typeof import("../infra/update-candidate-state.js").readUpdateStateSchemaVersions>(),
   readConfigFileSnapshot: vi.fn<typeof import("../config/config.js").readConfigFileSnapshot>(),
+  readCurrentGitUpdateRecovery: vi.fn(),
   gitMutationPolicy: vi.fn(),
   maybeRestartServiceAfterFailedMutableUpdate: vi.fn(),
   maybeStopManagedServiceBeforeMutableUpdate: vi.fn(),
@@ -38,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   restartUpdatedGateway: vi.fn(),
   stopGatewayService: vi.fn(),
   waitForHealthyRestart: vi.fn(),
+  inspectGatewayRestart: vi.fn(),
   waitForHttpReadiness:
     vi.fn<typeof import("../cli/daemon-cli/restart-health.js").waitForGatewayHttpReadiness>(),
   doctorCommand: vi.fn(),
@@ -56,8 +62,13 @@ vi.mock("../cli/update-cli/progress.js", () => ({
 vi.mock("../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: async (root: string) => `${root}/dist/index.js`,
 }));
-vi.mock("../process/exec.js", () => ({
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: mocks.runCommandWithTimeout,
+}));
+
+vi.mock("../infra/update-runner-git-recovery.js", () => ({
+  readCurrentGitUpdateRecovery: mocks.readCurrentGitUpdateRecovery,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -87,7 +98,9 @@ vi.mock("../cli/daemon-cli.js", () => ({
 vi.mock("../cli/update-cli/update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.createUpdateConfigSnapshot,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
+vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
+  inspectGatewayRestart: mocks.inspectGatewayRestart,
   waitForGatewayHealthyRestart: mocks.waitForHealthyRestart,
   waitForGatewayHttpReadiness: mocks.waitForHttpReadiness,
   renderRestartDiagnostics: () => ["gateway not ready"],
@@ -113,13 +126,24 @@ vi.mock("../cli/update-cli/update-command-run.js", async (importOriginal) => ({
   completeUpdateCommandRun: mocks.completeUpdateCommandRun,
   failUpdateCommandRun: mocks.failUpdateCommandRun,
 }));
-vi.mock("../infra/update-run-ledger.js", () => ({
-  recordUpdateRunPhase: vi.fn(),
-  recordUpdateRunStep: vi.fn(),
-  recordUpdateRunVerification: vi.fn(),
-  getUpdateRun: vi.fn(),
-  recordUpdateRunRepairAttempt: vi.fn(),
-}));
+vi.mock("../infra/update-run-ledger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-run-ledger.js")>();
+  return {
+    ...actual,
+    recordUpdateRunPhase: (...args: Parameters<typeof actual.recordUpdateRunPhase>) =>
+      mocks.realLedger ? actual.recordUpdateRunPhase(...args) : undefined,
+    recordUpdateRunStep: (...args: Parameters<typeof actual.recordUpdateRunStep>) =>
+      mocks.realLedger ? actual.recordUpdateRunStep(...args) : undefined,
+    recordUpdateRunVerification: (
+      ...args: Parameters<typeof actual.recordUpdateRunVerification>
+    ) => (mocks.realLedger ? actual.recordUpdateRunVerification(...args) : undefined),
+    getUpdateRun: (...args: Parameters<typeof actual.getUpdateRun>) =>
+      mocks.realLedger ? actual.getUpdateRun(...args) : undefined,
+    recordUpdateRunRepairAttempt: (
+      ...args: Parameters<typeof actual.recordUpdateRunRepairAttempt>
+    ) => (mocks.realLedger ? actual.recordUpdateRunRepairAttempt(...args) : undefined),
+  };
+});
 vi.mock("../cli/update-cli/update-command-launch-agent-recovery.js", () => ({
   recoverInstalledLaunchAgentAfterUpdate: async () => ({ attempted: false, recovered: false }),
 }));
@@ -161,14 +185,56 @@ export async function runOffer(params?: {
   });
 }
 
-export function mockGitCheckout() {
+export function mockGitCheckout(root = "/repo/link") {
   vi.spyOn(fs, "realpath").mockImplementation(async (candidate) => String(candidate));
   mocks.runCommandWithTimeout.mockImplementation(async (argv, options) => {
+    if (argv.includes("--update-executor")) {
+      // Keep the public caller and executor real. Only replace the target CLI
+      // transport: bind a real child, consume its grant, and await its exit.
+      const { runCommandWithTimeout } =
+        await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+      const mode = argv[argv.indexOf("--update-executor") + 1];
+      const receiver = new URL("../cli/update-cli/update-command-executor.ts", import.meta.url)
+        .href;
+      const script =
+        mode === "check"
+          ? `process.stdin.resume(); process.stdin.on("end",()=>process.stdout.write(JSON.stringify({updateExecutor:"${GATEWAY_UPDATE_EXECUTOR_CONTRACT}",targetRootBinding:true})));`
+          : `
+          import fs from "node:fs";
+          import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(receiver)};
+          const {executor:grant,action}=JSON.parse(fs.readFileSync(0,"utf8"));
+          await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
+            fence.assertCurrent();
+            process.stdout.write(JSON.stringify({action,ok:true,result:"restarted"}));
+          });
+        `;
+      const response = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          "--input-type=module",
+          "-e",
+          script,
+        ],
+        { ...options, cwd: process.cwd() },
+      );
+      if (mode === "run" && response.code === 0 && argv[3] === "restart") {
+        try {
+          await mocks.restartUpdatedGateway(options.env);
+        } catch (error) {
+          // A target command failure is a nonzero child result, not a transport
+          // rejection that leaves sticky executor custody failure.
+          return { ...response, code: 1, stderr: String(error) };
+        }
+      }
+      return response;
+    }
     if (argv[2] === "gateway" && argv[3] === "restart") {
       await mocks.restartUpdatedGateway(options.env);
     }
     return {
-      stdout: "/repo/link\n",
+      stdout: `${root}\n`,
       stderr: "",
       code: 0,
       killed: false,
@@ -230,11 +296,16 @@ export function mockUpdateResult(result: Omit<UpdateRunResult, "steps" | "durati
 }
 
 export function installDoctorUpdateTestHooks(): void {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
   const originalStdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
   const originalStdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
   const originalServiceRepairPolicy = process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
 
   beforeEach(async () => {
+    mocks.realLedger = false;
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      dirs.make("doctor-executor-"),
+    );
     // These controls exercise the canonical host install, not the test launcher's profile.
     for (const key of [
       "OPENCLAW_HOME",
@@ -277,6 +348,11 @@ export function installDoctorUpdateTestHooks(): void {
       warnings: [],
       legacyIssues: [],
     });
+    mocks.readCurrentGitUpdateRecovery.mockReset().mockResolvedValue({
+      serviceRestartSafe: true,
+      version: "2026.4.23",
+      buildId: "original-build",
+    });
     mocks.gitMutationPolicy.mockReset();
     mockSystemAccountHome();
     mocks.maybeRestartServiceAfterFailedMutableUpdate.mockReset();
@@ -299,12 +375,14 @@ export function installDoctorUpdateTestHooks(): void {
     mocks.revalidateManagedGatewayServiceAfterUpdate.mockImplementation(
       async ({ preManagedServiceStop }) => preManagedServiceStop.serviceUpdateVerdict,
     );
-    mocks.waitForHealthyRestart.mockReset().mockResolvedValue({
+    const healthy = {
       healthy: true,
       runtime: { status: "running" },
       staleGatewayPids: [],
       gatewayVersion: "2026.4.24",
-    });
+    };
+    mocks.waitForHealthyRestart.mockReset().mockResolvedValue(healthy);
+    mocks.inspectGatewayRestart.mockReset().mockResolvedValue(healthy);
     mocks.waitForHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
 
     mocks.doctorCommand.mockReset();

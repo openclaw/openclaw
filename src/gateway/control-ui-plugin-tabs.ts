@@ -1,21 +1,28 @@
 import { BOARD_REPORT_WIDGET_KIND } from "../boards/board-report.js";
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
-// Descriptors come from the process-root registry installed by the gateway.
+// Descriptors follow the current Gateway's registry, including request-local snapshots.
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
 import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   authorizeOperatorScopesForRequiredScope,
   READ_SCOPE,
   type OperatorScope,
 } from "./method-scopes.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
-import { findMatchingPluginHttpRoutes } from "./server/plugins-http/route-match.js";
+import {
+  findMatchingPluginHttpRoutes,
+  findRegisteredPluginHttpRoute,
+} from "./server/plugins-http/route-match.js";
+
+const log = createSubsystemLogger("gateway/control-ui");
 
 type ControlUiPluginTab = {
   pluginId: string;
@@ -25,6 +32,7 @@ type ControlUiPluginTab = {
   icon?: string;
   path?: string;
   placement?: string;
+  slug?: string;
   group?: "control" | "agent";
   order?: number;
   requiresGatewayAuth?: boolean;
@@ -101,6 +109,7 @@ function projectControlUiPluginTabs(
       icon: descriptor.icon,
       path: descriptor.path,
       placement: descriptor.placement,
+      ...(descriptor.slug ? { slug: descriptor.slug } : {}),
       group: descriptor.group,
       order: descriptor.order,
     });
@@ -119,13 +128,29 @@ export function listControlUiPluginTabs(
   scopes: readonly string[],
   opts: { requireGatewayAuthGrant?: boolean } = {},
 ): ControlUiPluginTab[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
+  const basePath = normalizeControlUiBasePath(
+    getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath,
+  );
   return projectControlUiPluginTabs(registry?.controlUiDescriptors ?? [], scopes).flatMap((tab) => {
     const route = registry ? findControlUiTabGatewayRoute(registry, tab) : undefined;
     if (route === null) {
       // Dispatch authenticates against its first matching gateway route. Hide
       // a descriptor whose owning plugin cannot receive that request.
       return [];
+    }
+    // Project after registration so HTTP routes shadow slugs regardless of registration order.
+    if (registry && tab.slug) {
+      const pathname = `${basePath}/${tab.slug}`;
+      const shadow = findRegisteredPluginHttpRoute(registry, pathname);
+      if (shadow) {
+        const message = `Control UI tab slug ${pathname} is shadowed by plugin HTTP route ${shadow.pluginId}:${shadow.path}; using the generic tab URL for ${tab.pluginId}:${tab.id}`;
+        if (!registry.diagnostics.some((diagnostic) => diagnostic.message === message)) {
+          registry.diagnostics.push({ level: "warn", pluginId: tab.pluginId, message });
+          log.warn(message);
+        }
+        delete tab.slug;
+      }
     }
     return route && opts.requireGatewayAuthGrant !== false
       ? [{ ...tab, requiresGatewayAuth: true }]
@@ -137,7 +162,7 @@ export function listControlUiPluginTabs(
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const entries = registry?.controlUiDescriptors ?? [];
   const disabled = new Set(
     registry?.plugins
@@ -174,7 +199,7 @@ export function listControlUiPluginWidgetKinds(
 export function listControlUiPluginTabAuthGrants(
   callerScopes: readonly string[],
 ): ControlUiPluginTabAuthGrant[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   if (!registry || !authorizeOperatorScopesForRequiredScope(READ_SCOPE, callerScopes).allowed) {
     return [];
   }

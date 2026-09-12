@@ -60,6 +60,7 @@ function scenario(): ControlUiMockGatewayScenario {
       "browser.request",
       "desktop.observe",
       "environments.list",
+      "environments.status",
       "sessions.diff",
       "tasks.list",
       "terminal.open",
@@ -77,9 +78,7 @@ function scenario(): ControlUiMockGatewayScenario {
         control: false,
         auth: "vnc-password",
       },
-      "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
-      },
+      "environments.status": { id: "gateway", type: "local", status: "available", desktop: true },
       "sessions.diff": {
         sessionKey,
         root: "/workspace/openclaw",
@@ -230,9 +229,9 @@ function sidePanelBody(page: Page): Locator {
   return page.locator('.sidebar-region [data-region="side"]:not([hidden])');
 }
 
-// Scope tab queries to the panel's own header: Terminal and Browser render the
-// same strip inside the panel body, so an unscoped descendant match would also
-// collect their inner rails. Match descendants of that header rather than a
+// Scope tab queries to the panel's own header: Terminal renders the same strip
+// inside the panel body, so an unscoped descendant match would also collect its
+// inner rail. Match descendants of that header rather than a
 // direct child, so header layout wrappers can change without silently emptying
 // every tab assertion.
 const sidePanelTabLabelSelector = '[data-region-header="side"] .tabstrip-tab__label';

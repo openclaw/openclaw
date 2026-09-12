@@ -100,6 +100,7 @@ describe("doctor retirement repair ordering", () => {
       expect.soft(result.warnings.join("\n")).toContain(expected);
     }
     const cronRepair = await repairCronCodexModelRefsAfterConfigWrite({
+      migrateCodexModelRefs: true,
       cfg: configRepair.config,
       repairRetiredModelRefs: true,
     });
@@ -170,6 +171,7 @@ describe("doctor retirement repair ordering", () => {
         shouldRepair: true,
       });
       const cronRepair = await repairCronCodexModelRefsAfterConfigWrite({
+        migrateCodexModelRefs: true,
         cfg: repair.config,
         repairRetiredModelRefs: true,
       });

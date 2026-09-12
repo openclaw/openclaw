@@ -10,15 +10,28 @@ import {
   withToolApprovalReviews,
 } from "../../lib/chat/tool-approval-reviews.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { getChatRunOwner } from "./history-merge.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handlePreambleProgress } from "./tool-stream-preamble.ts";
+import { cancelToolStreamSync, syncToolStreamMessages } from "./tool-stream-state.ts";
 import { handleStreamStatus, resolveAcceptedSession } from "./tool-stream-status.ts";
 
+// How far a cyber notice has settled. A lower value never replaces a higher one
+// for the same run, which keeps reroutes and blocks safe from a late review
+// update and makes an automatic Daybreak escalation terminal.
+const PROVIDER_POLICY_PRECEDENCE = {
+  buffering: 0,
+  fallback: 1,
+  blocked: 2,
+  escalated: 3,
+  unavailable: 3,
+} as const;
 const TOOL_STREAM_LIMIT = 50;
 const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -106,6 +119,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     type: "toolcall",
     name: entry.name,
     arguments: entry.args ?? {},
+    ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
     ...(entry.details !== undefined ? { details: entry.details } : {}),
   });
   // Emit the result block whenever a result landed, even with empty output;
@@ -115,6 +129,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
       type: "toolresult",
       name: entry.name,
       text: entry.output ?? "",
+      ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
       ...(entry.details !== undefined ? { details: entry.details } : {}),
       ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
       ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
@@ -150,19 +165,6 @@ function trimToolStream(host: ToolStreamHost) {
   }
 }
 
-function syncToolStreamMessages(host: ToolStreamHost) {
-  host.chatToolMessages = host.toolStreamOrder
-    .map((id) => host.toolStreamById.get(id)?.message)
-    .filter((msg): msg is Record<string, unknown> => Boolean(msg));
-}
-
-function cancelToolStreamSync(host: ToolStreamHost) {
-  if (host.toolStreamSyncTimer != null) {
-    clearTimeout(host.toolStreamSyncTimer);
-    host.toolStreamSyncTimer = null;
-  }
-}
-
 function flushToolStreamSync(host: ToolStreamHost) {
   cancelToolStreamSync(host);
   syncToolStreamMessages(host);
@@ -181,51 +183,6 @@ function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
     // The initial event rendered before this deferred projection existed.
     host.requestUpdate?.();
   }, TOOL_STREAM_THROTTLE_MS);
-}
-
-export function resetToolStream(host: ToolStreamHost) {
-  cancelToolStreamSync(host);
-  host.toolStreamById.clear();
-  host.toolStreamOrder = [];
-  host.activityEventSeqById?.clear();
-  host.chatToolMessages = [];
-  host.chatStreamSegments = [];
-  host.knownAgentRunIds?.clear();
-  host.waitingApprovalStatuses?.clear();
-  // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
-  // until snapshot reconciliation observes the approval leaving the queue.
-}
-
-export function resetToolStreamRun(host: ToolStreamHost, runId: string) {
-  cancelToolStreamSync(host);
-  const removedIdentities = new Set<string>();
-  for (const identity of host.toolStreamOrder) {
-    const entry = host.toolStreamById.get(identity);
-    if (entry?.runId !== runId) {
-      continue;
-    }
-    removedIdentities.add(identity);
-  }
-  for (const identity of removedIdentities) {
-    host.toolStreamById.delete(identity);
-  }
-  const activityPrefix = `tool:[${JSON.stringify(runId)},`;
-  for (const sequenceIdentity of host.activityEventSeqById?.keys() ?? []) {
-    if (sequenceIdentity.startsWith(activityPrefix)) {
-      host.activityEventSeqById?.delete(sequenceIdentity);
-    }
-  }
-  host.toolStreamOrder = host.toolStreamOrder.filter(
-    (identity) => !removedIdentities.has(identity),
-  );
-  syncToolStreamMessages(host);
-  host.chatStreamSegments = host.chatStreamSegments.filter((segment) => segment.runId !== runId);
-  host.knownAgentRunIds?.delete(runId);
-  for (const [approvalId, waitingApproval] of host.waitingApprovalStatuses ?? []) {
-    if (waitingApproval.runId === runId) {
-      host.waitingApprovalStatuses?.delete(approvalId);
-    }
-  }
 }
 
 function toolActivityIdentity(runId: string, toolCallId: string): string {
@@ -343,6 +300,70 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
   }
   const data = payload.data ?? {};
   const phase = toTrimmedString(data.phase);
+  if (systemNotice && phase === "provider_policy") {
+    if (data.category !== "cyber" || data.provider !== "openai") {
+      return true;
+    }
+    const state = data.state;
+    if (
+      state !== "buffering" &&
+      state !== "blocked" &&
+      state !== "fallback" &&
+      state !== "escalated" &&
+      state !== "unavailable" &&
+      state !== "cleared"
+    ) {
+      return true;
+    }
+    const owner = host.chatRunId ?? getChatRunOwner(host) ?? host.providerPolicyNotice?.runId;
+    const pendingSend = host.chatQueue?.some(
+      (item) =>
+        item.sendState === "sending" &&
+        item.sendRunId === payload.runId &&
+        item.sessionKey &&
+        uiSessionEventMatches(host, item.sessionKey, item.agentId),
+    );
+    if (owner !== payload.runId && !pendingSend) {
+      return true;
+    }
+    const identity = `provider-policy:${payload.runId}`;
+    const previous = Math.max(
+      host.activityEventSeqById?.get(identity) ?? -1,
+      host.providerPolicyNotice?.runId === payload.runId ? host.providerPolicyNotice.seq : -1,
+    );
+    if (!Number.isSafeInteger(payload.seq) || payload.seq <= previous) {
+      return true;
+    }
+    (host.activityEventSeqById ??= new Map()).set(identity, payload.seq);
+    if (state === "cleared") {
+      if (
+        host.providerPolicyNotice?.runId === payload.runId &&
+        host.providerPolicyNotice.state === "buffering"
+      ) {
+        host.providerPolicyNotice = null;
+      }
+      return true;
+    }
+    const currentNotice = host.providerPolicyNotice;
+    if (
+      currentNotice?.runId === payload.runId &&
+      PROVIDER_POLICY_PRECEDENCE[state] < PROVIDER_POLICY_PRECEDENCE[currentNotice.state]
+    ) {
+      return true;
+    }
+    const model = toTrimmedString(data.model);
+    const fallbackModel = toTrimmedString(data.fallbackModel);
+    host.providerPolicyNotice = {
+      runId: payload.runId,
+      seq: payload.seq,
+      state,
+      ...(model ? { model: formatUiExternalText(model.slice(0, 256)) } : {}),
+      ...(fallbackModel
+        ? { fallbackModel: formatUiExternalText(fallbackModel.slice(0, 256)) }
+        : {}),
+    };
+    return true;
+  }
   const status = toTrimmedString(data.status);
   const reviewId = toTrimmedString(data.reviewId);
   const threadId = toTrimmedString(data.threadId);
@@ -518,6 +539,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
   const args = phase === "start" ? data.args : undefined;
+  const parentToolCallId = toTrimmedString(data.parentToolCallId) ?? undefined;
   const output =
     phase === "update"
       ? formatToolOutput(data.partialResult)
@@ -550,6 +572,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     entry = {
       toolCallId,
       runId: payload.runId,
+      ...(parentToolCallId ? { parentToolCallId } : {}),
       sessionKey,
       name,
       args,
@@ -567,6 +590,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     host.toolStreamOrder.push(toolStreamIdentity);
   } else {
     entry.name = name;
+    entry.parentToolCallId ??= parentToolCallId;
     if (args !== undefined) {
       entry.args = args;
     }

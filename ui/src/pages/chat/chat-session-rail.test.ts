@@ -539,6 +539,7 @@ describe("ChatSessionRailElement", () => {
     };
     await element.updateComplete;
     expect(element.textContent).toContain("Couldn't load this session's history.");
+    expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
     (element.querySelector(".chat-session-rail__retry") as HTMLButtonElement).click();
     expect(onSubmit).toHaveBeenCalledWith("What changed?");
   });

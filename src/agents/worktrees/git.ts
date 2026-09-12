@@ -15,6 +15,9 @@ import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-en
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
+// Materializing checkout objects gets extra time without extending other Git commands or setup.
+export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
+
 type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
@@ -72,6 +75,7 @@ export async function runGit(
   options: {
     env?: NodeJS.ProcessEnv;
     input?: string | Uint8Array;
+    maxOutputBytes?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
   } = {},
@@ -163,10 +167,32 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
   return entries;
 }
 
-export async function listGitWorktrees(repoRoot: string): Promise<WorktreeListEntry[]> {
+export async function listGitWorktrees(
+  repoRoot: string,
+  options: Parameters<typeof runGit>[2] = {},
+): Promise<WorktreeListEntry[]> {
   return parseWorktreeList(
-    await requireGitRaw(repoRoot, ["worktree", "list", "--porcelain", "-z"]),
+    requireGitCommandOutput(
+      "git worktree list",
+      await runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"], options),
+    ),
   );
+}
+
+/** Resolve shared storage and its primary root without selecting or validating HEAD. */
+export async function resolveGitRepositoryPaths(
+  sourceRoot: string,
+  options: Parameters<typeof runGit>[2] = {},
+): Promise<{ canonicalRoot: string; commonDir: string }> {
+  const commonRaw = normalizeGitPathForFilesystem(
+    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
+  );
+  const commonDir = await fs.realpath(
+    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
+  );
+  const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
+  const canonicalRoot = await fs.realpath(primary);
+  return { canonicalRoot, commonDir };
 }
 
 /**

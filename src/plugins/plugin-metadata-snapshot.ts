@@ -5,6 +5,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
@@ -48,6 +49,7 @@ import type {
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 
 const MAX_PLUGIN_METADATA_PROJECTIONS = 64;
 export type {
@@ -57,9 +59,14 @@ export type {
 
 export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
-function throwReadonlyPluginMetadataMutation(): never {
-  throw new TypeError("Plugin metadata snapshots are immutable");
-}
+// Retained snapshots cross source/require module graphs. Frozen descriptors
+// require the same function identity when another graph finalizes them again.
+const throwReadonlyPluginMetadataMutation = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginMetadataReadonlyMutation"),
+  () => (): never => {
+    throw new TypeError("Plugin metadata snapshots are immutable");
+  },
+);
 
 function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== "object") {
@@ -209,6 +216,9 @@ function buildPluginMetadataOwnerMaps(
       }
     }
     for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+      if (typeof target !== "string") {
+        continue;
+      }
       const alias = normalizeProviderId(rawAlias);
       const targetProvider = normalizeProviderId(target);
       if (
@@ -230,6 +240,18 @@ function buildPluginMetadataOwnerMaps(
   return { ...owners, ...buildPluginMetadataProviderFacts(plugins) };
 }
 
+function buildPluginMetadataManifestFacts(manifestRegistry: PluginManifestRegistry) {
+  const plugins = manifestRegistry.plugins;
+  return {
+    manifestRegistry,
+    plugins,
+    diagnostics: manifestRegistry.diagnostics,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    owners: buildPluginMetadataOwnerMaps(plugins),
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
+  };
+}
+
 export function listPluginOriginsFromMetadataSnapshot(
   snapshot: Pick<PluginMetadataSnapshot, "plugins">,
 ): ReadonlyMap<string, PluginManifestRecord["origin"]> {
@@ -240,23 +262,23 @@ export function listPluginOriginsFromMetadataSnapshot(
 export function rebasePluginMetadataSnapshotManifestRegistry(
   snapshot: Omit<
     PluginMetadataSnapshot,
-    "manifestRegistry" | "plugins" | "diagnostics" | "byPluginId" | "owners"
+    | "manifestRegistry"
+    | "plugins"
+    | "diagnostics"
+    | "byPluginId"
+    | "owners"
+    | "declaredProviderOwners"
   >,
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
-  const plugins = manifestRegistry.plugins;
   const rebased = {
     ...snapshot,
-    manifestRegistry,
-    plugins,
-    diagnostics: manifestRegistry.diagnostics,
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    ...buildPluginMetadataManifestFacts(manifestRegistry),
     normalizePluginId: snapshot.index
       ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
       : snapshot.normalizePluginId,
-    owners: buildPluginMetadataOwnerMaps(plugins),
     ...(snapshot.metrics
-      ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
+      ? { metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length } }
       : {}),
   };
   // Rebuilt views retain the original generation even when consumed in another scope.
@@ -443,7 +465,10 @@ export function completePluginMetadataSnapshot(params: {
       inputs.snapshot.bundledManifestRegistry ??
       loadBundledPluginManifestRegistry({ env: inputs.env });
     const manifestRegistryMs = performance.now() - manifestStartedAt;
-    const rebased = rebasePluginMetadataSnapshotManifestRegistry(inputs.snapshot, manifestRegistry);
+    const rebased =
+      snapshot.pluginIds === undefined
+        ? snapshot
+        : rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry);
     const { pluginIds: _pluginIds, ...unscoped } = rebased;
     const completed = finalizePluginMetadataSnapshot({
       ...unscoped,
@@ -562,9 +587,8 @@ function loadPluginMetadataSnapshotImpl(
     includeDisabled: true,
   });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
-  const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
   const ownerMapsStartedAt = performance.now();
-  const owners = buildPluginMetadataOwnerMaps(manifestRegistry.plugins);
+  const manifestFacts = buildPluginMetadataManifestFacts(manifestRegistry);
   const ownerMapsMs = performance.now() - ownerMapsStartedAt;
   const totalMs = performance.now() - totalStartedAt;
 
@@ -578,15 +602,11 @@ function loadPluginMetadataSnapshotImpl(
       policyHash: index.policyHash,
       workspaceDir: params.workspaceDir,
     }),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    workspaceDir: params.workspaceDir,
     index,
     registryIndex: index,
     registryDiagnostics: registryResult.diagnostics,
-    manifestRegistry,
-    plugins: manifestRegistry.plugins,
-    diagnostics: manifestRegistry.diagnostics,
-    byPluginId,
-    owners,
+    ...manifestFacts,
     metrics: {
       registrySnapshotMs,
       manifestRegistryMs,

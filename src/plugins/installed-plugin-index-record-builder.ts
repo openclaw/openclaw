@@ -12,7 +12,7 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
@@ -195,13 +195,15 @@ function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
 function readRecordFile(params: {
   record: PluginManifestRecord;
   filePath: string;
+  boundaryRoot?: string;
   rejectHardlinks: boolean;
   required: boolean;
   diagnostics: PluginDiagnostic[];
 }) {
+  const rootDir = params.boundaryRoot ?? params.record.rootDir;
   const file = readPluginCacheFile({
-    rootDir: params.record.rootDir,
-    relativePath: path.relative(params.record.rootDir, params.filePath),
+    rootDir,
+    relativePath: path.relative(rootDir, params.filePath),
     rejectHardlinks: params.rejectHardlinks,
     ...(params.required && path.extname(params.filePath) === ".json"
       ? { maxBytes: 256 * 1024 }
@@ -275,11 +277,12 @@ export function buildInstalledPluginIndexRecords(params: {
     const manifestHash = manifestless
       ? hashManifestlessBundleRecord(record)
       : (manifestFile?.hash ?? "");
-    const doctorContractPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
-    const doctorContractFile = doctorContractPath
+    const doctorContractArtifact = resolvePluginDoctorContractArtifact(record);
+    const doctorContractFile = doctorContractArtifact
       ? readRecordFile({
           record,
-          filePath: doctorContractPath,
+          filePath: doctorContractArtifact.modulePath,
+          boundaryRoot: doctorContractArtifact.boundaryRoot,
           rejectHardlinks,
           diagnostics: params.diagnostics,
           required: false,

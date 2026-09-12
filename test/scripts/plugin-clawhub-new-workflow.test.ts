@@ -355,7 +355,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");
     expect(materializerSource).toContain("cli=${clawhub_cli}");
     expect(source).not.toContain("npm exec");
-    expect(source).not.toContain("npm install");
+    expect(source).not.toMatch(/\bnpm\s+install\b/u);
     expect(source).not.toContain("CLAWHUB_CLI_PACKAGE");
     expect(source).toContain("OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}");
     expect(source).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');

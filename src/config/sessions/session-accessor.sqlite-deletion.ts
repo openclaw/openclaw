@@ -30,8 +30,10 @@ import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
+  withSqliteSessionDatabase,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
+import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import type { SessionEntry } from "./types.js";
 
 type DeletionEntry = { sessionKey: string; entry: SessionEntry };
@@ -67,13 +69,18 @@ type PreparedSessionWrite<T> = {
 export async function runPreparedSqliteSessionWrite<T>(
   scope: ResolvedSqliteReadScope,
   prepare: () => Promise<PreparedSessionWrite<T>>,
+  operation: SqliteSessionWriteOperation,
 ): Promise<{ deletedEntries: number; result: T }> {
-  const prepared = await runExclusiveSqliteSessionWrite(scope, async () => {
-    const write = await prepare();
-    return write.deletedEntries.length || write.beforeCommit
-      ? { write }
-      : { result: await write.commit() };
-  });
+  const prepared = await runExclusiveSqliteSessionWrite(
+    scope,
+    async () => {
+      const write = await prepare();
+      return write.deletedEntries.length || write.beforeCommit
+        ? { write }
+        : { result: await write.commit() };
+    },
+    operation,
+  );
   if (!prepared.write) {
     return { deletedEntries: 0, result: prepared.result };
   }
@@ -83,10 +90,17 @@ export async function runPreparedSqliteSessionWrite<T>(
     write.deletedEntries,
     async (assertCurrent) => {
       await write.beforeCommit?.();
-      return await runExclusiveSqliteSessionWrite(scope, async () => {
-        assertCurrent();
-        return await write.commit();
-      });
+      return await runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          return await withSqliteSessionDatabase(
+            toDatabaseOptions(scope),
+            () => write.commit(),
+            assertCurrent,
+          );
+        },
+        operation,
+      );
     },
   );
   return { deletedEntries: write.deletedEntries.length, result };

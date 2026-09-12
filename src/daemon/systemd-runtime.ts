@@ -7,6 +7,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceEnv,
@@ -21,7 +22,9 @@ import {
   isSystemdUnitMissingDetail,
   isSystemdUnitNotEnabled,
   readSystemctlDetail,
+  systemdInspectionError,
 } from "./systemd-exec.js";
+import { readLoadedSystemdServiceRuntime } from "./systemd-loaded-runtime.js";
 import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
@@ -134,13 +137,20 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (res.termination === "exit" && !isSystemctlMissing(res) && isSystemdUnitNotEnabled(detail)) {
     return false;
   }
-  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
+  throw systemdInspectionError(
+    res,
+    `systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim(),
+    installed.scope,
+  );
 }
 
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  if (opts?.requireLoaded) {
+    return await readLoadedSystemdServiceRuntime(env, opts.timeoutMs, opts.loadForInspection);
+  }
   const timeoutMs = opts?.timeoutMs;
   const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
   if (installed?.scope !== "system") {
@@ -150,6 +160,7 @@ export async function readSystemdServiceRuntime(
       return {
         status: "unknown",
         detail: formatErrorMessage(err),
+        ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
       };
     }
   }
@@ -168,10 +179,12 @@ export async function readSystemdServiceRuntime(
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
     const missing = res.termination === "exit" && !installed && isSystemdUnitMissingDetail(detail);
+    const error = missing ? undefined : systemdInspectionError(res, detail, installed?.scope);
     return {
       status: missing ? "stopped" : "unknown",
       ...(!missing && detail ? { detail } : {}),
       missingUnit: missing,
+      ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     };
   }
   const parsed = parseSystemdShow(res.stdout || "");

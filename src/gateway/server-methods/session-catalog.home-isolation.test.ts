@@ -1,26 +1,21 @@
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+import {
+  clearActivePluginRegistry,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
-type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
-  sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
-};
-
 const hoisted = vi.hoisted(() => ({
-  activeRegistry: {} as TestPluginRegistry,
   listSessionEntriesReadOnly: vi.fn(() => []),
 }));
 
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginRegistry: () => hoisted.activeRegistry,
-  getActivePluginSessionExtensionRegistry: () => hoisted.activeRegistry,
-  requireActivePluginRegistry: () => hoisted.activeRegistry,
-}));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly,
@@ -45,6 +40,10 @@ function provider(
     read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
     ...overrides,
   };
+}
+
+function registerCatalog(registry: PluginRegistry, catalog: SessionCatalogProvider) {
+  registry.sessionCatalogs.push({ pluginId: catalog.id, source: "test", provider: catalog });
 }
 
 async function call(
@@ -78,10 +77,45 @@ function withProfile<T>(profile: string | undefined, run: () => Promise<T>): Pro
 }
 
 describe("session catalog Gateway HOME isolation", () => {
+  let activeRegistry: PluginRegistry;
   beforeEach(() => {
-    hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
-    markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
+    activeRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry);
     hoisted.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
+  });
+  afterEach(() => clearActivePluginRegistry());
+
+  it.each([true, false])("reads only the scoped registry (has catalog: %s)", async (hasCatalog) => {
+    const globalCatalog = provider("global");
+    registerCatalog(activeRegistry, globalCatalog);
+    const scopedRegistry = createEmptyPluginRegistry();
+    const scopedCatalog = provider("scoped");
+    if (hasCatalog) {
+      registerCatalog(scopedRegistry, scopedCatalog);
+    }
+
+    await withPluginRuntimeRegistryScope(scopedRegistry, async () => {
+      await Promise.resolve();
+      const catalogs = listActiveSessionCatalogs();
+      expect(catalogs.map(({ id }) => id)).toEqual(hasCatalog ? ["scoped"] : []);
+      for (const catalog of catalogs) {
+        await catalog.list({});
+        await catalog.read({ hostId: "gateway:local", threadId: "synthetic-thread" });
+      }
+    });
+
+    expect(scopedCatalog.list).toHaveBeenCalledTimes(hasCatalog ? 1 : 0);
+    expect(scopedCatalog.read).toHaveBeenCalledTimes(hasCatalog ? 1 : 0);
+    expect(globalCatalog.list).not.toHaveBeenCalled();
+    expect(globalCatalog.read).not.toHaveBeenCalled();
+    expect(listActiveSessionCatalogs().map(({ id }) => id)).toEqual(["global"]);
+  });
+
+  it("leaves a cold registry uninitialized during catalog lookup", async () => {
+    await clearActivePluginRegistry();
+
+    expect(listActiveSessionCatalogs()).toEqual([]);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("suppresses only process-HOME local hosts for a named profile", async () => {
@@ -104,7 +138,7 @@ describe("session catalog Gateway HOME isolation", () => {
       ...(query.allowProcessHomeFallback === false ? [] : [localHost]),
       nodeHost,
     ]);
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("claude", { list }) }];
+    registerCatalog(activeRegistry, provider("claude", { list }));
     const logGateway = { warn: vi.fn() };
 
     const defaultRespond = await withProfile(undefined, () =>
@@ -147,7 +181,7 @@ describe("session catalog Gateway HOME isolation", () => {
       }
       return { hostId: request.hostId, threadId: request.threadId, items: [] };
     });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("test", { list, read }) }];
+    registerCatalog(activeRegistry, provider("test", { list, read }));
 
     await withProfile(undefined, async () => {
       const [catalog] = listActiveSessionCatalogs();
@@ -186,9 +220,10 @@ describe("session catalog Gateway HOME isolation", () => {
       }
       return hook === "archive" ? { ok: true as const } : { sessionKey: "agent:main:known" };
     });
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("test", { [hook]: rejectLocal } as Partial<SessionCatalogProvider>) },
-    ];
+    registerCatalog(
+      activeRegistry,
+      provider("test", { [hook]: rejectLocal } as Partial<SessionCatalogProvider>),
+    );
 
     const respond = await withProfile("dev", () =>
       call(`sessions.catalog.${method}`, {

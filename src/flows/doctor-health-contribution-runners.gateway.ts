@@ -21,6 +21,9 @@ export async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  // Stray jobs can disrupt admitted maintenance; managed-service repair stays below the fence.
+  const { noteMacForeignLaunchdJobs } = await import("../commands/doctor-foreign-launchd-jobs.js");
+  await noteMacForeignLaunchdJobs(ctx.options, ctx.runtime, ctx.env ?? process.env);
   if (ctx.gatewayMaintenanceActive) {
     return;
   }

@@ -40,6 +40,24 @@ compaction with session-store patches and harness calls. The result contains
 `compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
 snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
+## Auth-profile resolution
+
+The experimental `openclaw/plugin-sdk/agent-runtime` entrypoint exports
+`resolveApiKeyForProfile(...)`. Its optional synchronous
+`validateOAuthCredential` callback runs for every OAuth candidate before the
+credential is used, adopted, persisted, or returned, including a legacy
+`provider:default` fallback. Return normally to accept the credential; throw to
+reject it.
+
+Stored credentials are validated before refresh, and refreshed credentials are
+validated before persistence. If fallback is allowed and every permitted
+candidate is rejected, resolution preserves the original selected-profile
+refresh failure. Rejection during active refresh settlement can terminally
+fence that credential generation and require reauthentication. Omitting the
+callback preserves existing behavior. Set `allowProfileFallback: false` when
+the selected profile represents an account boundary that must not rotate to a
+different configured profile.
+
 ## Agent and session namespaces
 
 <AccordionGroup>

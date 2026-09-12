@@ -30,8 +30,10 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
@@ -553,6 +555,14 @@ export function resolveTsdownCleanOutputRoots(args: string[] = []) {
   return listTsdownOutputRoots();
 }
 
+export function sanitizeTsdownBuildOutputRoots(args: string[] = [], cwd = process.cwd()): void {
+  const roots = resolveTsdownCleanOutputRoots(args);
+  const rootPaths = assertTsdownCleanOutputRoots({ cwd, roots });
+  for (const rootPath of rootPaths) {
+    sanitizeBundlerHelperDtsExportTree(rootPath);
+  }
+}
+
 function wrapperOwnsTsdownCleanup(args: string[]) {
   if (readForwardedScalarOption(args, ["--out-dir", "-d"], "--out-dir/-d") !== undefined) {
     return true;
@@ -939,7 +949,7 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
 function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   const configuredLimit = params.cgroupMemoryLimitBytes;
   if (configuredLimit !== undefined && Number.isFinite(configuredLimit) && configuredLimit >= 0) {
-    return { limitBytes: Math.trunc(configuredLimit), unresolved: false };
+    return { limitBytes: Math.trunc(configuredLimit), unresolved: false, usageKnown: false };
   }
 
   const fsImpl = params.fs ?? fs;
@@ -983,6 +993,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   let readV1HardLimit = false;
   let sawDisabledV2MemoryController = false;
   let sawUnreadableControllerFile = false;
+  let usageKnown = true;
   for (const limitPath of resolvedPaths.paths) {
     try {
       const rawLimit = fsImpl.readFileSync(limitPath, "utf8");
@@ -1007,6 +1018,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
             "utf8",
           ),
         );
+        usageKnown &&= usageBytes !== null;
         if (usageBytes !== null) {
           let inactiveFileBytes = 0;
           try {
@@ -1029,7 +1041,8 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
           availableBytes = Math.max(0, limitBytes - competingBytes);
         }
       } catch {
-        // Older or synthetic cgroup views may not expose current usage; the limit remains a cap.
+        // Keep the serial heap cap, but an unobserved shared budget cannot admit overlap.
+        usageKnown = false;
       }
       if (tightestLimitBytes === null || availableBytes < tightestLimitBytes) {
         tightestLimitBytes = availableBytes;
@@ -1057,6 +1070,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
 
   return {
     limitBytes: tightestLimitBytes,
+    usageKnown,
     unresolved:
       resolvedPaths.cgroupRecordReadFailed ||
       sawUnreadableControllerFile ||
@@ -1127,6 +1141,24 @@ function readHostAvailableMemoryBytes(params: MemoryLimitParams) {
   return null;
 }
 
+function readTsdownMemoryCapacity(params: MemoryLimitParams) {
+  const cgroupMemory = readCgroupMemoryLimitBytes(params);
+  if (cgroupMemory.unresolved) {
+    return { ...cgroupMemory, limitBytes: null, availableBytes: null };
+  }
+  const physicalTotalBytes = readProcMemTotalBytes(params) ?? readPhysicalMemoryTotalBytes(params);
+  const hostAvailableBytes = readHostAvailableMemoryBytes(params);
+  const physicalLimitBytes =
+    hostAvailableBytes === null || physicalTotalBytes === null
+      ? (hostAvailableBytes ?? physicalTotalBytes)
+      : Math.min(hostAvailableBytes, physicalTotalBytes);
+  const limitBytes =
+    cgroupMemory.limitBytes === null || physicalLimitBytes === null
+      ? (cgroupMemory.limitBytes ?? physicalLimitBytes)
+      : Math.min(cgroupMemory.limitBytes, physicalLimitBytes);
+  return { ...cgroupMemory, limitBytes, availableBytes: hostAvailableBytes };
+}
+
 function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   if (params.resolvedMaxOldSpaceMb !== undefined) {
     return { maxOldSpaceMb: params.resolvedMaxOldSpaceMb, unresolvedCgroupMemory: false };
@@ -1142,21 +1174,10 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   if (envOverride !== null) {
     return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false };
   }
-
-  const cgroupMemory = readCgroupMemoryLimitBytes(params);
-  if (cgroupMemory.unresolved) {
+  const { limitBytes, unresolved } = readTsdownMemoryCapacity(params);
+  if (unresolved) {
     return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true };
   }
-  const physicalTotalBytes = readProcMemTotalBytes(params) ?? readPhysicalMemoryTotalBytes(params);
-  const hostAvailableBytes = readHostAvailableMemoryBytes(params);
-  const physicalLimitBytes =
-    hostAvailableBytes === null || physicalTotalBytes === null
-      ? (hostAvailableBytes ?? physicalTotalBytes)
-      : Math.min(hostAvailableBytes, physicalTotalBytes);
-  const limitBytes =
-    cgroupMemory.limitBytes === null || physicalLimitBytes === null
-      ? (cgroupMemory.limitBytes ?? physicalLimitBytes)
-      : Math.min(cgroupMemory.limitBytes, physicalLimitBytes);
   if (limitBytes === null) {
     return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false };
   }
@@ -1169,6 +1190,36 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
     maxOldSpaceMb: Math.min(defaultMaxOldSpaceMb, cgroupCap),
     unresolvedCgroupMemory: false,
   };
+}
+
+/** Only independently staged SDK misses may share an unchanged aggregate heap budget. */
+export function resolveStagedSdkDeclarationConcurrency(
+  groups: readonly { name: string; maxOldSpaceMb: number }[],
+  params: MemoryLimitParams & { availableParallelism?: number } = {},
+): 1 | 2 {
+  if (
+    groups.length !== 2 ||
+    !TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.every((name) =>
+      groups.some((group) => group.name === name),
+    ) ||
+    (params.availableParallelism ?? os.availableParallelism()) < 2
+  ) {
+    return 1;
+  }
+  // Frozen or explicit per-child heaps do not establish available batch capacity.
+  // Unknown available memory stays serial; retain native headroom for each child.
+  const capacity = readTsdownMemoryCapacity(params);
+  const requiredBytes = groups.reduce(
+    (sum, group) => sum + (group.maxOldSpaceMb + TSDOWN_CGROUP_MEMORY_HEADROOM_MB) * 1024 * 1024,
+    0,
+  );
+  return !capacity.unresolved &&
+    capacity.usageKnown &&
+    capacity.availableBytes !== null &&
+    capacity.limitBytes !== null &&
+    capacity.limitBytes >= requiredBytes
+    ? 2
+    : 1;
 }
 
 const resolveTsdownMaxOldSpaceMb = (params: ResolvedMemoryLimitParams = {}) =>
@@ -1822,36 +1873,19 @@ export async function runTsdownBuildInvocation(
   });
 }
 
-/** Execute CLI and staged declaration plans with the same diagnostics and deadlines. */
-export async function executeTsdownBuildPlan(
-  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
-) {
-  let result: TsdownBuildResult | undefined;
-  for (const [index, invocation] of plan.invocations.entries()) {
-    const startedAt = performance.now();
-    result = await runTsdownBuildInvocation(invocation);
-    if (result.error) {
-      throw result.error;
-    }
-    // Per-invocation timing separates the AI-declarations pass from the main
-    // graph in CI logs; the combined step is otherwise a single opaque cost.
-    console.log(
-      `[tsdown-build] invocation ${index + 1}/${plan.invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
-    );
-    if (
-      result.timedOut ||
-      result.status !== 0 ||
-      result.hasIneffectiveDynamicImport ||
-      result.fatalUnresolvedImport
-    ) {
-      break;
-    }
+async function executeTsdownInvocation(
+  invocation: TsdownBuildInvocation,
+  index: number,
+  count: number,
+): Promise<number> {
+  const startedAt = performance.now();
+  const result = await runTsdownBuildInvocation(invocation);
+  if (result.error) {
+    throw result.error;
   }
-
-  if (!result) {
-    return 1;
-  }
-
+  console.log(
+    `[tsdown-build] invocation ${index + 1}/${count} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+  );
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {
     console.error(
       "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
@@ -1877,28 +1911,93 @@ export async function executeTsdownBuildPlan(
   return 1;
 }
 
-export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Promise<number> {
+/** Execute CLI and staged declaration plans with the same diagnostics and deadlines. */
+export async function executeTsdownBuildPlan(
+  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+  concurrency: 1 | 2 = 1,
+) {
+  let next = 0;
+  let exitCode = plan.invocations.length ? 0 : 1;
+  const failedExits: { index: number; code: number }[] = [];
+  const run = async () => {
+    while (exitCode === 0 && next < plan.invocations.length) {
+      const index = next++;
+      try {
+        const code = await executeTsdownInvocation(
+          plan.invocations[index]!,
+          index,
+          plan.invocations.length,
+        );
+        if (code !== 0) {
+          failedExits.push({ index, code });
+          exitCode ||= code;
+        }
+      } catch (error) {
+        exitCode ||= 1;
+        throw error;
+      }
+    }
+  };
+  // A failed sibling stops admission, not the lifetime of an already admitted compiler.
+  // Join every result before the writer may seal, publish, or release its private stages.
+  const results = await Promise.allSettled(
+    Array.from({ length: Math.min(concurrency, plan.invocations.length) }, run),
+  );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length || failedExits.length > 1) {
+    failures.push(
+      ...failedExits.map(({ index, code }) =>
+        Object.assign(new Error(`tsdown invocation ${index + 1} failed with exit ${code}`), {
+          exitCode: code,
+        }),
+      ),
+    );
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, "tsdown compiler batch failed");
+  }
+  return exitCode;
+}
+
+export async function runTsdownBuild(
+  argv: string[] = process.argv.slice(2),
+  options: {
+    cwd?: string;
+    executeBuild?: (forwardedArgs: string[]) => Promise<number>;
+  } = {},
+): Promise<number> {
   const args = parseTsdownBuildArgs(argv);
   if (args.help) {
     console.log(tsdownBuildUsage());
     return 0;
   }
-  const plan = prepareTsdownBuildExecution(
-    { args: args.forwardedArgs },
-    {
-      reportShortfall(shortfall) {
-        if (shortfall.fatal) {
-          console.error(shortfall.message);
-        } else {
-          console.warn(shortfall.message);
-        }
+  let code: number;
+  if (options.executeBuild) {
+    code = await options.executeBuild(args.forwardedArgs);
+  } else {
+    const plan = prepareTsdownBuildExecution(
+      { args: args.forwardedArgs },
+      {
+        reportShortfall(shortfall) {
+          if (shortfall.fatal) {
+            console.error(shortfall.message);
+          } else {
+            console.warn(shortfall.message);
+          }
+        },
       },
-    },
-  );
-  if (!plan) {
-    return 1;
+    );
+    if (!plan) {
+      return 1;
+    }
+    code = await executeTsdownBuildPlan(plan);
   }
-  return executeTsdownBuildPlan(plan);
+  if (code === 0) {
+    sanitizeTsdownBuildOutputRoots(args.forwardedArgs, options.cwd);
+  }
+  return code;
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

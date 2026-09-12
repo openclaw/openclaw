@@ -11,10 +11,6 @@ inputs:
     description: Whether to install Bun alongside Node.
     required: false
     default: "true"
-  install-trufflehog:
-    description: Whether to install the pinned TruffleHog binary for a reusable test environment.
-    required: false
-    default: "false"
   install-deps:
     description: Whether to run pnpm install after environment setup.
     required: false
@@ -120,7 +116,7 @@ runs:
 
     # Blacksmith's image tracks an older runner-images snapshot whose toolcache
     # Node patches sit just under this repo's engines floor (measured 2026-08-16:
-    # 20.20.0/22.22.0/24.13.0 against >=22.22.3 and >=24.15.0), so every job
+    # 20.20.0/22.22.0/24.13.0 below the supported release floors), so every job
     # falls through to a nodejs.org download. That is ~2.6s normally but tail-
     # spikes past 110s when the mirror throttles our ~46 simultaneous fetches,
     # and it lands on every job at once. Keep the payload in the Actions cache,
@@ -241,11 +237,6 @@ runs:
         # including legacy Blacksmith callers that disabled that old fallback.
         cache-mode: ${{ inputs.cache-mode != 'off' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && 'restore' || 'off' }}
 
-    - name: Setup TruffleHog
-      if: inputs.install-trufflehog == 'true'
-      shell: bash
-      run: bash scripts/install-trufflehog.sh
-
     # Embedded step env is evaluated before its condition. Keep this scan in a
     # guarded script and share its result across cache restore and configuration.
     - name: Resolve Vitest transform cache generation
@@ -328,21 +319,6 @@ runs:
         echo "NODE_COMPILE_CACHE_PORTABLE=1" >> "$GITHUB_ENV"
         echo "OPENCLAW_NODE_COMPILE_CACHE_WRITER=0" >> "$GITHUB_ENV"
 
-    - name: Setup Bun
-      if: inputs.install-bun == 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        npm install -g bun@1.4.0
-
-    - name: Runtime versions
-      shell: bash
-      run: |
-        node -v
-        npm -v
-        pnpm -v
-        if command -v bun &>/dev/null; then bun -v; fi
-
     - name: Capture node path
       shell: bash
       run: |
@@ -353,6 +329,27 @@ runs:
         # zizmor: ignore[github-env] node_bin comes from trusted actions/setup-node output in this composite action.
         echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
         echo "$node_bin" >> "$GITHUB_PATH"
+
+    - name: Setup Bun
+      if: inputs.install-bun == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        bun_bin="$(node "$GITHUB_ACTION_PATH/seed-bun-from-image.mjs")"
+        if [[ -n "$bun_bin" ]]; then
+          export PATH="$bun_bin:$PATH"
+          echo "$bun_bin" >> "$GITHUB_PATH"
+        else
+          npm install -g bun@1.4.0
+        fi
+
+    - name: Runtime versions
+      shell: bash
+      run: |
+        node -v
+        npm -v
+        pnpm -v
+        if command -v bun &>/dev/null; then bun -v; fi
 
     - name: Install dependencies
       if: inputs.install-deps == 'true'

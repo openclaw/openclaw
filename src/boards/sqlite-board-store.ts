@@ -27,28 +27,26 @@ import {
   normalizeBoardWidgetPutParams,
   type BoardSessionTarget,
   type BoardStore,
+  type BoardWriteOptions,
+  type BoardWidgetDocument,
   type BoardSnapshotWithHtmlViewMetadata,
-  type BoardWidgetHtmlDocument,
   type BoardWidgetHtmlViewMetadata,
   type BoardWidgetMcpAppDocument,
-  type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
 import {
   BOARD_WIDGET_SNAPSHOT_COLUMNS,
   createBoardWidgetContentFields,
-  effectiveGrantState,
   parseDescriptor,
   parseManifest,
   parsePluginContent,
   resolveSqliteBoardWidgetPutParams,
-  rowToRegisteredDocument,
+  rowToBoardWidgetDocument,
   rowToTab,
   rowToHtmlViewMetadata,
   rowToWidget,
   serializeManifest,
   updateManifestHeightMode,
   type SelectedBoardTabRow,
-  type SelectedBoardWidgetRow,
   type SelectedBoardWidgetSnapshotRow,
 } from "./sqlite-board-codec.js";
 
@@ -85,11 +83,11 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   return true;
 }
 
-export function listBoardSessionKeysReadOnly(params: {
+export async function listBoardSessionKeysReadOnly(params: {
   agentId: string;
   path: string;
   env?: NodeJS.ProcessEnv;
-}): ReadonlySet<string> {
+}): Promise<ReadonlySet<string>> {
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     if (!boardTablesPresent(database)) {
       return [];
@@ -198,27 +196,6 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
     },
     { databaseLabel: database.path, operationLabel: "board.read" },
   );
-}
-
-function rowToHtmlDocument(
-  row: Pick<
-    SelectedBoardWidgetRow,
-    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
-  >,
-): BoardWidgetHtmlDocument | undefined {
-  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
-    return undefined;
-  }
-  const manifest = parseManifest(row.manifest);
-  const declared = manifest.declared;
-  return {
-    html: Buffer.from(row.html).toString("utf8"),
-    revision: row.revision,
-    sha256: row.sha256,
-    viewGeneration: row.view_generation,
-    grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(declared ? { declared } : {}),
-  };
 }
 
 function upsertTabs(
@@ -421,25 +398,34 @@ export class SqliteBoardStore implements BoardStore {
     return { database, resolved };
   }
 
-  getSnapshot(target: BoardSessionTarget): BoardSnapshot {
-    const resolved = this.resolve(target);
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
-          ? readStoredBoard(database, resolved.sessionKey).snapshot
-          : undefined,
-      {
-        agentId: resolved.agentId,
-        ...(resolved.path ? { path: resolved.path } : {}),
-        env: this.options.env,
-      },
-    );
-    return cloneBoardSnapshot(
-      result.found && result.value ? result.value : emptyBoardSnapshot(resolved.sessionKey),
-    );
+  async getSnapshot(target: BoardSessionTarget): Promise<BoardSnapshot> {
+    return this.readSnapshotWithHtmlViewMetadata(target).snapshot;
   }
 
-  getSnapshotWithHtmlViewMetadata(target: BoardSessionTarget): BoardSnapshotWithHtmlViewMetadata {
+  async getSnapshotWithHtmlViewMetadata(
+    target: BoardSessionTarget,
+  ): Promise<BoardSnapshotWithHtmlViewMetadata> {
+    return this.readSnapshotWithHtmlViewMetadata(target);
+  }
+
+  async useSnapshot<T>(
+    target: BoardSessionTarget,
+    consume: (snapshot: BoardSnapshot) => T,
+  ): Promise<Awaited<T>> {
+    return await consume(this.readSnapshotWithHtmlViewMetadata(target).snapshot);
+  }
+
+  async useWidgetDocument<T>(
+    target: BoardSessionTarget,
+    name: string,
+    consume: (document: BoardWidgetDocument | undefined) => T,
+  ): Promise<Awaited<T>> {
+    return await consume(this.readWidgetDocument(target, name));
+  }
+
+  private readSnapshotWithHtmlViewMetadata(
+    target: BoardSessionTarget,
+  ): BoardSnapshotWithHtmlViewMetadata {
     const resolved = this.resolve(target);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) =>
@@ -459,13 +445,19 @@ export class SqliteBoardStore implements BoardStore {
     };
   }
 
-  applyOps(target: BoardSessionTarget, ops: readonly BoardOp[]): BoardSnapshot {
+  async applyOps(
+    target: BoardSessionTarget,
+    ops: readonly BoardOp[],
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot> {
     if (ops.length === 0) {
       return this.getSnapshot(target);
     }
+    options?.assertCurrent?.();
     const { database, resolved } = this.prepareWrite(target);
     return runOpenClawAgentWriteTransaction(
       (transactionDatabase) => {
+        options?.assertCurrent?.();
         if (!hasSession(transactionDatabase, resolved.sessionKey)) {
           throw new BoardValidationError(
             "not_found",
@@ -492,12 +484,14 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  putWidget(params: BoardWidgetMaterializedPutParams) {
+  async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWriteOptions) {
+    options?.assertCurrent?.();
     const { database, resolved } = this.prepareWrite(params);
     const canonicalInput = normalizeBoardWidgetPutParams(params, resolved.sessionKey);
     const viewGeneration = randomBytes(16).toString("hex");
     return runOpenClawAgentWriteTransaction(
       (transactionDatabase) => {
+        options?.assertCurrent?.();
         if (!hasSession(transactionDatabase, resolved.sessionKey)) {
           throw new BoardValidationError(
             "not_found",
@@ -577,16 +571,19 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  grant(
+  async grant(
     target: BoardSessionTarget,
     name: string,
     decision: "granted" | "rejected",
     revision: number,
     instanceId?: string,
-  ): BoardSnapshot {
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot> {
+    options?.assertCurrent?.();
     const { database, resolved } = this.prepareWrite(target);
     return runOpenClawAgentWriteTransaction(
       (transactionDatabase) => {
+        options?.assertCurrent?.();
         if (!hasSession(transactionDatabase, resolved.sessionKey)) {
           throw new BoardValidationError(
             "not_found",
@@ -694,38 +691,22 @@ export class SqliteBoardStore implements BoardStore {
     return result.found ? result.value : undefined;
   }
 
-  readWidgetHtml(target: BoardSessionTarget, name: string): BoardWidgetHtmlDocument | undefined {
-    const row = this.readWidgetRow(target, name);
-    return row ? rowToHtmlDocument(row) : undefined;
-  }
-
-  readWidgetMcpApp(
+  private readWidgetDocument(
     target: BoardSessionTarget,
     name: string,
-  ): BoardWidgetMcpAppDocument | undefined {
+    contentKind?: "mcp-app",
+  ): BoardWidgetDocument | undefined {
     const row = this.readWidgetRow(target, name);
-    if (!row || row.content_kind !== "mcp-app" || row.descriptor_json === null) {
-      return undefined;
-    }
-    const manifest = parseManifest(row.manifest);
-    if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
-      return undefined;
-    }
-    return {
-      descriptor: parseDescriptor(row.descriptor_json),
-      revision: row.revision,
-      instanceId: manifest.mcpAppInstanceId,
-      grantState: effectiveGrantState(row.grant_state, manifest),
-      declaredTools: manifest.declared?.tools ?? [],
-      interactive: manifest.mcpAppInteractive,
-    };
+    return row && (!contentKind || row.content_kind === contentKind)
+      ? rowToBoardWidgetDocument(row)
+      : undefined;
   }
 
-  readWidgetRegistered(
+  async readWidgetMcpApp(
     target: BoardSessionTarget,
     name: string,
-  ): BoardWidgetRegisteredDocument | undefined {
-    const row = this.readWidgetRow(target, name);
-    return row ? rowToRegisteredDocument(row) : undefined;
+  ): Promise<BoardWidgetMcpAppDocument | undefined> {
+    const document = this.readWidgetDocument(target, name, "mcp-app");
+    return document && "descriptor" in document ? document : undefined;
   }
 }

@@ -101,7 +101,7 @@ export function handleMessageUpdate(
         delta: "",
         content: commentaryText,
       }));
-      emitAssistantCommentaryStreamData(ctx, msg);
+      emitAssistantCommentaryStreamData(ctx, msg, false, commentaryText);
     }
     return undefined;
   }
@@ -469,15 +469,13 @@ export function handleMessageUpdate(
             ? ctx.consumePartialReplyDirectives("", { final: finalText })
             : null,
         );
-    if (shouldUsePhaseAwareBlockReply || isTerminalSnapshot) {
-      recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
-    }
     const previousCleaned = ctx.state.assistantStream?.text ?? "";
     const {
       text: cleanedText,
       delta: replyDelta,
       replace,
       hasText,
+      replyDirectives,
     } = resolveStreamingReply({
       evtType,
       next,
@@ -487,6 +485,9 @@ export function handleMessageUpdate(
       appendDelta,
       parsedStreamDirectives,
     });
+    if (shouldUsePhaseAwareBlockReply || isTerminalSnapshot) {
+      recordPendingAssistantReplyDirectives(ctx.state, replyDirectives);
+    }
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
 
     const hasVisibleReply = hasText || hasAudio;

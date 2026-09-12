@@ -67,6 +67,21 @@ export const overflowServerMiscCases = [
     signal: { message: "Proxy stream ended before terminal event" },
     expected: reason("timeout"),
   },
+  {
+    id: "openai-responses-eof-with-unresolved-tools",
+    source: "packages/ai/src/transports/openai-responses-stream-internal.ts",
+    signal: { provider: "openai", message: "Responses stream ended with unresolved tool calls" },
+    expected: reason("timeout"),
+  },
+  {
+    id: "openai-responses-completed-with-unresolved-tools",
+    source: "packages/ai/src/transports/openai-responses-stream-internal.ts",
+    signal: {
+      provider: "openai",
+      message: "Responses stream completed with unresolved tool calls",
+    },
+    expected: null,
+  },
   ...failoverSignalRows(billingSource, reason("timeout"), [
     ["billing-deadline-exceeded", { message: "deadline exceeded" }],
     ["billing-no-stream-chunks", { message: "request ended without sending any chunks" }],

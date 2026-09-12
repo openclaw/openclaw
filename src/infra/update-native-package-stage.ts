@@ -191,6 +191,11 @@ export async function prepareNativePackageStage(params: {
       installTarget.manager === "pnpm"
         ? [`--config.global-dir=${projectRoot}`, `--config.global-bin-dir=${binDir}`]
         : [];
+    if (installTarget.manager === "pnpm") {
+      // pnpm 12 ignores the CLI bin override; its lower-case env key wins.
+      env.pnpm_config_global_bin_dir = binDir;
+      env.PNPM_CONFIG_GLOBAL_BIN_DIR = binDir;
+    }
     if (installTarget.manager === "bun") {
       env.BUN_INSTALL_GLOBAL_DIR = projectRoot;
       env.BUN_INSTALL_BIN = binDir;

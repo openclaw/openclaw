@@ -4,7 +4,12 @@ import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
-import { renderPanelTabStrip } from "../../../components/panel-tab-strip.ts";
+import {
+  PANEL_HOSTED_TABS_CHANGE_EVENT,
+  readPanelHostedTabs,
+  type PanelHostedTab,
+} from "../../../components/panel-hosted-tabs.ts";
+import { renderPanelTabStrip, type PanelTabStripTab } from "../../../components/panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
@@ -13,6 +18,8 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
+import { readLinkFavicon } from "../link-favicon-cache.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import {
   SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,
@@ -74,11 +81,121 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   // thread) is only reachable if the panel contributes it to the shared header.
   @property({ attribute: false }) panelActions: SidebarPanelTemplates = {};
   @property({ attribute: false }) availableSlots: SidebarSlotId[] = [];
+  @property({ attribute: false }) fetchFavicon?: LinkFaviconFetcher;
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
   private contentMounted = false;
+  private focusedSurface: Element | null = null;
+  private nativeCloseListeners: AbortController | undefined;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.nativeCloseListeners = new AbortController();
+    const options = { capture: true, signal: this.nativeCloseListeners.signal };
+    this.parentElement?.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, this.refreshHostedTabs, {
+      signal: this.nativeCloseListeners.signal,
+    });
+    // The region renders its content into siblings, not into this element.
+    // Document focus also clears the owner when another pane or chrome wins it.
+    document.addEventListener("pointerdown", this.trackFocus, options);
+    document.addEventListener("focusin", this.trackFocus, options);
+    window.addEventListener("openclaw:native-close-focused-panel", this.closeFocusedPanel, options);
+  }
+
+  override disconnectedCallback(): void {
+    this.nativeCloseListeners?.abort();
+    this.nativeCloseListeners = undefined;
+    this.focusedSurface = null;
+    super.disconnectedCallback();
+  }
+
+  private readonly refreshHostedTabs = (): void => this.requestUpdate();
+
+  private readonly trackFocus = (event: Event): void => {
+    const surface = event
+      .composedPath()
+      .find(
+        (node): node is Element =>
+          node instanceof Element && node.matches("[data-region], [data-region-header]"),
+      );
+    this.focusedSurface =
+      surface && surface.closest(".sidebar-region") === this.parentElement ? surface : null;
+  };
+
+  private readonly closeFocusedPanel = (event: Event): void => {
+    if (
+      event.defaultPrevented ||
+      !this.layout.open ||
+      (this.layout.expanded && !this.layout.expandedSide) ||
+      !this.callbacks
+    ) {
+      return;
+    }
+    const browserScope = event instanceof CustomEvent ? event.detail?.browserScope : undefined;
+    // Native browser content is a separate NSView, so its responder scope is
+    // authoritative over the dashboard document's previous DOM focus.
+    const browser =
+      typeof browserScope === "string"
+        ? [
+            ...(this.parentElement?.querySelectorAll<HTMLElement>("[data-native-browser-scope]") ??
+              []),
+          ].find((element) => element.dataset.nativeBrowserScope === browserScope)
+        : undefined;
+    const frame =
+      document.activeElement instanceof HTMLIFrameElement
+        ? document.activeElement.closest("[data-region]")
+        : null;
+    const surface =
+      typeof browserScope === "string"
+        ? browser?.closest("[data-region]")
+        : (frame ?? this.focusedSurface);
+    const active = sidebarActivePanel(this.layout);
+    if (
+      !active ||
+      !surface?.isConnected ||
+      surface.closest(".sidebar-region") !== this.parentElement ||
+      !surface.matches('[data-region="side"], [data-region-header="side"]') ||
+      surface.closest('[hidden], [inert], [aria-hidden="true"]') ||
+      document.openClawModalLayers?.size ||
+      document.querySelector("dialog[open], [aria-modal='true']")
+    ) {
+      return;
+    }
+    event.preventDefault();
+    // Keep successive Close commands in the tab strip after its content unmounts.
+    const header = this.parentElement?.querySelector('[data-region-header="side"]') ?? null;
+    this.focusedSurface = header;
+    const restoreFocus = () => {
+      if (this.layout.open && this.focusedSurface === header && header?.isConnected) {
+        header.querySelector<HTMLElement>("wa-tab[active]")?.focus();
+      }
+    };
+    const hosted = this.hostedTabsElement(active);
+    const hostedTabId = hosted?.activeHostedTabId;
+    if (hosted && hostedTabId && hosted.hostedTabs.some((tab) => tab.id === hostedTabId)) {
+      // The focused header tab is one page, not the panel; the owner's change
+      // event re-renders the strip once that page is gone.
+      void hosted
+        .closeHostedTab(hostedTabId)
+        .then(() => this.updateComplete)
+        .then(restoreFocus);
+      return;
+    }
+    this.callbacks.closeSlot(active.slot);
+    // The callback invalidates the parent first; await this region's next commit.
+    this.requestUpdate();
+    void this.updateComplete.then(restoreFocus);
+  };
+
+  private hostedTabsElement(panel: SidebarPanel) {
+    return panel.slot === "browser"
+      ? readPanelHostedTabs(
+          this.parentElement?.querySelector('[data-panel-slot="browser"]')?.firstElementChild,
+        )
+      : null;
+  }
 
   deliverPanelEvent(slot: SidebarSlotId, event: Event): boolean {
     const panel = this.parentElement?.querySelector<HTMLElement>(
@@ -144,19 +261,90 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     `;
   }
 
+  private renderHostedTabIcon(tab: PanelHostedTab) {
+    let hostname = "";
+    try {
+      hostname = new URL(tab.url).hostname;
+    } catch {
+      // Blank and incomplete URLs keep the browser-kind icon.
+    }
+    const favicon =
+      hostname && this.fetchFavicon
+        ? readLinkFavicon(hostname, this.fetchFavicon, this.refreshHostedTabs)
+        : null;
+    return favicon
+      ? html`<img class="tabstrip-tab__favicon" src=${favicon} alt="" />`
+      : tab.kind === "native"
+        ? icons.monitor
+        : icons.globe;
+  }
+
   private renderHeader(column: SidebarColumn) {
-    const tabs = sidebarSidePanels(this.layout).map((panel) => {
+    const sidePanels = sidebarSidePanels(this.layout);
+    const hostedPanels = sidePanels.flatMap((panel) => {
+      const element = this.hostedTabsElement(panel);
+      return element ? [{ panel, element, tabs: element.hostedTabs }] : [];
+    });
+    const resolveHostedTab = (id: string) => {
+      for (const hosted of hostedPanels) {
+        const prefix = `hosted:${hosted.panel.id}:`;
+        if (id.startsWith(prefix)) {
+          const tabId = id.slice(prefix.length);
+          if (hosted.tabs.some((tab) => tab.id === tabId)) {
+            return { ...hosted, tabId };
+          }
+        }
+      }
+      return null;
+    };
+    const tabs = sidePanels.flatMap((panel): PanelTabStripTab[] => {
+      const hosted = hostedPanels.find((entry) => entry.panel.id === panel.id);
+      if (hosted?.tabs.length) {
+        return hosted.tabs.map((tab) => ({
+          id: `hosted:${panel.id}:${tab.id}`,
+          domId: `side-panel-tab-${panel.id}-${tab.id}`,
+          label: tab.label,
+          labelTooltip: tab.label,
+          icon: this.renderHostedTabIcon(tab),
+          closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+          group: panel.id,
+          draggable: false,
+          reorderId: panel.id,
+        }));
+      }
       const type = panelType(this.panelDefinitions, panel.slot);
-      return {
-        id: panel.id,
-        domId: `side-panel-tab-${panel.id}`,
-        label: type.label,
-        labelTooltip: type.label,
-        icon: type.icon,
-        closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
-      };
+      return [
+        {
+          id: panel.id,
+          domId: `side-panel-tab-${panel.id}`,
+          label: type.label,
+          labelTooltip:
+            panel.slot === "dashboard"
+              ? t(
+                  this.layout.expanded &&
+                    this.layout.expandedSide &&
+                    column.activePanelId === panel.id
+                    ? "chat.sidePanel.restore"
+                    : "chat.sidePanel.expandPanel",
+                  { panel: type.label },
+                )
+              : type.label,
+          onActivate:
+            panel.slot === "dashboard"
+              ? () => this.callbacks?.togglePanelExpanded(panel.id)
+              : undefined,
+          icon: type.icon,
+          closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
+        },
+      ];
     });
     const active = sidebarActivePanel(this.layout);
+    const activeHosted = hostedPanels.find((entry) => entry.panel.id === active?.id);
+    const activeId = activeHosted?.tabs.some(
+      (tab) => tab.id === activeHosted.element.activeHostedTabId,
+    )
+      ? `hosted:${activeHosted.panel.id}:${activeHosted.element.activeHostedTabId}`
+      : (active?.id ?? null);
     const activePanel = column.panels.find((panel) => panel.id === active?.id);
     const activeActions = (activePanel ? this.panelActions[activePanel.slot] : null) ?? null;
     return html`
@@ -164,10 +352,25 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         <div class="side-panel__header-tabs">
           ${renderPanelTabStrip({
             tabs,
-            activeId: active?.id ?? null,
+            activeId,
             ariaControls: "chat-side-panel-content",
-            onSelect: (panelId) => this.callbacks?.activatePanel(panelId),
-            onClose: (panelId) => {
+            onSelect: (panelId) => {
+              const hosted = resolveHostedTab(panelId);
+              if (hosted) {
+                if (column.activePanelId !== hosted.panel.id) {
+                  this.callbacks?.activatePanel(hosted.panel.id);
+                }
+                hosted.element.selectHostedTab(hosted.tabId);
+              } else {
+                this.callbacks?.activatePanel(panelId);
+              }
+            },
+            onClose: async (panelId) => {
+              const hosted = resolveHostedTab(panelId);
+              if (hosted) {
+                await hosted.element.closeHostedTab(hosted.tabId);
+                return;
+              }
               const panel = column.panels.find((entry) => entry.id === panelId);
               if (panel) {
                 this.callbacks?.closeSlot(panel.slot);
@@ -188,6 +391,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null) {
+    const active = sidebarActivePanel(this.layout);
+    const expanded = this.layout.expanded === true && this.layout.expandedSide === true;
+    const expandLabel = expanded
+      ? t("chat.sidePanel.restore")
+      : t("chat.sidePanel.expandPanel", {
+          panel: active ? panelType(this.panelDefinitions, active.slot).label : "",
+        });
     return html`<div class="rail-header__actions side-panel__actions">
       ${
         panelActions
@@ -197,6 +407,21 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           : nothing
       }
       <span class="side-panel__action-group side-panel__action-group--close">
+        ${
+          active
+            ? html`<openclaw-tooltip .content=${expandLabel}>
+                <button
+                  class="rail-header__action side-panel__expand"
+                  type="button"
+                  aria-label=${expandLabel}
+                  aria-pressed=${String(expanded)}
+                  @click=${() => this.callbacks?.togglePanelExpanded(active.id)}
+                >
+                  ${expanded ? icons.minimize : icons.maximize}
+                </button>
+              </openclaw-tooltip>`
+            : nothing
+        }
         <openclaw-tooltip .content=${t("common.close")}>
           <button
             class="rail-header__action side-panel__minimize"
@@ -321,7 +546,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     // Saved closed panels stay dormant until first shown. Once mounted, their
     // content survives hiding; closing tabs or this region releases it.
     this.contentMounted ||=
-      (this.layout.open === true && !this.layout.expanded) ||
+      (this.layout.open === true && (!this.layout.expanded || this.layout.expandedSide === true)) ||
       (sidebarMainPanel(this.layout)?.slot ?? "conversation") !== "conversation";
     return html`${
         !this.narrow && this.layout.open && !this.layout.expanded && column

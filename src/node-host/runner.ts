@@ -218,6 +218,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     });
   };
 
+  const deviceIdentity = loadOrCreateDeviceIdentity();
   const client = createNodeHostGatewayCandidateConnection({
     candidates: gatewayCandidates,
     cloudflareAccessByCandidate,
@@ -241,9 +242,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       computerUse: preparedRuntime.manifest.computerUse,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
-      deviceIdentity: loadOrCreateDeviceIdentity(),
+      deviceIdentity,
     },
     onEvent: (evt) => {
+      if (evt.event === "node.pair.resolved") {
+        if (
+          isRecord(evt.payload) &&
+          evt.payload.nodeId === deviceIdentity.deviceId &&
+          evt.payload.decision === "approved"
+        ) {
+          activeRuntime.refreshRunnerInventory();
+        }
+        return;
+      }
       if (evt.event === "node.invoke.cancel") {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
         if (payload) {

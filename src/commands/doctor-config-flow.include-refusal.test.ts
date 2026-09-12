@@ -5,10 +5,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
+import { UpdateRequesterRevokedError } from "../infra/update-requester-authority.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
@@ -22,41 +28,94 @@ describe("doctor --fix include write ownership", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("writes a nested agent repair to its fragment and preserves both ancestor files", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
-          gateway: { mode: "local" },
-        });
-        const fragmentDir = path.join(path.dirname(configPath), "config");
-        await fs.mkdir(fragmentDir);
-        const parentPath = path.join(fragmentDir, "main-parent.json5");
-        const parentRaw = '{ /* keep this delegation */ $include: "./main.json5" }\n';
-        await fs.writeFile(parentPath, parentRaw);
-        const fragmentPath = path.join(fragmentDir, "main.json5");
-        await fs.writeFile(fragmentPath, JSON.stringify({ sandbox: { perSession: true } }));
-        const rootRaw = await fs.readFile(configPath, "utf-8");
+  it.each([
+    { authority: false, refusal: undefined },
+    { authority: true, refusal: undefined },
+    { authority: true, refusal: "requester-revoked" },
+    { authority: true, refusal: "config-input-changed" },
+    { authority: true, refusal: "include-input-changed" },
+  ] as const)(
+    "writes a nested agent repair to its fragment and preserves both ancestor files (authority=$authority, refusal=$refusal)",
+    async ({ authority, refusal }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
+            gateway: { mode: "local" },
+          });
+          const fragmentDir = path.join(path.dirname(configPath), "config");
+          await fs.mkdir(fragmentDir);
+          const parentPath = path.join(fragmentDir, "main-parent.json5");
+          const parentRaw = '{ /* keep this delegation */ $include: "./main.json5" }\n';
+          await fs.writeFile(parentPath, parentRaw);
+          const fragmentPath = path.join(fragmentDir, "main.json5");
+          const fragmentRaw = JSON.stringify({ sandbox: { perSession: true } });
+          await fs.writeFile(fragmentPath, fragmentRaw);
+          const rootRaw = await fs.readFile(configPath, "utf-8");
 
-        const ctx = await prepareDoctorContext(configPath);
-        expect(ctx.configResult.shouldWriteConfig).toBe(true);
-        expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+          const ctx = await prepareDoctorContext(configPath);
+          expect(ctx.configResult.shouldWriteConfig).toBe(true);
+          expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
+          const retainedFragmentRaw =
+            refusal === "include-input-changed"
+              ? JSON.stringify({ sandbox: { perSession: true }, name: "Operator edit" })
+              : fragmentRaw;
+          if (refusal === "include-input-changed") {
+            await fs.writeFile(fragmentPath, retainedFragmentRaw);
+          }
+          const writing = captureUpdateDoctorConfigWrites(
+            configPath,
+            () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
+            authority
+              ? {
+                  inputHash: hashConfigRaw(refusal === "config-input-changed" ? "{}" : rootRaw),
+                  assertCurrent: () => {
+                    if (refusal === "requester-revoked") {
+                      throw new UpdateRequesterRevokedError();
+                    }
+                  },
+                }
+              : undefined,
+          );
+          if (refusal === "requester-revoked") {
+            await expect(writing).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
+          } else if (refusal === "config-input-changed" || refusal === "include-input-changed") {
+            await expect(writing).rejects.toBeInstanceOf(ConfigMutationConflictError);
+          } else {
+            await writing;
+          }
+          if (refusal) {
+            expect(ctx.configResultWriteCommitted).not.toBe(true);
+            await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+            await expect(fs.readFile(parentPath, "utf-8")).resolves.toBe(parentRaw);
+            await expect(fs.readFile(fragmentPath, "utf-8")).resolves.toBe(retainedFragmentRaw);
+            expect((await fs.readdir(fragmentDir)).toSorted()).toEqual([
+              "main-parent.json5",
+              "main.json5",
+            ]);
+            return;
+          }
 
-        expect(ctx.configWriteRefusal).toBeUndefined();
-        expect(ctx.configResultWriteCommitted).toBe(true);
-        expect(JSON.parse(await fs.readFile(fragmentPath, "utf-8"))).toEqual({
-          sandbox: { scope: "session" },
+          expect(ctx.configWriteRefusal).toBeUndefined();
+          expect(ctx.configResultWriteCommitted).toBe(true);
+          expect(JSON.parse(await fs.readFile(fragmentPath, "utf-8"))).toEqual({
+            sandbox: { scope: "session" },
+          });
+          await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+          await expect(fs.readFile(parentPath, "utf-8")).resolves.toBe(parentRaw);
+          if (authority) {
+            expect(ctx.updateWarnings).toContain(
+              "Doctor include-owned keys agents: promotion unavailable for include-owned configuration.",
+            );
+          }
         });
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
-        await expect(fs.readFile(parentPath, "utf-8")).resolves.toBe(parentRaw);
       });
-    });
-  });
+    },
+  );
 
   it("records the refusal and leaves the root and the included file untouched", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
           agents: { list: [{ id: "ops" }] },
           browser: { $include: "./browser.json" },

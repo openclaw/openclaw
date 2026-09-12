@@ -407,6 +407,48 @@ describe("stable release closeout", () => {
     expect(replay.manifest).toBeNull();
   });
 
+  it("records the independently verified split attempts and refuses missing or changed replay proof", () => {
+    const publishRecovery = {
+      npmDockerVerified: true,
+      mode: "split-publication-v1",
+      releaseTag: "v2026.6.8",
+      sourceSha: "tag-sha",
+      toolingSha: "a".repeat(40),
+      fullReleaseValidation: { runId: "11", runAttempt: "2" },
+      originalParent: { runId: "12", runAttempt: "3", conclusion: "failure" },
+      npm: { runId: "13", runAttempt: "1", jobId: "130" },
+      docker: { runId: "14", runAttempt: "1", jobId: "140" },
+    };
+    const params = {
+      ...validCloseoutParams,
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+      allowFailedPublishRecovery: true,
+      publishRecovery,
+    };
+    const first = verifyStableMainCloseout(params);
+    expect(first.errors).toEqual([]);
+    expect(first.manifest?.releasePublishRecovery).toEqual(publishRecovery);
+    const replay = { ...params, existingManifest: first.manifest };
+    expect(verifyStableMainCloseout(replay).manifest).toEqual(first.manifest);
+    for (const replacement of [
+      undefined,
+      { ...publishRecovery, docker: { ...publishRecovery.docker, runAttempt: "2" } },
+    ]) {
+      expect(
+        verifyStableMainCloseout({ ...replay, publishRecovery: replacement }).manifest,
+      ).toBeNull();
+    }
+    for (const patch of [
+      { allowFailedPublishRecovery: false },
+      { releaseTagSha: "another-sha" },
+      { tag: "v2026.6.8-2", release: { ...release, tagName: "v2026.6.8-2" } },
+      { fullReleaseValidationRunAttempt: "3" },
+      { releasePublishRunId: "15" },
+    ]) {
+      expect(verifyStableMainCloseout({ ...params, ...patch }).manifest).toBeNull();
+    }
+  });
+
   it("rejects calendar-normalized rollback drill dates", () => {
     const result = verifyStableMainCloseout({
       ...validCloseoutParams,
@@ -439,6 +481,43 @@ describe("stable release closeout", () => {
     );
     expect(result.errors).toContain(
       "rollback drill is older than 90 days: 2026-03-01. Run the private rollback drill before stable closeout.",
+    );
+  });
+
+  it("allows mirrored prose changes only with unchanged frozen release accounting", () => {
+    const section = extractStableChangelogSection(changelog, "2026.6.8");
+    const record =
+      "## 2026.6.8\n\n### Complete contribution record\n\n- Shipped fix. (#123) Thanks @author.\n";
+    const params = {
+      ...validCloseoutParams,
+      mainRelease: {
+        section: "## 2026.6.8\n\nClearer published documentation.\n",
+        format: "docs-mirror",
+        record,
+      },
+      tagRelease: { section, format: "initial", record },
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    };
+    const result = verifyStableMainCloseout(params);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.changelogSha256).toBe(sha256(section!));
+    for (const changedRecord of [null, "Changed accounting"]) {
+      expect(
+        verifyStableMainCloseout({
+          ...params,
+          mainRelease: { ...params.mainRelease, record: changedRecord },
+        }).errors,
+      ).toContain(
+        "main changelog 2026.6.8 frozen contribution record does not match the shipped release accounting.",
+      );
+    }
+    expect(
+      verifyStableMainCloseout({
+        ...params,
+        mainRelease: { ...params.mainRelease, format: "initial" },
+      }).errors,
+    ).toContain(
+      "main CHANGELOG.md ## 2026.6.8 does not exactly match the shipped release section.",
     );
   });
 

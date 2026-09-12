@@ -1,0 +1,620 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import * as triageUpdate from "../../commands/triage-update.js";
+import * as config from "../../config/config.js";
+import * as launchd from "../../daemon/launchd.js";
+import * as gatewayService from "../../daemon/service.js";
+import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
+import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
+import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as updateGlobal from "../../infra/update-global.js";
+import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
+import {
+  POST_CORE_UPDATE_CHANNEL_ENV,
+  POST_CORE_UPDATE_ENV,
+} from "../../infra/update-post-core-context.js";
+import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
+import * as ledger from "../../infra/update-run-ledger.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import * as triage from "../../infra/update-triage.js";
+import * as installedPlugins from "../../plugins/installed-plugin-index-records.js";
+import { defaultRuntime } from "../../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as stateOwnership from "../../state/openclaw-state-ownership.js";
+import { resolveProfileStateDir } from "../profile-utils.js";
+import * as updateShared from "./shared.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import * as updateConfig from "./update-command-config.js";
+import * as updateExecutor from "./update-command-executor.js";
+import { updateFinalizeCommand } from "./update-command-finalize.js";
+import {
+  createManagedServiceIdentityFixture,
+  finishSuccessfulPackageSwitch,
+  taskRecovery,
+} from "./update-command-post-update.test-support.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
+import * as updateResume from "./update-command-resume.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+import { updateCommand } from "./update-command.js";
+
+const dirs = new Set<string>();
+afterEach(() => cleanupTempDirs(dirs));
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+function materialSnapshot(root: string) {
+  return fs
+    .readdirSync(root, { recursive: true })
+    .map(String)
+    .toSorted()
+    .map((name) => {
+      const filename = path.join(root, name);
+      const stat = fs.lstatSync(filename);
+      return {
+        name,
+        ino: stat.ino,
+        mode: stat.mode,
+        mtime: stat.mtimeMs,
+        content: stat.isSymbolicLink()
+          ? fs.readlinkSync(filename)
+          : stat.isFile()
+            ? createHash("sha256").update(fs.readFileSync(filename)).digest("hex")
+            : null,
+      };
+    });
+}
+
+function pendingPackageInvocation(
+  params: {
+    redirected?: boolean;
+    alias?: boolean;
+    existingRun?: boolean;
+    manager?: "npm" | "pnpm" | "bun";
+    profile?: string;
+    readOnlyConfig?: boolean;
+  } = {},
+) {
+  const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
+  const identity = createManagedServiceIdentityFixture(home);
+  const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
+  const source = path.join(home, "prefix", "lib", "node_modules", "openclaw");
+  const target = path.join(home, "service-prefix", "lib", "node_modules", "openclaw");
+  const control = path.join(home, "control");
+  for (const root of [source, target]) {
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"1.0.0"}\n');
+    fs.writeFileSync(path.join(root, "dist", "entry.js"), "// installed entrypoint\n");
+  }
+  fs.mkdirSync(state);
+  fs.mkdirSync(control);
+  const configPath = path.join(state, "openclaw.json");
+  const contextPath = path.join(home, "triage.json");
+  const metaPath = path.join(home, "sentinel.json");
+  fs.writeFileSync(configPath, "{}\n");
+  fs.writeFileSync(contextPath, "retained triage\n");
+  fs.writeFileSync(metaPath, JSON.stringify({ meta: { triageContextPath: contextPath } }));
+  for (const key of [
+    "OPENCLAW_UPDATE_RUN_ID",
+    POST_CORE_UPDATE_ENV,
+    POST_CORE_UPDATE_CHANNEL_ENV,
+    "OPENCLAW_NIX_MODE",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
+  vi.stubEnv("OPENCLAW_STATE_DIR", state);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  vi.stubEnv("OPENCLAW_PROFILE", params.profile);
+  vi.stubEnv("OPENCLAW_CONFIG_READONLY", params.readOnlyConfig ? "1" : undefined);
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+  vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metaPath);
+  if (params.existingRun) {
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", createUpdateRun({ trigger: "cli" }).runId);
+    closeOpenClawStateDatabaseForTest();
+  }
+  let invocationRoot = source;
+  if (params.alias) {
+    invocationRoot = path.join(home, "invocation-root");
+    fs.symlinkSync(source, invocationRoot, "dir");
+  }
+  vi.spyOn(updateShared, "resolveUpdateRoot").mockResolvedValue(invocationRoot);
+  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+  const manager = vi
+    .spyOn(updateShared, "resolveGlobalManager")
+    .mockResolvedValue(params.manager ?? "npm");
+  const service = gatewayService.resolveGatewayService();
+  const readCommand = vi.fn(async () =>
+    params.redirected
+      ? { programArguments: [process.execPath, path.join(target, "dist", "entry.js"), "gateway"] }
+      : null,
+  );
+  vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({ ...service, readCommand });
+  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  const stateWrite = vi.spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath");
+  const configWrite = vi.spyOn(config, "assertConfigWriteAllowedInCurrentMode");
+  const createRun = vi.spyOn(ledger, "createUpdateRun");
+  const adoptRun = vi.spyOn(ledger, "adoptUpdateRun");
+  const finishRun = vi.spyOn(ledger, "finishUpdateRun");
+  const disableAutoStart = vi
+    .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
+    .mockResolvedValue(false);
+  const runTriage = vi.fn(async () => ({ status: "cancelled" as const }));
+  const prepareTriage = vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage);
+  const writeTriage = vi.spyOn(triageUpdate, "writeTriageUpdateFailure");
+  const cleanupHandoffs = vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs");
+  const loadPlugins = vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords");
+  const resumePostCore = vi
+    .spyOn(updateResume, "resumePostCoreUpdate")
+    .mockRejectedValue(new Error("Untrusted continuation reached plugin convergence"));
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+  const addPending = (root = params.redirected ? target : source) => {
+    const anchor = resolvePackageActivationAnchor(root);
+    fs.mkdirSync(anchor, { mode: 0o700 });
+    // A crash during sealing is already pending, even before a complete journal exists.
+    fs.writeFileSync(path.join(anchor, "candidate-evidence"), "retained package evidence\n", {
+      mode: 0o600,
+    });
+    return anchor;
+  };
+  return {
+    home,
+    state,
+    source,
+    target,
+    runId: process.env.OPENCLAW_UPDATE_RUN_ID,
+    restore() {
+      vi.unstubAllEnvs();
+      identity.restore();
+    },
+    addPending,
+    writers: {
+      stateWrite,
+      configWrite,
+      createRun,
+      adoptRun,
+      finishRun,
+      disableAutoStart,
+      prepareTriage,
+      writeTriage,
+      runTriage,
+      cleanupHandoffs,
+      loadPlugins,
+      resumePostCore,
+      manager,
+    },
+  };
+}
+
+describe.skipIf(process.platform === "win32")("pending package activation admission", () => {
+  it.each([
+    { name: "source with absent history" },
+    { name: "canonical source behind an alias", alias: true },
+    { name: "redirected service target", redirected: true, existingRun: true },
+    {
+      name: "pnpm caller with another profile",
+      manager: "pnpm" as const,
+      profile: "other",
+      existingRun: true,
+    },
+    { name: "Bun caller with another profile", manager: "bun" as const, profile: "other" },
+    { name: "externally managed config", readOnlyConfig: true, existingRun: true },
+  ])("refuses $name before writable preparation or run admission", async (params) => {
+    const f = pendingPackageInvocation(params);
+    try {
+      const opts: UpdateCommandOptions = { json: true, yes: true };
+      f.addPending();
+      const before = materialSnapshot(f.home);
+      await expect(updateCommand(opts)).rejects.toMatchObject({ code: 1 });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "error",
+          reason: "update-recovery-pending",
+          ...(params.redirected ? { root: f.target } : {}),
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        }),
+      );
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringMatching(/recovery artifacts|publication recovery/i),
+      );
+      for (const writer of Object.values(f.writers)) {
+        expect(writer).not.toHaveBeenCalled();
+      }
+      expect(materialSnapshot(f.home)).toEqual(before);
+    } finally {
+      f.restore();
+    }
+  });
+
+  it.each([false, true])(
+    "reports pending after lease acquisition with existing history=%s without changing retained material",
+    async (existingRun) => {
+      const f = pendingPackageInvocation({ existingRun });
+      const withExecutor = updateExecutor.withUpdateCommandExecutor;
+      let anchor: string | undefined;
+      let record: ReturnType<typeof ledger.getUpdateRun> | undefined;
+      const retainedMaterial = () => ({
+        source: materialSnapshot(f.source),
+        target: materialSnapshot(f.target),
+        anchor: anchor ? materialSnapshot(anchor) : undefined,
+        config: fs.readFileSync(path.join(f.state, "openclaw.json")),
+        triage: fs.readFileSync(path.join(f.home, "triage.json")),
+        sentinel: fs.readFileSync(path.join(f.home, "sentinel.json")),
+      });
+      let before: ReturnType<typeof retainedMaterial> | undefined;
+      vi.spyOn(updateConfig, "readUpdateChannelConfig").mockResolvedValue({
+        configSnapshot: await config.readConfigFileSnapshot({
+          skipPluginValidation: true,
+          observe: false,
+        }),
+        legacyConfigPlan: undefined,
+        storedChannel: null,
+      });
+      const metadata = vi
+        .spyOn(updateGlobal, "createGlobalInstallEnv")
+        .mockRejectedValue(
+          new Error("package metadata must not run after pending lease admission"),
+        );
+      vi.spyOn(updateExecutor, "withUpdateCommandExecutor").mockImplementation(
+        (runId, operation, options) =>
+          withExecutor(
+            runId,
+            async (executor) =>
+              operation({
+                async enter(root, enterOptions) {
+                  const fence = await executor.enter(root, enterOptions);
+                  if (!anchor) {
+                    anchor = f.addPending();
+                    record = ledger.getUpdateRun(runId);
+                    before = retainedMaterial();
+                  }
+                  return fence;
+                },
+              }),
+            options,
+          ),
+      );
+      try {
+        await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
+        expect(anchor).toBeDefined();
+        if (existingRun) {
+          expect(record).toMatchObject({ status: "running" });
+        } else {
+          expect(record).toBeUndefined();
+          expect(f.writers.createRun).not.toHaveBeenCalled();
+          expect(fs.existsSync(path.join(f.state, "state", "openclaw.sqlite"))).toBe(false);
+        }
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            status: "error",
+            reason: "update-recovery-pending",
+            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          }),
+        );
+        expect(metadata).not.toHaveBeenCalled();
+        expect(f.writers.disableAutoStart).not.toHaveBeenCalled();
+        expect(f.writers.cleanupHandoffs).not.toHaveBeenCalled();
+        expect(f.writers.loadPlugins).not.toHaveBeenCalled();
+        expect(f.writers.writeTriage).not.toHaveBeenCalled();
+        expect(f.writers.runTriage).not.toHaveBeenCalled();
+        expect(retainedMaterial()).toEqual(before);
+        if (record) {
+          // Pending reporting must retain an already-admitted attempt.
+          expect(ledger.getUpdateRun(record.runId)).toMatchObject({ runId: record.runId });
+        }
+      } finally {
+        f.restore();
+      }
+    },
+  );
+});
+
+async function fixture() {
+  const root = fs.realpathSync(makeTempDir(dirs, "pending-finalizer-"));
+  const retained = createRetainedCheckpointFixture(root);
+  const { env, options, file, run, runtime, record, displaced } = retained;
+  retained.displace();
+  const recovery = {
+    options,
+    fence: {
+      assertCurrent() {
+        throw new Error("prior owner released");
+      },
+    },
+    getRecord: () => record,
+    onRecord() {
+      throw new Error("retained record must not change");
+    },
+    assertReady() {
+      throw new Error("no readiness authority");
+    },
+  };
+  const opts: UpdateCommandOptions = { run, recovery };
+  const windows = taskRecovery();
+  const rollback = vi.fn(async () => {
+    throw new Error("legacy rollback must not run");
+  });
+  const complete = vi.fn();
+  return {
+    root,
+    env,
+    file,
+    displaced,
+    opts,
+    windows,
+    rollback,
+    complete,
+    entries: () => 0,
+    invoke: (previousInstallRoot = runtime.root) =>
+      finishSuccessfulPackageSwitch(
+        { packageRoot: runtime.root, run },
+        {
+          root: runtime.root,
+          previousInstallRoot,
+          opts,
+          result: {
+            status: "error",
+            mode: "npm",
+            root: runtime.root,
+            runId: run.runId,
+            reason: "candidate-failed",
+            steps: [],
+            durationMs: 1,
+          },
+          preManagedServiceStop: {
+            inspected: true,
+            runtimeInspected: true,
+            running: false,
+            stopped: true,
+            serviceEnv: env,
+            windowsTaskAutoStartRecovery: windows,
+          },
+          packageTransaction: { rollback, complete, backupRoot: path.join(root, "retained") },
+        },
+      ),
+  };
+}
+
+describe("pending recovery finalizer", () => {
+  it("refuses standalone finalization before recreating a displaced canonical database", async () => {
+    const f = await fixture();
+    const before = fs.readFileSync(f.displaced);
+    const configPath = path.join(f.root, "openclaw.json");
+    const originalConfig = fs.readFileSync(configPath);
+    const resolveRoot = vi
+      .spyOn(updateShared, "resolveUpdateRoot")
+      .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    await expect(
+      withOwnedManagedUpdateEnv(
+        { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
+        () => updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+      ),
+    ).rejects.toThrow("full-state recovery is deferred");
+    expect(resolveRoot).not.toHaveBeenCalled();
+    expect(fs.existsSync(f.file)).toBe(false);
+    expect(fs.readFileSync(f.displaced)).toEqual(before);
+    expect(fs.readFileSync(configPath)).toEqual(originalConfig);
+  });
+
+  it.each([true, false])(
+    "preserves a missing canonical database with live-context=%s",
+    async (context) => {
+      const f = await fixture();
+      if (!context) {
+        f.opts.recovery = undefined;
+      }
+      const before = fs.readFileSync(f.displaced);
+      const failure = await f.invoke().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toMatchObject({
+        name: "UpdateCommandPendingRecoveryFailure",
+        result: {
+          reason: "candidate-failed",
+          runId: f.opts.run!.runId,
+          recovery: { serviceRestartSafe: false },
+        },
+      });
+      expect(f.entries()).toBe(0);
+      expect(fs.existsSync(f.file)).toBe(false);
+      expect(fs.readFileSync(f.displaced)).toEqual(before);
+      expect(f.rollback).not.toHaveBeenCalled();
+      expect(f.complete).not.toHaveBeenCalled();
+      expect(f.windows.restore).not.toHaveBeenCalled();
+      expect(f.windows.complete).not.toHaveBeenCalled();
+    },
+  );
+  it("refuses retained recovery without touching either the managed or caller root", async () => {
+    const f = await fixture();
+    const failure = await f.invoke(path.join(f.root, "caller-install")).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({
+      name: "UpdateCommandPendingRecoveryFailure",
+      result: { reason: "candidate-failed" },
+    });
+    expect(f.entries()).toBe(0);
+    expect(fs.existsSync(f.file)).toBe(false);
+    expect(f.rollback).not.toHaveBeenCalled();
+    expect(f.windows.restore).not.toHaveBeenCalled();
+  });
+
+  it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
+    "keeps %s unwind away from autostart, history and managed triage",
+    async (kind) => {
+      const f = await fixture();
+      const run = f.opts.run;
+      if (!run) {
+        throw new Error("fixture run absent");
+      }
+      if (kind === "unexpected" || kind === "completed") {
+        f.opts.recovery = undefined;
+      }
+      const before = fs.readFileSync(f.displaced);
+      const context = path.join(f.root, "triage.json");
+      const meta = path.join(f.root, "sentinel.json");
+      fs.writeFileSync(context, "unchanged");
+      fs.writeFileSync(meta, JSON.stringify({ meta: { triageContextPath: context } }));
+      const primary = {
+        status: "error" as const,
+        mode: "npm" as const,
+        runId: run.runId,
+        reason: "candidate-failed",
+        steps: [],
+        durationMs: 1,
+      };
+      const target = {
+        root: f.root,
+        env: {
+          ...f.env,
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: meta,
+        },
+        failureResult: primary,
+      };
+      vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+      const result = withUpdateFailureTriage({ ...f.opts, json: true }, target, () =>
+        withUpdateCommandRecoveryUnwind(
+          { ...f.opts, run },
+          { triageTarget: target, windowsTaskAutoStartRecovery: f.windows },
+          async () => {
+            if (kind === "unexpected") {
+              throw new Error("lost executor context");
+            }
+            if (kind === "reported") {
+              throw new UpdateCommandFailure(primary);
+            }
+            if (kind === "finalizer") {
+              await f.invoke();
+            }
+          },
+        ),
+      );
+      await expect(result).rejects.toMatchObject({ code: 1 });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "candidate-failed",
+          runId: run.runId,
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        }),
+      );
+      expect(fs.existsSync(f.file)).toBe(false);
+      expect(fs.readFileSync(f.displaced)).toEqual(before);
+      expect(fs.readFileSync(context, "utf8")).toBe("unchanged");
+      expect(f.windows.restore).not.toHaveBeenCalled();
+      expect(f.windows.complete).not.toHaveBeenCalled();
+      expect(f.rollback).not.toHaveBeenCalled();
+      expect(f.complete).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("migrated-runtime unwind", () => {
+  it.each([false, true])(
+    "preserves newer canonical state after handoff (failure=%s)",
+    async (failed) => {
+      const root = fs.realpathSync(makeTempDir(dirs, "migrated-unwind-"));
+      const env = { HOME: root, OPENCLAW_STATE_DIR: root };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      closeOpenClawStateDatabaseForTest();
+      const file = path.join(root, "state", "openclaw.sqlite");
+      const db = new DatabaseSync(file);
+      try {
+        const row = db.prepare("PRAGMA user_version").get();
+        db.exec(`PRAGMA user_version=${Number(row?.user_version) + 1}`);
+      } finally {
+        db.close();
+      }
+      const before = fs.readFileSync(file);
+      const windows = taskRecovery();
+      const failure = new UpdateCommandFailure({
+        status: "error",
+        mode: "npm",
+        runId: run.runId,
+        reason: "new-runtime-failed",
+        steps: [],
+        durationMs: 1,
+      });
+      const completion = withUpdateCommandRecoveryUnwind(
+        { run },
+        {
+          ledgerHandoffOwned: true,
+          ledgerHandoffCompleted: true,
+          triageTarget: { env },
+          windowsTaskAutoStartRecovery: windows,
+        },
+        async () => {
+          if (failed) {
+            throw failure;
+          }
+        },
+      );
+      if (failed) {
+        await expect(completion).rejects.toBe(failure);
+      } else {
+        await expect(completion).resolves.toBeUndefined();
+      }
+      expect(windows.restore).toHaveBeenCalledOnce();
+      expect(windows.complete).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(file)).toEqual(before);
+    },
+  );
+});
+
+it.each([false, true])(
+  "leaves an unconfirmed migrated handoff pending (failure=%s)",
+  async (failed) => {
+    const root = fs.realpathSync(makeTempDir(dirs, "unconfirmed-handoff-"));
+    const env = { HOME: root, OPENCLAW_STATE_DIR: root };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    closeOpenClawStateDatabaseForTest();
+    const file = path.join(root, "state", "openclaw.sqlite");
+    const before = fs.readFileSync(file);
+    const windows = taskRecovery();
+    const cause = new Error("candidate finalizer unavailable");
+    const primary = {
+      status: "error" as const,
+      mode: "npm" as const,
+      runId: run.runId,
+      reason: "candidate-failed",
+      steps: [],
+      durationMs: 1,
+    };
+    await expect(
+      withUpdateCommandRecoveryUnwind(
+        { run },
+        {
+          ledgerHandoffOwned: true,
+          triageTarget: { env, failureResult: primary },
+          windowsTaskAutoStartRecovery: windows,
+        },
+        async () => {
+          if (failed) {
+            throw cause;
+          }
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "UpdateCommandPendingRecoveryFailure",
+      result: { reason: "candidate-failed", recovery: { serviceRestartSafe: false } },
+      ...(failed ? { cause } : {}),
+    });
+    expect(windows.restore).not.toHaveBeenCalled();
+    expect(windows.complete).toHaveBeenCalledExactlyOnceWith(false);
+    expect(fs.readFileSync(file)).toEqual(before);
+  },
+);

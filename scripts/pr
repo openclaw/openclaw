@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 
@@ -20,7 +24,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover)
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -329,6 +333,9 @@ Usage:
     Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
     Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
+  scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
+    Finish a verified merge receipt after cleanup; never dispatches a merge or deletes resources.
+    Posts a first completion comment only from merged; uncertain comment attempts are lookup-only.
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
@@ -417,6 +424,10 @@ main() {
       ;;
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
+      ;;
+    merge-complete)
+      [ "$#" -eq 3 ] && is_canonical_pr_number "$1" &&
+        [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
       local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path=""
@@ -577,6 +588,9 @@ main() {
       ;;
     merge-run | merge-recover)
       merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path"
+      ;;
+    merge-complete)
+      merge_complete "$1" "$2"
       ;;
     *)
       usage

@@ -104,6 +104,65 @@ function harness() {
 }
 
 describe("occupancy-driven transcript lifecycle", () => {
+  it("refuses a stale occupancy reopen after its recent read is delayed", async () => {
+    const h = harness();
+    const original = {
+      sessionId: "recent-capture",
+      title: "Original meeting",
+      source: {
+        providerId: h.provider.id,
+        accountId: "default",
+        guildId: "guild",
+        channelId: "voice",
+      },
+      startedAt: "2026-08-01T11:50:00.000Z",
+      stoppedAt: "2026-08-01T11:59:00.000Z",
+      metadata: { sessionIdOrigin: "generated" },
+    };
+    await h.store.writeSession(original);
+    await h.store.appendUtteranceForSession(original, { text: "Archived speech" });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const read = h.store.readRecentStoppedSession.bind(h.store);
+    const delayedRead = vi
+      .spyOn(TranscriptsStore.prototype, "readRecentStoppedSession")
+      .mockImplementationOnce(async (...args) => {
+        const recent = await read(...args);
+        expect(recent).toBeDefined();
+        entered.resolve();
+        await release.promise;
+        return recent;
+      });
+    await withPluginRuntimeRegistryScope(h.registry, async () => {
+      const service = h.service();
+      try {
+        service.start();
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+        h.watches[0]!.onOccupied();
+        await entered.promise;
+        const replacement = { ...original, title: "Changed by another writer" };
+        await h.store.writeSession(replacement);
+        await h.store.appendUtteranceForSession(replacement, { text: "Saved during recent read" });
+        release.resolve();
+        await vi.waitFor(() => {
+          expect(
+            h.logger.warn.mock.calls.length + vi.mocked(h.provider.start!).mock.calls.length,
+          ).toBeGreaterThan(0);
+        });
+        expect.soft(h.provider.start).not.toHaveBeenCalled();
+        expect.soft(await h.store.readSession(original.sessionId)).toEqual(replacement);
+        expect(await h.store.readUtterancesForSession(original)).toMatchObject([
+          { text: "Archived speech" },
+          { text: "Saved during recent read" },
+        ]);
+      } finally {
+        release.resolve();
+        await service.stop();
+        delayedRead.mockRestore();
+      }
+    });
+  });
+
   it.each([undefined, null, "invalid", "supplied", "generated"])(
     "reopens only a newest capture with recorded generated origin (%s)",
     async (origin) => {
@@ -303,7 +362,7 @@ describe("occupancy-driven transcript lifecycle", () => {
             expect((await h.store.readSession(request.session.sessionId))?.stoppedAt).toBeDefined(),
           );
           const restored = await h.store.readSession(request.session.sessionId);
-          const revision = h.store.readSummaryInputRevision(request.session);
+          const revision = await h.store.readSummaryInputRevision(request.session);
           if (stop !== "omitted") {
             if (stop === "denied") {
               h.provider.accessControl!.authorize = async () => ({ ok: false, error: "denied" });
@@ -321,7 +380,7 @@ describe("occupancy-driven transcript lifecycle", () => {
           // Historical stop preserves stoppedAt and summary inputs, even when it
           // cancels a pending retry. The real stop must still revoke that attempt.
           expect(await h.store.readSession(request.session.sessionId)).toEqual(restored);
-          expect(h.store.readSummaryInputRevision(request.session)).toBe(revision);
+          expect(await h.store.readSummaryInputRevision(request.session)).toBe(revision);
           const summary = await h.store.readSummary(request.session);
           h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (next) => {
             h.requests.push(next);

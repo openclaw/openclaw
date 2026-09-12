@@ -55,9 +55,6 @@ const POLL_SPAWN_TIMEOUT_MS = 400;
 const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
-const sleepSyncOverride: ((ms: number) => void) | null = null;
-const dateNowOverride: (() => number) | null = null;
-const parentPidOverride: (() => number) | null = null;
 
 /** Terminate externally discovered stale gateway processes and allow cleanup to settle. */
 export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
@@ -73,17 +70,9 @@ export async function terminateStaleGatewayPids(pids: number[]): Promise<number[
   return targets;
 }
 
-function getTimeMs(): number {
-  return dateNowOverride ? dateNowOverride() : Date.now();
-}
-
 function sleepSync(ms: number): void {
   const timeoutMs = Math.max(0, Math.floor(ms));
   if (timeoutMs <= 0) {
-    return;
-  }
-  if (sleepSyncOverride) {
-    sleepSyncOverride(timeoutMs);
     return;
   }
   try {
@@ -95,10 +84,6 @@ function sleepSync(ms: number): void {
       // Best-effort fallback when Atomics.wait is unavailable.
     }
   }
-}
-
-function getParentPid(): number {
-  return parentPidOverride ? parentPidOverride() : process.ppid;
 }
 
 /**
@@ -178,7 +163,7 @@ export function getSelfAndAncestorPidsSync(
   spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
 ): Set<number> {
   const pids = new Set<number>([process.pid]);
-  const immediateParent = getParentPid();
+  const immediateParent = process.ppid;
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
   }
@@ -349,6 +334,8 @@ function filterVerifiedWindowsGatewayPidsResult(
 }
 
 type CleanStaleGatewayProcessesOptions = {
+  /** Reassert effect authority after blocking probes and before every signal. */
+  assertCurrent?: () => void;
   protectedPid?: number;
   // Resolve only after listener enumeration so supervisor respawns captured by
   // that snapshot cannot be mistaken for stale processes. Throw to skip cleanup.
@@ -533,12 +520,13 @@ function pollPortOnceWindows(port: number): PollResult {
  * On Unix: sends SIGTERM, waits briefly, then SIGKILL for survivors.
  * On Windows: uses taskkill (graceful first, then /F for force-kill).
  */
-function terminateStaleProcessesSync(pids: number[]): number[] {
+function terminateStaleProcessesSync(pids: number[], assertCurrent?: () => void): number[] {
   if (process.platform === "win32") {
-    return terminateStaleProcessesWindows(pids);
+    return terminateStaleProcessesWindows(pids, assertCurrent);
   }
   const killed: number[] = [];
   for (const pid of pids) {
+    assertCurrent?.();
     if (trySignalStaleProcess(pid, "SIGTERM")) {
       killed.push(pid);
     }
@@ -549,6 +537,7 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
   sleepSync(STALE_SIGTERM_WAIT_MS);
   for (const pid of killed) {
     if (isProcessAlive(pid)) {
+      assertCurrent?.();
       trySignalStaleProcess(pid, "SIGKILL");
     }
   }
@@ -574,7 +563,7 @@ function trySignalStaleProcess(pid: number, signal: NodeJS.Signals): boolean {
  * Windows-specific process termination using taskkill.
  * Sends a graceful taskkill first (/T for tree), waits, then escalates to /F.
  */
-function terminateStaleProcessesWindows(pids: number[]): number[] {
+function terminateStaleProcessesWindows(pids: number[], assertCurrent?: () => void): number[] {
   const taskkillPath = path.win32.join(
     getWindowsInstallRoots().systemRoot,
     "System32",
@@ -582,6 +571,7 @@ function terminateStaleProcessesWindows(pids: number[]): number[] {
   );
   const killed: number[] = [];
   for (const pid of pids) {
+    assertCurrent?.();
     const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
       stdio: "ignore",
       timeout: 5000,
@@ -597,6 +587,7 @@ function terminateStaleProcessesWindows(pids: number[]): number[] {
       killed.push(pid);
       continue;
     }
+    assertCurrent?.();
     const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
       stdio: "ignore",
       timeout: 5000,
@@ -640,8 +631,8 @@ function isProcessAlive(pid: number): boolean {
  *   - Wall-clock deadline exceeded                               → log warning, proceed anyway
  */
 function waitForPortFreeSync(port: number): void {
-  const deadline = getTimeMs() + PORT_FREE_TIMEOUT_MS;
-  while (getTimeMs() < deadline) {
+  const deadline = Date.now() + PORT_FREE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     const result = pollPortOnce(port);
     if (result.free === true) {
       return;
@@ -697,7 +688,7 @@ export function cleanStaleGatewayProcessesSync(
     restartLog.warn(
       `killing ${stalePids.length} stale gateway process(es) before restart: ${stalePids.join(", ")}`,
     );
-    const killed = terminateStaleProcessesSync(stalePids);
+    const killed = terminateStaleProcessesSync(stalePids, options?.assertCurrent);
     // Wait for the port to be released before returning — called unconditionally
     // even when `killed` is empty (all pids were already dead before SIGTERM).
     // A process can exit before our signal arrives yet still leave its socket

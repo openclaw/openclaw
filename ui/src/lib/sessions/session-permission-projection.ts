@@ -1,12 +1,7 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  reconcileSessionChanged,
-  type SessionChangedResult,
-  type readSessionChangedEvent,
-} from "./reconcile.ts";
+import type { readSessionChangedEvent } from "./reconcile.ts";
 import type { SessionGateway } from "./session-capability.ts";
 import { resolveUiConversationIdentity } from "./session-key.ts";
-import type { PublishedSession } from "./session-list-query.ts";
 
 type PermissionFields = Pick<GatewaySessionRow, "sessionId" | "permissionMode" | "updatedAt">;
 export type SessionPermissionClaim = {
@@ -16,9 +11,10 @@ export type SessionPermissionClaim = {
 
 type PermissionProjectionRoster = {
   readonly requestRevision: number;
-  publishedSession: (
+  inheritRow: (row: GatewaySessionRow, source: GatewaySessionRow) => GatewaySessionRow;
+  publishedRow: (
     matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
-  ) => PublishedSession | undefined;
+  ) => GatewaySessionRow | undefined;
 };
 
 // Claims and confirmed fields share one conversation owner. A row event may
@@ -56,10 +52,10 @@ export function createSessionPermissionProjection(
     const expectedId = expectedSessionId?.trim() || undefined;
     const sessionId =
       expectedId ??
-      getRoster().publishedSession(
+      getRoster().publishedRow(
         (row, ownerAgentId) =>
           permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
-      )?.row.sessionId;
+      )?.sessionId;
     const projection = createProjection(identity, sessionId);
     const initialFact = projection.fact;
     const ownsClaim = () => permissionProjections.get(identity) === projection;
@@ -103,131 +99,122 @@ export function createSessionPermissionProjection(
       },
     };
   };
-  const reconcilePermissionList = (
+  const projectPermissionRow = (
+    row: GatewaySessionRow,
+    readRevision: (row: GatewaySessionRow) => number,
+    agentId: string | null | undefined,
+    observe: boolean,
+  ): GatewaySessionRow => {
+    const identity = permissionIdentity(row.key, row.agentId ?? agentId);
+    const projection = permissionProjections.get(identity);
+    if (!projection) {
+      return row;
+    }
+    if (row.sessionId !== projection.sessionId) {
+      if (observe) {
+        permissionProjections.delete(identity);
+      }
+      return row;
+    }
+    const revision = readRevision(row);
+    const fact = projection.fact;
+    const older =
+      fact?.updatedAt != null && row.updatedAt != null && row.updatedAt < fact.updatedAt;
+    const newer =
+      fact?.updatedAt != null && row.updatedAt != null && row.updatedAt > fact.updatedAt;
+    if (!fact || newer || (!older && revision > fact.revision)) {
+      // Retain the watermark: another older managed/list request may still finish.
+      if (observe) {
+        projection.fact = {
+          permissionMode: row.permissionMode,
+          updatedAt: row.updatedAt,
+          revision: Math.max(revision, fact?.revision ?? 0),
+        };
+      }
+      return row;
+    }
+    if (row.permissionMode === fact.permissionMode) {
+      return row;
+    }
+    const next = { ...row };
+    if (fact.permissionMode === undefined) {
+      delete next.permissionMode;
+    } else {
+      next.permissionMode = fact.permissionMode;
+    }
+    return getRoster().inheritRow(next, row);
+  };
+  const projectPermissionList = (
     result: SessionsListResult | null,
-    revision: number,
-    agentId?: string,
+    readRevision: (row: GatewaySessionRow) => number,
+    agentId: string | null | undefined,
+    observe: boolean,
   ) => {
     if (!result || permissionProjections.size === 0) {
       return result;
     }
     let changed = false;
     const sessions = result.sessions.map((row) => {
-      const identity = permissionIdentity(row.key, row.agentId ?? agentId);
-      const projection = permissionProjections.get(identity);
-      if (!projection) {
-        return row;
-      }
-      if (row.sessionId !== projection.sessionId) {
-        permissionProjections.delete(identity);
-        return row;
-      }
-      const fact = projection.fact;
-      const older =
-        fact?.updatedAt != null && row.updatedAt != null && row.updatedAt < fact.updatedAt;
-      const newer =
-        fact?.updatedAt != null && row.updatedAt != null && row.updatedAt > fact.updatedAt;
-      if (!fact || newer || (!older && revision > fact.revision)) {
-        // Retain the watermark: another older managed/list request may still finish.
-        projection.fact = {
-          permissionMode: row.permissionMode,
-          updatedAt: row.updatedAt,
-          revision: Math.max(revision, fact?.revision ?? 0),
-        };
-        return row;
-      }
-      if (row.permissionMode === fact.permissionMode) {
-        return row;
-      }
-      changed = true;
-      const next = { ...row };
-      if (fact.permissionMode === undefined) {
-        delete next.permissionMode;
-      } else {
-        next.permissionMode = fact.permissionMode;
-      }
+      const next = projectPermissionRow(row, readRevision, agentId, observe);
+      changed ||= next !== row;
       return next;
     });
     return changed ? { ...result, sessions } : result;
   };
+  const observeEventRow = (
+    row: GatewaySessionRow,
+    previous: GatewaySessionRow | undefined,
+    event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
+    agentId?: string | null,
+  ): GatewaySessionRow => {
+    if (row === previous) {
+      return row;
+    }
+    const ownerAgentId = row.agentId ?? event.agentId ?? agentId;
+    const identity = permissionIdentity(row.key, ownerAgentId);
+    let projection = permissionProjections.get(identity);
+    if (!projection || projection.sessionId !== row.sessionId) {
+      // The accepted event owns this incarnation even before primary publication.
+      projection = createProjection(identity, row.sessionId);
+    }
+    if (
+      projection?.fact?.updatedAt != null &&
+      row.updatedAt != null &&
+      row.updatedAt < projection.fact.updatedAt
+    ) {
+      // Another held list may have accepted a newer field than this roster has seen.
+      const corrected = {
+        ...row,
+        permissionMode: projection.fact.permissionMode,
+      };
+      if (corrected.permissionMode === undefined) {
+        delete corrected.permissionMode;
+      }
+      return corrected;
+    }
+    if (row.sessionId) {
+      // Events supersede confirmed outcomes; a pending local choice still arbitrates its acknowledgment.
+      projection.fact = {
+        permissionMode: row.permissionMode,
+        updatedAt: row.updatedAt,
+        revision: getRoster().requestRevision,
+      };
+    }
+    return row;
+  };
 
   return {
     claim: claimPermissionProjection,
-    reconcileList: reconcilePermissionList,
-    observeEvent(
-      reconciled: SessionChangedResult,
-      previous: SessionsListResult | null,
-      payload: unknown,
-      event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
+    reconcileList: (result: SessionsListResult | null, revision: number, agentId?: string) =>
+      projectPermissionList(result, () => revision, agentId, true),
+    apply: (
+      result: SessionsListResult | null,
+      readRevision: (row: GatewaySessionRow) => number,
       agentId?: string | null,
-    ): SessionChangedResult {
-      let rowAgentId = agentId;
-      let row = reconciled.row;
-      let previousRow = previous?.sessions.find((candidate) => candidate.key === row?.key);
-      if (!row || row === previousRow) {
-        const identity = permissionIdentity(event.key, event.agentId ?? agentId);
-        const held = getRoster().publishedSession(
-          (candidate, ownerAgentId) =>
-            permissionIdentity(candidate.key, candidate.agentId ?? ownerAgentId) === identity,
-        );
-        if (!held || held.row === previousRow) {
-          return reconciled;
-        }
-        // Managed-only rows use the same event admission/freshness rules as the primary roster.
-        row = reconcileSessionChanged(held.result, payload, {
-          resultAgentId: held.agentId,
-          archivedFilter: "all",
-        }).row;
-        previousRow = held.row;
-        rowAgentId = held.agentId;
-      }
-      if (!row || row === previousRow) {
-        return reconciled;
-      }
-      const ownerAgentId = row.agentId ?? event.agentId ?? rowAgentId;
-      const identity = permissionIdentity(row.key, ownerAgentId);
-      let projection = permissionProjections.get(identity);
-      if (!projection || projection.sessionId !== row.sessionId) {
-        // The accepted event owns this incarnation even before primary publication.
-        projection = createProjection(identity, row.sessionId);
-      }
-      if (
-        projection?.fact?.updatedAt != null &&
-        row.updatedAt != null &&
-        row.updatedAt < projection.fact.updatedAt
-      ) {
-        // Another held list may have accepted a newer field than this roster has seen.
-        if (reconciled.row === row && reconciled.result) {
-          const corrected = {
-            ...row,
-            permissionMode: projection.fact.permissionMode,
-          };
-          if (corrected.permissionMode === undefined) {
-            delete corrected.permissionMode;
-          }
-          return {
-            ...reconciled,
-            row: corrected,
-            result: {
-              ...reconciled.result,
-              sessions: reconciled.result.sessions.map((candidate) =>
-                candidate === row ? corrected : candidate,
-              ),
-            },
-          };
-        }
-        return reconciled;
-      }
-      if (row.sessionId) {
-        // Events supersede confirmed outcomes; a pending local choice still arbitrates its acknowledgment.
-        projection.fact = {
-          permissionMode: row.permissionMode,
-          updatedAt: row.updatedAt,
-          revision: getRoster().requestRevision,
-        };
-      }
-      return reconciled;
-    },
+    ) => projectPermissionList(result, readRevision, agentId, false),
+    applyRow: (row: GatewaySessionRow, readRevision: number, agentId?: string | null) =>
+      projectPermissionRow(row, () => readRevision, agentId, false),
+    observeEventRow,
     clear: () => permissionProjections.clear(),
   };
 }

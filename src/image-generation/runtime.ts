@@ -6,6 +6,7 @@ import { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
 import {
   getImageGenerationProvider,
   listImageGenerationProviders,
+  withImageGenerationProviders,
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
@@ -15,6 +16,10 @@ import {
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import {
+  buildCapabilityProviderIndex,
+  normalizeCapabilityProviderId,
+} from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
@@ -59,6 +64,29 @@ export function listRuntimeImageGenerationProviders(
 export async function generateImage(
   params: GenerateImageParams,
   deps: ImageGenerationRuntimeDeps = {},
+): Promise<GenerateImageRuntimeResult> {
+  if (deps.getProvider && deps.listProviders) {
+    return runImageGeneration(params, deps);
+  }
+  return withImageGenerationProviders(params.cfg, (providers) => {
+    const canonical = buildCapabilityProviderIndex(providers, "canonical");
+    const aliases = buildCapabilityProviderIndex(providers, "aliases");
+    return runImageGeneration(params, {
+      ...deps,
+      getProvider:
+        deps.getProvider ??
+        ((id) => {
+          const normalized = normalizeCapabilityProviderId(id);
+          return normalized ? aliases.get(normalized) : undefined;
+        }),
+      listProviders: deps.listProviders ?? (() => [...canonical.values()]),
+    });
+  });
+}
+
+async function runImageGeneration(
+  params: GenerateImageParams,
+  deps: ImageGenerationRuntimeDeps,
 ): Promise<GenerateImageRuntimeResult> {
   const getProvider = deps.getProvider ?? getImageGenerationProvider;
   const listProviders = deps.listProviders ?? listImageGenerationProviders;

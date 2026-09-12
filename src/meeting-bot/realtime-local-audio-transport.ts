@@ -126,6 +126,11 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const signalFatal = () => {
     if (!fatalSignaled) {
       fatalSignaled = true;
+      void stop().catch((error: unknown) => {
+        params.logger.warn(
+          `${params.logScope} failed audio transport cleanup: ${formatErrorMessage(error)}`,
+        );
+      });
       fatalHandler?.();
     }
   };
@@ -197,6 +202,26 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
     }
   };
+  const stop = () => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      outputLoopbackVerifier.cancelOutput();
+      releaseOutputWriteWaiters();
+      await Promise.all([
+        terminateMeetingBridgeProcess(inputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateMeetingBridgeProcess(outputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateMeetingBridgeProcess(bargeInInputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        ...retiredOutputStops,
+      ]);
+    })();
+    return stopPromise;
+  };
   attachOutputProcessHandlers(outputProcess);
   inputProcess.on("error", fail("audio input command"));
   inputProcess.on("exit", (code, signal) => {
@@ -236,26 +261,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       });
     },
     beginOutput: () => outputLoopbackVerifier.beginOutput(),
-    stop: () => {
-      stopPromise ??= (async () => {
-        stopped = true;
-        outputLoopbackVerifier.cancelOutput();
-        releaseOutputWriteWaiters();
-        await Promise.all([
-          terminateMeetingBridgeProcess(inputProcess, {
-            graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-          }),
-          terminateMeetingBridgeProcess(outputProcess, {
-            graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-          }),
-          terminateMeetingBridgeProcess(bargeInInputProcess, {
-            graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-          }),
-          ...retiredOutputStops,
-        ]);
-      })();
-      return stopPromise;
-    },
+    stop,
     writeOutput: async (audio) => {
       if (stopped) {
         return;

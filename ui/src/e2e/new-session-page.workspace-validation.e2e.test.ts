@@ -7,9 +7,11 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  NEW_SESSION_MODEL_CATALOG,
   SOURCE_REPO,
   TARGET_REPO,
   WORKSPACE,
+  captureUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -113,6 +115,64 @@ async function expectPendingNewSession(page: Page, message: string) {
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "starts a worktree from an unsuggested ref when branch suggestions are unavailable=%s",
+    async (branchesUnavailable) => {
+      await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+        const branches = branchList();
+        const gateway = await installMockGateway(page, {
+          workspaceGit: true,
+          models: NEW_SESSION_MODEL_CATALOG,
+          methodResponses: {
+            "agents.list": mainAgentList(),
+            "worktrees.branches": {
+              ...branches,
+              branches: branchesUnavailable ? [] : branches.branches,
+              ...(branchesUnavailable ? { branchesUnavailable: true } : {}),
+            },
+            "sessions.create": { key: "agent:main:unsuggested-ref", runStarted: true },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const checkout = page.locator("#new-session-checkout-trigger");
+        await checkout.click();
+        await page
+          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+          .click();
+        await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
+        const baseRef = page.locator('input[list="new-session-branches"]');
+        await baseRef.fill("origin/release-outside-suggestions");
+        expect(
+          await page
+            .locator('#new-session-branches option[value="origin/release-outside-suggestions"]')
+            .count(),
+        ).toBe(0);
+        await captureUiProof(
+          suite,
+          page,
+          `worktree-branches-${branchesUnavailable ? "unavailable" : "limited"}.png`,
+        );
+        await page
+          .getByText(
+            branchesUnavailable
+              ? "Branch suggestions are unavailable. Enter a branch or commit."
+              : "Suggestions are limited. Enter any branch or commit.",
+            { exact: true },
+          )
+          .waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await page.locator(".new-session-page__message").fill("start from the selected release");
+        await page.getByRole("button", { name: "Start session" }).click();
+        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+          agentId: "main",
+          message: "start from the selected release",
+          worktree: true,
+          worktreeBaseRef: "origin/release-outside-suggestions",
+        });
+      });
+    },
+  );
+
   it("blocks a selected workspace worktree when branch rediscovery is unavailable until cleared", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
       const gateway = await installMockGateway(page, {
@@ -303,7 +363,7 @@ suite.define(() => {
       const where = page.locator("wa-popover.new-session-page__where-popover");
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       await whereTrigger.click();
-      await where.getByRole("button", { name: "Cloud · aws" }).click();
+      await where.getByRole("button", { name: "aws", exact: true }).click();
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
 
@@ -319,8 +379,10 @@ suite.define(() => {
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await whereTrigger.click();
-      const cloud = where.getByRole("button", { name: "Cloud · aws" });
+      const cloud = where.getByRole("button", { name: "aws", exact: true });
       expect(await cloud.isDisabled()).toBe(true);
+      await cloud.focus();
+      await page.keyboard.press("Enter");
       await expect
         .poll(() => tooltipTitleText(cloud))
         .toBe("Couldn't verify Git for this folder. Choose it again to retry.");

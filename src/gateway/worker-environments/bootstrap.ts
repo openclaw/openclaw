@@ -502,6 +502,7 @@ type WorkerBootstrapDependencies = {
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissionHandshake {
@@ -694,7 +695,7 @@ function parsePreflight(
     result.stdout.includes(NODE_UNSUPPORTED_MARKER)
   ) {
     throw new Error(
-      "Worker bootstrap requires Node 22.22.3+, 24.15.0+, or 25.9.0+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
+      "Worker bootstrap requires Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
     );
   }
   if (!isSuccess(result)) {
@@ -731,14 +732,20 @@ export async function bootstrapWorker(
   const receipt = normalizeHandshake(artifact);
   const operationToken = createHash("sha256").update(request.operationId).digest("hex");
   const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
-  const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
+  const run = dependencies.runCommand ?? runCommandWithTimeout;
+  let needsUploadCleanup = false;
+  const runCommand: WorkerBootstrapCommandRunner = (argv, options) => {
+    dependencies.assertCurrent?.();
+    needsUploadCleanup = true;
+    return run(argv, options);
+  };
+  dependencies.assertCurrent?.();
   const prepared = await prepareWorkerSsh({
     ssh: request.ssh,
     pinnedHostKey: request.pinnedHostKey,
     resolveIdentity: dependencies.resolveIdentity,
     temporaryDirectoryPrefix: "openclaw-worker-bootstrap-",
   });
-  let needsUploadCleanup = true;
   try {
     const preflightResult = await runWorkerSshCandidates(
       prepared,
@@ -832,7 +839,7 @@ export async function bootstrapWorker(
         prepared,
         bundleHash: receipt.bundleHash,
         operationToken,
-        runCommand,
+        runCommand: run,
         timeoutMs,
       });
     }

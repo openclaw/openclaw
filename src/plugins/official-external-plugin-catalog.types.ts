@@ -254,3 +254,11 @@ export type HostedOfficialExternalPluginCatalogLoadResult =
         checksum?: string;
       };
     };
+
+export type OfficialCatalogResult = Pick<
+  HostedOfficialExternalPluginCatalogLoadResult,
+  "entries"
+> & {
+  error?: string;
+  hostedFeaturedAuthoritative?: boolean;
+};

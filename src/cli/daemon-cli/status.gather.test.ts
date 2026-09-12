@@ -9,6 +9,7 @@ import { Command } from "commander";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
+import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -65,6 +66,9 @@ const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) =
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
 >(async () => []);
+const findForeignLaunchdJobs = vi.fn<(env?: NodeJS.ProcessEnv) => Promise<ForeignLaunchdJob[]>>(
+  async () => [],
+);
 type PortUsageTestSummary = {
   port: number;
   status: PortUsageStatus;
@@ -269,6 +273,15 @@ vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
     findStaleOpenClawUpdateLaunchdJobs(env),
 }));
 
+vi.mock("../../daemon/launchd-foreign-jobs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd-foreign-jobs.js")>()),
+  findForeignLaunchdJobs: (env?: NodeJS.ProcessEnv) => findForeignLaunchdJobs(env),
+}));
+
+vi.mock("../../daemon/restart-storm.js", () => ({
+  readGatewayForcedRestartSummary: () => ({ count: 3, windowMs: 600_000 }),
+}));
+
 vi.mock("../../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: (opts: unknown) => auditGatewayServiceConfig(opts),
 }));
@@ -456,6 +469,7 @@ describe("gatherDaemonStatus", () => {
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
+    findForeignLaunchdJobs.mockReset().mockResolvedValue([]);
     loadInstalledPluginIndexInstallRecords.mockClear();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     fetchNpmPackageTargetStatus.mockClear();
@@ -1436,6 +1450,31 @@ describe("gatherDaemonStatus", () => {
       ]);
     },
   );
+
+  it("surfaces foreign launchd jobs and restart correlation without --deep", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const job: ForeignLaunchdJob = {
+        label: "ai.openclaw.test.w15.restart",
+        program: "/tmp/openclaw-test/restart.sh",
+        keepAlive: true,
+        gatewayActions: ["restart"],
+        safeToRemove: true,
+      };
+      findForeignLaunchdJobs.mockResolvedValue([job]);
+
+      const status = await gatherStatus({ probe: false });
+
+      expect(status.service.foreignLaunchdJobs).toEqual([job]);
+      expect(status.service.forcedRestartSummary).toEqual({ count: 3, windowMs: 600_000 });
+      expect(findForeignLaunchdJobs.mock.calls[0]?.[0]?.OPENCLAW_STATE_DIR).toBe(
+        "/tmp/openclaw-daemon",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
 
   it("does not read restart handoffs during normal status", async () => {
     await gatherStatus({ probe: false });

@@ -57,7 +57,7 @@ suite.define(() => {
       // chat.metadata request was only a synchronization point for this test.
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("models.list");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const sendButton = page.getByRole("button", { name: "Send message" });
       await composer.waitFor({ state: "visible", timeout: 10_000 });
@@ -143,7 +143,7 @@ suite.define(() => {
         commands: (await gateway.getRequests("commands.list")).length,
         metadata: (await gateway.getRequests("chat.metadata")).length,
         models: (await gateway.getRequests("models.list")).length,
-      }).toEqual({ commands: 0, metadata: 0, models: 0 });
+      }).toEqual({ commands: 0, metadata: 0, models: 1 });
       expect(await gateway.getRequests("agents.list")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
@@ -155,7 +155,7 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "openai/hydrated-model",
-      deferredMethods: ["agents.list", "chat.metadata"],
+      deferredMethods: ["agents.list", "chat.metadata", "models.list"],
       methodResponses: {
         "chat.startup": {
           messages: [
@@ -189,8 +189,8 @@ suite.define(() => {
         mainKey: "main",
         scope: "agent",
       });
-      await gateway.resolveDeferred("chat.metadata", {
-        commands: [],
+      await gateway.resolveDeferred("chat.metadata", { commands: [] });
+      await gateway.resolveDeferred("models.list", {
         models: [
           {
             available: true,

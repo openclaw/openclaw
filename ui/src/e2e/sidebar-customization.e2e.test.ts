@@ -379,6 +379,7 @@ suite.define(() => {
           "Ask OpenClaw",
           "Approvals",
           "Infrastructure",
+          "Labs",
           "Advanced",
           "Debug",
           "Logs",

@@ -34,6 +34,125 @@ defineDiscordVoiceTests((harness) => {
   } = harness;
   const fixture = createDiscordRecordingFixture(harness);
 
+  it.each(["resolve", "reject", "synchronous"] as const)(
+    "retains final recording through provider close (%s) before completing leave",
+    async (completion) => {
+      const f = await fixture();
+      transcribeAudioFileMock.mockResolvedValue(unavailable);
+      await startTranscripts(f.manager, f.sink);
+      await f.audio(OWNER, 1);
+      const provider = lastRealtimeBridgeParams();
+      const closed = createDeferred<void>();
+      const stored = createDeferred<void>();
+      f.sink.mockImplementationOnce(() => stored.promise);
+      realtimeSessionMock.close.mockImplementationOnce(() => {
+        if (completion === "synchronous") {
+          provider.onTranscript?.("user", "Final meeting note.", true);
+          provider.onTranscript?.("user", "Second final note.", true);
+          return undefined;
+        }
+        return closed.promise;
+      });
+      const closeConversation = vi.spyOn(f.entry.conversations, "close");
+      const stopPlayback = vi.spyOn(f.entry.player, "stop");
+      const leave = f.manager.leave({ guildId: "g1" });
+      const finished = vi.fn();
+      void leave.then(finished);
+      try {
+        expect(f.manager.status()).toEqual([]);
+        expect(f.entry.sessionLifecycle.status).toBe("stopped");
+        expect(stopPlayback).toHaveBeenCalledWith(true);
+        expect(closeConversation).not.toHaveBeenCalled();
+        void f.entry.stop();
+        expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
+        if (completion !== "synchronous") {
+          provider.onTranscript?.("user", "Final meeting note.", true);
+          provider.onTranscript?.("user", "Second final note.", true);
+        }
+        expect(f.sink).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: "Final meeting note." }),
+        );
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        if (completion === "reject") {
+          closed.reject(new Error("Provider close failed"));
+        } else {
+          closed.resolve();
+        }
+        await Promise.resolve();
+        expect(finished).not.toHaveBeenCalled();
+        expect(closeConversation).not.toHaveBeenCalled();
+      } finally {
+        closed.resolve();
+        stored.resolve();
+        await leave;
+      }
+      expect(f.sink.mock.calls.map(([utterance]) => utterance.text)).toEqual([
+        "Final meeting note.",
+        "Second final note.",
+      ]);
+      expect(closeConversation).toHaveBeenCalledOnce();
+      provider.onTranscript?.("user", "After close.", true);
+      expect(f.sink).toHaveBeenCalledTimes(2);
+      await f.manager.destroy();
+    },
+  );
+
+  it("does not hold shutdown for realtime finals whose batch eligibility is unresolved", async () => {
+    const f = await fixture();
+    const batch = createDeferred<void>();
+    transcribeAudioFileMock.mockImplementationOnce(async () => {
+      await batch.promise;
+      return unavailable;
+    });
+    await startTranscripts(f.manager, f.sink);
+    let leaving: ReturnType<typeof f.manager.leave> | undefined;
+    try {
+      const receiving = f.begin(OWNER);
+      await vi.waitFor(() => expect(f.streams.has(OWNER)).toBe(true));
+      f.streams.get(OWNER)!.end(Buffer.alloc(96_000, 1));
+      await receiving;
+      await vi.waitFor(() => expect(transcribeAudioFileMock).toHaveBeenCalledOnce());
+      await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), "Unproven final.");
+      expect(f.sink).not.toHaveBeenCalled();
+      const conversationClosed = vi.spyOn(f.entry.conversations, "close");
+      leaving = f.manager.leave({ guildId: "g1" });
+      expect(conversationClosed).toHaveBeenCalledOnce();
+    } finally {
+      batch.resolve();
+      await f.entry.processingQueue;
+      await leaving;
+      await f.manager.destroy();
+    }
+    expect(f.sink).not.toHaveBeenCalled();
+  });
+
+  it("waits for a detached room's provider when the manager is destroyed", async () => {
+    const f = await fixture();
+    transcribeAudioFileMock.mockResolvedValue(unavailable);
+    await startTranscripts(f.manager, f.sink);
+    await f.audio(OWNER, 1);
+    const provider = lastRealtimeBridgeParams();
+    const closed = createDeferred<void>();
+    realtimeSessionMock.close.mockReturnValueOnce(closed.promise);
+    const stopped = f.entry.stop();
+    const destroyed = f.manager.destroy();
+    const finished = vi.fn();
+    void destroyed.then(finished);
+    try {
+      await Promise.resolve();
+      expect(finished).not.toHaveBeenCalled();
+      provider.onTranscript?.("user", "Detached room final.", true);
+      expect(f.sink).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: "Detached room final." }),
+      );
+    } finally {
+      closed.resolve();
+      await stopped;
+      await destroyed;
+    }
+    expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
+  });
+
   it.each(["agent-proxy", "bidi"] as const)(
     "retains fully bound %s recording and exposes limited coverage through vc status",
     async (mode) => {

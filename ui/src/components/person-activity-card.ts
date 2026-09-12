@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
 import {
@@ -10,7 +11,12 @@ import {
   stopHoverMarqueeFromEvent,
 } from "../lib/hover-marquee.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { presenceMatchesProfile, type PresenceViewer } from "../lib/presence-users.ts";
+import { describePlatform } from "../lib/platform-label.ts";
+import {
+  presenceMatchesProfile,
+  presenceUserLabel,
+  type PresenceViewer,
+} from "../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -120,17 +126,27 @@ function connections(user: PresenceViewer): string[] {
     ...new Set(
       (user.entries ?? [])
         .map((entry) => {
+          const family = entry.deviceFamily?.trim();
+          const platform = describePlatform(entry.platform ?? "", family);
+          const familyPlatform = family === "Mac" ? "macOS" : family === "iPad" ? "iPadOS" : family;
           const app =
             entry.mode === "webchat"
-              ? t("presence.card.controlUi")
+              ? t("presence.card.web")
               : entry.mode === "cli"
                 ? t("presence.card.cli")
-                : entry.mode === "ui"
-                  ? t("presence.card.app")
-                  : undefined;
+                : entry.clientId === GATEWAY_CLIENT_IDS.TUI
+                  ? t("presence.card.terminal")
+                  : entry.mode === "ui"
+                    ? t("presence.card.app")
+                    : undefined;
           return [
             ...new Set(
-              [entry.deviceFamily, entry.platform, app]
+              [
+                family,
+                platform.label === familyPlatform ? undefined : platform.label,
+                platform.architecture,
+                app,
+              ]
                 .map((value) => value?.trim())
                 .filter(Boolean),
             ),
@@ -217,6 +233,7 @@ function renderSessions(
 
 export function renderPersonActivityCard(input: PersonCardInput) {
   const { user } = input;
+  const label = presenceUserLabel(user, t("presence.card.person"));
   // Presence projections always have entries; roster-only owners have no live facts.
   const offline = (user.entries?.length ?? 0) === 0;
   const entries = user.entries ?? [];
@@ -260,7 +277,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         presenceMatchesProfile(user, actor?.identity),
       ),
   );
-  const activity = personActivityLink(user.identity?.id, input.routing, user.name);
+  const activity = personActivityLink(user.identity?.id, input.routing, label.name);
   return html`<div class="person-activity-card">
     <header class="person-activity-card__header">
       <openclaw-viewer-avatar
@@ -270,7 +287,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         aria-hidden="true"
       ></openclaw-viewer-avatar>
       <div>
-        <h2>${user.name ?? user.email ?? t("presence.card.person")}</h2>
+        <h2>${label.name}</h2>
         <span
           class="person-activity-card__status ${
             offline ? "person-activity-card__status--offline" : ""
@@ -285,6 +302,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         >
       </div>
     </header>
+    ${label.isSharedOwner ? html`<p class="person-activity-card__hint person-activity-card__muted">${t("presence.sharedOwner.hint")}</p>` : nothing}
     ${
       offline
         ? nothing

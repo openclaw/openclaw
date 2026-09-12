@@ -111,7 +111,7 @@ test("sessions.list filters dashboard sessions by board existence instead of sav
       },
     },
   });
-  boardStore.applyOps({ sessionKey: "agent:main:board" }, [
+  await boardStore.applyOps({ sessionKey: "agent:main:board" }, [
     { kind: "tab_create", tabId: "main", title: "Dashboard" },
   ]);
 
@@ -152,7 +152,7 @@ test("sessions.list includes boards stored with incognito sessions", async () =>
   const incognitoBoardStore = new SqliteBoardStore({
     resolveSession: () => ({ agentId: "main", path: incognitoPath, sessionKey }),
   });
-  incognitoBoardStore.applyOps({ sessionKey }, [
+  await incognitoBoardStore.applyOps({ sessionKey }, [
     { kind: "tab_create", tabId: "main", title: "Incognito dashboard" },
   ]);
   expect(listOpenIncognitoAgentDatabases()).toContainEqual({
@@ -204,7 +204,7 @@ test.each(["first", "later"] as const)(
           sessionKey: "unknown",
         }),
       });
-      boards.applyOps({ sessionKey: "unknown" }, [
+      await boards.applyOps({ sessionKey: "unknown" }, [
         { kind: "tab_create", tabId: "main", title: "Selected-store dashboard" },
       ]);
       testState.agentsConfig = { list: [{ id: "main", default: true }] };

@@ -647,7 +647,7 @@ describe("Doctor plugin persistence", () => {
             throw new Error("expected plugin registry persistence to fail", { cause: failure });
           }
           expect(failure.message).toMatch(
-            /differences: preflight-fixture .*persisted source: .*fixture-plugin.*derived source: .*fixture-plugin.*openclaw plugins registry --refresh/u,
+            /differences: preflight-fixture \(record changed; persisted source: .*fixture-plugin.*derived source: .*fixture-plugin.*openclaw plugins registry --refresh/u,
           );
           expect(failure.message).not.toContain("\u001b");
         } finally {

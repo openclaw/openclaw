@@ -278,12 +278,13 @@ describe("queued message edit round-trip", () => {
     },
   );
 
-  it("aborts a replacement when its edit is cancelled during history loading", async () => {
+  it("aborts a replacement when its edit is cancelled during history refresh", async () => {
     const history = createDeferred<{ messages: unknown[] }>();
     const historyRequest = vi.fn(() => history.promise);
     const sendRequest = vi.fn(() => ({ status: "started" as const }));
     const { host } = queueHost([{}], {
       chatLoading: true,
+      currentSessionId: "queued-edit-session",
       connected: true,
       requestHandlers: {
         "chat.history": historyRequest,
@@ -303,12 +304,13 @@ describe("queued message edit round-trip", () => {
     expect(sendRequest).not.toHaveBeenCalled();
   });
 
-  it("aborts a replacement when its draft changes during history loading", async () => {
+  it("aborts a replacement when its draft changes during history refresh", async () => {
     const history = createDeferred<{ messages: unknown[] }>();
     const historyRequest = vi.fn(() => history.promise);
     const sendRequest = vi.fn(() => ({ status: "started" as const }));
     const { host } = queueHost([{}], {
       chatLoading: true,
+      currentSessionId: "queued-edit-session",
       connected: true,
       requestHandlers: {
         "chat.history": historyRequest,

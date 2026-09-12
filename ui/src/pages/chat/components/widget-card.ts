@@ -38,6 +38,7 @@ type WidgetCardOptions = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   sessionKey?: string;
+  messageTimestamp?: number;
   boardProvider?: BoardProvider;
   browserTabRevision?: string;
   browserTabLatest?: boolean;
@@ -428,6 +429,7 @@ function renderWidgetContent(
             <openclaw-canvas-widget-view
               .docId=${preview.viewId!.trim()}
               .sessionKey=${options?.sessionKey ?? ""}
+              .messageTimestamp=${options?.messageTimestamp}
               .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
               .preferredHeight=${preview.preferredHeight}
               .allowScripts=${sandbox.includes("allow-scripts")}
@@ -520,6 +522,39 @@ function handleWidgetExportAction(
     .catch(() => {
       showToast({ message: t("chat.toolCards.widgetExportFailed") });
     });
+}
+
+function widgetActionsPlacementRef() {
+  let observer: ResizeObserver | undefined;
+  let frame: number | undefined;
+  return (element: Element | undefined) => {
+    observer?.disconnect();
+    observer = undefined;
+    if (frame !== undefined) {
+      cancelAnimationFrame(frame);
+      frame = undefined;
+    }
+    if (!(element instanceof HTMLElement) || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    // Lit refs can run during resize delivery. Register both connected targets
+    // in the next frame so the shallower thread cannot trigger a loop error.
+    frame = requestAnimationFrame(() => {
+      frame = undefined;
+      const thread = element.closest<HTMLElement>(".chat-thread");
+      if (!thread) {
+        return;
+      }
+      observer = new ResizeObserver(() => {
+        const clipRight =
+          thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
+        const availableWidth = clipRight - element.getBoundingClientRect().right;
+        element.toggleAttribute("data-widget-actions-above", availableWidth < 40);
+      });
+      observer.observe(element);
+      observer.observe(thread);
+    });
+  };
 }
 
 function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean) {
@@ -648,6 +683,7 @@ function renderWidgetCard(
         </div>`;
   return html`
     <div
+      ${actions !== nothing ? ref(widgetActionsPlacementRef()) : nothing}
       class="chat-tool-card__preview"
       data-content-kind=${contentKind}
       ?data-has-widget-actions=${actions !== nothing}

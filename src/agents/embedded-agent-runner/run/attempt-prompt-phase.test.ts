@@ -1,17 +1,14 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { persistHeartbeatOutcome } from "../../../infra/heartbeat-outcome-store.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../../state/openclaw-agent-db.js";
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
@@ -102,7 +99,6 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import { abortable } from "./abortable.js";
 import {
   runEmbeddedAttemptPromptPhase,
   type EmbeddedAttemptPromptState,
@@ -125,8 +121,6 @@ type PromptErrorCall = {
   yieldDetected: boolean;
   yieldMessage: string | null;
 };
-
-const tempStateDirs: string[] = [];
 
 function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) {
   const order: string[] = [];
@@ -329,7 +323,9 @@ function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) 
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
   mocks.applyPromptToolsAllow.mockReturnValue({
     activeToolNames: ["read"],
     effectiveTools: [{ name: "read" }],
@@ -341,9 +337,6 @@ beforeEach(() => {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
-  for (const stateDir of tempStateDirs.splice(0)) {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
 });
 
 registerAgentSessionLoopTestLifecycle();
@@ -726,41 +719,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     },
   );
 
-  it("does not claim heartbeat outcomes for detached user-triggered runs", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-phase-heartbeat-"));
-    tempStateDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await upsertSessionEntryCore(
-      { agentId: "main", env: process.env, sessionKey: "agent:main:main" },
-      { sessionId: "prompt-phase-heartbeat-test", updatedAt: 1 },
-    );
-    persistHeartbeatOutcome({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:main:heartbeat",
-      response: { outcome: "progress", notify: false, summary: "Heartbeat context" },
-      occurredAt: 1,
-      env: process.env,
-    });
-    const fixture = createFixture();
-    Object.assign(fixture.input.attempt, {
-      sessionKey: "agent:main:main",
-      sessionPersistence: "detached",
-      trigger: "user",
-    });
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(mocks.preparePromptContext.mock.calls[0]?.[0]).not.toHaveProperty(
-      "heartbeatOutcomeContext",
-    );
-    expect(
-      openOpenClawAgentDatabase({ agentId: "main", env: process.env })
-        .db.prepare("SELECT context_run_id, context_claimed_at FROM heartbeat_outcomes")
-        .get(),
-    ).toEqual({ context_run_id: null, context_claimed_at: null });
-  });
-
   it("runs prompt work in phase order and publishes prompt outputs", async () => {
     const fixture = createFixture();
 
@@ -822,6 +780,40 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       }),
     );
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
+  });
+
+  it("withholds prompt hooks and submission after its owner retires during context lookup", async () => {
+    const fixture = createFixture();
+    const admission = prepareSystemAgentRunAdmission({}, "prompt-owner", "main", "prompt-session");
+    try {
+      const admitted = await admission.admit("embedded");
+      const prepareAssembly = mocks.preparePromptAssembly.getMockImplementation()!;
+      mocks.preparePromptAssembly.mockImplementationOnce(async (...args) => ({
+        ...(await prepareAssembly(...args)),
+        assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
+      }));
+      const context = mocks.preparePromptContext.getMockImplementation()!();
+      const lookup = createDeferred<typeof context>();
+      const entered = createDeferred();
+      mocks.preparePromptContext.mockImplementationOnce(() => {
+        entered.resolve();
+        return lookup.promise;
+      });
+      const pending = runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+      await entered.promise;
+      admission.close();
+      lookup.resolve(context);
+      await pending;
+      expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
+      expect(mocks.submitPrompt).not.toHaveBeenCalled();
+      expect(mocks.handlePromptError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({ message: "admitted run authority is no longer active" }),
+        }),
+      );
+    } finally {
+      admission.close();
+    }
   });
 
   it("skips before_agent_run for settled-turn finalization", async () => {
@@ -942,17 +934,13 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     const fixture = createFixture();
     fixture.input.state.terminal = { kind: "timeout", phase: "prompt", source: "run_budget" };
     fixture.input.runAbortController.abort(new Error("request timed out"));
-    const timeoutAbort = await abortable(
-      fixture.input.runAbortController.signal,
-      Promise.resolve(),
-    ).catch((error: unknown) => error);
-    mocks.submitPrompt.mockRejectedValueOnce(timeoutAbort);
-    mocks.handlePromptError.mockResolvedValueOnce({
-      promptFailure: { error: timeoutAbort, source: "prompt" },
-    });
+    mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => ({
+      promptFailure: { error: input.error, source: "prompt" },
+    }));
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
     expect(fixture.readState().promptError).toBeNull();
     expect(fixture.readState().promptErrorSource).toBeNull();
   });

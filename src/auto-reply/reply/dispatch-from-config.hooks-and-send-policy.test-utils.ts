@@ -1,6 +1,7 @@
 // Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -9,7 +10,7 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  buildNoVisibleReplyFallbackText,
   QUEUE_CAP_REJECTION_TEXT,
 } from "./dispatch-from-config.payloads.js";
 import {
@@ -41,6 +42,16 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
+
+function sendPolicySessionEntry(sendPolicy: "allow" | "deny") {
+  return { sessionId: "s1", updatedAt: 0, sendPolicy };
+}
+
+function groupSilenceConfig(group: "allow" | "disallow"): OpenClawConfig {
+  return { agents: { defaults: { silentReply: { group } } } };
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -272,11 +283,7 @@ describe("before_dispatch hook", () => {
 
   it("suppresses before_dispatch handled reply when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
     const dispatcher = createDispatcher();
     const result = await dispatchReplyFromConfig({
@@ -311,11 +318,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("still calls the replyResolver when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.suppressTyping).toBe(true);
@@ -338,11 +341,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     diagnosticMocks.logMessageDispatchStarted.mockClear();
     diagnosticMocks.logMessageDispatchCompleted.mockClear();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     hookMocks.runner.runReplyDispatch.mockImplementation(async (event: unknown) => {
       const candidate = event as { isTailDispatch?: boolean };
       if (candidate.isTailDispatch) {
@@ -397,11 +396,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses final reply delivery when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({ SessionKey: "test:session" });
@@ -422,11 +417,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   it("keeps the suppressed reply log preview UTF-16 safe", async () => {
     setNoAbort();
     globalMocks.logVerbose.mockClear();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const text = `${"y".repeat(159)}🚀`;
 
@@ -486,15 +477,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         SessionKey: "agent:main:feishu:group:oc_group",
         WasMentioned: true,
       }),
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
     },
   ])("records explicit NO_REPLY without a generic fallback in $name", async ({ ctx, cfg }) => {
     setNoAbort();
@@ -628,15 +611,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -651,6 +626,57 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
+
+  it.each([
+    ["caller-run", undefined, false, "caller-run"],
+    [undefined, "generated-run", false, "generated-run"],
+    ["caller-run", "observed-run", true, "observed-run"],
+    [undefined, undefined, true, undefined],
+    ["<@everyone>", undefined, true, undefined],
+  ] as const)(
+    "keeps fallback correlation non-error (supplied=%s, observed=%s, routed=%s)",
+    async (runId, generatedRunId, routed, reference) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      const onAgentRunStart = vi.fn();
+      const replyOptions = { runId, onAgentRunStart };
+      const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+        if (generatedRunId) {
+          options?.onAgentRunStart?.(generatedRunId);
+          options?.onAgentRunTerminalOutcome?.("completed");
+        }
+        return undefined;
+      });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: routed ? "discord" : "telegram",
+          OriginatingTo: "user:1",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions,
+      });
+      const payload = {
+        text: reference
+          ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
+          : NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      };
+      if (routed) {
+        expect(firstRouteReplyCall().payload).toEqual(payload);
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } else {
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(payload);
+      }
+      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+      expect(readAgentRunTerminalOutcome(result)).toBe(generatedRunId ? "completed" : undefined);
+      expect(replyOptions).toEqual({ runId, onAgentRunStart });
+      expect(onAgentRunStart.mock.calls).toEqual(generatedRunId ? [[generatedRunId]] : []);
+    },
+  );
 
   it("keeps ambient group turns silent even when silence policy is disallow", async () => {
     setNoAbort();
@@ -668,15 +694,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -732,15 +750,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -770,15 +780,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -853,15 +855,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "allow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("allow"),
       dispatcher,
       replyResolver,
     });
@@ -877,11 +871,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("does not deliver no-visible fallback when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
     const ctx = buildTestCtx({
@@ -894,15 +884,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -916,11 +898,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("does not deliver no-visible fallback under message_tool_only source delivery", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
     const ctx = buildTestCtx({
@@ -965,15 +943,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
       replyOptions: {
@@ -1010,15 +980,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1052,15 +1014,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1088,15 +1042,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1130,15 +1076,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1172,15 +1110,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1208,9 +1138,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: { defaults: { silentReply: { group: "disallow" } } },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver: vi.fn(async () => ({ text: "Legacy final answer." })),
     });
@@ -1239,15 +1167,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1273,15 +1193,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1318,15 +1230,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1365,15 +1269,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1406,15 +1302,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1445,15 +1333,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "disallow",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: groupSilenceConfig("disallow"),
       dispatcher,
       replyResolver,
     });
@@ -1467,11 +1347,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses tool result delivery when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     let capturedOnToolResult: ((payload: ReplyPayload) => Promise<void>) | undefined;
     const replyResolver = vi.fn(
@@ -1498,11 +1374,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses block reply delivery when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     let capturedOnBlockReply:
       | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
@@ -1531,11 +1403,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers replies normally when sendPolicy is allow", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({ SessionKey: "test:session" });
@@ -1553,11 +1421,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers provider conversation-state runner payloads as outbound channel replies", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const exactProviderError = "Custom tool call output is missing for call id: call_live_123.";
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
@@ -1619,11 +1483,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       handled: true,
       aborted: true,
     });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -1649,11 +1509,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       handled: true,
       aborted: true,
     });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -2266,11 +2122,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -2420,11 +2272,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           pluginRoot: "/tmp/plugin",
         },
       } satisfies SessionBindingRecord);
-      sessionStoreMocks.currentEntry = {
-        sessionId: "s1",
-        updatedAt: 0,
-        sendPolicy: "allow",
-      };
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
 
@@ -2495,11 +2343,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -2590,11 +2434,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -2673,11 +2513,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const cfg = { messages: { visibleReplies: "message_tool" } } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "reset ack" }) satisfies ReplyPayload);
@@ -2742,11 +2578,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -2818,11 +2650,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -2873,11 +2701,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("keeps message-tool-only source delivery private while still processing the turn", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const callbacks = {
       partial: vi.fn(),
@@ -2961,11 +2785,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("treats message-tool-only observed delivery as visible for fallback eligibility", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const observedReplyDelivery = vi.fn();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -2999,11 +2819,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const blockedReply = setReplyPayloadMetadata(
       { text: "Your message could not be sent: blocked by policy-plugin", isError: true },
@@ -3034,11 +2850,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses fast auto progress in message-tool-only mode without verbose progress", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({
@@ -3154,11 +2966,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses fast auto progress when sendPolicy is deny", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -3192,11 +3000,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("suppresses fast auto progress callbacks when verbose progress is off", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn();
     const payload = {
@@ -3231,11 +3035,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("forwards hidden fast auto progress only to lifecycle callbacks", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn(() => false);
     const payload = {
@@ -3434,11 +3234,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("lets the channel own forced tool progress at verbosity off", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn(() => false);
     const payload = { text: "🧠 Memory Search: release notes" } satisfies ReplyPayload;
@@ -3515,11 +3311,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     "keeps forced $label durable when channel progress is available",
     async ({ payload }) => {
       setNoAbort();
-      sessionStoreMocks.currentEntry = {
-        sessionId: "s1",
-        updatedAt: 0,
-        sendPolicy: "allow",
-      };
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
       const dispatcher = createDispatcher();
       const onToolResult = vi.fn(() => false);
       const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -3550,11 +3342,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers forced tool progress in message-tool-only mode without verbose progress", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "🛠️ Exec: ruby sleep proof" });
@@ -3621,11 +3409,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers marked runtime failure notices in message-tool-only mode", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const failureNotice = setReplyPayloadMetadata(
       { text: "⚠️ You've reached your Codex subscription usage limit." },

@@ -25,7 +25,7 @@ export type StoreWriterQueue = {
 type StoreWriterQueues = Map<string, StoreWriterQueue>;
 
 /** Request-owned monotonic timestamps; queued work may be rejected without entering. */
-export type StoreWriterTiming = { startedAt?: number; finishedAt?: number };
+export type StoreWriterTiming = { startedAt?: number; finishedAt?: number; reentrant?: boolean };
 
 type ActiveStoreWriter = {
   active: boolean;
@@ -42,6 +42,10 @@ const activeStoreWriters = resolveGlobalSingleton(
 );
 
 function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
+  // A new lane cannot be reentrant; bulk acquisition must not scan every held lock.
+  if (!queues.has(storePath)) {
+    return false;
+  }
   let active = activeStoreWriters.getStore();
   while (active) {
     if (active.active && active.queues === queues && active.storePath === storePath) {
@@ -60,6 +64,7 @@ async function runActiveStoreWriter<T>(
 ): Promise<T> {
   const writer = { active: true, parent: activeStoreWriters.getStore(), queues, storePath };
   if (timing) {
+    timing.reentrant = false;
     timing.startedAt = performance.now();
   }
   try {
@@ -143,6 +148,7 @@ export async function runQueuedStoreWrite<T>(params: {
   // active lane; ordinary async children must queue behind the current writer.
   if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
     if (params.timing) {
+      params.timing.reentrant = true;
       params.timing.startedAt = performance.now();
     }
     try {

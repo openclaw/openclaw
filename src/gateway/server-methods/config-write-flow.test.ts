@@ -60,6 +60,25 @@ it("awaits title application only with authoritative identity and an enabled rel
   ).toBe(false);
 });
 
+it.each(["hybrid", "off"] as const)(
+  "hot-applies cold-storage settings with reload mode %s",
+  (mode) => {
+    expect(
+      shouldAwaitGatewayConfigApplication({
+        previousConfig: {},
+        nextConfig: {
+          gateway: { reload: { mode } },
+          session: { maintenance: { coldStorage: { enabled: true, afterDays: 7 } } },
+        },
+        changedPaths: [
+          "session.maintenance.coldStorage.enabled",
+          "session.maintenance.coldStorage.afterDays",
+        ],
+      }),
+    ).toBe(true);
+  },
+);
+
 describe("commitGatewayConfigWrite", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,7 +107,7 @@ describe("commitGatewayConfigWrite", () => {
     expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         baseHash: "missing-config-revision",
-        nextConfig: {},
+        sourceConfig: {},
       }),
     );
   });

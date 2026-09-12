@@ -994,19 +994,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it("retires the immutable session ID without resolving a rebound session key", async () => {
-    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
-
-    await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
-
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "test-session", reason: "cli-run-end" }),
-    );
-    expect(retireSessionMcpRuntimeForSessionKeyMock).not.toHaveBeenCalled();
-    expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
-  });
-
   it("preserves confirmed delivery when session MCP retirement fails", async () => {
     executePreparedCliRunMock.mockResolvedValue({
       text: "",

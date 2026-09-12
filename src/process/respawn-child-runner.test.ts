@@ -1,9 +1,11 @@
 // Respawn child runner tests cover signal forwarding and process-tree cleanup.
 import type { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
+const processKillMock = vi.fn<typeof process.kill>(() => true);
 
 vi.mock("./kill-tree.js", () => ({
   signalProcessTree: signalProcessTreeMock,
@@ -26,6 +28,12 @@ function createChild(pid?: number): { child: ChildProcess; kill: ReturnType<type
 describe("runRespawnChildWithSignalBridge", () => {
   beforeEach(() => {
     signalProcessTreeMock.mockReset();
+    processKillMock.mockClear();
+    vi.spyOn(process, "kill").mockImplementation(processKillMock);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("spawns POSIX respawn children detached for process-group cleanup", () => {
@@ -54,9 +62,26 @@ describe("runRespawnChildWithSignalBridge", () => {
   });
 
   it.each([
-    { signal: "SIGINT" as const, laterSignal: "SIGTERM" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, laterSignal: "SIGINT" as const, exitCode: 143 },
-  ])("exits $exitCode when the child exits by forwarded $signal", (testCase) => {
+    {
+      signal: "SIGINT" as const,
+      firstSignal: "SIGINT" as const,
+      laterSignal: "SIGTERM" as const,
+      exitCode: 130,
+    },
+    {
+      signal: "SIGTERM" as const,
+      firstSignal: "SIGTERM" as const,
+      laterSignal: "SIGINT" as const,
+      exitCode: 143,
+    },
+    {
+      signal: "SIGTERM" as const,
+      firstSignal: "SIGINT" as const,
+      laterSignal: undefined,
+      exitCode: 1,
+    },
+    { signal: "SIGKILL" as const, firstSignal: undefined, laterSignal: undefined, exitCode: 1 },
+  ])("preserves child $signal termination after first signal $firstSignal", (testCase) => {
     const { child } = createChild(2345);
     const exit = vi.fn<RespawnChildRuntime["exit"]>();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
@@ -76,11 +101,21 @@ describe("runRespawnChildWithSignalBridge", () => {
       onError: vi.fn(),
     });
 
-    onSignal?.(testCase.signal);
-    onSignal?.(testCase.laterSignal);
+    if (testCase.firstSignal) {
+      onSignal?.(testCase.firstSignal);
+    }
+    if (testCase.laterSignal) {
+      onSignal?.(testCase.laterSignal);
+    }
     child.emit("exit", null, testCase.signal);
 
-    expect(exit).toHaveBeenCalledWith(testCase.exitCode);
+    if (process.platform === "win32") {
+      expect(exit).toHaveBeenCalledWith(testCase.exitCode);
+      expect(processKillMock).not.toHaveBeenCalled();
+    } else {
+      expect(processKillMock).toHaveBeenCalledWith(process.pid, testCase.signal);
+      expect(exit).not.toHaveBeenCalled();
+    }
   });
 
   it("signals detached respawn process groups after forwarded signal grace", () => {
@@ -132,7 +167,12 @@ describe("runRespawnChildWithSignalBridge", () => {
       }
 
       child.emit("exit", null, "SIGKILL");
-      expect(exit).toHaveBeenCalledWith(1);
+      if (process.platform === "win32") {
+        expect(exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(processKillMock).toHaveBeenCalledWith(process.pid, "SIGKILL");
+        expect(exit).not.toHaveBeenCalled();
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -233,6 +273,65 @@ describe("runRespawnChildWithSignalBridge", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
+  it.each(["resolve", "reject"] as const)(
+    "waits for asynchronous spawn diagnostics to %s before exiting",
+    async (settlement) => {
+      const { child } = createChild();
+      const reporting = createDeferredCore();
+      const onError = vi.fn(() => reporting.promise);
+      const exit = vi.fn<RespawnChildRuntime["exit"]>();
+      runRespawnChildWithSignalBridge({
+        command: "missing-command",
+        args: [],
+        env: {},
+        runtime: {
+          spawn: vi.fn(() => child) as unknown as typeof spawn,
+          attachChildProcessBridge: vi.fn(),
+          exit,
+        },
+        onError,
+      });
+
+      const error = new Error("spawn failed");
+      try {
+        child.emit("error", error);
+        expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        if (settlement === "resolve") {
+          reporting.resolve();
+        } else {
+          reporting.reject(new Error("formatter unavailable"));
+        }
+        await reporting.promise.catch(() => undefined);
+      }
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(1));
+    },
+  );
+
+  it("preserves synchronous spawn exceptions without starting diagnostics", () => {
+    const error = new Error("invalid spawn options");
+    const onError = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
+    expect(() =>
+      runRespawnChildWithSignalBridge({
+        command: "node",
+        args: [],
+        env: {},
+        runtime: {
+          spawn: vi.fn(() => {
+            throw error;
+          }) as unknown as typeof spawn,
+          attachChildProcessBridge: vi.fn(),
+          exit,
+        },
+        onError,
+      }),
+    ).toThrow(error);
+    expect(onError).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
   it("keeps escalation active across repeated operational errors", () => {
     vi.useFakeTimers();
     const { child, kill } = createChild(5678);
@@ -267,7 +366,12 @@ describe("runRespawnChildWithSignalBridge", () => {
       expect(kill).toHaveBeenNthCalledWith(2, process.platform === "win32" ? "SIGTERM" : "SIGKILL");
 
       child.emit("exit", null, "SIGKILL");
-      expect(exit).toHaveBeenCalledWith(1);
+      if (process.platform === "win32") {
+        expect(exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(processKillMock).toHaveBeenCalledWith(process.pid, "SIGKILL");
+        expect(exit).not.toHaveBeenCalled();
+      }
     } finally {
       vi.useRealTimers();
     }

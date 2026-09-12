@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
@@ -8,7 +9,7 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
-import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
+import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
@@ -44,6 +45,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import {
   renderSessionAttentionIcon,
   sessionAttentionSubtitle,
@@ -64,28 +66,13 @@ type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   toggleSection(sectionId: string): void;
 };
 
-type SidebarNativeGateway = {
-  id: string;
-  name: string;
-  isPrimary: boolean;
-  health: "ok" | "error" | "unknown";
-};
-
-type SidebarNativeGatewaysSnapshot = {
-  gateways: SidebarNativeGateway[];
-  currentId: string;
-};
-
 // Display-only: read the injected global directly; the capability module must stay
-// chat-chunk-owned to protect the QA smoke startup budget.
-function readSidebarNativeGateway(): SidebarNativeGateway | null {
-  if (!isNativeWebChromeHost()) {
-    return null;
-  }
-  const snapshot = (
-    window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewaysSnapshot }
-  )["__OPENCLAW_NATIVE_GATEWAYS__"];
-  if (!snapshot || !Array.isArray(snapshot.gateways) || snapshot.gateways.length < 2) {
+// lazy to protect the startup budget.
+function readSidebarNativeGateway(): NativeGateway | null {
+  const snapshot = (window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: NativeGatewaysSnapshot })[
+    "__OPENCLAW_NATIVE_GATEWAYS__"
+  ];
+  if (!snapshot || !Array.isArray(snapshot.gateways)) {
     return null;
   }
   return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
@@ -295,6 +282,10 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   if (users.length === 0) {
     return nothing;
   }
+  const routing = personActivityRouting(
+    { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
+    () => host.dismissTransientMenus(),
+  );
   return html`
     <section class="sidebar-online" aria-label=${label} data-session-section=${sectionId}>
       ${renderSidebarSessionSectionHeader({
@@ -334,22 +325,32 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           ? nothing
           : html`<div class="sidebar-online__list">
               ${repeat(users, presenceUserKey, (user) => {
-                return html`<div
+                const activity = personActivityLink(
+                  user.identity?.id,
+                  routing,
+                  presenceViewerLabel(user),
+                );
+                const tag = activity ? literal`a` : literal`button`;
+                return staticHtml`<div
                   class="sidebar-online__row"
                   data-person-card
                   data-person-card-section="online"
                 >
-                  <button
+                  <${tag}
                     class="sidebar-online__person ${
                       isPresenceViewerIdle(user) ? "sidebar-online__person--away" : ""
                     }"
-                    type="button"
+                    type=${activity ? nothing : "button"}
+                    href=${activity?.href ?? nothing}
+                    @click=${activity?.open ?? nothing}
                     data-online-user-id=${user.id}
                     data-person-card-key=${presenceUserKey(user)}
                     data-person-card-trigger
                     aria-haspopup="dialog"
                     aria-expanded="false"
-                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
+                    aria-label=${t(activity ? "presence.card.ariaLabel" : "presence.card.details", {
+                      name: presenceViewerLabel(user),
+                    })}
                   >
                     <openclaw-viewer-avatar
                       .user=${user}
@@ -361,7 +362,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                     <span class="sidebar-online__person-action" aria-hidden="true"
                       >${icons.chevronRight}</span
                     >
-                  </button>
+                  </${tag}>
                 </div>`;
               })}
             </div>`
@@ -372,7 +373,12 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
-  const connectionStatus = resolveSidebarConnectionStatus(host);
+  const connectionStatus = resolveSidebarConnectionStatus({
+    offline: host.offline,
+    restartPending: host.restartPending,
+    suspensionPhase: host.suspensionPhase,
+    phase: host.sessionDataContext?.gateway.snapshot.phase,
+  });
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
@@ -385,12 +391,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     name: selfLabel,
     watchedSessions: [],
   };
-  const gateway = host.offline ? null : readSidebarNativeGateway();
+  const gateway = readSidebarNativeGateway();
   const buildSubtitle = formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
-  // Health is visual-only here by budget decision; the header picker owns health accessibility.
-  const gatewayPrimaryTag = gateway?.isPrimary
-    ? t("chat.sessionHeader.gatewayPicker.primaryTag")
-    : null;
+  const gatewayPrimaryTag = gateway?.isPrimary ? t("nav.gateway.primaryTag") : null;
   const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
   const identityDetail = host.offline
     ? t("connection.reconnecting")
@@ -411,6 +414,21 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
         <span class="sidebar-identity-card__text">
           <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
+          ${
+            gateway
+              ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">
+                  ${
+                    host.offline
+                      ? t("connection.reconnecting")
+                      : html`
+                          <span class="sidebar-gateway-health" data-health=${gateway.health}></span>
+                          <span class="sidebar-gateway-name">${gateway.name}</span>
+                          ${gatewayPrimaryTag ? html`<span class="sidebar-gateway-primary">${gatewayPrimaryTag}</span>` : nothing}
+                        `
+                  }
+                </span>`
+              : nothing
+          }
         </span>
       </button>
       ${
@@ -517,7 +535,7 @@ export function renderAppSidebarPluginTabEntry(
               tab,
               basePath: host.basePath,
               active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
-              onNavigate: (search) => host.onNavigate?.("plugin", { search }),
+              onNavigate: (location) => host.onNavigate?.("plugin", location),
             })
       }
     </div>

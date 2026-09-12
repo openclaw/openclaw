@@ -27,7 +27,7 @@ type ModuleWithResolver = typeof Module & {
   registerHooks?: (options: {
     resolve?: (
       specifier: string,
-      context: { parentURL?: string | undefined },
+      context: { parentURL?: string | undefined; conditions: readonly string[] },
       nextResolve: (
         specifier: string,
         context?: { parentURL?: string | undefined },
@@ -362,13 +362,28 @@ function installResolver(): void {
   moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
       const aliasTarget = resolveAliasTargetForParentUrl(specifier, context.parentURL);
-      if (aliasTarget) {
-        return {
-          shortCircuit: true,
-          url: pathToFileURL(aliasTarget).href,
-        };
+      const resolved = aliasTarget
+        ? { shortCircuit: true, url: pathToFileURL(aliasTarget).href }
+        : nextResolve(specifier, context);
+      if (context.conditions.includes("import") && resolved.url.startsWith("file:")) {
+        const filename = fileURLToPath(resolved.url);
+        const sdkTarget = isPluginSdkAliasSpecifier(specifier)
+          ? aliasTarget
+          : Array.from(getPluginCache().sdk.contexts.values()).some(({ sdkRoots }) =>
+                sdkRoots.includes(path.dirname(filename)),
+              )
+            ? resolveAliasTargetForParentUrl(
+                `openclaw/plugin-sdk/${path.basename(filename, path.extname(filename))}`,
+                context.parentURL,
+              )
+            : undefined;
+        // Built plugins use relative SDK URLs. Match the authorized host alias before
+        // evaluation so later synchronous loads never inherit an uninstantiated job.
+        if (sdkTarget && pathToFileURL(sdkTarget).href === resolved.url) {
+          Module.createRequire(import.meta.url)(sdkTarget);
+        }
       }
-      return nextResolve(specifier, context);
+      return resolved;
     },
   });
   installed = true;

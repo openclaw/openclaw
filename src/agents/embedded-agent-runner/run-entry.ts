@@ -34,6 +34,7 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import { isProviderModelRerouted } from "../provider-model-route.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -66,6 +67,7 @@ type RunEntryHarnessPreparation =
     };
 
 type DeliveryEvidence = {
+  hasRetryBlockedDelivery: boolean;
   hasDirectlySentBlockReply: boolean;
   hasBlockReplyPipelineOutput: boolean;
 };
@@ -248,8 +250,7 @@ function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
           requested,
           rerouted:
             terminalReceipt.rerouted ||
-            terminalReceipt.effective.provider !== requested.provider ||
-            terminalReceipt.effective.model !== requested.model,
+            isProviderModelRerouted(requested, terminalReceipt.effective),
         },
       }
     : params.result.meta.agentMeta;
@@ -313,9 +314,10 @@ function buildTerminal(params: {
           },
           successfulToolNames: ["message"],
           sourceReplyDelivered: true as const,
-          rerouted:
-            agentMeta.provider !== params.requested.provider ||
-            agentMeta.model !== params.requested.model,
+          rerouted: isProviderModelRerouted(params.requested, {
+            provider: agentMeta.provider,
+            model: agentMeta.model,
+          }),
         }
       : undefined);
   const terminalReceipt =
@@ -432,12 +434,16 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   // delivered its reply, producing a duplicate visible answer (#113788). Consult the
   // same live delivery evidence the result classifier already uses so both exit
   // paths suppress fallback after a delivered reply.
-  const canFallbackAfterError = committedSideEffect
+  const canFallback = committedSideEffect
     ? () => !committedSideEffect()
     : readChannelDeliveryEvidence
       ? () => {
           const evidence = readChannelDeliveryEvidence();
-          return !evidence.hasDirectlySentBlockReply && !evidence.hasBlockReplyPipelineOutput;
+          return (
+            !evidence.hasDirectlySentBlockReply &&
+            !evidence.hasBlockReplyPipelineOutput &&
+            !evidence.hasRetryBlockedDelivery
+          );
         }
       : undefined;
   try {
@@ -497,9 +503,14 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
-            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) => result.classification,
+            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
+              result.result.meta.modelFallbackStopReason
+                ? { stopReason: result.result.meta.modelFallbackStopReason }
+                : canFallback?.() === false
+                  ? undefined
+                  : result.classification,
           }),
-      ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
+      ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
@@ -529,6 +540,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           | { result: EmbeddedAgentRunResult; value: ModelFallbackResultClassification }
           | undefined;
         const classifyResult = (result: EmbeddedAgentRunResult) => {
+          // Custody can settle between classification and finalization; never cache its veto.
+          if (canFallback?.() === false) {
+            return undefined;
+          }
           if (!classified || classified.result !== result) {
             const classification =
               params.behavior.kind === "maintenance"
@@ -547,10 +562,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             // returns a replacement that must not inherit its predecessor's decision.
             classified = {
               result,
-              value:
-                effectiveClassification && committedSideEffect?.()
-                  ? undefined
-                  : effectiveClassification,
+              value: effectiveClassification,
             };
           }
           return classified.value;

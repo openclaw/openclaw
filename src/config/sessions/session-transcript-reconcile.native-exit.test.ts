@@ -65,11 +65,15 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
       created.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
         if (message.type === stage && !fenced) {
           fenced = true;
-          blocker = runExclusiveSqliteSessionWrite(databaseOptions, async () => {
-            blocked.resolve();
-            await release.promise;
-            beforeRelease();
-          });
+          blocker = runExclusiveSqliteSessionWrite(
+            databaseOptions,
+            async () => {
+              blocked.resolve();
+              await release.promise;
+              beforeRelease();
+            },
+            "sessions.transcript-index.preflight",
+          );
         }
       });
       return created;
@@ -87,7 +91,11 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
       // On baseline failure, settlement can beat this handler; join it before fixture disposal.
       if (fenced) {
         if (stage === "done") {
-          await runExclusiveSqliteSessionWrite(databaseOptions, async () => undefined);
+          await runExclusiveSqliteSessionWrite(
+            databaseOptions,
+            async () => undefined,
+            "sessions.transcript-index.preflight",
+          );
         } else {
           await withTestTimeout(acknowledged.promise, 5_000, "queued projection did not finish");
         }
@@ -203,7 +211,11 @@ it.each(cases)(
         }
         expect(isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(false);
         const atSettlement = snapshot();
-        await runExclusiveSqliteSessionWrite(databaseOptions, async () => undefined);
+        await runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => undefined,
+          "sessions.transcript-index.preflight",
+        );
         await checkpoint();
         expect(snapshot()).toEqual(atSettlement);
         if (!replace) {

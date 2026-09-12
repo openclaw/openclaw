@@ -117,3 +117,32 @@
     grid-template-columns: 1fr;
   }
 }
+
+.connection-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.connection-details {
+  border-top: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.connection-details summary {
+  width: fit-content;
+}
+
+.connection-details__body {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+}
+
+.connection-details__body p {
+  margin: 0;
+}

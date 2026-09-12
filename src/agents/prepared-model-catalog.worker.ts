@@ -28,6 +28,7 @@ import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-e
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
+import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
@@ -214,7 +215,8 @@ export async function runPreparedModelCatalogWorkerRequest(
         }),
       };
     }
-    const { prepareAgentCatalogSource } = await import("./prepared-model-runtime.facts.js");
+    const { prepareAgentCatalogSource } =
+      await import("./prepared-model-runtime.scoped-catalog.js");
     const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
@@ -314,6 +316,24 @@ export async function runPreparedModelCatalogWorkerRequest(
       snapshot: facts.modelCatalog,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
+      providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+        prepareModelCatalogAuthLabels({
+          config: value.input.config,
+          agentDir: value.input.agentDir,
+          workspaceDir: value.input.workspaceDir,
+          env: value.input.env,
+          store: authStore,
+          providers: [
+            ...exactAgentFacts.providerIds,
+            ...Object.keys(catalogCredentials),
+            ...Object.keys(value.input.config.models?.providers ?? {}),
+            ...facts.modelCatalog.entries.map((entry) => entry.provider),
+            ...facts.modelCatalog.routeVariants.map((entry) => entry.provider),
+            ...(facts.modelCatalog.staticEntries ?? []).map((entry) => entry.provider),
+            ...Object.values(authStore.profiles).map((profile) => profile.provider),
+          ],
+        }),
+      ),
       authStore,
       authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };

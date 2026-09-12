@@ -3,11 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  writeUpdatePostInstallDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "./update-doctor-result.js";
 import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
@@ -37,12 +43,14 @@ const children = new Map<number, FakeChild>();
 let candidateConfig: Record<string, unknown>;
 let childEnv: NodeJS.ProcessEnv;
 let pluginErrors = false;
+let pluginInventory: unknown;
 let runtimeError = false;
 let runtimeContract: unknown;
 
 beforeEach(async () => {
   vi.clearAllMocks();
   pluginErrors = false;
+  pluginInventory = undefined;
   runtimeError = false;
   runtimeContract = { state: 2, agent: 3 };
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "canary-unit-")));
@@ -53,7 +61,7 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
   mocks.snapshot.mockResolvedValue({
     code: 0,
-    stdout: Buffer.from("[]"),
+    stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
     stderr: Buffer.alloc(0),
     termination: "exit",
   });
@@ -70,12 +78,14 @@ beforeEach(async () => {
         queueMicrotask(() => {
           if (args.includes("plugins")) {
             child.stdout.write(
-              JSON.stringify({
-                plugins: [],
-                diagnostics: pluginErrors
-                  ? [{ level: "error", message: "incompatible plugin" }]
-                  : [],
-              }),
+              JSON.stringify(
+                pluginInventory ?? {
+                  plugins: [],
+                  diagnostics: pluginErrors
+                    ? [{ level: "error", message: "incompatible plugin" }]
+                    : [],
+                },
+              ),
             );
           }
           if (args.includes("--check")) {
@@ -102,6 +112,313 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it("keeps snapshot and validation source selection inside the candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const servingRoot = path.join(root, "installed");
+    const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env,
+      timeoutMs: 3000,
+    });
+    expect(result.status).toBe("ok");
+    expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mocks.spawn.mock.calls) {
+      expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+    }
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
+  });
+
+  it("classifies a deadline before teardown when SIGTERM closes the child with zero", async () => {
+    let now = 2_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
+      const child = new FakeChild(nextPid++);
+      children.set(child.pid, child);
+      childEnv = options.env;
+      now += 899;
+      return child;
+    });
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 1_000,
+      });
+      expect(result).toMatchObject({ status: "error", phase: "doctor" });
+      expect(result.logTail.join("\n")).toContain("deadline exceeded");
+      expect(result.steps.at(-1)).toMatchObject({ exitCode: 1 });
+      expect(result.steps.at(-1)?.stderrTail).toContain("deadline exceeded");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
+    const now = Date.now.bind(Date);
+    let snapshotElapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + snapshotElapsed);
+    mocks.snapshot.mockImplementationOnce(async () => {
+      snapshotElapsed = 300_001;
+      return {
+        code: 0,
+        stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
+        stderr: Buffer.alloc(0),
+        termination: "exit",
+      };
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+      });
+      expect(result, result.logTail.join("\n")).toMatchObject({ status: "ok", phase: "readiness" });
+      expect(result.durationMs).toBeGreaterThanOrEqual(300_001);
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "candidate gateway canary", exitCode: 0 }),
+      );
+      expect(result.logTail.join("\n")).toContain("readyz: ready");
+      await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "identifies legacy Doctor writes even if later validation fails (%s)",
+    async (failsValidation) => {
+      runtimeError = failsValidation;
+      mocks.spawn.mockImplementationOnce(
+        (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+          expect(args).toContain("doctor");
+          const child = new FakeChild(nextPid++);
+          children.set(child.pid, child);
+          const configPath = options.env.OPENCLAW_CONFIG_PATH;
+          if (!configPath) {
+            throw new Error("Missing rehearsal config");
+          }
+          void fs
+            .readFile(configPath, "utf8")
+            .then(async (raw) => {
+              const config: unknown = JSON.parse(raw);
+              if (!isRecord(config)) {
+                throw new Error("Invalid rehearsal fixture");
+              }
+              config.meta = { lastTouchedVersion: "2026.9.4" };
+              config.wizard = { lastRunCommand: "doctor" };
+              config.plugins = { entries: { openai: { enabled: true } } };
+              await fs.writeFile(configPath, JSON.stringify(config));
+              child.emit("close", 0);
+            })
+            .catch((error: unknown) => child.emit("error", error));
+          return child;
+        },
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ status: "started", ready: true })),
+      );
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+      });
+      expect(result.status).toBe(failsValidation ? "error" : "ok");
+      expect(result.doctorConfigWrites).not.toBe(true);
+      expect(result.doctorConfigChanges).toEqual(
+        ["meta", "plugins", "wizard"].map((key) => ({ kind: "key", key })),
+      );
+    },
+  );
+  it("accepts a classified Doctor advisory while capturing migration receipts", async () => {
+    mocks.spawn.mockImplementationOnce(
+      (_command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+        expect(args).toContain("doctor");
+        const child = new FakeChild(nextPid++);
+        children.set(child.pid, child);
+        const resultPath = options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        if (!resultPath) {
+          throw new Error("Missing candidate Doctor receipt");
+        }
+        void writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: createDeferredConfiguredPluginRepairDoctorResult([
+            "Deferred configured plugin repair.",
+          ]),
+        }).then(
+          () => child.emit("close", 86),
+          (error: unknown) => child.emit("error", error),
+        );
+        return child;
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3000,
+    });
+    expect(result.status).toBe("ok");
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "candidate migration rehearsal",
+        exitCode: 86,
+        advisory: expect.any(Object),
+      }),
+    );
+  });
+  it.each([
+    {
+      label: "plugin load failure",
+      inventory: { plugins: [{ id: "fixture", status: "error" }] },
+      proceeds: true,
+    },
+    {
+      label: "attributed registry failure",
+      inventory: {
+        plugins: [],
+        registry: {
+          diagnostics: [{ pluginId: "fixture", level: "error", message: "Plugin unavailable" }],
+        },
+      },
+      proceeds: true,
+    },
+    {
+      label: "malformed plugin inventory",
+      inventory: { plugins: [{ status: "error" }] },
+      proceeds: false,
+    },
+  ])("handles $label before proving core readiness", async ({ inventory, proceeds }) => {
+    pluginInventory = inventory;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3000,
+    });
+
+    expect(result.status).toBe(proceeds ? "ok" : "error");
+    expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("gateway"))).toBe(proceeds);
+    if (proceeds) {
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "candidate plugin resolution",
+          exitCode: 0,
+          stdoutTail: 'Plugin "fixture" could not be loaded during the update preview.',
+        }),
+      );
+      expect(result.phase).toBe("readiness");
+    } else {
+      expect(result.phase).toBe("plugins");
+    }
+  });
+
+  it("keeps verified readiness and records a warning when rehearsal cleanup fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    const remove = fs.rm.bind(fs);
+    let retained: string | undefined;
+    const denial = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (
+        typeof target === "string" &&
+        path.basename(target).startsWith("openclaw-update-canary-")
+      ) {
+        retained = target;
+        throw new Error("synthetic cleanup permission denied");
+      }
+      return remove(target, options);
+    });
+    const onStep = vi.fn();
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+        onStep,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "candidate gateway canary", exitCode: 0 }),
+      );
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "candidate rehearsal cleanup",
+          advisory: expect.objectContaining({
+            message: expect.stringContaining("synthetic cleanup permission denied"),
+          }),
+        }),
+      );
+      expect(onStep).toHaveBeenCalledWith(result.steps.at(-1));
+      expect(result.steps.at(-1)?.advisory?.message).toContain(retained);
+    } finally {
+      denial.mockRestore();
+      if (retained) {
+        await remove(retained, { recursive: true, force: true });
+      }
+    }
+  });
+  it.each([undefined, "unknown-owned-v2"])(
+    "keeps unsupported checkpoint capability out of admission (%s)",
+    async (candidateMutation) => {
+      runtimeContract = {
+        state: 2,
+        agent: 3,
+        executorDelegation: "pid-start-v1",
+        candidateMutation,
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ status: "started", ready: true })),
+      );
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+        timeoutMs: 3000,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
+      expect(result).not.toHaveProperty("checkpointContinuation");
+    },
+  );
   it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
     await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
     vi.stubGlobal(
@@ -119,6 +436,7 @@ describe("update candidate canary", () => {
     });
     expect(result).toMatchObject({ status: "ok", phase: "runtime" });
     expect(result.candidateSchemaVersions).toBeUndefined();
+    expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps).toEqual([
       expect.objectContaining({
         name: "candidate migration continuation",
@@ -133,6 +451,12 @@ describe("update candidate canary", () => {
   });
 
   it("rehearses and validates only private state before requiring started then ready, and reaps the process group", async () => {
+    runtimeContract = {
+      state: 2,
+      agent: 3,
+      executorDelegation: "pid-start-v1",
+      candidateMutation: "checkpoint-owned-v1",
+    };
     const requests: string[] = [];
     const completed: Array<{ name: string; argv: string[] }> = [];
     let startupCalls = 0;
@@ -149,6 +473,7 @@ describe("update candidate canary", () => {
     );
     const original = {
       gateway: { port: 18789 },
+      mcp: { apps: { enabled: true, sandboxPort: 18790 } },
       cron: { enabled: true },
       agents: {
         entries: { main: { workspace: "/original/workspace", agentDir: "/original/agent" } },
@@ -173,6 +498,7 @@ describe("update candidate canary", () => {
     });
     expect(result.status).toBe("ok");
     expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
+    expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps.map((step) => step.name)).toEqual([
       "candidate migration rehearsal",
       "candidate doctor lint",
@@ -214,7 +540,14 @@ describe("update candidate canary", () => {
     expect(candidateConfig).toMatchObject({
       cron: { enabled: false },
       gateway: { bind: "loopback" },
+      mcp: { apps: { enabled: false } },
     });
+    expect(result.listenerIsolation).toEqual({
+      gateway: { host: "127.0.0.1", port: expect.any(Number) },
+      mcpAppSandbox: "disabled",
+    });
+    expect(candidateConfig.gateway).toMatchObject({ port: result.listenerIsolation?.gateway.port });
+    expect(original.mcp.apps).toEqual({ enabled: true, sandboxPort: 18790 });
     expect(original.cron.enabled).toBe(true);
     const gatewayPid = [...children.keys()].at(-1)!;
     expect(
@@ -237,6 +570,7 @@ describe("update candidate canary", () => {
       }),
     );
     const rehearsal = await prepareUpdateCandidateRehearsal({
+      candidateRoot: root,
       config,
       stateDir: root,
       env: {},
@@ -411,6 +745,68 @@ describe("update candidate canary", () => {
       targetStateDir: string;
     };
     await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([0, 1])("bounds multibyte stdout at the byte ceiling plus %i", async (overflow) => {
+    runtimeError = true;
+    const baseSpawn = mocks.spawn.getMockImplementation()!;
+    mocks.spawn.mockImplementation((command, args: string[], options) => {
+      if (!args.includes("plugins")) {
+        return baseSpawn(command, args, options);
+      }
+      const child = new FakeChild(nextPid++);
+      const json = JSON.stringify({ plugins: [], padding: "é".repeat(500_000) });
+      const bytes = Buffer.from(
+        json + " ".repeat(1024 * 1024 + overflow - Buffer.byteLength(json)),
+      );
+      queueMicrotask(() => {
+        child.stdout.write(bytes.subarray(0, 600_000));
+        child.stdout.end(bytes.subarray(600_000));
+        child.emit("close", 0);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+    expect(result).toMatchObject({ status: "error", phase: overflow ? "plugins" : "runtime" });
+  });
+
+  it("preserves split UTF-8 diagnostics and final unterminated lines on both pipes", async () => {
+    const expected = ["stdout 診断: café 🦞", "stderr 診断: café 🦞"];
+    mocks.spawn.mockImplementationOnce(() => {
+      const child = new FakeChild(nextPid++);
+      queueMicrotask(() => {
+        for (const [index, stream] of [child.stdout, child.stderr].entries()) {
+          // Real pipe chunks may end inside a code point; EOF need not follow a newline.
+          const bytes = Buffer.from(`${expected[index]}\r\n${expected[index]} final`);
+          for (const byte of bytes) {
+            stream.write(Buffer.from([byte]));
+          }
+          stream.end();
+        }
+        child.emit("close", 1);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+    expect(result.status).toBe("error");
+    for (const line of expected) {
+      expect(result.logTail).toContain(line);
+      expect(result.logTail).toContain(`${line} final`);
+      expect(result.steps.at(-1)?.stderrTail).toContain(`${line}\n`);
+      expect(result.steps.at(-1)?.stderrTail).toContain(`${line} final`);
+    }
   });
 
   it("omits the entire oversized log line across chunks while preserving following diagnostics", async () => {

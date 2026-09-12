@@ -72,14 +72,14 @@ export async function runReleaseConfiguredPluginInstallsHealth(
   writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }
 
-export async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runDiskSpaceHealth(): Promise<void> {
   const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
-  noteDiskSpace(ctx.cfg);
+  noteDiskSpace();
 }
 
-export async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runDatabaseBloatHealth(): Promise<void> {
   const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
-  noteSqliteDatabaseBloat(ctx.cfg);
+  noteSqliteDatabaseBloat();
 }
 
 export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -101,7 +101,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
-  noteBackupDoctorHint(ctx.env ?? process.env);
+  await noteBackupDoctorHint(ctx.env ?? process.env);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -119,7 +119,10 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
     ...(ctx.configResult.openAICodexAuthProfileIdMap?.size
-      ? { authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap }
+      ? {
+          authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
+          ...(!ctx.prompter.shouldRepair ? { authProfileOnly: true } : {}),
+        }
       : {}),
   });
   if (result.changes.length > 0) {

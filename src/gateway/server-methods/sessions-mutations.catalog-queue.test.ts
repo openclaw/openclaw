@@ -31,8 +31,8 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
-afterEach(() => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -406,7 +406,7 @@ test("a multi-target agent group retains ordered label claims around catalog loa
     const loadGatewayModelCatalog = vi.fn(async () => []);
     const respond = vi.fn();
     await sessionMutationHandlers["sessions.patchMany"]!({
-      params: { targets, patch: { label: "Winner", thinkingLevel: "off" } },
+      params: { targets, patch: { label: "Winner", thinkingLevel: "low" } },
       respond,
       context: patchContext(loadGatewayModelCatalog),
       client: null,
@@ -428,7 +428,7 @@ test("a multi-target agent group retains ordered label claims around catalog loa
     expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ agentId: "main", sessionKey: targets[0]!.key })).toMatchObject({
       label: "Winner",
-      thinkingLevel: "off",
+      thinkingLevel: "low",
     });
     expect(
       loadSessionEntry({ agentId: "main", sessionKey: targets[1]!.key })?.label,

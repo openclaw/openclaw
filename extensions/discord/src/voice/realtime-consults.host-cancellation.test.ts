@@ -62,8 +62,9 @@ defineDiscordVoiceTests(
         hostTurn,
         consult,
         async close() {
-          fixture.entry.stop();
+          const stopped = fixture.entry.stop();
           hostTurn.resolve({ payloads: [] });
+          await stopped;
           await Promise.all(submissions);
           // Forced consult timers launch work without returning its promise. Drain its
           // rejection/delivery continuations before the shared mocks are reset.
@@ -269,7 +270,7 @@ defineDiscordVoiceTests(
           await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
 
           if (transition === "teardown") {
-            entry.stop();
+            await entry.stop();
             await manager.join({ guildId: "g1", channelId: "1001" });
             entry = getSessionEntry(manager);
           } else {

@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as commandRunner from "../../process/exec-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { insertRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -296,4 +297,172 @@ describe("ManagedWorktreeService provisioned state", () => {
       expect(await fs.readFile(restoredPath, "utf8")).toBe("local bytes\n");
     },
   );
+
+  it.each([
+    {
+      replacement: "file-to-directory",
+      originalPath: "entry",
+      replacementPath: "entry/child.txt",
+      snapshotPaths: ["README.md", "entry/child.txt"],
+      directory: true,
+      staged: false,
+    },
+    {
+      replacement: "directory-to-file",
+      originalPath: "entry/child.txt",
+      replacementPath: "entry",
+      snapshotPaths: ["README.md", "entry"],
+      directory: false,
+      staged: false,
+    },
+    {
+      replacement: "staged-file-to-directory",
+      originalPath: "entry",
+      replacementPath: "entry/child.txt",
+      snapshotPaths: ["README.md", "entry/child.txt"],
+      directory: true,
+      staged: true,
+    },
+    {
+      replacement: "staged-directory-to-file",
+      originalPath: "entry/child.txt",
+      replacementPath: "entry",
+      snapshotPaths: ["README.md", "entry"],
+      directory: false,
+      staged: true,
+    },
+  ])("round trips a tracked $replacement replacement", async (row) => {
+    const originalPath = path.join(repo, row.originalPath);
+    await fs.mkdir(path.dirname(originalPath), { recursive: true });
+    await fs.writeFile(originalPath, "original\n");
+    await git(repo, "add", row.originalPath);
+    await git(repo, "commit", "-m", "add original entry");
+    const created = await service.create({
+      repoRoot: repo,
+      name: row.replacement,
+      baseRef: "HEAD",
+    });
+    const originalHead = await git(created.path, "rev-parse", "HEAD");
+    await fs.rm(path.join(created.path, "entry"), { recursive: true });
+    const replacementPath = path.join(created.path, row.replacementPath);
+    await fs.mkdir(path.dirname(replacementPath), { recursive: true });
+    await fs.writeFile(replacementPath, "local replacement\n");
+    if (row.staged) {
+      await git(created.path, "add", "-A");
+    }
+
+    const removed = await service.remove({ id: created.id, reason: "test" });
+    expect(
+      (await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).split("\n"),
+    ).toEqual(row.snapshotPaths);
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    const restored = await service.restore({ id: created.id });
+
+    expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+    expect((await fs.stat(path.join(restored.path, "entry"))).isDirectory()).toBe(row.directory);
+    expect(await fs.readFile(path.join(restored.path, row.replacementPath), "utf8")).toBe(
+      "local replacement\n",
+    );
+    expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+  });
+
+  it("snapshots a missing file that reappears before the index update", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "reappearing-file",
+      baseRef: "HEAD",
+    });
+    const originalHead = await git(created.path, "rev-parse", "HEAD");
+    const localPath = path.join(created.path, "README.md");
+    await fs.rm(localPath);
+    const runCommand = commandRunner.runCommandWithTimeout;
+    let reappeared = false;
+    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
+    commandSpy.mockImplementation(async (...args) => {
+      const argv = args[0];
+      if (argv[0] === "git" && argv.includes("update-index") && argv.includes("--stdin")) {
+        expect(reappeared).toBe(false);
+        await expect(fs.stat(localPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await fs.writeFile(localPath, "reappeared contents\n");
+        reappeared = true;
+      }
+      return await runCommand(...args);
+    });
+
+    try {
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      expect(reappeared).toBe(true);
+      expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe(
+        "reappeared contents",
+      );
+      await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      const restored = await service.restore({ id: created.id });
+
+      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "reappeared contents\n",
+      );
+      expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+    } finally {
+      commandSpy.mockRestore();
+    }
+  });
+
+  it("snapshots a reappearing untracked child after its parent becomes a directory", async () => {
+    await fs.writeFile(path.join(repo, "entry"), "original file\n");
+    await git(repo, "add", "entry");
+    await git(repo, "commit", "-m", "add tracked parent");
+    const created = await service.create({
+      repoRoot: repo,
+      name: "reappearing-child",
+      baseRef: "HEAD",
+    });
+    const originalHead = await git(created.path, "rev-parse", "HEAD");
+    const parentPath = path.join(created.path, "entry");
+    const childPath = path.join(parentPath, "child.txt");
+    await fs.rm(parentPath);
+    await fs.mkdir(parentPath);
+    await fs.writeFile(childPath, "discovered child\n");
+    const runCommand = commandRunner.runCommandWithTimeout;
+    let disappeared = false;
+    let reappeared = false;
+    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
+    commandSpy.mockImplementation(async (...args) => {
+      const argv = args[0];
+      if (argv[0] === "git" && argv.includes("read-tree") && argv.at(-1) === "HEAD") {
+        const result = await runCommand(...args);
+        expect(result.code).toBe(0);
+        expect(disappeared).toBe(false);
+        await fs.rm(childPath);
+        disappeared = true;
+        return result;
+      }
+      if (argv[0] === "git" && argv.includes("update-index") && argv.includes("--stdin")) {
+        expect(disappeared).toBe(true);
+        expect(reappeared).toBe(false);
+        await expect(fs.stat(childPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await fs.writeFile(childPath, "reappeared child\n");
+        reappeared = true;
+      }
+      return await runCommand(...args);
+    });
+
+    try {
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      expect(reappeared).toBe(true);
+      expect(
+        (await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).split("\n"),
+      ).toEqual(["README.md", "entry/child.txt"]);
+      const restored = await service.restore({ id: created.id });
+
+      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+      expect((await fs.stat(path.join(restored.path, "entry"))).isDirectory()).toBe(true);
+      expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
+        "reappeared child\n",
+      );
+      expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+    } finally {
+      commandSpy.mockRestore();
+    }
+  });
 });

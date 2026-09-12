@@ -7,7 +7,7 @@ import type {
   SessionsPatchManyResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
@@ -19,6 +19,7 @@ import type {
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
+import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -69,6 +70,7 @@ export type SidebarLifecycleState = HTMLElement & {
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   readonly sessionOwnerFilterId: string | null;
+  setSessionOwnerFilter: AppSidebarSessionNavigationElement["setSessionOwnerFilter"];
   sessionKey: string;
   onNavigate: (
     routeId: string,
@@ -76,6 +78,8 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   dismissTransientMenus: () => boolean;
   readonly sessionData: SessionDataController;
+  findSidebarSessionByKey: AppSidebarSessionNavigationElement["findSidebarSessionByKey"];
+  findSidebarHovercardRowByKey: AppSidebarSessionNavigationElement["findSidebarHovercardRowByKey"];
   readonly sessionOrganizer: SessionOrganizerController;
   listSessionGroupFolders(path?: string): Promise<{
     path: string;
@@ -412,6 +416,12 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return scopedSessions!.refreshList(options);
     },
     reconcile,
+    captureReconcile: () => reconcile,
+    observeRow: (...args: Parameters<SessionCapability["observeRow"]>) =>
+      scopedSessions!.observeRow(...args),
+    inheritRow: (...args: Parameters<SessionCapability["inheritRow"]>) =>
+      scopedSessions!.inheritRow(...args),
+    projectRows: (rows: readonly GatewaySessionRow[]) => scopedSessions!.projectRows(rows),
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -580,11 +590,22 @@ export async function mountSidebar(
   agentIdentity?: AgentIdentityCapability,
 ) {
   const context = createContext(gateway, sessions, agentsList, approvalQueue, agentIdentity);
+  return mountSidebarContext(context, variant);
+}
+
+export async function mountSidebarContext(
+  context: ApplicationContext<RouteId>,
+  variant: SidebarLifecycleState["variant"] = "panel",
+  activeRouteId?: RouteId,
+) {
   const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
+  if (activeRouteId) {
+    sidebar.activeRouteId = activeRouteId;
+  }
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;

@@ -66,7 +66,7 @@ describe("convertMarkdownTables", () => {
   it("keeps the existing table recognition for list-like headers", () => {
     const rendered = convertMarkdownTables("- A | B\n---|---\nx|y", "code");
 
-    expect(rendered).toContain("| - A | B |");
+    expect(rendered).toContain("| - A | B   |");
     expect(new MarkdownIt().render(rendered)).toContain("<pre><code>");
   });
 
@@ -115,7 +115,7 @@ describe("convertMarkdownTables", () => {
 
     expect(rendered.startsWith(`${first}\`\`\``)).toBe(true);
     expect(html).toContain(container);
-    expect(html).toContain("<pre><code>| A | B |");
+    expect(html).toContain("<pre><code>| A   | B   |");
   });
 
   it("keeps reference labels in code tables and leaves document definitions untouched", () => {
@@ -150,7 +150,7 @@ describe("convertMarkdownTables", () => {
   it("falls back to code rendering for block mode", () => {
     const rendered = convertMarkdownTables("| A | B |\n|---|---|\n| 1 | 2 |", "block");
 
-    expect(rendered).toBe("```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```");
+    expect(rendered).toBe("```\n| A   | B   |\n| --- | --- |\n| 1   | 2   |\n```");
   });
 
   it("does not parse ordinary text that cannot contain a table", () => {

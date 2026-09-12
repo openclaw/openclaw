@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -170,11 +171,11 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("models.list")).length)
           .toBeGreaterThan(0);
+        const catalogWarning = page.locator('.model-providers__catalog-progress[role="alert"]');
 
         if (recordVisuals) {
           await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
-          const phase =
-            (await page.locator(".provider-usage-error").count()) === 0 ? "before" : "after";
+          const phase = (await catalogWarning.count()) === 0 ? "before" : "after";
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -186,32 +187,23 @@ suite.define(() => {
         }
 
         await expect
-          .poll(() => page.locator(".provider-usage-error").textContent(), { timeout: 5_000 })
-          .toContain("Model catalog temporarily unavailable");
+          .poll(() => catalogWarning.textContent(), { timeout: 5_000 })
+          .toContain("More models could not be discovered.");
+        await catalogWarning.getByRole("button", { name: "Retry", exact: true }).waitFor();
+        expect(await page.locator(".provider-usage-error").count()).toBe(0);
         expect(await page.locator('[data-model-readiness="model-required"]').count()).toBe(0);
-        const primary = page.locator(".model-providers__defaults wa-select").first();
-        await expect
-          .poll(() =>
-            primary.evaluate((element) =>
-              String((element as HTMLElement & { value?: string }).value),
-            ),
-          )
-          .toBe("openai/gpt-5.5");
+        const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
+        await expect.poll(() => pickerValue(primary)).toBe("openai/gpt-5.5");
 
         await gateway.setMethodResponse("models.list", {
           models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
         });
         await page.getByRole("button", { name: "Refresh", exact: true }).click();
 
+        await expect.poll(() => catalogWarning.count()).toBe(0);
         await expect.poll(() => page.locator(".provider-usage-error").count()).toBe(0);
         await expect.poll(() => card.textContent()).toContain("API key set in config");
-        await expect
-          .poll(() =>
-            primary.evaluate((element) =>
-              String((element as HTMLElement & { value?: string }).value),
-            ),
-          )
-          .toBe("openai/gpt-5.5");
+        await expect.poll(() => pickerValue(primary)).toBe("openai/gpt-5.5");
         if (recordVisuals) {
           await page.screenshot({
             animations: "disabled",
@@ -286,7 +278,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const openaiCard = page.locator('[data-provider-id="openai"]');
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
-        await openaiCard.getByRole("button", { name: "Replace key" }).click();
+        await openaiCard.getByRole("button", { name: "Set API key" }).click();
         if (recordVisuals) {
           await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
           await page.screenshot({

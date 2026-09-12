@@ -21,6 +21,12 @@ import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
+if (process.versions.bun) {
+  // Removal: delete this Vitest bootstrap after oven-sh/bun#42349 ships in supported Bun.
+  const { ensureSqliteLibrarySelected } = await import("../../src/infra/bun-sqlite-library.ts");
+  ensureSqliteLibrarySelected();
+}
+
 export type { LocalVitestScheduling };
 
 export const jsdomOptimizedDeps = {

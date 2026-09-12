@@ -292,7 +292,8 @@ export default function createApplicationPlacementStartupRuntime(
       // Status reads must not rescan payloads or mint new attachment identities.
       attachments: restoreChatApiAttachments(input.recovery.attachments),
       persistRecovery: input.persistRecovery,
-      createdAt: input.createdAt,
+      createdAt:
+        existing?.owner.messageId === owner.messageId ? existing.createdAt : input.createdAt,
       scope,
       retainsConnection: capturePlacementStartupConnection(params.gateway, owner),
     };

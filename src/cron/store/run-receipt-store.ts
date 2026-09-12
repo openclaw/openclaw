@@ -22,6 +22,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
@@ -617,7 +618,7 @@ export function assertCronRunReceiptCurrent(params: {
   if (params.isAgentAvailable && !params.isAgentAvailable(params.handle.agentId)) {
     throw new CronRunReceiptRevisionError(
       params.handle.receiptId,
-      `cron job agent is unavailable: ${params.handle.agentId}`,
+      describeUnavailableCronAgent(params.handle.agentId, params.env),
       "owner-unavailable",
     );
   }

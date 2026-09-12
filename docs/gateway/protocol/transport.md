@@ -13,10 +13,10 @@ What the wire looks like before any method call: the published packages, the fra
 
 ## npm packages
 
-The verified stable package release is `2026.8.1`. Follow
-[Install the packages](/gateway/clients#install-the-packages) for exact-version
-commands and compatibility guidance. Package release versions are separate from
-the wire protocol version and the root `openclaw` CLI release.
+Follow [Install the packages](/gateway/clients#install-the-packages) for the
+verified stable release, exact-version commands, and compatibility guidance.
+Package release versions are separate from the wire protocol version and the
+root `openclaw` CLI release.
 
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   publishes the schemas, validators, TypeScript types, lightweight frame and error
@@ -28,9 +28,9 @@ the wire protocol version and the root `openclaw` CLI release.
   `@openclaw/gateway-client/browser`.
 
 For application lifecycle guidance, see
-[Building a Gateway client](https://docs.openclaw.ai/gateway/clients). For apps
+[Building a Gateway client](/gateway/clients). For apps
 that supervise the Gateway as a child process, see
-[Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+[Embedding OpenClaw](/gateway/embedding).
 
 ## Transport and framing
 
@@ -97,6 +97,20 @@ HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
 use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
+
+## Connection keepalives
+
+Authenticated control connections use WebSocket ping/pong keepalives. These are
+separate from [scheduled agent heartbeats](/gateway/heartbeat); disabling agent
+heartbeats does not disable connection monitoring.
+
+A ping queued behind outgoing data is governed by transport inactivity, including
+partial write progress and incoming traffic. Once its write completes, the peer
+gets a full 25-second pong window; unrelated incoming messages do not extend that
+window. The periodic check closes expired connections and releases their owners.
+Transport inactivity is not an independent write-only deadline: a peer sending
+traffic can keep a queued write alive. Existing slow-consumer buffer limits still
+apply. Streaming transports retain their stream-owner lifecycle policy.
 
 ## Gateway-controlled WebRTC Talk
 

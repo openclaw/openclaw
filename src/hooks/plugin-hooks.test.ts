@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { projectInstalledPluginComponents } from "../plugins/installed-plugin-components.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   clearInternalHooks,
@@ -53,16 +55,20 @@ describe("bundle plugin hooks", () => {
     await fsp.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  async function writeBundleHookFixture(): Promise<string> {
+  async function writeBundleHookFixture(
+    format = "codex",
+    withJsonHooks = false,
+    declaredRoot = "hooks",
+  ): Promise<string> {
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
     const hookDir = path.join(bundleRoot, "hooks", "bundle-hook");
-    await fsp.mkdir(path.join(bundleRoot, ".codex-plugin"), { recursive: true });
+    await fsp.mkdir(path.join(bundleRoot, `.${format}-plugin`), { recursive: true });
     await fsp.mkdir(hookDir, { recursive: true });
     await fsp.writeFile(
-      path.join(bundleRoot, ".codex-plugin", "plugin.json"),
+      path.join(bundleRoot, `.${format}-plugin`, "plugin.json"),
       JSON.stringify({
         name: "Sample Bundle",
-        hooks: "hooks",
+        hooks: declaredRoot,
       }),
       "utf-8",
     );
@@ -85,6 +91,9 @@ describe("bundle plugin hooks", () => {
       'export default async function(event) { event.messages.push("bundle-hook-ok"); }\n',
       "utf-8",
     );
+    if (withJsonHooks) {
+      await fsp.writeFile(path.join(bundleRoot, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
+    }
     return bundleRoot;
   }
 
@@ -114,22 +123,50 @@ describe("bundle plugin hooks", () => {
     return entry;
   }
 
-  it("exposes enabled bundle hook dirs as plugin-managed hook entries", async () => {
-    const bundleRoot = await writeBundleHookFixture();
+  function projectBundleComponents(pluginId: string, config: OpenClawConfig) {
+    const metadata = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+    const manifest = metadata.manifestRegistry.plugins.find(({ id }) => id === pluginId);
+    if (!manifest) {
+      throw new Error(`Expected bundle manifest for ${pluginId}`);
+    }
+    const { declared } = buildPluginCapabilitySummary({ manifest, origin: manifest.origin });
+    return { declared, components: projectInstalledPluginComponents({ manifest, declared }) };
+  }
 
-    const entries = loadWorkspaceHookEntries(workspaceDir, {
-      config: createConfig(true),
-    });
+  it.each([
+    { format: "codex", withJsonHooks: false, root: "hooks", supported: ["hooks"] },
+    { format: "claude", withJsonHooks: false, root: "hooks", supported: ["hooks"] },
+    { format: "claude", withJsonHooks: true, root: "hooks", supported: ["hooks"] },
+    { format: "claude", withJsonHooks: false, root: "hooks/bundle-hook", supported: [] },
+  ])(
+    "matches $format hook components to discovery for $root with JSON hooks $withJsonHooks",
+    async ({ format, withJsonHooks, root, supported }) => {
+      const bundleRoot = await writeBundleHookFixture(format, withJsonHooks, root);
+      const config = createConfig(true);
+      const entries = loadWorkspaceHookEntries(workspaceDir, { config });
 
-    const entry = requireOnlyHookEntry(entries);
-    expect(entry.hook.name).toBe("bundle-hook");
-    expect(entry.hook.source).toBe("openclaw-plugin");
-    expect(entry.hook.pluginId).toBe("sample-bundle");
-    expect(entry.hook.baseDir).toBe(
-      fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
-    );
-    expect(entry.metadata?.events).toEqual(["command:new"]);
-  });
+      if (supported.length > 0) {
+        const entry = requireOnlyHookEntry(entries);
+        expect(entry.hook.name).toBe("bundle-hook");
+        expect(entry.hook.source).toBe("openclaw-plugin");
+        expect(entry.hook.pluginId).toBe("sample-bundle");
+        expect(entry.hook.baseDir).toBe(
+          fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+        );
+        expect(entry.metadata?.events).toEqual(["command:new"]);
+      } else {
+        expect(entries).toHaveLength(0);
+      }
+
+      const { declared, components } = projectBundleComponents("sample-bundle", config);
+      expect(declared.hooks).toEqual(withJsonHooks ? [root, "hooks/hooks.json"] : [root]);
+      expect(components).toMatchObject({
+        mapped: supported.length > 0 ? ["hooks"] : [],
+        hooks: supported,
+        unavailable: { capabilities: supported.length > 0 ? [] : ["hooks"] },
+      });
+    },
+  );
 
   it("reuses published plugin metadata without rescanning manifests", async () => {
     const bundleRoot = await writeBundleHookFixture();
@@ -222,13 +259,19 @@ describe("bundle plugin hooks", () => {
     );
     await fsp.writeFile(path.join(bundleRoot, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
 
-    const entries = loadWorkspaceHookEntries(workspaceDir, {
-      config: {
-        hooks: { internal: { enabled: true } },
-        plugins: { entries: { "claude-bundle": { enabled: true } } },
-      },
-    });
-
+    const config: OpenClawConfig = {
+      hooks: { internal: { enabled: true } },
+      plugins: { entries: { "claude-bundle": { enabled: true } } },
+    };
+    const entries = loadWorkspaceHookEntries(workspaceDir, { config });
     expect(entries).toHaveLength(0);
+
+    const { declared, components } = projectBundleComponents("claude-bundle", config);
+    expect(declared.hooks).toEqual(["hooks/hooks.json"]);
+    expect(components).toMatchObject({
+      mapped: [],
+      hooks: [],
+      unavailable: { capabilities: ["hooks"] },
+    });
   });
 });
