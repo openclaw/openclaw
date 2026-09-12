@@ -18,14 +18,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
-import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
-import {
-  deliveryContextFromSession,
-  normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../../utils/delivery-context.shared.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../tool-outcome-instructions.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import {
@@ -44,6 +37,11 @@ import {
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
+import {
+  announceRestartRecoveryResumption,
+  isRestartRecoveryDeliveryCurrent,
+  resolveRestartRecoveryDeliveryContext,
+} from "./main-session-restart-recovery-delivery.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
@@ -81,45 +79,6 @@ function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
     return `${RESTART_RECOVERY_RESUME_MESSAGE}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
   }
   return RESTART_RECOVERY_RESUME_MESSAGE;
-}
-
-export function resolveRestartRecoveryDeliveryContext(params: {
-  cfg?: OpenClawConfig;
-  entry: SessionEntry;
-  includeSessionDeliveryFallback?: boolean;
-  sessionKey: string;
-}): (DeliveryContext & { channel: string; to: string }) | undefined {
-  const activeRunDeliveryContext = normalizeDeliveryContext(
-    params.entry.restartRecoveryDeliveryContext,
-  );
-  // A claim with no context is intentionally transcript-only. Only legacy
-  // rows without a claim may fall back to the session delivery route.
-  const hasActiveRunDeliveryClaim =
-    normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
-  const deliveryContext =
-    normalizeDeliveryContext(params.entry.pendingFinalDelivery?.context) ??
-    activeRunDeliveryContext ??
-    (params.includeSessionDeliveryFallback && !hasActiveRunDeliveryClaim
-      ? deliveryContextFromSession(params.entry)
-      : undefined);
-  const channel = normalizeOptionalString(deliveryContext?.channel);
-  const to = normalizeOptionalString(deliveryContext?.to);
-  if (!channel || !to || !isDeliverableMessageChannel(channel)) {
-    return undefined;
-  }
-  if (
-    params.cfg &&
-    resolveSendPolicy({
-      cfg: params.cfg,
-      entry: params.entry,
-      sessionKey: params.sessionKey,
-      channel,
-      chatType: params.entry.chatType,
-    }) === "deny"
-  ) {
-    return undefined;
-  }
-  return { ...deliveryContext, channel, to };
 }
 
 function normalizeRestartRecoveryTerminalStatus(
@@ -495,6 +454,10 @@ export async function resumeMainSession(params: {
         ) {
           return { result: false };
         }
+        // Freeze the resolved legacy route before the new claim disables session fallback.
+        if (!claimedRunId && deliveryContext) {
+          entry.restartRecoveryDeliveryContext = deliveryContext;
+        }
         entry.restartRecoveryDeliveryRunId = recoveryRunId;
         entry.restartRecoveryForceSafeTools = params.forceRestartSafeTools ? true : undefined;
         entry.updatedAt = Date.now();
@@ -565,9 +528,15 @@ export async function resumeMainSession(params: {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
     dispatchStarted = true;
+    let dispatchSettled = false;
+    let stopTyping: (() => void) | undefined;
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
       gatewayRuntime: params.gatewayRuntime,
+      onSettled: () => {
+        dispatchSettled = true;
+        stopTyping?.();
+      },
     });
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);
@@ -624,6 +593,38 @@ export async function resumeMainSession(params: {
       return "skipped";
     }
     const resumeResult = terminalStatus ? "settled" : "started";
+    if (resumeResult === "started" && agentParams.deliver && deliveryContext) {
+      if (!dispatchSettled) {
+        stopTyping = params.gatewayRuntime.startRecoveryTyping?.({
+          ...deliveryContext,
+          agentId: params.agentId,
+          runId: recoveryRunId,
+          isCurrent: (cfg) =>
+            !dispatchSettled &&
+            isRestartRecoveryDeliveryCurrent({
+              ...target,
+              sessionKey: dispatchSessionKey,
+              sessionId: params.entry.sessionId,
+              recoveryRunId,
+              lifecycleGeneration,
+              deliveryContext,
+              cfg,
+              shouldContinue: params.shouldContinue,
+            }),
+        });
+      }
+      await announceRestartRecoveryResumption({
+        ...target,
+        sessionKey: dispatchSessionKey,
+        sessionId: params.entry.sessionId,
+        recoveryRunId,
+        lifecycleGeneration,
+        deliveryContext,
+        cfg: params.cfg,
+        shouldContinue: () => !dispatchSettled && params.shouldContinue?.() !== false,
+        gatewayRuntime: params.gatewayRuntime,
+      });
+    }
     log.info(
       `${resumeResult} interrupted main session: ${params.sessionKey}${
         sanitizedPendingText ? " (with pending payload)" : ""

@@ -166,7 +166,7 @@ describe("createGatewayInstanceRuntime", () => {
         await platformDispatchHold;
         await ctx.onPlatformSendDispatch?.();
         visibleSend();
-        return { channel: "signal", messageId: "signal-message-1" };
+        return { channel: "signal", messageId: `signal-message-${visibleSend.mock.calls.length}` };
       });
       const handleAction = vi.fn(async () => {
         throw new Error("recovery notice must not invoke message actions");
@@ -236,9 +236,13 @@ describe("createGatewayInstanceRuntime", () => {
         const staleDelivery = runtime.recovery.sendRecoveryNotice({
           ...notice,
           idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
+          liveOnly: true,
           isCurrent: () => ownerCurrent,
         });
         await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
+        const queuedResumption = findDeliveryIntentOwner(
+          "main-session-restart-recovery:run-2:failed-notice",
+        );
         ownerCurrent = false;
         releasePlatformDispatch?.();
 
@@ -247,6 +251,7 @@ describe("createGatewayInstanceRuntime", () => {
         );
 
         expect(visibleSend).toHaveBeenCalledOnce();
+        expect(queuedResumption).toBeNull();
         expect(sendText).toHaveBeenCalledWith(
           expect.objectContaining({
             to: "+15551234567",
@@ -256,6 +261,21 @@ describe("createGatewayInstanceRuntime", () => {
           }),
         );
         expect(handleAction).not.toHaveBeenCalled();
+
+        const guardedDurableNotice = {
+          ...notice,
+          idempotencyKey: "main-session-restart-recovery:subagent:run-3:resumed-notice",
+          isCurrent: () => true,
+        };
+        await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
+        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
+        await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
+        expect(visibleSend).toHaveBeenCalledTimes(2);
+        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
       } finally {
         runtime.close();
         restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);

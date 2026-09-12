@@ -35,6 +35,7 @@ export type RestartRecoveryDispatchStartOutcome =
 export async function dispatchRestartRecoveryUntilStarted(params: {
   agentParams: AgentRunRequest;
   gatewayRuntime: GatewayRecoveryRuntime;
+  onSettled?: () => void;
 }): Promise<RestartRecoveryDispatchStartOutcome> {
   let dispatchAccepted = false;
   let executionStarted = false;
@@ -143,10 +144,12 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
         return executionStartTimeoutPromise;
       }
       clearExecutionStartTimer();
+      params.onSettled?.();
       return { kind: "terminal", observation: observe(), result };
     },
     (error: unknown) => {
       clearExecutionStartTimer();
+      params.onSettled?.();
       return { kind: "failed", error, observation: observe() };
     },
   );

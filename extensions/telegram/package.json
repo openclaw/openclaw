@@ -7,6 +7,7 @@
   "dependencies": {
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
+    "abort-controller": "3.0.0",
     "grammy": "1.46.0",
     "typebox": "1.3.26",
     "undici": "8.10.2",

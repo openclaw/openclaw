@@ -150,9 +150,9 @@ describe("subagent registry restart recovery notices", () => {
       const recovery = recover(entry, { now });
       await vi.waitFor(() => expect(gatewayRuntime.sendRecoveryNotice).toHaveBeenCalledOnce());
       const notice = vi.mocked(gatewayRuntime.sendRecoveryNotice).mock.calls[0]![0];
-      expect(notice.isCurrent?.()).toBe(true);
+      expect(notice.isCurrent?.({})).toBe(true);
       rotateAgentEventLifecycleGeneration();
-      expect(notice.isCurrent?.()).toBe(false);
+      expect(notice.isCurrent?.({})).toBe(false);
       delivery.resolve({ suppressed });
       await recovery;
 

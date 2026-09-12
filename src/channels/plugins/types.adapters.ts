@@ -353,6 +353,15 @@ export type ChannelHeartbeatAdapter = {
     threadId?: string | number | null;
     deps?: ChannelHeartbeatDeps;
   }) => Promise<void> | void;
+  /** Optional owned typing: recheck the guard after transport waits and honor cancellation. */
+  sendTypingGuarded?: (params: {
+    cfg: OpenClawConfig;
+    to: string;
+    accountId?: string | null;
+    threadId?: string | number | null;
+    signal: AbortSignal;
+    assertPlatformSendAuthorized: () => void;
+  }) => Promise<void> | void;
   clearTyping?: (params: {
     cfg: OpenClawConfig;
     to: string;

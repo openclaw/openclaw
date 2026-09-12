@@ -334,6 +334,28 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
+When a recovered turn starts with an eligible channel delivery route, OpenClaw
+sends a resumption notice to that conversation, retaining its account and topic.
+The final reply uses the same delivery route. Transcript-only turns stay private,
+and a turn that has already finished does not receive a late resumption notice.
+A failed notice does not restart or replay the recovered work. Main-session
+resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
+owner are rechecked immediately before the channel send. They are not replayed
+from the outbound queue; terminal-failure notice retries and normal final-reply
+delivery are unchanged.
+
+Telegram renews its typing indicator while the recovered turn runs. Typing stops
+when the turn settles, its recovery owner changes, or the gateway closes, and
+respects `typingMode: "never"`. Other channels can opt in through the guarded
+typing hook; unsupported channels still receive the resumption notice.
+
+Channel plugins opt in with `heartbeat.sendTypingGuarded(...)`. Alongside the
+recovery delivery target, core supplies an `AbortSignal` and an
+`assertPlatformSendAuthorized` callback. Plugins must honor cancellation through
+queued sends and invoke the callback immediately before the platform request,
+after asynchronous preparation. Recovery does not fall back to the unguarded
+`heartbeat.sendTyping(...)` hook.
+
 Startup reconciliation retries transient failures up to three times with
 exponential backoff. Separately, each interrupted main-session cycle has a
 durable budget of three charged automatic dispatch attempts, retained across

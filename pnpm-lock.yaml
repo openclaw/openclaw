@@ -2067,6 +2067,9 @@ importers:
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
         version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
+      abort-controller:
+        specifier: 3.0.0
+        version: 3.0.0
       grammy:
         specifier: 1.46.0
         version: 1.46.0(supports-color@10.2.2)
