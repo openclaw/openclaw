@@ -126,6 +126,8 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
       async listBoardAggregates() {
         return await delegate.listBoardAggregates();
       },
+      listStatsAggregates: (boardId) => delegate.listStatsAggregates(boardId),
+      hasCards: (boardId) => delegate.hasCards(boardId),
     } satisfies WorkboardCardStore,
     pauseNextWrite() {
       const reached = createSignal();
@@ -3465,6 +3467,14 @@ describe("WorkboardStore", () => {
 
   it("scopes idempotent creates and stats by board", async () => {
     const store = createWorkboardSqliteTestStore();
+    await expect(store.stats()).resolves.toEqual({
+      id: "all",
+      total: 0,
+      active: 0,
+      archived: 0,
+      byStatus: {},
+      byAgent: {},
+    });
     const ops = await store.create({
       title: "Ops work",
       boardId: "ops",
@@ -3506,6 +3516,17 @@ describe("WorkboardStore", () => {
     expect(secondProduct.position).toBe(2000);
     const stats = await store.stats({ boardId: "product" });
     expect(stats.byAgent[prototypeAgentId]).toBe(1);
+    expect(stats.byAgent["(default)"]).toBe(1);
+    await expect(store.stats({ boardId: " PRODUCT " })).resolves.toEqual(stats);
+    await expect(store.stats({ boardId: "bad/id" })).rejects.toThrow("board id must match");
+    await expect(store.stats({ boardId: "missing" })).resolves.toEqual({
+      id: "missing",
+      total: 0,
+      active: 0,
+      archived: 0,
+      byStatus: {},
+      byAgent: {},
+    });
     const metadataBoardFirst = await store.create({
       title: "Metadata board first",
       metadata: { automation: { boardId: "metadata-board" } },
@@ -3516,13 +3537,31 @@ describe("WorkboardStore", () => {
     });
     expect(metadataBoardFirst.position).toBe(1000);
     expect(metadataBoardSecond.position).toBe(2000);
+    const defaultCard = await store.create({ title: "Default board" });
+    await expect(store.stats({ boardId: "default" })).resolves.toMatchObject({
+      id: "default",
+      total: 1,
+      byStatus: { todo: 1 },
+      byAgent: { "(default)": 1 },
+      updatedAt: defaultCard.updatedAt,
+    });
+    await expect(store.stats({ boardId: "metadata-board" })).resolves.toMatchObject({ total: 2 });
+    await expect(store.stats()).resolves.toMatchObject({
+      id: "all",
+      total: 6,
+      active: 6,
+      archived: 0,
+      byStatus: { todo: 6 },
+      byAgent: { "(default)": 5, [prototypeAgentId]: 1 },
+    });
+    await expect(store.stats({ boardId: " " })).resolves.toEqual(await store.stats());
   });
 
   it("excludes archived ready cards from active queue-age statistics", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
-      const store = createWorkboardSqliteTestStore();
+      const { store, stores } = createWorkboardSqliteTestHarness();
       const oldReady = await store.create({
         title: "Archived ready work",
         boardId: "ops",
@@ -3553,6 +3592,32 @@ describe("WorkboardStore", () => {
         archived: 1,
         byStatus: { ready: 2 },
         oldestReadyAgeMs: 2_000,
+        updatedAt: 3_000,
+      });
+      await expect(store.stats({ boardId: "ops" }, 1_000)).resolves.toMatchObject({
+        oldestReadyAgeMs: 0,
+      });
+      const epochReady = await store.create({
+        title: "Epoch ready",
+        boardId: "epoch",
+        status: "ready",
+      });
+      await stores.cards.register(epochReady.id, {
+        version: 1,
+        card: {
+          ...epochReady,
+          agentId: "",
+          updatedAt: 0,
+          metadata: { ...epochReady.metadata, archivedAt: 0 },
+        },
+      });
+      await expect(store.stats({ boardId: "epoch" }, 5_000)).resolves.toEqual({
+        id: "epoch",
+        total: 1,
+        active: 1,
+        archived: 0,
+        byStatus: { ready: 1 },
+        byAgent: { "(default)": 1 },
       });
     } finally {
       vi.useRealTimers();
@@ -4319,6 +4384,16 @@ describe("WorkboardStore", () => {
       target: "session:operator",
       eventKinds: ["completed"],
     });
+
+    await expect(store.deleteBoard("default")).rejects.toThrow("default board cannot be deleted");
+    const card = await store.create({ title: "Still on board", boardId: "ops" });
+    await store.archive(card.id, true);
+    await expect(store.deleteBoard("ops")).rejects.toThrow("board still has cards");
+    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toMatchObject({
+      subscriptions: [expect.objectContaining({ boardId: "ops" })],
+    });
+    await store.delete(card.id);
+    await store.create({ title: "Other board card", boardId: "product" });
 
     await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
     await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toEqual({
