@@ -149,7 +149,12 @@ export async function readSystemdServiceRuntime(
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
   if (opts?.requireLoaded) {
-    return await readLoadedSystemdServiceRuntime(env, opts.timeoutMs, opts.loadForInspection);
+    return await readLoadedSystemdServiceRuntime(
+      env,
+      opts.timeoutMs,
+      opts.loadForInspection,
+      opts.systemdReadBinding,
+    );
   }
   const timeoutMs = opts?.timeoutMs;
   const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);

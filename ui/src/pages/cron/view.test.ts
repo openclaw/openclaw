@@ -8,6 +8,30 @@ import {
 } from "./view.test-support.ts";
 
 describe("cron view list pane", () => {
+  it("identifies the agent on each job in a mixed-agent list", async () => {
+    const container = renderView({
+      jobs: [
+        createJob("home", { agentId: "main" }),
+        createJob("research", { agentId: "research" }),
+      ],
+    });
+    document.body.append(container);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
+          (chip) => chip.updateComplete,
+        ),
+      );
+      expect(
+        [...container.querySelectorAll(".cron-table__row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        ),
+      ).toEqual(["main", "research"]);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("combines status filters and run history in one tab row", () => {
     const onJobsFiltersChange = vi.fn();
     const onListTabChange = vi.fn();

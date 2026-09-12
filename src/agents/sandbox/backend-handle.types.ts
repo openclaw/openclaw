@@ -14,7 +14,11 @@ export type SandboxBackendId = string;
 export type SandboxBackendExecSpec = {
   argv: string[];
   env: NodeJS.ProcessEnv;
+  /** Local transport cwd, independent of the remote command's workdir. */
+  cwd?: string;
   stdinMode: "pipe-open" | "pipe-closed";
+  /** Synchronously revalidate runtime authority at deferred process admission. */
+  assertCurrent?: () => void;
   finalizeToken?: unknown;
 };
 

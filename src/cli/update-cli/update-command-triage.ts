@@ -7,6 +7,7 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
+import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
@@ -27,11 +28,28 @@ import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 
+type UpdateFailureTriageOptions = Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & {
+  invocationCwd?: string;
+};
+
 export async function withUpdateFailureTriage(
-  opts: Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & { invocationCwd?: string },
+  opts: UpdateFailureTriageOptions,
   target: UpdateTriageTarget,
   run: () => Promise<void>,
 ): Promise<void> {
+  const handleFailure = await prepareUpdateCommandFailureTriage(opts, target);
+  try {
+    await run();
+  } catch (error) {
+    await handleFailure(error);
+  }
+}
+
+/** Capture repair code and operator context before replacing the installation. */
+export async function prepareUpdateCommandFailureTriage(
+  opts: UpdateFailureTriageOptions,
+  target: UpdateTriageTarget,
+): Promise<(error: unknown) => Promise<void>> {
   // CLI and Gateway reports for an admitted run share its identity and state scope.
   // Standalone calls without an admitted run still own a fresh attempt.
   const updateAttemptId = opts.run?.runId ?? randomUUID();
@@ -40,6 +58,9 @@ export async function withUpdateFailureTriage(
     : !opts.yes && isTerminalInteractive()
       ? "interactive"
       : "non-interactive";
+  if (mode === "interactive") {
+    await preparePublicUpdateFailureIdentifiers();
+  }
   const { prepareUpdateFailureTriage } = await import("../../infra/update-triage.js");
   const runTriage = await prepareUpdateFailureTriage({
     mode,
@@ -49,9 +70,7 @@ export async function withUpdateFailureTriage(
     },
     invocationCwd: opts.invocationCwd,
   });
-  try {
-    await run();
-  } catch (error) {
+  return async (error) => {
     if (error instanceof UpdateCommandFinalizedRecoveryFailure) {
       return exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
@@ -146,5 +165,5 @@ export async function withUpdateFailureTriage(
       exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     throw error;
-  }
+  };
 }

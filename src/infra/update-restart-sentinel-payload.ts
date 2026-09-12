@@ -84,6 +84,7 @@ export function buildUpdateRestartSentinelPayload(params: {
         cwd: step.cwd,
         durationMs: step.durationMs,
         ...(step.advisory ? { advisory: true } : {}),
+        ...(step.failureFacts?.length ? { failureFacts: step.failureFacts } : {}),
         log: {
           stdoutTail: step.stdoutTail ?? null,
           stderrTail: step.stderrTail ?? null,

@@ -6,7 +6,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 // Setup wizard tests cover end-to-end onboarding prompt flows.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
@@ -560,6 +560,19 @@ function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
     error: vi.fn(),
     exit: vi.fn(),
   };
+}
+
+function buildWizardPrompter(
+  overrides?: Partial<WizardPrompter>,
+  options?: Parameters<typeof createWizardPrompter>[1],
+): WizardPrompter {
+  return createWizardPrompter(
+    {
+      text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
+      ...overrides,
+    },
+    options,
+  );
 }
 
 const defaultSetupOptions = {

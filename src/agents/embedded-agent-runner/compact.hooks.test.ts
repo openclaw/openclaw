@@ -1819,7 +1819,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     } as never;
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: preparedModelRuntime,
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     });
     createOpenClawCodingToolsMock.mockReturnValueOnce([
       {
@@ -3933,7 +3933,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     const parent = new AsyncWorkScope();
     const admissionStarted = createDeferred();
     const releaseAdmission = createDeferred();
-    const releaseLease = vi.fn();
+    const releaseLease = vi.fn(async () => {});
     const defaultAcquire = expectDefined(
       acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
       "default prepared runtime acquisition mock",
@@ -3945,7 +3945,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       admissionStarted.resolve(undefined);
       await releaseAdmission.promise;
       const lease = await defaultAcquire(input);
-      return { ...lease, release: releaseLease };
+      return { ...lease, [Symbol.asyncDispose]: releaseLease };
     }) as never);
 
     const pending = parent.run(() =>
@@ -5005,8 +5005,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
       order: { openai: ["openai:subscription"] },
     });
-    resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
-    shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
@@ -5026,7 +5024,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           models: {
             providers: {
               openai: {
-                auth: "api-key",
                 apiKey: "literal-key",
                 models: [{ id: "gpt-5.5", contextWindow: 350_000 }],
               },
@@ -5073,8 +5070,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       order: { openai: ["openai:subscription"] },
     };
     ensureAuthProfileStoreMock.mockReturnValue(authStore);
-    resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
-    shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
     getApiKeyForModelMock.mockImplementation(async (authParams = {}) => {
       if (authParams.profileId === "openai:subscription") {
         throw new Error("subscription credential resolution failed");
@@ -5120,15 +5115,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           models: {
             providers: {
               openai: {
-                auth: "api-key",
                 apiKey: "literal-key",
                 models: [{ id: "gpt-5.5" }],
               },
-            },
-          },
-          agents: {
-            defaults: {
-              models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
             },
           },
         },

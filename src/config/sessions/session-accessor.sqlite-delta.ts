@@ -17,6 +17,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { normalizeVisibleMessageLimit } from "./session-accessor.sqlite-visible-cursor.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -113,6 +114,7 @@ export function readTranscriptRawDelta(
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
+      assertSessionTranscriptHot(database.db, resolved.sessionId);
       const beforeEventSeq = resolveSqliteSessionTranscriptReadFence({
         database,
         ...resolved,

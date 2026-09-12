@@ -467,7 +467,7 @@ describe("processDiscordMessage session routing", () => {
   it("honors explicit status reactions for always-on guild replies", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onReasoningStream?.({});
       await new Promise((resolve) => {
         setTimeout(resolve, 1_000);
       });

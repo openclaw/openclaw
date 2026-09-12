@@ -9,6 +9,7 @@ export type DoctorSessionSqliteIssue = {
 
 const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
   "entry_invalid",
+  "historical_transcript_deferred",
   "transcript_archive_failed",
   "transcript_malformed",
   "transcript_missing",

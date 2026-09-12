@@ -76,7 +76,7 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 
 The bundled Codex plugin follows this pattern:
 
-- preferred user model refs: `openai/gpt-5.6-sol`
+- preferred user model refs: `openai/gpt-6-astra`
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`

@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { resolvePluginProviders } from "openclaw/plugin-sdk/provider-catalog-runtime";
+import {
+  augmentModelCatalogWithProviderPlugins,
+  resolvePluginProviders,
+} from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import {
   fenceScheduledGatewayContextResolver,
@@ -48,6 +51,69 @@ it("resolves an empty provider scope through the shipped SDK export", () => {
 });
 
 let sequence = 0;
+
+it.each([
+  ["omitted", undefined, ["family", "other"], ["sdk-family", "sdk-other"]],
+  ["empty", [], [], []],
+  ["normalized id", [" SDK-FAMILY "], ["family"], ["sdk-family"]],
+  ["alias", [" SDK-ALIAS "], ["family"], ["sdk-family"]],
+  ["family hook alias", [" SDK-FAMILY-EAST "], ["family"], ["sdk-family"]],
+] as const)(
+  "shipped provider-catalog-runtime augmentModelCatalogWithProviderPlugins selects %s hooks without filtering their rows",
+  async (_selection, providerIds, expected, expectedCalls) => {
+    const id = `sdk-catalog-selection-${sequence++}`;
+    const stateKey = `__${id}`;
+    const plugin = writePlugin({
+      id,
+      body: `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+        api.registerProvider({ id: "sdk-family", label: "Family", auth: [],
+          aliases: ["sdk-alias"], hookAliases: ["sdk-family-east"],
+          augmentModelCatalog: () => {
+            globalThis[${JSON.stringify(stateKey)}].push("sdk-family");
+            return [{ provider: "foreign", id: "family", name: "Family row" }];
+          },
+        });
+        api.registerProvider({ id: "sdk-other", label: "Other", auth: [],
+          augmentModelCatalog: () => {
+            globalThis[${JSON.stringify(stateKey)}].push("sdk-other");
+            return [{ provider: "foreign", id: "other", name: "Other row" }];
+          },
+        });
+      } };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id,
+        providers: ["sdk-family", "sdk-other"],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+    );
+    const config = {
+      plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+    };
+    const env = {
+      HOME: plugin.dir,
+      OPENCLAW_STATE_DIR: `${plugin.dir}/state`,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    const calls: string[] = [];
+    Object.defineProperty(globalThis, stateKey, { configurable: true, value: calls });
+    try {
+      const rows = await augmentModelCatalogWithProviderPlugins({
+        ...(providerIds === undefined ? {} : { providerIds }),
+        config,
+        env,
+        context: { config, env, entries: [{ provider: "input", id: "seed", name: "Input seed" }] },
+      });
+      expect(calls).toEqual(expectedCalls);
+      expect(rows.map((row) => row.id)).toEqual(expected);
+      expect(rows.map((row) => row.provider)).toEqual(expected.map(() => "foreign"));
+    } finally {
+      Reflect.deleteProperty(globalThis, stateKey);
+    }
+  },
+);
 
 function nativeProviderFixture(
   disposalFailure = false,
@@ -211,7 +277,7 @@ it("does not revive an inspection released by an earlier selection getter", asyn
   });
   try {
     expect(() => fixture.resolve(inspection.registry, host, ["synthetic-runtime-alias"])).toThrow(
-      "inspection resources have been released",
+      "reloaded or disabled",
     );
     expect(reads).toBeGreaterThan(0);
     await released;
@@ -222,28 +288,65 @@ it("does not revive an inspection released by an earlier selection getter", asyn
   }
 });
 
-it("releases its temporary native claim when provider projection throws", async () => {
-  const fixture = nativeProviderFixture();
-  const host = new LegacyPluginSdkResourceHost();
-  const inspection = await fixture.load();
-  const failure = new Error("synthetic provider projection failure");
-  Object.defineProperty(inspection.registry.providers[0]!.provider, "sdkProjection", {
-    enumerable: true,
-    get() {
-      throw failure;
-    },
-  });
-  try {
-    expect(() => fixture.resolve(inspection.registry, host)).toThrow(failure);
-    await inspection.release();
-    expect(fixture.state.disposals).toBe(1);
-    expect(fixture.state.database?.isOpen).toBe(false);
-    await host.close();
-  } finally {
-    await Promise.allSettled([host.close(), inspection.release()]);
-    fixture.cleanup();
-  }
-});
+it.each([
+  { name: "first projection", previouslyAdopted: false, tail: false },
+  { name: "adopted view", previouslyAdopted: true, tail: false },
+  { name: "tracked tail", previouslyAdopted: false, tail: true },
+])(
+  "releases a failed temporary projection after its owned work ($name)",
+  async ({ previouslyAdopted, tail }) => {
+    const fixture = nativeProviderFixture();
+    const host = new LegacyPluginSdkResourceHost();
+    const inspection = await fixture.load();
+    const previous = previouslyAdopted ? fixture.resolve(inspection.registry, host)[0] : undefined;
+    const failure = new Error("synthetic provider projection failure");
+    const finishTail = createDeferredCore();
+    let tailWork: Promise<void> | undefined;
+    Object.defineProperty(inspection.registry.providers[0]!.provider, "sdkProjection", {
+      enumerable: true,
+      get() {
+        if (tail) {
+          tailWork = trackAsyncWork(async () => {
+            await finishTail.promise;
+            const provider = inspection.registry.providers[0]!.provider;
+            expect(
+              provider.isCacheTtlEligible?.({ provider: provider.id, modelId: "synthetic-model" }),
+            ).toBe(true);
+          });
+        }
+        throw failure;
+      },
+    });
+    try {
+      expect(() => fixture.resolve(inspection.registry, host)).toThrow(failure);
+      await inspection.release();
+      expect(fixture.state.disposals).toBe(previouslyAdopted || tail ? 0 : 1);
+      expect(fixture.state.database?.isOpen).toBe(previouslyAdopted || tail);
+      if (previous) {
+        expect(readProvider(previous)).toBe(true);
+      }
+      let closed = false;
+      const closing = host.close().then(() => {
+        closed = true;
+      });
+      if (tail) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(closed).toBe(false);
+        finishTail.resolve();
+        await tailWork;
+      }
+      await closing;
+      expect(fixture.state.disposals).toBe(1);
+      expect(fixture.state.database?.isOpen).toBe(false);
+    } finally {
+      finishTail.resolve();
+      await Promise.allSettled([tailWork, host.close(), inspection.release()]);
+      fixture.cleanup();
+    }
+  },
+);
 
 it.each([false, true])(
   "joins a temporary claim when a projection getter closes the exact host (disposal fails: %s)",

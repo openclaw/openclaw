@@ -2,7 +2,6 @@
  * Tests channel streaming helper lifecycle and event forwarding.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   buildChannelProgressDraftLine,
   createChannelProgressDraftGate,
@@ -13,7 +12,6 @@ import {
   isChannelProgressDraftWorkToolName,
   isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
-  removeChannelProgressDraftLineForStreaming,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
@@ -712,48 +710,6 @@ describe("channel-streaming", () => {
     const again = mergeChannelProgressDraftLine(finished, outputLine, { maxLines: 4 });
     expect(again).toHaveLength(1);
     expect(again[0]?.id).toBe("tool:call-1");
-  });
-
-  it("removes a correlated line whose id came from an earlier item family", () => {
-    const toolLine = buildChannelProgressDraftLine({
-      event: "item",
-      itemId: "tool:call-1",
-      toolCallId: "call-1",
-      name: "exec",
-      status: "failed",
-    });
-    const failedOutput = buildChannelProgressDraftLine({
-      event: "command-output",
-      itemId: "command:call-1",
-      toolCallId: "call-1",
-      phase: "end",
-      exitCode: 1,
-    });
-    const recoveredOutput = buildChannelProgressDraftLine({
-      event: "command-output",
-      itemId: "command:call-1",
-      toolCallId: "call-1",
-      phase: "end",
-      exitCode: 0,
-    });
-    const unrelatedOutput = buildChannelProgressDraftLine({
-      event: "command-output",
-      itemId: "command:call-2",
-      toolCallId: "call-2",
-      phase: "end",
-      exitCode: 0,
-    });
-    if (!toolLine || !failedOutput || !recoveredOutput || !unrelatedOutput) {
-      throw new Error("expected exec progress lines");
-    }
-    const failed = mergeChannelProgressDraftLine([toolLine], failedOutput, { maxLines: 4 });
-    expect(failed).toHaveLength(1);
-    expect(failed[0]?.id).toBe("tool:call-1");
-
-    // The stored id is tool:call-1; the recovery arrives as command:call-1.
-    expect(removeChannelProgressDraftLine(failed, recoveredOutput.id ?? "")).toBe(failed);
-    expect(removeChannelProgressDraftLineForStreaming(failed, unrelatedOutput)).toBe(failed);
-    expect(removeChannelProgressDraftLineForStreaming(failed, recoveredOutput)).toEqual([]);
   });
 
   it("starts progress drafts after the initial delay", async () => {

@@ -8,7 +8,7 @@ import { getLoadedChannelThreadingAdapter } from "../../channels/thread-addressi
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/account-id.js";
-import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import {
   copyReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
@@ -48,9 +48,10 @@ function resolveConfiguredReplyToMode(
   ];
   const normalizedAccountId = accountId?.trim();
   const accountConfig = normalizedAccountId
-    ? resolveNormalizedAccountEntry(
+    ? resolveChannelAccountEntry(
         channelConfig?.accounts,
         normalizeAccountId(normalizedAccountId),
+        provider,
         normalizeAccountId,
       )
     : undefined;

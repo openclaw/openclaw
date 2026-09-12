@@ -1,4 +1,3 @@
-// Commit helpers that move transient plugin install records into the persisted install index.
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -120,7 +119,7 @@ export function stripPendingPluginInstallRecords(
   };
 }
 
-type ConfigCommit<T = ConfigReplaceResult | void> = (
+type ConfigCommit<T extends ConfigReplaceResult | void = ConfigReplaceResult | void> = (
   config: OpenClawConfig,
   writeOptions?: ConfigWriteOptions,
 ) => Promise<T>;
@@ -563,7 +562,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
   beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<InstalledPluginIndexWriteReceipt> {
+}): Promise<InstalledPluginIndexWriteReceipt & { configWrite: ConfigReplaceResult }> {
   const result = await commitPluginInstallRecordsWithWriter({
     prepareInstallRecords: async (storeOptions) => ({
       previousInstallRecords:
@@ -582,7 +581,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
       });
     },
   });
-  return result.indexWrite;
+  return { ...result.indexWrite, configWrite: result.committed };
 }
 
 /** Persist plugin install records without rewriting the user-authored config file. */
@@ -724,6 +723,7 @@ export async function transformConfigWithPendingPluginInstalls<T = void>(
     return {
       config: committed.nextConfig,
       persistedHash: committed.persistedHash,
+      persistedSourceConfig: committed.persistedSourceConfig,
       afterWrite,
     };
   };

@@ -96,7 +96,11 @@ describe("renderAgents", () => {
     expect(
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
-    expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
+    expect(
+      container
+        .querySelector(".agent-identity-editor__avatar .identity-avatar__text")
+        ?.getAttribute("data-avatar"),
+    ).toBe("🦊");
   });
 
   it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {

@@ -8,6 +8,7 @@ import type {
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
+  setMaxPluginStateEntriesPerPluginForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,9 +29,11 @@ import {
   loadReefSetupSession,
   openStores,
   finalizeReefIdentityBinding,
+  REEF_DELIVERED_MAX_ENTRIES,
   REEF_DELIVERED_NAMESPACE,
   ReefInboxCursorStore,
   REEF_REPLAY_TTL_MS,
+  REEF_DELIVERED_TTL_MS,
   REEF_REVIEWS_NAMESPACE,
   releaseReefIdentityReservation,
   reserveReefIdentityBinding,
@@ -634,5 +637,91 @@ describe("Reef SQLite state", () => {
     await store.request(third);
 
     await expect(store.list()).resolves.toEqual([second, third]);
+  });
+});
+
+describe("Reef delivered markers", () => {
+  let stateDir = "";
+
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-state-"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetPluginStateStoreForTests();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function testKeys() {
+    const identity = generateIdentity();
+    return { ...identity, auditKey, replayKey, keyEpoch: 1 };
+  }
+
+  it("confirms delivered markers idempotently", async () => {
+    const stores = openStores(createRuntime(stateDir), testKeys());
+    await expect(stores.delivered.status("m1")).resolves.toBeUndefined();
+    await expect(stores.delivered.has("m1")).resolves.toBe(false);
+    await stores.delivered.confirm("m1");
+    await expect(stores.delivered.status("m1")).resolves.toBe("delivered");
+    await expect(stores.delivered.has("m1")).resolves.toBe(true);
+    await stores.delivered.confirm("m1");
+    await expect(stores.delivered.status("m1")).resolves.toBe("delivered");
+    await stores.delivered.add("m2");
+    await expect(stores.delivered.status("m2")).resolves.toBe("delivered");
+  });
+
+  it("surfaces capacity as PLUGIN_STATE_LIMIT_EXCEEDED from confirm without touching existing markers", async () => {
+    const stores = openStores(createRuntime(stateDir), testKeys(), {
+      deliveredMaxEntries: 1,
+    });
+    await stores.delivered.add("first"); // delivered namespace full
+    // Confirming into a full delivered namespace fails closed. No marker is
+    // retained, so the re-poll re-ingresses before retrying confirmation.
+    await expect(stores.delivered.confirm("second")).rejects.toMatchObject({
+      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+    });
+    await expect(stores.delivered.status("second")).resolves.toBeUndefined();
+    await expect(stores.delivered.status("first")).resolves.toBe("delivered");
+    await expect(stores.delivered.status("third")).resolves.toBeUndefined();
+  });
+
+  it("parks confirm at the plugin-wide aggregate limit without retaining bookkeeping", async () => {
+    const stores = openStores(createRuntime(stateDir), testKeys(), {
+      deliveredMaxEntries: REEF_DELIVERED_MAX_ENTRIES,
+    });
+    // Fill the plugin-wide aggregate limit from another namespace's row. The
+    // parked entry keeps no separate bookkeeping and retries at-least-once.
+    setMaxPluginStateEntriesPerPluginForTests(1);
+    try {
+      const other = createRuntime(stateDir).state.openSyncKeyedStore<{ id: string }>({
+        namespace: "reef-test-other",
+        maxEntries: REEF_DELIVERED_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      other.registerIfAbsent("row-1", { id: "row-1" });
+      await expect(stores.delivered.status("aggregate-1")).resolves.toBeUndefined();
+      await expect(stores.delivered.confirm("aggregate-1")).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(stores.delivered.status("aggregate-1")).resolves.toBeUndefined();
+    } finally {
+      setMaxPluginStateEntriesPerPluginForTests();
+    }
+  });
+
+  it("reads legacy delivered markers without a state as delivered", async () => {
+    const runtime = createRuntime(stateDir);
+    const stores = openStores(runtime, testKeys());
+    const legacy = runtime.state.openSyncKeyedStore<{ id: string }>({
+      namespace: REEF_DELIVERED_NAMESPACE,
+      maxEntries: REEF_DELIVERED_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_DELIVERED_TTL_MS,
+    });
+    legacy.registerIfAbsent("legacy-1", { id: "legacy-1" });
+    await expect(stores.delivered.status("legacy-1")).resolves.toBe("delivered");
+    await expect(stores.delivered.has("legacy-1")).resolves.toBe(true);
   });
 });

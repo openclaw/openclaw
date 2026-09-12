@@ -97,7 +97,7 @@ Start agent work in the background: hook-dispatched turns for external content, 
       toolsAlsoAllow: ["my_plugin_progress"],
       promptMode: "minimal", // optional bounded subagent prompt
       provider: "openai", // optional override
-      model: "gpt-5.6-sol", // optional override
+      model: "gpt-6-astra", // optional override
       deliver: false,
       completionDelivery: "current-requester", // optional, before_dispatch hooks only
     });
@@ -143,6 +143,39 @@ Start agent work in the background: hook-dispatched turns for external content, 
 
   </Accordion>
   <Accordion title="api.runtime.tasks">
+    Prefer `api.runtime.tasks.async` for reads. It has `runs`, `flows`, and
+    `managedFlows` namespaces with the same synchronous `bindSession(...)` and
+    `fromToolContext(...)` factories. Await `get`, `list`, `findLatest`, and
+    `resolve`; both flow namespaces also provide awaited `getTaskSummary`.
+
+    ```typescript
+    const flows = api.runtime.tasks.async.managedFlows.fromToolContext(ctx);
+    const current = await flows.get(flowId);
+    ```
+
+    Results preserve the corresponding synchronous payloads and owner scope.
+    Reads query persisted SQLite records in the shared database worker, without
+    overwriting the process registry. The first cold call still performs the
+    existing schema admission and registry restore on the main thread. Access
+    checks for bare owner keys without a persisted requester agent can also
+    require existing runtime-configuration preparation on the main thread.
+    Warmed task and flow SQL queries run in the worker. A result describes its
+    query snapshot and may be superseded by a later mutation.
+
+    Lists sort newest first. Equal task timestamps sort by task ID descending;
+    equal flow timestamps sort by flow ID ascending. Run-ID lookup retains its
+    runtime preference and oldest-first selection, then uses task ID ascending
+    for ties. Legacy synchronous methods
+    keep their existing insertion-order tie behavior.
+
+    The 14 synchronous read methods remain supported but are deprecated in
+    favor of this opt-in surface. Their removal requires a supported external
+    plugin migration and an explicitly approved Plugin SDK major release.
+    Mutations and cancellation continue through the existing namespaces; the
+    async namespace does not expose replacement write methods yet. An awaited
+    read does not authorize a later write: retain revision checks and the
+    synchronous final backing-task read/link sequence described below.
+
     Bind Task Flow and Task Run state to a trusted, existing OpenClaw owner session.
 
     - `managedFlows` creates and mutates managed flow records. Bind with `fromToolContext(ctx)` or `bindSession({ sessionKey, requesterOrigin })` using host-resolved context, never raw user input.

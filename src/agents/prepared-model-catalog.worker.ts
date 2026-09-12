@@ -8,6 +8,7 @@ import {
 } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import type { Model } from "../llm/types.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
@@ -31,6 +32,7 @@ import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.j
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import {
+  PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelWorkerRequest,
   type PreparedModelCatalogWorkerInput,
@@ -106,16 +108,13 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
-  // Runtime catalog and harness owners declare their role in the prepared manifest snapshot.
+  // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
   const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
   const basePluginIds = metadata.plugins
     .filter(
       (plugin) =>
-        (manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ||
-          plugin.cliBackends.length > 0 ||
-          Boolean(plugin.setup?.cliBackends?.length) ||
-          Boolean(plugin.activation?.onAgentHarnesses?.length)) &&
+        manifestPluginResolvesRuntimeModelCatalogAugment(plugin) &&
         isManifestPluginAvailableForControlPlane({
           snapshot: metadata,
           plugin,
@@ -127,9 +126,14 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
   const prepared = await prepareWorkspaceBuildGroup(
-    [value.input],
-    "live",
-    { preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts, basePluginIds },
+    [{ ...value.input, runtimePluginSelections: [] }],
+    "static",
+    {
+      preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
+      basePluginIds,
+      providerDiscoveryProviderIds: value.providerIds,
+      getConfiguredHarnessRuntimes: () => [],
+    },
     undefined,
     undefined,
     metadata,
@@ -187,7 +191,12 @@ export async function runPreparedModelCatalogWorkerRequest(
           authoritativeSyntheticAuthProviderRefs:
             prepared.pluginGeneration.pluginMetadataSnapshot.owners.cliBackends.keys(),
           syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
-            resolveRuntimeSyntheticAuthProviderRefs(),
+            [
+              ...new Set([
+                ...resolveRuntimeSyntheticAuthProviderRefs(),
+                ...request.syntheticAuth.map(({ providerRef }) => providerRef),
+              ]),
+            ],
             providerIds,
           ),
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
@@ -204,15 +213,17 @@ export async function runPreparedModelCatalogWorkerRequest(
         providerIds: request.providerIds,
         pluginGeneration: prepared.pluginGeneration,
       });
+      const credentials = {
+        ...resolveSyntheticCredentials(request.providerIds),
+        ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
+      };
       return {
         status: "ok",
         kind: "auth-refresh",
         generationFingerprint,
         authStore,
-        authModes: resolveUsableAgentCredentialModes({
-          ...resolveSyntheticCredentials(request.providerIds),
-          ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
-        }),
+        credentials,
+        authModes: resolveUsableAgentCredentialModes(credentials),
       };
     }
     const { prepareAgentCatalogSource } =
@@ -226,11 +237,13 @@ export async function runPreparedModelCatalogWorkerRequest(
       authStore: value.authStore,
       config: value.input.config,
       env: value.input.env ?? process.env,
-      providerIds: listExternalCliSyncProviderIds(),
+      providerIds: request.providerIds ?? listExternalCliSyncProviderIds(),
       pluginGeneration: prepared.pluginGeneration,
     });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
-    const ambientCredentials = resolveSyntheticCredentials(value.providerIds);
+    const ambientCredentials = resolveSyntheticCredentials(
+      request.providerIds ?? value.providerIds,
+    );
     const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
     const credentials = {
       ...ambientCredentials,
@@ -241,9 +254,9 @@ export async function runPreparedModelCatalogWorkerRequest(
       authStore,
       templateAuthStorage: AuthStorage.inMemory(credentials),
       credentials,
-      providerIds: [...new Set([...value.providerIds, ...Object.keys(credentials)])].toSorted(
-        (left, right) => left.localeCompare(right),
-      ),
+      providerIds: [
+        ...new Set(request.providerIds ?? [...value.providerIds, ...Object.keys(credentials)]),
+      ].toSorted((left, right) => left.localeCompare(right)),
     };
     const { pluginMetadataSnapshot, pluginRegistry } = prepared.pluginGeneration;
     const discoveryScope = resolveImplicitProviderDiscoveryScope({
@@ -269,6 +282,8 @@ export async function runPreparedModelCatalogWorkerRequest(
       // catalog owners from the captured metadata before binding the authoritative registry.
       const catalogRegistry = loadAgentRuntimePluginRegistryHandle({
         ...value.input,
+        selections: [],
+        configuredHarnessRuntimes: [],
         metadataSnapshot: pluginMetadataSnapshot,
         preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
         reusableRegistry: pluginRegistry,
@@ -296,24 +311,55 @@ export async function runPreparedModelCatalogWorkerRequest(
       catalogGeneration,
       "live",
       false,
-      { authStore },
+      {
+        authStore,
+        providerDiscoveryProviderIds: request.providerIds,
+        providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+      },
     );
-    const facts = await prepareFullCatalogFacts(exactAgentFacts, catalogGeneration, "live", source);
+    const facts = await prepareFullCatalogFacts(
+      exactAgentFacts,
+      catalogGeneration,
+      "live",
+      source,
+      {
+        includeNative: false,
+        providerIds: request.providerIds,
+      },
+    );
     // Full discovery can publish routes absent from startup config. Pair those exact rows with
     // provider-owned synthetic auth before the catalog and auth modes cross the worker boundary.
     const catalogCredentials = {
       ...resolveSyntheticCredentials(
         [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
           .map((entry) => entry.provider)
+          .filter(
+            (provider) =>
+              !request.providerIds || request.providerIds.includes(normalizeProviderId(provider)),
+          )
           .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
       ),
       ...credentials,
     };
+    const runtimeModels = new Map<string, Model[]>();
+    for (const model of facts.templateModelRegistry.getAll()) {
+      const provider = normalizeProviderId(model.provider);
+      const models = runtimeModels.get(provider) ?? [];
+      models.push(model);
+      runtimeModels.set(provider, models);
+    }
+    for (const outcome of facts.modelCatalog.providerOutcomes ?? []) {
+      const provider = normalizeProviderId(outcome.provider);
+      if (!runtimeModels.has(provider)) {
+        runtimeModels.set(provider, []);
+      }
+    }
     return {
       status: "ok",
       kind: "catalog",
       generationFingerprint,
       snapshot: facts.modelCatalog,
+      runtimeModels,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
@@ -349,7 +395,10 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
   return (
     isRecord(value) &&
     Array.isArray(value.syntheticAuth) &&
-    (value.kind === "catalog" ||
+    ((value.kind === "catalog" &&
+      (value.providerIds === undefined ||
+        (Array.isArray(value.providerIds) &&
+          value.providerIds.every((id) => typeof id === "string")))) ||
       (value.kind === "auth-refresh" &&
         Array.isArray(value.providerIds) &&
         value.providerIds.every((providerId) => typeof providerId === "string") &&

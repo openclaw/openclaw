@@ -187,6 +187,8 @@ export {
   SessionsSearchParamsSchema,
   SessionsSearchResultSchema,
   SessionsCleanupParamsSchema,
+  SessionsStorageParamsSchema,
+  SessionsStorageStatusResultSchema,
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsResolveCandidateSchema,

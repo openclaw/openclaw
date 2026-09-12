@@ -861,6 +861,35 @@ describe("session MCP runtime", () => {
     expect(mapValidator({ foo: 42 }).valid).toBe(false);
   });
 
+  it.each([
+    { $schema: undefined, validFormat: false },
+    { $schema: "http://json-schema.org/draft-07/schema#", validFormat: false },
+    { $schema: "https://json-schema.org/draft/2020-12/schema", validFormat: true },
+  ])(
+    "preserves format and non-mutating validation semantics for $schema",
+    ({ $schema, validFormat }) => {
+      const schema = {
+        ...($schema ? { $schema } : {}),
+        type: "object",
+        properties: {
+          url: { type: "string", format: "uri" },
+          count: { type: "integer", default: 7 },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      };
+      const originalSchema = structuredClone(schema);
+      const validator = createBundleMcpJsonSchemaValidator().getValidator(schema);
+      const input = { url: "not a uri" };
+      expect(validator(input).valid).toBe(validFormat);
+      const validInput = { url: "https://example.test" };
+      expect(validator(validInput).data).toBe(validInput);
+      expect(validInput).toEqual({ url: "https://example.test" });
+      expect(validator({ url: "https://example.test", count: "7" }).valid).toBe(false);
+      expect(schema).toEqual(originalSchema);
+    },
+  );
+
   it("rejects invalid draft-2020-12 tool output schemas from external MCP catalogs", () => {
     for (const schema of [
       {
@@ -945,6 +974,27 @@ describe("session MCP runtime", () => {
         "Invalid MCP draft-2020-12 JSON Schema",
       );
     }
+  });
+
+  it("reports malformed annotation formats at their original schema path", () => {
+    expect(() =>
+      createBundleMcpJsonSchemaValidator().getValidator({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: {
+          node: {
+            type: ["object", "null"],
+            // Deliberately malformed external schema must reach runtime shape validation.
+            $defs: { Leaf: { type: "string", format: 42 as never } },
+          },
+        },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        message: expect.stringContaining("<schema>.properties.node.$defs.Leaf.format"),
+        cause: expect.any(Error),
+      }),
+    );
   });
 
   it("accepts draft-2020-12 local refs to boolean schemas and anchors", () => {
@@ -1101,6 +1151,64 @@ describe("session MCP runtime", () => {
     expect(validator({ a: {}, b: {} }).valid).toBe(true);
     expect(validator({ a: {}, b: 1 }).valid).toBe(false);
   });
+
+  it.each([
+    { label: "valid leaf", structuredContent: { node: null, label: "leaf" }, valid: true },
+    { label: "invalid leaf", structuredContent: { node: null, label: 42 }, valid: false },
+  ])(
+    "validates nested union resource references over stdio: $label",
+    async ({ structuredContent, valid }) => {
+      const tempDir = tempDirTracker.make("bundle-mcp-nested-union-schema-");
+      const serverPath = path.join(tempDir, "server.mjs");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath: path.join(tempDir, "server.log"),
+        tools: [
+          {
+            name: "nested",
+            inputSchema: { type: "object" },
+            outputSchema: {
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              type: "object",
+              properties: {
+                node: { type: ["object", "null"], $defs: { Leaf: { type: "string" } } },
+                label: { $ref: "#/properties/node/$defs/Leaf" },
+              },
+              required: ["node", "label"],
+              additionalProperties: false,
+            },
+          },
+          { name: "healthy", inputSchema: { type: "object" } },
+        ],
+        callToolResult: { content: [], structuredContent },
+      });
+      const runtime = createSessionMcpRuntime({
+        sessionId: "session-nested-union-schema",
+        workspaceDir: tempDir,
+        cfg: { mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } } },
+      });
+      try {
+        expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
+          "healthy",
+          "nested",
+        ]);
+        if (valid) {
+          await expect(runtime.callTool("docs", "nested", {})).resolves.toMatchObject({
+            structuredContent,
+          });
+        } else {
+          await expect(runtime.callTool("docs", "nested", {})).rejects.toThrow(
+            "does not match the tool's output schema",
+          );
+        }
+        await expect(runtime.callTool("docs", "healthy", {})).resolves.toMatchObject({
+          structuredContent,
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    },
+  );
 
   it("enforces output schemas under the canonical trimmed tool name", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-canonical-schema-");

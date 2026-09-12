@@ -740,7 +740,7 @@ describe("pairing setup code", () => {
     });
   });
 
-  it("allows lan bind cleartext setup urls for mobile pairing", async () => {
+  it("allows LAN cleartext pairing without route probing for a single address", async () => {
     const runCommandWithTimeout = createNoRouteRunner();
     await expectResolvedSetupSuccessCase({
       config: {
@@ -760,7 +760,7 @@ describe("pairing setup code", () => {
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 1,
+      expectedRunCommandCalls: 0,
     });
   });
 
@@ -827,7 +827,10 @@ describe("pairing setup code", () => {
         },
       } satisfies ResolveSetupConfig,
       options: {
-        networkInterfaces: () => createIpv4NetworkInterfaces("192.168.139.3"),
+        networkInterfaces: () => ({
+          ...createIpv4NetworkInterfaces("192.168.139.3"),
+          bridge100: createIpv4NetworkInterfaces("10.37.129.4").en0,
+        }),
         runCommandWithTimeout,
       } satisfies ResolveSetupOptions,
       expected: {
@@ -983,6 +986,35 @@ describe("pairing setup code", () => {
       expectedRunCommandCalls,
     });
   });
+
+  it.each([false, true])(
+    "keeps local server pairing on its own endpoint and TLS pin (local=%s)",
+    async (useLocalGateway) => {
+      const config = createCustomGatewayConfig({ mode: "token", token: "local-token" });
+      config.gateway = {
+        ...config.gateway,
+        mode: "remote",
+        port: 19443,
+        tls: { enabled: true },
+        remote: { url: "wss://primary.example", tlsFingerprint: "cd".repeat(32) },
+      };
+      const resolved = await resolvePairingSetupFromConfig(config, {
+        env: {},
+        useLocalGateway,
+        localTlsFingerprint: TLS_FINGERPRINT,
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      expect(resolved.payload.url).toBe(
+        useLocalGateway ? "wss://127.0.0.1:19443" : "wss://primary.example",
+      );
+      expect(resolved.payload.tlsFingerprint).toBe(
+        useLocalGateway ? TLS_FINGERPRINT : "cd".repeat(32),
+      );
+    },
+  );
 
   it("pins the prepared leaf only for a direct TLS gateway URL", async () => {
     const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });

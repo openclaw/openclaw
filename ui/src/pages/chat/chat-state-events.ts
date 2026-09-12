@@ -2,7 +2,7 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   isHiddenAssistantStreamText,

@@ -36,6 +36,14 @@ describe("update failure triage diagnostics", () => {
           exitCode: index === 0 ? 0 : 1,
           stdoutTail: `${"Earlier build output\n".repeat(100)}The compiler reported the actual failure on stdout`,
           stderrTail: `token=${secret}\n${"🦞".repeat(8_000)} ${stateDir}/npm.log terminal failure token=${secret}`,
+          failureFacts: [
+            {
+              check: "core/doctor/runtime-tool-schemas",
+              code: "doctor-failed",
+              affectedKey: "mcp.servers",
+              message: `Cannot expose runtime tools: token=${secret}`,
+            },
+          ],
           advisory:
             index === 4 ? { kind: advisoryKind, message: "Non-failure update advice" } : undefined,
         })),
@@ -50,6 +58,8 @@ describe("update failure triage diagnostics", () => {
       expect(raw).not.toContain(secret);
       expect(raw).not.toContain(home);
       expect(raw).not.toContain("unredacted-command");
+      expect(raw).toContain("core/doctor/runtime-tool-schemas");
+      expect(raw).toContain("mcp.servers");
       expect(raw).not.toContain("\uFFFD");
       expect(failure).toMatchObject({
         result: {

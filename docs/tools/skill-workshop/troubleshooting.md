@@ -56,8 +56,19 @@ and [Downgrade recovery](/reference/database-schemas#downgrade-recovery).
 ### Tool-policy diagnostic
 
 In `propose` and `auto` modes, `openclaw doctor` runs the
-`core/doctor/skill-workshop-tool-policy` check for the default agent. If policy
-hides `skill_workshop`, the warning names the first excluding config layer and
-the exact `allow` or `alsoAllow` change to make. Older runbooks may still use
+`core/doctor/skill-workshop-tool-policy` check for each configured agent. Doctor
+checks the sandbox construction gate before tool policy: sandboxed runs without
+host-granted library-authoring authority do not construct `skill_workshop`, even
+when `alsoAllow` lists it. The warning names the effective sandbox setting and
+recommends a non-sandboxed session, a human turn with library-authoring authority,
+or the `openclaw skills workshop` CLI. For `non-main` mode, this restriction applies
+to non-main sessions. Library authority is granted by the host for an authenticated
+human turn; it is not an allowlist entry or a permission autonomous reviews can
+grant themselves. See [Personal library authoring](/tools/skill-workshop/personal-library).
+
+When the tool can be constructed but policy hides it, the warning names the first
+excluding config layer and the exact `allow` or `alsoAllow` change to make. A run
+whose explicit allowlist leaves no callable tools also names the sandbox gate
+when it excludes the requested Workshop tool. Older runbooks may still use
 `openclaw plugins inspect skill-workshop`; that command now explains that Skill
 Workshop is built in and prints the same policy hint when applicable.

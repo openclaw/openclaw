@@ -10,7 +10,7 @@ import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -90,7 +90,7 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
           throw failed.reason;
         }
         // Exec finalizers can open state; release its handle before Windows removes the file.
-        closeOpenClawStateDatabaseByPath(
+        await closeOpenClawStateDatabaseByPathAsync(
           resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
         );
         // Process completion writes its task outcome into this environment's state.
@@ -106,7 +106,10 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
           process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
         }
         await rm(stateDir, { recursive: true, force: true });
-      })()),
+      })().catch((error: unknown) => {
+        closing = undefined;
+        throw error;
+      })),
   };
 }
 
@@ -149,9 +152,26 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
+  function loadRuntimeImports() {
+    const imports = [
+      import("./embedded-agent.runtime.js"),
+      import("./inference-stream.runtime.js"),
+    ] as const;
+    const ready = Promise.all(imports);
+    // Rejected admission does not await ready; still observe errors and join both
+    // imports before restoring the process environment.
+    void ready.catch(() => undefined);
+    return { ready, settled: Promise.allSettled(imports) };
+  }
+  let runtimeImports: ReturnType<typeof loadRuntimeImports> | undefined;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    onAdmissionRequestSent: () => {
+      if (!abortController.signal.aborted) {
+        runtimeImports ??= loadRuntimeImports();
+      }
+    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -209,10 +229,8 @@ export async function runWorkerDescriptor(
       }
       throw error;
     }
-    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] = await Promise.all([
-      import("./embedded-agent.runtime.js"),
-      import("./inference-stream.runtime.js"),
-    ]);
+    const [{ runWorkerEmbeddedTurn }, { createWorkerInferenceStreamAdapter }] =
+      await (runtimeImports ??= loadRuntimeImports()).ready;
     const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     const stream = createWorkerInferenceStreamAdapter({
       client: inference,
@@ -333,6 +351,7 @@ export async function runWorkerDescriptor(
     inference.dispose();
     live.dispose();
     await connection.stop();
+    await runtimeImports?.settled;
     await environment?.close();
   }
 }

@@ -13,6 +13,7 @@ type ToolCallLike = {
 };
 
 type ToolCallOccurrence = {
+  contentIndex: number;
   id: string;
   name?: string;
   result?: ToolResultMessage;
@@ -88,27 +89,28 @@ export function createToolCallOccurrenceQueue<T>(): ToolCallOccurrenceQueue<T> {
   };
 }
 
+function readToolCall(block: unknown): ToolCallLike | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as { type?: unknown; id?: unknown; name?: unknown };
+  if (
+    typeof record.type !== "string" ||
+    !TOOL_CALL_TYPES.has(record.type) ||
+    typeof record.id !== "string" ||
+    !record.id
+  ) {
+    return undefined;
+  }
+  return { id: record.id, name: typeof record.name === "string" ? record.name : undefined };
+}
+
 export function extractToolCallsFromAssistant(
   message: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-  return message.content.flatMap((block) => {
-    if (!block || typeof block !== "object") {
-      return [];
-    }
-    const record = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (
-      typeof record.type !== "string" ||
-      !TOOL_CALL_TYPES.has(record.type) ||
-      typeof record.id !== "string" ||
-      !record.id
-    ) {
-      return [];
-    }
-    return [{ id: record.id, name: typeof record.name === "string" ? record.name : undefined }];
-  });
+  return Array.isArray(message.content)
+    ? message.content.flatMap((block) => readToolCall(block) ?? [])
+    : [];
 }
 
 export function extractToolResultIds(message: ToolResultMessage): string[] {
@@ -241,12 +243,17 @@ export function classifyToolUseResultPairing(
   const frameRecords: Array<ToolUsePairingFrame & { unclaimedResults: ToolResultRecord[] }> =
     frameStartIndexes.map((startIndex, frameIndex) => {
       const assistant = messages[startIndex] as Extract<AgentMessage, { role: "assistant" }>;
-      const toolCalls = extractToolCallsFromAssistant(assistant);
+      const toolCalls: ToolCallLike[] = [];
       const occurrences: ToolCallOccurrence[] = [];
       const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
       const syntheticById = new Map<string, ToolCallOccurrence[]>();
-      for (const toolCall of toolCalls) {
-        const occurrence = { id: toolCall.id, name: toolCall.name };
+      for (const [contentIndex, block] of assistant.content.entries()) {
+        const toolCall = readToolCall(block);
+        if (!toolCall) {
+          continue;
+        }
+        toolCalls.push(toolCall);
+        const occurrence = { ...toolCall, contentIndex };
         occurrences.push(occurrence);
         pending.add(toolCall.id, occurrence);
       }
@@ -377,6 +384,22 @@ export function classifyToolUseResultPairing(
   }
 
   return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount, droppedResults };
+}
+
+/** Select actual completed occurrences, never unmatched calls or synthesized missing results. */
+export function collectCompletedToolCallBlocks(messages: readonly AgentMessage[]): Set<object> {
+  const completed = new Set<object>();
+  for (const frame of classifyToolUseResultPairing(messages).frames) {
+    for (const occurrence of frame.occurrences) {
+      if (occurrence.sourceResult && !isSyntheticMissingToolResult(occurrence.sourceResult)) {
+        const block = frame.assistant.content[occurrence.contentIndex];
+        if (block && typeof block === "object") {
+          completed.add(block);
+        }
+      }
+    }
+  }
+  return completed;
 }
 
 /** Select reset-tail model context without changing persisted entry bytes or order. */

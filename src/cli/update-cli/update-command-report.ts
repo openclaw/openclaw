@@ -8,6 +8,7 @@ import {
   submitUpdateFailureReport,
   type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -70,11 +71,18 @@ export async function runInteractiveUpdateFailureAction(params: {
         durationMs: 0,
       };
       const stateDir = resolveStateDir(params.env);
+      let recordedRun: ReturnType<typeof getUpdateRun>;
+      try {
+        recordedRun = getUpdateRun(params.attemptId, { env: params.env });
+      } catch {
+        // A missing or locked ledger must not prevent reporting the direct failure.
+      }
       const prepared = await prepareUpdateFailureReport(
         {
           attemptId: params.attemptId,
           ...(params.error ? { error: params.error } : {}),
           result,
+          recordedRun,
           ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
         },
         { env: params.env, stateDir },

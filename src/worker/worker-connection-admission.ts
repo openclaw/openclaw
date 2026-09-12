@@ -153,6 +153,14 @@ export function connectWorkerConnectionAttempt(
             new WorkerConnectionInterruptedError(`admission send failed: ${error.message}`),
           );
           socket.terminate();
+          return;
+        }
+        if (isActive() && admission === "pending") {
+          try {
+            connectionOptions.onAdmissionRequestSent?.();
+          } catch {
+            // Optional preparation observers do not control admission or retry policy.
+          }
         }
       });
     });

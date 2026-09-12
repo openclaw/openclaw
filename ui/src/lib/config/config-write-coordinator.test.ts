@@ -15,7 +15,7 @@ import {
 } from "./config-test-harness.ts";
 
 describe("config write coordinator", () => {
-  it("rebinds a retained draft to an opaque revision when the reconnect base is unchanged", async () => {
+  it("config.set rebinds a retained draft to an opaque revision when the reconnect base is unchanged", async () => {
     vi.useFakeTimers();
     let hash = "legacy-raw-hash";
     const raw = '{\n  "count": 1\n}\n';
@@ -26,7 +26,7 @@ describe("config write coordinator", () => {
       }
       if (method === "config.set") {
         submissions.push(params as { raw: string; baseHash: string });
-        return { hash: "opaque-next" };
+        return { config: JSON.parse((params as { raw: string }).raw), hash: "opaque-next" };
       }
       return {};
     });
@@ -50,7 +50,7 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("keeps the old revision and conflicts when the reconnect base changed", async () => {
+  it("config.set keeps the old revision and conflicts when the reconnect base changed", async () => {
     vi.useFakeTimers();
     let hash = "legacy-raw-hash";
     let raw = '{\n  "count": 1\n}\n';
@@ -65,7 +65,7 @@ describe("config write coordinator", () => {
         if (submission.baseHash !== hash) {
           throw new Error("config changed since last load; re-run config.get and retry");
         }
-        return { hash: "opaque-next" };
+        return { config: JSON.parse((params as { raw: string }).raw), hash: "opaque-next" };
       }
       return {};
     });
@@ -436,7 +436,7 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("flushes a scheduled autosave when a write barrier runs before the debounce", async () => {
+  it("config.set flushes a scheduled autosave when a write barrier runs before the debounce", async () => {
     vi.useFakeTimers();
     const setGate = deferred<unknown>();
     const methods: string[] = [];
@@ -472,14 +472,14 @@ describe("config write coordinator", () => {
     expect(methods.filter((method) => method === "config.set")).toHaveLength(1);
     expect(drained).toBe(false);
 
-    setGate.resolve({ hash: "hash-2" });
+    setGate.resolve({ config: { count: 2 }, hash: "hash-2" });
     await drain;
     expect(drained).toBe(true);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     runtimeConfig.dispose();
   });
 
-  it("serializes external mutations after scheduled drafts and refreshes before resolving", async () => {
+  it("config.set serializes external mutations after scheduled drafts and refreshes before resolving", async () => {
     vi.useFakeTimers();
     const order: string[] = [];
     let storedConfig: Record<string, unknown> = { count: 1 };
@@ -499,7 +499,7 @@ describe("config write coordinator", () => {
         order.push("config.set");
         storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { hash };
+        return { config: storedConfig, hash };
       }
       if (method === "plugins.setEnabled") {
         order.push("plugins.setEnabled");
@@ -531,7 +531,7 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("rechecks external mutation access after pending config writes settle", async () => {
+  it("config.set rechecks external mutation access after pending config writes settle", async () => {
     vi.useFakeTimers();
     const firstSet = deferred<unknown>();
     const methods: string[] = [];
@@ -568,7 +568,7 @@ describe("config write coordinator", () => {
     );
     await vi.waitFor(() => expect(methods).toEqual(["config.set"]));
     canDispatch = false;
-    firstSet.resolve({ hash: "hash-2" });
+    firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
 
     await expect(result).resolves.toEqual({
       ok: false,
@@ -792,7 +792,7 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("retries a background mutation when suspension begins during its write drain", async () => {
+  it("config.set retries a background mutation when suspension begins during its write drain", async () => {
     vi.useFakeTimers();
     const firstSet = deferred<unknown>();
     const methods: string[] = [];
@@ -825,7 +825,7 @@ describe("config write coordinator", () => {
       { waitForWritesResumed: true },
     );
     runtimeConfig.setWritesSuspended(true);
-    firstSet.resolve({ hash: "hash-2" });
+    firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
     await vi.advanceTimersByTimeAsync(0);
     expect(methods).toEqual(["config.set"]);
 
@@ -839,9 +839,12 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("flushes a pre-ack revert during disposal", async () => {
+  it("config.set flushes a pre-ack revert during disposal with canonical siblings", async () => {
     vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
+    const { request, submissions, firstSet } = createDeferredSetServerMock({
+      count: 2,
+      ui: { prefs: { locale: "fr" } },
+    });
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
@@ -862,7 +865,11 @@ describe("config write coordinator", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(submissions).toHaveLength(2);
-    expect(submissions[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
+    expect(submissions[1]?.baseHash).toBe("hash-2");
+    expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
+      { count: 2 },
+      { count: 1, ui: { prefs: { locale: "fr" } } },
+    ]);
   });
 
   it("does not write when an edit is reverted within the debounce window", async () => {
@@ -1070,7 +1077,7 @@ describe("config write coordinator", () => {
     ]);
   });
 
-  it("skips the teardown flush behind a pending apply", async () => {
+  it("config.apply skips the teardown flush behind a pending apply", async () => {
     vi.useFakeTimers();
     const firstApply = deferred<unknown>();
     let setCalls = 0;
@@ -1086,10 +1093,10 @@ describe("config write coordinator", () => {
       }
       if (method === "config.set") {
         setCalls += 1;
-        return Promise.resolve({ hash: "hash-9" });
+        return Promise.resolve({ config: { count: 3 }, hash: "hash-9" });
       }
       if (method === "config.apply") {
-        return firstApply.promise.then(() => ({ hash: "hash-2" }));
+        return firstApply.promise.then(() => ({ config: { count: 2 }, hash: "hash-2" }));
       }
       return Promise.resolve({});
     });

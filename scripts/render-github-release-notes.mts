@@ -2,6 +2,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { changelogFormat, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
   compactReleaseNotes,
   OPENCLAW_RELEASE_TAG_PATTERN,
@@ -31,6 +32,7 @@ type ReleaseNotesTarget = {
   version: unknown;
   tag: unknown;
   repository: unknown;
+  contributionRecordPath?: string;
 };
 
 const RELEASE_VERIFICATION_HEADING = "### Release verification";
@@ -302,11 +304,42 @@ export function releaseNotesSectionForTag(changelog: unknown, version: unknown, 
   }
 }
 
+export function loadReleaseNotesForTag({
+  rootDir,
+  ref,
+  tag,
+  version = releaseNotesVersionForTag(tag),
+}: {
+  rootDir: string;
+  ref?: string;
+  tag: string;
+  version?: string;
+}) {
+  validateTag(tag);
+  const dedicatedVersion = dedicatedSectionVersionForTag(tag);
+  const versions = [
+    ...(dedicatedVersion ? [dedicatedVersion] : []),
+    version,
+    ...(/-alpha\.[1-9][0-9]*$/u.test(tag) ? ["Unreleased"] : []),
+  ];
+  for (const selectedVersion of new Set(versions)) {
+    const source = findReleaseChangelog({ rootDir, ref, version: selectedVersion });
+    if (source) {
+      if (source.format !== "initial") {
+        fail("docs-mirrored release notes require the docs-publication renderer");
+      }
+      return source;
+    }
+  }
+  throw new Error(`changelog does not contain release notes for ${tag}`);
+}
+
 export function renderGithubReleaseNotes({
   changelog,
   version,
   tag,
   repository,
+  contributionRecordPath,
   verification = "",
 }: ReleaseNotesTarget & { verification?: string }) {
   assertString(repository, "repository");
@@ -318,9 +351,16 @@ export function renderGithubReleaseNotes({
   if (tagVersion !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);
   }
+  assertString(changelog, "changelog");
+  if (changelogFormat(changelog) !== "initial") {
+    fail("docs-mirrored release notes require the docs-publication renderer");
+  }
   const section = releaseNotesSectionForTag(changelog, version, tag);
   const mode = fitsGithubReleaseBody(section) ? "full" : "compact";
-  const baseBody = mode === "full" ? section : compactReleaseNotes(section, repository, tag)?.body;
+  const baseBody =
+    mode === "full"
+      ? section
+      : compactReleaseNotes(section, repository, tag, contributionRecordPath)?.body;
   if (baseBody === undefined) {
     fail(
       "release notes exceed GitHub's body limit and cannot be compacted without a complete contribution record",
@@ -352,6 +392,7 @@ export function verifyGithubReleaseNotes({
   version,
   tag,
   repository,
+  contributionRecordPath,
 }: ReleaseNotesTarget & { body: unknown }) {
   assertString(body, "release body");
   const normalizedBody = body.trimEnd();
@@ -360,6 +401,7 @@ export function verifyGithubReleaseNotes({
     version,
     tag,
     repository,
+    contributionRecordPath,
   });
   if (normalizedBody === base.body) {
     return {
@@ -378,6 +420,7 @@ export function verifyGithubReleaseNotes({
         version,
         tag,
         repository,
+        contributionRecordPath,
         verification,
       })
     : base;
@@ -391,7 +434,8 @@ export function verifyGithubReleaseNotes({
 function usage() {
   return `Usage:
   node --import tsx scripts/render-github-release-notes.mts \\
-    --changelog <path> --tag <tag> --repository <owner/repo> \\
+    (--root <repository-path> [--ref <ref>] | --changelog <legacy-file>) \\
+    --tag <tag> --repository <owner/repo> \\
     [--version <version>] [--verification-file <path>] [--output <path>] \\
     [--metadata-output <path>]
 `;
@@ -400,6 +444,8 @@ function usage() {
 function parseArgs(argv: string[]) {
   const valueOptions = [
     ["--changelog", "changelog"],
+    ["--root", "rootDir"],
+    ["--ref", "ref"],
     ["--version", "version"],
     ["--tag", "tag"],
     ["--repository", "repository"],
@@ -428,10 +474,16 @@ function parseArgs(argv: string[]) {
     fail(`unknown argument: ${arg}`);
   }
   if (!options.help) {
-    for (const name of ["changelog", "tag", "repository"] as const) {
+    for (const name of ["tag", "repository"] as const) {
       if (!options[name]) {
         fail(`--${name} is required`);
       }
+    }
+    if (Boolean(options.changelog) === Boolean(options.rootDir)) {
+      fail("exactly one of --root or --changelog is required");
+    }
+    if (options.ref && !options.rootDir) {
+      fail("--ref requires --root");
     }
     if (options.metadataOutput && !options.output) {
       fail("--metadata-output requires --output");
@@ -447,19 +499,28 @@ function main() {
     return;
   }
   const { changelog: changelogPath, repository, tag } = options;
-  if (!changelogPath || !repository || !tag) {
+  if (!repository || !tag) {
     fail("release notes arguments were not validated");
   }
-  const changelog = readFileSync(changelogPath, "utf8");
+  const version = options.version ?? releaseNotesVersionForTag(tag);
+  const source = options.rootDir
+    ? loadReleaseNotesForTag({ rootDir: options.rootDir, ref: options.ref, tag, version })
+    : undefined;
+  const changelog = source
+    ? source.section
+    : changelogPath
+      ? readFileSync(changelogPath, "utf8")
+      : fail("release notes source was not validated");
   const verification = options.verificationFile
     ? readFileSync(options.verificationFile, "utf8")
     : "";
   const rendered = renderGithubReleaseNotes({
     changelog,
-    version: options.version ?? releaseNotesVersionForTag(tag),
+    version,
     tag,
     repository,
     verification,
+    contributionRecordPath: source?.recordPath ?? undefined,
   });
   if (options.output) {
     writeFileSync(options.output, rendered.body);

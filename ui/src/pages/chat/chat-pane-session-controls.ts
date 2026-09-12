@@ -132,7 +132,11 @@ export function renderChatPaneComposerControls(params: {
     currentChange?.pending || selectedSession?.permissionModePending,
   );
   const modelCatalogState = resolveModelCatalogState(
-    { models: state.chatModelCatalog, refreshFailed: state.chatModelCatalogRefreshFailed },
+    {
+      models: state.chatModelCatalog,
+      refreshFailed: state.chatModelCatalogRefreshFailed,
+      pendingProviders: state.chatModelCatalogPendingProviders,
+    },
     {
       connected: state.connected,
       loading: state.chatModelsLoading,
@@ -147,11 +151,14 @@ export function renderChatPaneComposerControls(params: {
     composerControls: html`
       <div class="chat-composer-model-control">
         ${renderChatModelControls({
-          renderAccountControl: (accountModel) =>
+          modelAuthStatusResult: state.modelAuthStatusResult,
+          accountSelection,
+          renderAccountSection: (accountModel) =>
             renderChatModelAccountControl({
               owner: state,
               client,
               selection: accountSelection,
+              modelAuthStatusResult: state.modelAuthStatusResult,
               model: accountModel,
               disabled:
                 !modelAccess.allowed ||

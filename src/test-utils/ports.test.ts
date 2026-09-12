@@ -1,6 +1,7 @@
 import { createServer as createRealServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "./env.js";
+import { spawnNodeEvalSync } from "./node-process.js";
 
 const host = vi.hoisted(() => ({
   platform: vi.fn(() => "linux"),
@@ -140,9 +141,12 @@ describe("deterministic test port blocks", () => {
       );
       const { getDeterministicFreePortBlock, isPortFree } = await import("./ports.js");
       await expect(isPortFree(last)).resolves.toBe(true);
-      await expect(fetch(`http://127.0.0.1:${last}/`)).rejects.toMatchObject({
-        cause: { message: "bad port" },
-      });
+      const blocked = spawnNodeEvalSync(
+        `try { await fetch("http://127.0.0.1:${last}/"); process.exitCode = 1; } catch (error) { process.stdout.write(JSON.stringify({ cause: error.cause?.message })); }`,
+      );
+      expect(blocked.error, blocked.stderr).toBeUndefined();
+      expect(blocked.status, blocked.stderr).toBe(0);
+      expect(JSON.parse(blocked.stdout)).toEqual({ cause: "bad port" });
       const port = await getDeterministicFreePortBlock({ offsets });
       for (const offset of offsets) {
         expect(port + offset).toBeGreaterThanOrEqual(1800);

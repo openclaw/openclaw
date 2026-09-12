@@ -938,6 +938,7 @@ describe("chat pane native history pagination", () => {
       2,
       "chat.history",
       expect.objectContaining({ sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024 }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(state.currentSessionId).toBe("session-new");
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7, 8]);

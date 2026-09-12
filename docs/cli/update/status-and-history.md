@@ -35,8 +35,10 @@ include `registry.reason` (`selector_missing`, `selector_query_failed`,
 
 Every admitted update has a durable `runId`, including updates requested from
 chat, the Control UI, the CLI, and automatic update campaigns. Dry-run previews
-and updates refused after admission keep a skipped or failed record with their
-reason. CLI invocations rejected before admission leave state untouched. The same ID follows
+on profiles with an existing runtime database and updates refused after admission
+keep a skipped or failed record with their reason. A fresh-profile dry-run leaves
+the database absent and records no run. CLI invocations rejected before admission
+leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
@@ -45,7 +47,7 @@ a run ID.
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
 
-`openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
+An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
 If history cannot be read or classified, status still shows update availability
 and runtime findings. Human output explains that run status is unavailable;
@@ -85,6 +87,18 @@ old run. See [Updating](/install/updating#stale-update-history).
 Human output, chat completion notices, the Control UI update view, and the
 `openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
+
+Failed steps include bounded `failureFacts` when the updater observed a specific
+check, Doctor finding, package-manager error, service inspection reason, or plugin
+failure. Each fact names the check and reason code, with an optional affected
+config key, plugin ID, and one diagnostic line of at most 200 characters. These
+facts survive the run ledger and appear in the local summary and the reviewed
+GitHub failure report. Secrets and private paths are redacted before recording;
+public reports include recognized error causes instead of arbitrary command or
+user text, and show config key families instead of operator-defined names. Only
+catalog-confirmed public check and plugin IDs are included; unknown IDs and codes
+remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
+and report size limits still apply.
 
 Recoverable maintenance failures appear as recorded warnings even when the update
 succeeds. Each warning names the skipped work, the cause, and a repair command.

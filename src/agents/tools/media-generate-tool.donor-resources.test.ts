@@ -3,11 +3,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   getPluginRegistryInspectionResources,
   PluginRegistryInspectionResources,
 } from "../../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -20,10 +22,11 @@ import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-gene
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
+import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
+import { retainPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
 import {
   closeEphemeralPreparedModelRuntimeResources,
   PreparedModelRuntimeBuildResources,
-  retainPreparedModelRuntimeGenerationResources,
 } from "../prepared-model-runtime.resources.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
@@ -62,6 +65,7 @@ it.each(["managed", "failure", "primary-failure", "rollback", "raw"] as const)(
         const finishPrimary = createDeferredCore();
         const rollbackDisposal = createDeferredCore();
         const finishRollback = createDeferredCore();
+        const rollbackFailure = new Error("rollback cleanup failed");
         const donorDisposal = createDeferredCore();
         const finishDonor = createDeferredCore();
         const values: unknown[] = [];
@@ -145,7 +149,10 @@ module.exports = { id: '${id}', register(api) {
           logger: { info() {}, warn() {}, error() {}, debug() {} },
           activateGlobalSideEffects: false,
         });
-        const donorSource = mode === "raw" ? undefined : new PluginRegistryInspectionResources();
+        const donorSource =
+          mode === "raw"
+            ? undefined
+            : new PluginRegistryInspectionResources(retireInspectionInstances);
         donorSource?.attach(donor.registry);
         const record = createPluginRecord({ id, source: entry });
         donor.registry.plugins.push(record);
@@ -175,7 +182,8 @@ module.exports = { id: '${id}', register(api) {
         setActivePluginRegistry(donor.registry);
         const donorCurrent = capturePluginLifecycleAuthority(donor.registry);
         const construction = new PreparedModelRuntimeBuildResources();
-        let publication: ReturnType<typeof retainPreparedModelRuntimeGenerationResources>;
+        let releasePublication: ReturnType<typeof retainPreparedPluginGeneration> | undefined;
+        let releasingOwners: Promise<PromiseSettledResult<void>[]> | undefined;
         let closeDonor: Promise<void> | undefined;
         let completion: Promise<void> | undefined;
         try {
@@ -203,14 +211,14 @@ module.exports = { id: '${id}', register(api) {
                   rollbackDisposal.resolve();
                   await finishRollback.promise;
                   values.push(bridge.readDonor());
-                  throw new Error("rollback cleanup failed");
+                  throw rollbackFailure;
                 },
               });
             });
             source.rollback("rolled-back");
             await rollbackDisposal.promise;
           }
-          publication = retainPreparedModelRuntimeGenerationResources(prepared.pluginGeneration);
+          releasePublication = retainPreparedPluginGeneration(prepared.pluginGeneration);
           const facts = prepared.agentFacts[0]!;
           const catalog = prepareConfiguredRuntimeFacts({
             agentFacts: facts,
@@ -227,6 +235,7 @@ module.exports = { id: '${id}', register(api) {
               isCurrent: () => true,
               withRefreshStatus: (value) => value,
               readFullModelCatalog: () => catalog.modelCatalog,
+              readPublishedModels: () => undefined,
               loadFullModelCatalog: async () => catalog.modelCatalog,
               loadAuth: async () => {
                 throw new Error("No model auth in this fixture");
@@ -263,9 +272,18 @@ module.exports = { id: '${id}', register(api) {
             (await tool.execute("donor-call", { prompt: "A synthetic resource proof" })).details,
           ).toMatchObject({ status: "started" });
           completion = scheduled[0]!();
-          await admitted.promise;
-          construction.release();
-          publication?.release();
+          await Promise.race([
+            admitted.promise,
+            completion.then(() => {
+              throw new Error("Media task settled before invoking the copied donor", {
+                cause: failed.mock.calls[0]?.[0]?.error,
+              });
+            }),
+          ]);
+          releasingOwners = Promise.allSettled([
+            construction[Symbol.asyncDispose](),
+            releasePublication?.(),
+          ]);
           closeDonor = donorSource?.release();
           void closeDonor?.catch(() => {});
           await new Promise<void>((resolve) => {
@@ -304,21 +322,21 @@ module.exports = { id: '${id}', register(api) {
           }
           finishDonor.resolve();
           await completion;
+          await releasingOwners;
           await closeDonor?.catch(() => {});
           expect(values).toEqual(mode === "rollback" ? [42, 42, 42, 42] : [42, 42, 42]);
           if (mode === "rollback") {
-            await expect(closeEphemeralPreparedModelRuntimeResources()).rejects.toMatchObject({
-              errors: [
-                expect.objectContaining({
-                  errors: [
-                    expect.objectContaining({
-                      cause: expect.objectContaining({ message: "rollback cleanup failed" }),
-                    }),
-                  ],
-                }),
-              ],
-            });
+            const observed = closeEphemeralPreparedModelRuntimeResources();
+            await expect(observed).rejects.toBeInstanceOf(AggregateError);
+            const failure: unknown = await observed.catch((error: unknown) => error);
+            expect(
+              collectErrorGraphCandidates(failure, (candidate) => [
+                candidate.cause,
+                ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+              ]),
+            ).toContain(rollbackFailure);
             await expect(closeEphemeralPreparedModelRuntimeResources()).resolves.toBeUndefined();
+            await expect(closePreparedModelRuntimeSnapshots()).resolves.toBeUndefined();
           }
           expect(connections).toHaveLength(1);
           expect(connections[0]?.disposals).toBe(1);
@@ -340,8 +358,8 @@ module.exports = { id: '${id}', register(api) {
           finishPrimary.resolve();
           finishDonor.resolve();
           await completion;
-          construction.release();
-          publication?.release();
+          await releasingOwners;
+          await Promise.allSettled([construction[Symbol.asyncDispose](), releasePublication?.()]);
           await closeDonor?.catch(() => {});
           await donorSource?.release().catch(() => {});
           await closeEphemeralPreparedModelRuntimeResources().catch(() => {});

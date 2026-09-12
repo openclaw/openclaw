@@ -255,6 +255,7 @@ export const validateSessionsCatalogStartTerminalParams = compile(
 );
 export const validateSessionsSearchParams = compile(S.SessionsSearchParamsSchema);
 export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSchema);
+export const validateSessionsStorageParams = compile(S.SessionsStorageParamsSchema);
 export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);
 export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSchema);
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
@@ -506,6 +507,7 @@ export const validateCapabilityConsentErrorDetails = compile(S.CapabilityConsent
 export const validatePluginsListParams = compile(S.PluginsListParamsSchema);
 export const validatePluginsInspectParams = compile(S.PluginsInspectParamsSchema);
 export const validatePluginsRefreshParams = compile(S.PluginsRefreshParamsSchema);
+export const validatePluginsReloadParams = compile(S.PluginsReloadParamsSchema);
 export const validatePluginsSearchParams = compile(S.PluginsSearchParamsSchema);
 export const validatePluginsCatalogBrowseParams = compile(S.PluginsCatalogBrowseParamsSchema);
 export const validatePluginsCatalogCategoriesParams = compile(

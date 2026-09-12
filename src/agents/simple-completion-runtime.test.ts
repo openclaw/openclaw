@@ -9,6 +9,7 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -68,6 +69,10 @@ vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
 }));
 
+vi.mock("./auth-profiles/usage.js", () => ({
+  reconcileAuthProfileQuotaBlocks: vi.fn(async () => {}),
+}));
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
@@ -91,7 +96,6 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 import {
   prepareSimpleCompletionModel,
   acquireSimpleCompletionModelForAgent,
-  resolveSimpleCompletionSelectionForAgent,
 } from "./simple-completion-runtime.js";
 
 let preparedModelRuntime: PreparedModelRuntimeSnapshot;
@@ -105,6 +109,7 @@ beforeEach(() => {
   hoisted.setRuntimeApiKeyMock.mockReset();
   hoisted.prepareProviderRuntimeAuthMock.mockReset();
   hoisted.ensureAuthProfileStoreMock.mockReset();
+  hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
   hoisted.getCurrentPluginMetadataSnapshotMock.mockReset();
   const authStorage = AuthStorage.inMemory({});
   const modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -126,7 +131,7 @@ beforeEach(() => {
   };
   hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
     snapshot: preparedModelRuntime,
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
   });
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
@@ -160,7 +165,6 @@ beforeEach(() => {
         : undefined;
     },
   );
-  hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
   hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue(
     createPluginMetadataSnapshotFixture({
       plugins: [
@@ -823,42 +827,13 @@ describe("prepareSimpleCompletionModel", () => {
 });
 
 describe("acquireSimpleCompletionModelForAgent", () => {
-  it("resolves explicit aliases in the selected agent scope", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "openai/global-model",
-          models: {
-            "openai/global-model": { alias: "fast" },
-          },
-        },
-        entries: {
-          worker: {
-            models: {
-              "anthropic/worker-model": { alias: "fast" },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(
-      resolveSimpleCompletionSelectionForAgent({
-        cfg,
-        agentId: "worker",
-        modelRef: "fast",
-      }),
-    ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
-    expect(
-      resolveSimpleCompletionSelectionForAgent({
-        cfg,
-        agentId: "main",
-        modelRef: "fast",
-      }),
-    ).toMatchObject({ provider: "openai", modelId: "global-model" });
-  });
-
   it("materializes a derived utility model on the Platform route for API-key auth", async () => {
+    hoisted.ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:platform": { type: "api_key", provider: "openai", key: "placeholder" },
+      },
+    });
     const cfg = {
       agents: {
         entries: {
@@ -903,7 +878,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       });
       expect(modelResolver).toHaveBeenCalledTimes(2);
       expect(
-        (callArg(hoisted.getApiKeyForModelMock, 1) as { model?: { api?: string } }).model?.api,
+        (callArg(hoisted.getApiKeyForModelMock, 0) as { model?: { api?: string } }).model?.api,
       ).toBe("openai-responses");
       // Route materialization re-resolves the model on a multi-agent config; both
       // calls must keep the authorized agentId or the second falls back to
@@ -912,49 +887,96 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
   });
 
-  it("keeps the Codex route for OAuth auth", async () => {
-    const cfg = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    } as unknown as OpenClawConfig;
-    const modelResolver = createOpenAIRouteModelResolver({
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-    hoisted.getApiKeyForModelMock.mockResolvedValue({
-      apiKey: "placeholder",
-      profileId: "openai:chatgpt",
-      source: "profile:openai:chatgpt",
-      mode: "oauth",
-    });
-
-    const result = await acquireSimpleCompletionModelForAgent({
-      cfg,
-      agentId: "main",
-      modelRef: "openai/gpt-5.5",
-      skipAgentDiscovery: true,
-      modelResolver,
-    });
-
-    try {
-      expectPreparedModelResult(result);
-      expect(result.selection.modelId).toBe("gpt-5.5");
-      expect(result.model).toMatchObject({
+  it.each(["mixed credentials", "same-route fallback", "pinned profile"])(
+    "preserves subscription selection with %s",
+    async (scenario) => {
+      const authLookup = hoisted.getApiKeyForModelMock;
+      const mixed = scenario === "mixed credentials";
+      const pinned = scenario === "pinned profile";
+      const oauth = {
+        type: "oauth",
+        provider: "openai",
+        access: "fixture-access",
+        refresh: "fixture-refresh",
+        expires: Date.now() + 60_000,
+      };
+      hoisted.ensureAuthProfileStoreMock.mockReturnValue({
+        version: 1,
+        profiles: {
+          "openai:ready": oauth,
+          ...((mixed || pinned) && {
+            "openai:platform": { type: "api_key", provider: "openai", key: "placeholder" },
+          }),
+          ...(!mixed && { "openai:expired": { ...oauth, expires: Date.now() - 60_000 } }),
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: "openai/gpt-5.5" } },
+        ...(!mixed && !pinned
+          ? { auth: { order: { openai: ["openai:expired", "openai:ready"] } } }
+          : {}),
+      };
+      authLookup.mockImplementation(({ profileId }: { profileId?: string }) => {
+        if (profileId === "openai:expired") {
+          const failure = { provider: "openai", message: "Fixture refresh rejected" };
+          throw pinned ? new Error(failure.message) : new OAuthRefreshFailureError(failure);
+        }
+        return {
+          apiKey: "fixture-access",
+          profileId: profileId ?? "openai:platform",
+          source: `profile:${profileId ?? "openai:platform"}`,
+          mode: profileId === "openai:ready" ? "oauth" : "api-key",
+        };
+      });
+      const modelResolver = createOpenAIRouteModelResolver({
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       });
-      expect(modelResolver).toHaveBeenCalledTimes(1);
-      expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledTimes(2);
-    } finally {
-      if (!("error" in result)) {
-        result.release();
+      const result = await acquireSimpleCompletionModelForAgent({
+        cfg,
+        agentId: "main",
+        modelRef: `openai/gpt-5.5${pinned ? "@openai:expired" : ""}`,
+        bindAuthOwner: pinned,
+        skipAgentDiscovery: true,
+        modelResolver,
+      });
+      try {
+        if (pinned) {
+          expect(result).toMatchObject({
+            error: expect.stringContaining("Fixture refresh rejected"),
+          });
+        } else {
+          expectPreparedModelResult(result);
+          expect(result.selection.modelId).toBe("gpt-5.5");
+          expect(result.auth.profileId).toBe("openai:ready");
+          expect(result.model).toMatchObject({
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          });
+        }
+        expect(authLookup).toHaveBeenCalledTimes(mixed || pinned ? 1 : 2);
+        expect(authLookup).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ profileId: mixed ? "openai:ready" : "openai:expired" }),
+        );
+        if (!mixed && !pinned) {
+          expect(authLookup).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ profileId: "openai:ready" }),
+          );
+        }
+      } finally {
+        if (!("error" in result)) {
+          await result[Symbol.asyncDispose]();
+        }
       }
-    }
-  });
+    },
+  );
 
   it("keeps an authored custom OpenAI route untouched", async () => {
     const cfg = {
@@ -962,6 +984,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
         providers: {
           openai: {
             api: "openai-responses",
+            apiKey: "fixture-api-key",
             baseUrl: "https://relay.example/v1",
             models: [{ id: "gpt-5.5" }],
           },
@@ -995,7 +1018,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(modelResolver).toHaveBeenCalledTimes(1);
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
   });
@@ -1003,6 +1026,11 @@ describe("acquireSimpleCompletionModelForAgent", () => {
   it("honors an explicit model ref while selecting its auth-compatible route", async () => {
     const cfg = {
       agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
+      models: {
+        providers: {
+          openai: { baseUrl: "https://api.openai.com/v1", models: [], apiKey: "placeholder" },
+        },
+      },
     } as unknown as OpenClawConfig;
     const modelResolver = createOpenAIRouteModelResolver({
       api: "openai-chatgpt-responses",
@@ -1028,7 +1056,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(result.model).toMatchObject({ id: "gpt-5.5", api: "openai-responses" });
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
   });

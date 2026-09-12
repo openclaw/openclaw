@@ -7,46 +7,49 @@ import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
+  openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreAgentIds, stateMigrations } from "./doctor-contract-api.js";
 import {
   createTestStorePath,
+  installVoiceCallStateRuntimeForTests,
   makePersistedCall,
   writeLegacyCallsJsonl,
 } from "./src/manager.test-harness.js";
-import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./src/manager/store.js";
-import { setVoiceCallStateRuntime } from "./src/runtime-state.js";
+import {
+  CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+  getCallHistoryFromStore,
+  loadActiveCallsFromStore,
+} from "./src/manager/store.js";
 
-function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
+function createDoctorContext(
+  env: NodeJS.ProcessEnv,
+  beforeWrite?: (namespace: string) => void,
+): PluginDoctorStateMigrationContext {
   return {
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStoreForTests<T>("voice-call", {
+      const store = createPluginStateKeyedStoreForTests<T>("voice-call", {
         ...options,
         env: options.env ?? env,
       });
+      if (!beforeWrite) {
+        return store;
+      }
+      const register = store.register.bind(store);
+      return {
+        ...store,
+        async register(...args: Parameters<typeof store.register>) {
+          beforeWrite(options.namespace);
+          await register(...args);
+        },
+      };
     },
   };
-}
-
-function installStateRuntime(): void {
-  setVoiceCallStateRuntime({
-    state: {
-      resolveStateDir: () => "",
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests("voice-call", options),
-      openChannelIngressQueue: (() => {
-        throw new Error("openChannelIngressQueue is not used by voice-call doctor tests");
-      }) as never,
-      openChannelIngressDrain: (() => {
-        throw new Error("openChannelIngressDrain is not used by voice-call doctor tests");
-      }) as never,
-    },
-  });
 }
 
 describe("voice-call doctor state migration", () => {
@@ -71,7 +74,7 @@ describe("voice-call doctor state migration", () => {
       OPENCLAW_STATE_DIR: warmStateDir,
     };
     try {
-      installStateRuntime();
+      installVoiceCallStateRuntimeForTests();
       const calls = Array.from({ length: 1002 }, (_, index) =>
         makePersistedCall({
           callId: `call-${index}`,
@@ -119,7 +122,7 @@ describe("voice-call doctor state migration", () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-doctor-"));
     storePath = createTestStorePath();
     env = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
-    installStateRuntime();
+    installVoiceCallStateRuntimeForTests();
   });
 
   afterEach(async () => {
@@ -379,6 +382,67 @@ describe("voice-call doctor state migration", () => {
     expect(overCapacityMigration.historyCallIds[0]).toBe("call-2");
     expect(overCapacityMigration.historyCallIds.at(-1)).toBe("call-1001");
   });
+
+  it.each([1, 2])(
+    "retains the source and written prefix after chunk write %s fails",
+    async (failedWrite) => {
+      const call = makePersistedCall({
+        callId: "call-write-failure",
+        transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+      });
+      writeLegacyCallsJsonl(storePath, [call]);
+      const failure = new Error("chunk write failed");
+      let writes = 0;
+      const beforeWrite = vi.fn((_namespace: string) => {
+        if (++writes === failedWrite) {
+          throw failure;
+        }
+      });
+      const params = {
+        config: { plugins: { entries: { "voice-call": { config: { store: storePath } } } } },
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env, beforeWrite),
+      };
+      const migration = expectDefined(stateMigrations[0], "voice-call state migration");
+      const result = await migration.migrateLegacyState(params);
+      expect(result).toEqual({
+        changes: [],
+        warnings: [
+          "Failed migrating Voice Call call-log line 1: Error: chunk write failed",
+          "Left Voice Call call-log source in place because migration was incomplete",
+        ],
+      });
+      expect(beforeWrite.mock.calls).toEqual(
+        Array.from({ length: failedWrite }, () => [CALL_RECORD_EVENT_CHUNKS_NAMESPACE]),
+      );
+      await fs.access(path.join(storePath, "calls.jsonl"));
+      await expect(fs.access(path.join(storePath, "calls.jsonl.migrated"))).rejects.toThrow();
+      const { db } = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } });
+      expect(
+        db
+          .prepare(
+            "SELECT namespace, json_extract(value_json, '$.index') AS chunk_index FROM plugin_state_entries WHERE plugin_id = ? ORDER BY entry_key",
+          )
+          .all("voice-call"),
+      ).toEqual(
+        Array.from({ length: failedWrite - 1 }, (_, index) => ({
+          namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+          chunk_index: index,
+        })),
+      );
+      resetPluginStateStoreForTests();
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([]);
+      const retried = await migration.migrateLegacyState({
+        ...params,
+        context: createDoctorContext(env),
+      });
+      expect(retried.warnings).toEqual([]);
+      await fs.access(path.join(storePath, "calls.jsonl.migrated"));
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
+    },
+  );
 
   it("leaves malformed mixed legacy logs in place after importing valid records", async () => {
     const sourcePath = path.join(storePath, "calls.jsonl");

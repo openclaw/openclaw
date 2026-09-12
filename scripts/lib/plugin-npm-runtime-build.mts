@@ -10,6 +10,7 @@ import {
   resolvePluginRuntimeFormat,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
+import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module-refs.mts";
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { isRecord } from "./record-shared.mjs";
 
@@ -235,14 +236,10 @@ function resolvePluginNpmRuntimePackageFiles(plan: {
       : [],
   );
   merged.add("dist/**");
-  if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
-    merged.add("openclaw.plugin.json");
-  }
-  if (packageRelativePathExists(plan.packageDir, "README.md")) {
-    merged.add("README.md");
-  }
-  if (packageRelativePathExists(plan.packageDir, "SKILL.md")) {
-    merged.add("SKILL.md");
+  for (const file of ["openclaw.plugin.json", "README.md", "SKILL.md", "assets/icon.png"]) {
+    if (packageRelativePathExists(plan.packageDir, file)) {
+      merged.add(file);
+    }
   }
   if (packageRelativePathExists(plan.packageDir, "skills")) {
     merged.add("skills/**");
@@ -312,9 +309,6 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
-  if (!fs.existsSync(packageJsonPath)) {
-    return null;
-  }
   const packageJson = readJsonFile(packageJsonPath);
   const rootPackageJsonPath = path.join(repoRoot, "package.json");
   const rootPackageJson = fs.existsSync(rootPackageJsonPath)
@@ -404,6 +398,14 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
       neverBundle: createNeverBundleDependencyMatcher(plan.packageJson),
     },
     entry: plan.entry,
+    plugins: [createPluginInventoryModuleRefsPlugin(plan.packageDir)],
+    outputOptions: {
+      chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+      entryFileNames: (chunk) =>
+        Object.hasOwn(plan.entry, chunk.name)
+          ? `[name]${pluginRuntimeExtension(plan.runtimeFormat)}`
+          : `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+    },
     env,
     fixedExtension: plan.runtimeFormat === "cjs",
     format: plan.runtimeFormat,
@@ -527,7 +529,7 @@ function readPackageDirArg(argv: string[]) {
     throw new Error(usage());
   }
   const extraArg = args[1];
-  if (extraArg) {
+  if (args.length > 1) {
     throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
   }
   return prepareIndex === -1 ? { packageDir } : { packageDir, prepareNativeImport: true };

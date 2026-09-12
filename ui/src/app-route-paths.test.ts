@@ -10,7 +10,6 @@ import {
   APP_ROUTE_IDS,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   inferBasePathFromPathname,
-  isLegacyPluginsDiscoveryPath,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
@@ -316,6 +315,13 @@ describe("Dynamic route startup bridge", () => {
   it("registers the Portals workspace path", () => {
     expect(pathForRoute("portals")).toBe("/portals");
     expect(routeIdFromPath("/portals")).toBe("portals");
+  });
+
+  it("keeps the mounted Agents roster separate from agent settings", () => {
+    expect(routeIdFromPath("/ui/agents", "/ui")).toBe("agents-home");
+    expect(inferBasePathFromPathname("/ui/agents")).toBe("/ui");
+    expect(agentRouteFromPath("/ui/agents", "/ui")).toBeNull();
+    expect(routeIdFromPath("/ui/settings/agents", "/ui")).toBe("agents");
   });
 
   it("matches mixed-case deep links exactly like the uirouter path key", () => {
@@ -709,16 +715,16 @@ describe("Memory tab route paths", () => {
 });
 
 describe("legacy Plugins discovery route", () => {
-  it("parses the retired discovery path only for inbound compatibility", () => {
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover")).toBe(true);
-    expect(isLegacyPluginsDiscoveryPath("/ui/settings/plugins/discover", "/ui")).toBe(true);
+  it("routes retired discovery links through the application router", () => {
+    const router = createApplicationRouter();
+    expect(router.routeIdFromPath("/settings/plugins/discover")).toBe("plugins");
+    expect(router.routeIdFromPath("/ui/settings/plugins/discover", "/ui")).toBe("plugins");
   });
 
-  it("keeps settings detail paths out of the legacy discovery matcher", () => {
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/unknown")).toBe(false);
-    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover/extra")).toBe(false);
-    expect(routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
-    expect(routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
+  it("keeps settings detail paths distinct from discovery in the application router", () => {
+    const router = createApplicationRouter();
+    expect(router.routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
+    expect(router.routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
   });
 });
 

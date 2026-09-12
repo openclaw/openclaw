@@ -38,7 +38,7 @@ const event = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stopped"), status, reason: text.optional() }),
 ]);
 export const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("ready") }),
+  z.object({ type: z.literal("ready"), candidateRehearsal: z.literal(true).optional() }),
   z.object({ type: z.literal("validate"), id: turn }),
   z.object({ type: z.literal("cancel-validation"), id: turn }),
   z.object({ type: z.literal("event"), event }),
@@ -64,9 +64,11 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
       configPath: z.string(),
       workspaceDir: z.string(),
       installRoot: z.string(),
+      environment: z.record(z.string(), z.string().optional()).optional(),
     }),
     failure: updateFailureSchema,
     context: z.object({
+      phase: z.enum(["validating", "verifying"]).optional(),
       beforeVersion: text.optional(),
       targetVersion: text.optional(),
       symptoms: z.array(text).max(20).optional(),
@@ -85,15 +87,14 @@ export type UpdateRepairWorkerMessage = z.infer<typeof updateRepairWorkerMessage
 export type UpdateRepairParentMessage = z.infer<typeof updateRepairParentMessageSchema>;
 export const UPDATE_REPAIR_IPC_MAX_BYTES = 64 * 1024;
 
-export type UpdateRepairTarget = Extract<UpdateRepairParentMessage, { type: "start" }>["target"] & {
-  candidateRoot?: string;
-  environment?: NodeJS.ProcessEnv;
-};
+export type UpdateRepairTarget = Extract<UpdateRepairParentMessage, { type: "start" }>["target"];
 export type UpdateRepairValidation = z.infer<typeof updateRepairValidationSchema>;
 export type UpdateRepairResult = Extract<UpdateRepairWorkerMessage, { type: "result" }>["result"];
 export type UpdateRepairEvent = Extract<UpdateRepairWorkerMessage, { type: "event" }>["event"];
 export type UpdateRepairParams = {
   target: UpdateRepairTarget;
+  /** Original installation environment for the admitting ledger and requester policy. */
+  admissionEnv?: NodeJS.ProcessEnv;
   nodeRunner?: string;
   runId?: string;
   requester?: { channel?: string; accountId?: string; senderId?: string };

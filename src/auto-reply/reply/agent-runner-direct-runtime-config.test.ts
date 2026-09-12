@@ -2,6 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -15,11 +16,15 @@ import {
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -609,6 +614,58 @@ describe("runReplyAgent runtime config", () => {
     expect(result.text).toBe(`⚠️ ${codexMessage}`);
     const metadata = getReplyPayloadMetadata(result);
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("delivers known pre-run OAuth refresh failures instead of dropping the reply", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runSessionCompactionIfNeededMock.mockRejectedValue(
+      new OAuthRefreshFailureError({
+        provider: "openai",
+        message: "refresh_token_invalidated",
+      }),
+    );
+    const delivered = vi.fn<(payload: ReplyPayload, kind: ReplyDispatchKind) => void>();
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, { kind }) => {
+        delivered(payload, kind);
+      },
+    });
+
+    const result = await withReplyDispatcher({
+      dispatcher,
+      run: async () => {
+        const payload = await runReplyAgent(replyParams);
+        if (!payload || Array.isArray(payload)) {
+          throw new Error("expected a single pre-run failure reply payload");
+        }
+        dispatcher.sendFinalReply(payload);
+        return payload;
+      },
+    });
+
+    const metadata = getReplyPayloadMetadata(result);
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(executeAgentTurnMock).not.toHaveBeenCalled();
+    expect(delivered).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: expect.stringContaining("/login openai"), isError: true }),
+      "final",
+    );
+    expect(delivered.mock.calls[0]?.[0].presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Sign in",
+              action: { type: "command", command: "/login openai" },
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("surfaces preflight compaction failures before the agent starts", async () => {

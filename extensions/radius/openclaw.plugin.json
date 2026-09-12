@@ -1,0 +1,38 @@
+{
+  "id": "radius",
+  "name": "Radius",
+  "description": "Radius model gateway provider.",
+  "categories": ["models"],
+  "activation": { "onStartup": false },
+  "enabledByDefault": true,
+  "providers": ["radius"],
+  "modelCatalog": { "discovery": { "radius": "refreshable" } },
+  "setup": { "providers": [{ "id": "radius", "envVars": ["RADIUS_API_KEY"] }] },
+  "providerAuthChoices": [
+    {
+      "provider": "radius",
+      "method": "oauth",
+      "choiceId": "radius",
+      "appGuidedAuth": "oauth",
+      "choiceLabel": "Radius (browser sign-in)",
+      "groupId": "radius",
+      "groupLabel": "Radius",
+      "groupHint": "Browser sign-in or API key"
+    },
+    {
+      "provider": "radius",
+      "method": "api-key",
+      "choiceId": "radius-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Radius API key",
+      "groupId": "radius",
+      "groupLabel": "Radius",
+      "groupHint": "Browser sign-in or API key",
+      "optionKey": "radiusApiKey",
+      "cliFlag": "--radius-api-key",
+      "cliOption": "--radius-api-key <key>",
+      "cliDescription": "Radius organization API key"
+    }
+  ],
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

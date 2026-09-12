@@ -281,7 +281,6 @@ describe("status-overview-rows", () => {
         totalSessions: 2,
         agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
       },
-      tailscaleBackendState: "Running",
     });
 
     expect(findRowValue(rows, "Version")).toBe(VERSION);

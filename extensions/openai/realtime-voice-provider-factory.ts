@@ -5,6 +5,7 @@ import type {
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
+  RealtimeVoiceProviderResolveConfigContext,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,7 +20,7 @@ import type { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-qui
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   isOpenAIGptLiveModel,
-  isSupportedOpenAIGptLiveModel,
+  isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
@@ -115,6 +116,41 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
+function resolveOpenAIRealtimeVoiceConfig(
+  {
+    cfg,
+    rawConfig,
+    agentId,
+    surface,
+    autoRespondToAudio,
+    requiredCapabilities,
+  }: RealtimeVoiceProviderResolveConfigContext,
+  context: OpenAIRealtimeHost,
+): OpenAIRealtimeVoiceProviderConfig {
+  const config = normalizeProviderConfig(rawConfig);
+  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
+    return config;
+  }
+  // Live delegates natively; GA still owns manually triggered replies and video.
+  if (
+    config.azureEndpoint ||
+    config.azureDeployment ||
+    autoRespondToAudio === false ||
+    requiredCapabilities?.supportsVideoFrames === true
+  ) {
+    return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
+  }
+  const platformConfigured = hasOpenAIRealtimePlatformAuthInput(
+    { configuredApiKey: config.apiKey, cfg, agentId },
+    context,
+  );
+  const model =
+    !platformConfigured && hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)
+      ? "gpt-live-1-codex"
+      : "gpt-live-1";
+  return { ...config, model };
+}
+
 function buildOpenAIRealtimeBrowserSessionConfig(
   req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
   config: OpenAIRealtimeVoiceProviderConfig,
@@ -186,7 +222,7 @@ async function createOpenAIRealtimeBrowserSession(
     const quicksilverRequest = {
       ...req,
       model,
-      instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+      instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
       voice: req.voice ?? config.voice,
     };
     const auth = await resolveOpenAIQuicksilverBridgeAuth(
@@ -393,12 +429,12 @@ export function buildOpenAIRealtimeVoiceProvider(
     id: "openai",
     label: "OpenAI Realtime Voice",
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
-    // GA is the provider default; model-specific GPT-Live voices are in the capabilities.
+    // Direct tool bridges retain GA; Talk resolves its account-specific default below.
     models: OPENAI_REALTIME_MODELS,
     voices: OPENAI_REALTIME_VOICES,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
-    resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
+    resolveConfig: (params) => resolveOpenAIRealtimeVoiceConfig(params, context),
     isConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.azureEndpoint || config.azureDeployment) {
@@ -428,7 +464,7 @@ export function buildOpenAIRealtimeVoiceProvider(
               ...req,
               model,
               voice: config.voice,
-              instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+              instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
               logger: options?.logger ?? { debug: () => undefined, warn: () => undefined },
               resolveAuth: () =>
                 resolveOpenAIQuicksilverBridgeAuth(
@@ -449,7 +485,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             ...req,
             model,
             voice: config.voice,
-            instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+            instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
             logger: options?.logger ?? { warn: () => undefined },
             resolveAuth: async () => ({
               type: "api-key",
@@ -513,7 +549,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             { configuredApiKey: config.apiKey, cfg, agentId },
             context,
           ) ||
-            (isSupportedOpenAIGptLiveModel(model) &&
+            (isOpenAIGptLiveSubscriptionModel(model) &&
               hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
         );
       }
@@ -573,7 +609,7 @@ export function buildOpenAIRealtimeVoiceProvider(
           { configuredApiKey: config.apiKey, cfg, agentId },
           context,
         ) ||
-        (isSupportedOpenAIGptLiveModel(config.model) &&
+        (isOpenAIGptLiveSubscriptionModel(config.model) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },

@@ -32,6 +32,7 @@ import {
   getPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeSnapshot,
@@ -42,7 +43,7 @@ export const PROVIDER_ID = "worker-catalog-fixture";
 export const HARNESS_ID = "worker-catalog-fixture-harness";
 export const DISCOVERED_HARNESS_ID = `${PROVIDER_ID}-discovered-harness`;
 export const MISSING_AUTH_HARNESS_ID = `${PROVIDER_ID}-missing-auth-harness`;
-const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
+export const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
 export const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 export const PLUGIN_ID = "worker-catalog-fixture";
 export const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
@@ -116,6 +117,7 @@ export function writeFixturePlugin(params: {
   builtPluginVersion?: string;
   nativeCatalog?: boolean;
   asyncSyntheticAuth?: boolean;
+  syntheticAuthAvailable?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -134,6 +136,7 @@ export function writeFixturePlugin(params: {
     unrelatedId: UNRELATED_SYNTHETIC_AUTH_ID,
     pluginVersion: params.pluginVersion ?? "v1",
     asyncSyntheticAuth: params.asyncSyntheticAuth,
+    syntheticAuthAvailable: params.syntheticAuthAvailable,
   });
   fs.writeFileSync(
     pluginFile,
@@ -285,6 +288,7 @@ module.exports = {
       spinMs: params.spinMs,
       pluginVersion: params.builtPluginVersion,
       asyncSyntheticAuth: params.asyncSyntheticAuth,
+      syntheticAuthAvailable: params.syntheticAuthAvailable,
     });
     const distDir = path.join(pluginDir, "dist");
     fs.mkdirSync(distDir);
@@ -638,6 +642,10 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       "static",
     ).pending
   )[0]!;
+  // Direct builds need the same retained generation that publication gives real callers.
+  await using _ = {
+    [Symbol.asyncDispose]: retainPreparedPluginGeneration(build.pluginGeneration),
+  };
   await expectNativeHarnessModelsPublished({
     config,
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,

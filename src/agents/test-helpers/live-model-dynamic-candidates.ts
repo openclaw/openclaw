@@ -40,7 +40,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m3",
-  "openai/gpt-5.6",
+  "openai/gpt-5.6-luna",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
@@ -75,7 +75,7 @@ const smallPriorityIndex = new Map<string, number>(
 );
 const excludedProviders = new Set(["codex", "codex-cli"]);
 const curatedProviders = new Set(["fireworks", "google", "openrouter", "xai"]);
-const directOpenAiModels = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+const directOpenAiModels = new Set(["gpt-5.6-terra", "gpt-5.6-luna"]);
 
 function canonicalLiveModelRef(ref: ModelRef): string | undefined {
   const provider = normalizeProviderId(ref.provider ?? "");

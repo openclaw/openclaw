@@ -61,11 +61,25 @@ export class ModelProviderSupplementalLoader {
     return this.pending.has("usage");
   }
 
-  adoptCoreData(client: GatewayBrowserClient | null, data: ModelProvidersData): void {
+  adoptCoreData(
+    client: GatewayBrowserClient | null,
+    data: ModelProvidersData,
+    options: { preserveCatalog?: boolean } = {},
+  ): void {
     const previous = client === this.options.getDataClient() ? this.options.getData() : null;
     // Keep the last supplemental snapshot visible until its replacement finishes.
     this.options.setData({
       ...data,
+      // An older core read updates config/auth, while the newer Retry owns catalog facts.
+      ...(options.preserveCatalog && previous
+        ? {
+            models: previous.models,
+            automaticUtilityModel: previous.automaticUtilityModel,
+            providerOutcomes: previous.providerOutcomes,
+            pendingProviders: previous.pendingProviders,
+            catalogError: previous.catalogError,
+          }
+        : {}),
       providerUsage: previous?.providerUsage ?? data.providerUsage,
       costByProvider: previous?.costByProvider ?? data.costByProvider,
     });

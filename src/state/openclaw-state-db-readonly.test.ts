@@ -53,7 +53,7 @@ it("keeps fresh synchronous read callbacks from returning asynchronous work", as
     expect(() =>
       withExistingOpenClawStateDatabaseReadOnly(() => Promise.resolve(1), options),
     ).toThrow("SQLite source read must remain synchronous");
-    const exclusion = acquireOpenClawStateDatabaseFileExclusion(options.path);
+    const exclusion = await acquireOpenClawStateDatabaseFileExclusion(options.path);
     exclusion.release();
   });
 });
@@ -128,14 +128,14 @@ it("retains stream handle custody when native close fails until explicit close s
       expect((await rows.next()).value).toBe(1);
       await expect(rows.return()).rejects.toBe(failure);
       expect(reader?.isOpen).toBe(true);
-      expect(() => acquireOpenClawStateDatabaseFileExclusion(source.path)).toThrow(
+      await expect(acquireOpenClawStateDatabaseFileExclusion(source.path)).rejects.toThrow(
         "reader close failed",
       );
       expect(reader?.isOpen).toBe(true);
       refuseClose = false;
       closeOpenClawStateDatabaseForTest();
       expect(reader?.isOpen).toBe(false);
-      const exclusion = acquireOpenClawStateDatabaseFileExclusion(source.path);
+      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(source.path);
       exclusion.release();
     } finally {
       refuseClose = false;
@@ -441,7 +441,7 @@ it("reads under its live mutation owner but refuses an unrelated caller", async 
     const initial = openOpenClawStateDatabase(options);
     initial.db.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original')");
     const pathname = initial.path;
-    const owner = acquireOpenClawStateDatabaseFileExclusion(pathname);
+    const owner = await acquireOpenClawStateDatabaseFileExclusion(pathname);
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const read = () =>

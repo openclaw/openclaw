@@ -32,7 +32,7 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
   await agents.closeOpenClawAgentDatabasesAsync(tempRoot);
-  state.closeOpenClawStateDatabaseByPath(
+  await state.closeOpenClawStateDatabaseByPathAsync(
     paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
   );
 }

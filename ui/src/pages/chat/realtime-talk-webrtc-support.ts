@@ -13,6 +13,7 @@ const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
 export type RealtimeServerEvent = {
   type?: string;
+  reason?: string;
   item_id?: string;
   previous_item_id?: string | null;
   call_id?: string;

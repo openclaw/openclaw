@@ -247,7 +247,7 @@ export async function runUpdateRepairTurn(params: {
       agentExecCommand(
         params.prompt,
         {
-          cwd: target.candidateRoot ?? target.installRoot,
+          cwd: target.installRoot,
           model: route.modelLabel,
           fallback: modelFallbacks,
           codeMode: "direct",

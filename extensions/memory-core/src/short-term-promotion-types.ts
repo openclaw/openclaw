@@ -177,6 +177,21 @@ export type ApplyShortTermPromotionsOptions = {
   };
 };
 
+/** Fixed diagnostic labels; never include candidate identifiers or threshold values. */
+export type PromotionRejectionCategory =
+  | "origin"
+  | "consolidation origin/session"
+  | "contamination"
+  | "already promoted"
+  | "score threshold"
+  | "signal threshold"
+  | "query threshold"
+  | "age threshold"
+  | "selection limit"
+  | "source rehydration"
+  | "source changed"
+  | "candidate changed";
+
 export type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
@@ -186,6 +201,7 @@ export type ApplyShortTermPromotionsResult = {
   rejectedCandidates: Array<{
     candidate: PromotionCandidate;
     reason: string;
+    category: PromotionRejectionCategory;
   }>;
   /** Number of older promotion sections compacted out to honor the budget. */
   compactedSections: number;

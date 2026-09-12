@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { Command } from "commander";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubCliByNameCore } from "../cli/program/register.subclis-core.js";
@@ -13,14 +15,12 @@ import {
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommands } from "./cli.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
-import {
-  createPluginCache,
-  getPluginCache,
-  resetPluginCache,
-  withPluginCache,
-} from "./plugin-cache.js";
+import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 beforeEach(() => resetPluginCache());
 const roots: string[] = [];
@@ -77,6 +77,53 @@ afterEach(() => {
 });
 
 describe("native plugin alias preparation", () => {
+  it.each([
+    ["src", "production", "source"],
+    ["dist", "development", "dist"],
+  ] as const)(
+    "preserves explicit %s SDK preference without native module hooks in %s",
+    async (pluginSdkResolution, environment, expected) => {
+      const f = fixture();
+      const source = writeFile(
+        f.root,
+        "external/index.ts",
+        'export { value } from "openclaw/plugin-sdk/used";',
+      );
+      // Native resolver hooks live for the process. A no-hook runtime must not
+      // mark this worker's resolver installed before the native-alias cases run.
+      const probe = writeFile(
+        f.root,
+        "no-native-hooks.mts",
+        [
+          'import Module from "node:module";',
+          'import path from "node:path";',
+          'Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });',
+          `const { createPluginModuleLoader } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/loader-module-runtime.ts")).href)});`,
+          `const { getPluginInstance } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/plugin-instance-scope.ts")).href)});`,
+          `const { createPluginRecord } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/status.test-helpers.ts")).href)});`,
+          `const { createEmptyPluginRegistry } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/plugins/registry-empty.ts")).href)});`,
+          `const source = ${JSON.stringify(source)};`,
+          "const rootDir = path.dirname(source);",
+          'const record = createPluginRecord({ id: "external", rootDir, source, origin: "global" });',
+          "const registry = createEmptyPluginRegistry();",
+          "registry.plugins.push(record);",
+          "try {",
+          `  const load = createPluginModuleLoader({ devSourceRoot: ${JSON.stringify(f.root)}, pluginSdkResolution: ${JSON.stringify(pluginSdkResolution)} });`,
+          "  console.log(JSON.stringify(load(source, { record, rootDir, registry })));",
+          "} finally {",
+          "  await getPluginInstance(record)?.dispose();",
+          "}",
+        ].join("\n"),
+      );
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        ["--import", pathToFileURL(path.resolve("scripts/tsx.mjs")).href, probe],
+        { env: { ...process.env, NODE_ENV: environment } },
+      );
+      expect(JSON.parse(stdout)).toMatchObject({ value: expected });
+    },
+  );
+
   it("loads alias-free compiled metadata without reading unused SDK artifacts", () => {
     return withPluginCache(createPluginCache(), () => {
       const f = fixture();
@@ -134,25 +181,53 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it("evaluates shared SDK imports before concurrent lazy CJS plugins require them", async () => {
-    const f = fixture();
-    writeFile(f.root, "dist/plugin-sdk/leaf.js", 'export const value = "dist";');
-    writeFile(f.root, "dist/plugin-sdk/used.js", 'export { value } from "./leaf.js";');
-    const pluginDir = path.dirname(f.entry);
-    writeFile(pluginDir, "esm-plugin.mjs", 'export { value } from "openclaw/plugin-sdk/used";');
-    writeFile(pluginDir, "cjs-plugin.cjs", 'module.exports = require("openclaw/plugin-sdk/used");');
-    const entry = writeFile(
-      pluginDir,
-      "index.cjs",
-      `module.exports = { start: () => Promise.all([
-        import("./esm-plugin.mjs"), import("./cjs-plugin.cjs")
-      ]).then(modules => modules.map(module => module.value ?? module.default.value)) };`,
-    );
-    const load = createPluginModuleLoader({ devSourceRoot: f.root });
-    const plugin = load(entry) as { start: () => Promise<string[]> };
-    await expect(plugin.start()).resolves.toEqual(["dist", "dist"]);
-    await expect(plugin.start()).resolves.toEqual(["dist", "dist"]);
-  });
+  it.each(["alias", "relative"] as const)(
+    "evaluates shared SDK imports before concurrent lazy CJS plugins require them (%s)",
+    async (sdkImport) => {
+      const f = fixture();
+      writeFile(f.root, "dist/plugin-sdk/leaf.js", 'export const value = "dist";');
+      writeFile(f.root, "dist/plugin-sdk/used.js", 'export { value } from "./leaf.js";');
+      const bundledEntry = writeFile(
+        f.root,
+        "dist/extensions/bundled/index.cjs",
+        `module.exports = { start: () => import("${sdkImport === "alias" ? "openclaw/plugin-sdk/used" : "../../plugin-sdk/used.js"}") };`,
+      );
+      const pluginDir = path.join(f.root, "external");
+      writeFile(pluginDir, "package.json", JSON.stringify({ name: "external-fixture" }));
+      writeFile(pluginDir, "lazy.cjs", 'module.exports = require("openclaw/plugin-sdk/used");');
+      const entry = writeFile(
+        pluginDir,
+        "index.cjs",
+        'module.exports = { start: () => import("./lazy.cjs") };',
+      );
+      const record = createPluginRecord({
+        id: "external",
+        rootDir: pluginDir,
+        source: entry,
+        origin: "global",
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(record);
+      const load = createPluginModuleLoader({ devSourceRoot: f.root });
+      const bundled = load(bundledEntry) as { start: () => Promise<{ value: string }> };
+      const external = load(entry, { record, rootDir: pluginDir, registry }) as {
+        start: () => Promise<{ default: { value: string } }>;
+      };
+      let reads: Promise<unknown>[] = [];
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          reads = [
+            bundled.start().then((module) => module.value),
+            external.start().then((module) => module.default.value),
+          ];
+          await expect(Promise.all(reads)).resolves.toEqual(["dist", "dist"]);
+        }
+      } finally {
+        await Promise.allSettled(reads);
+        await getPluginInstance(record)?.dispose();
+      }
+    },
+  );
 
   it.each([
     { specifier: "@openclaw/retry", target: "dist/retry/index.js" },
@@ -186,18 +261,51 @@ describe("native plugin alias preparation", () => {
     expect(read.mock.calls.some(([target]) => target === f.unused)).toBe(true);
   });
 
-  it("does not prepare aliases for unrelated requests or unregistered parents", () => {
+  it("does not prepare aliases for unrelated requests or unregistered parents", async () => {
     const f = fixture();
     const outside = fixture();
     const read = vi.spyOn(fs, "readFileSync");
     const load = createPluginModuleLoader({ devSourceRoot: f.root });
-    const metadata = load(f.entry) as { load: (name: string) => unknown };
+    const metadata = load(f.entry) as {
+      load: (name: string) => unknown;
+      loadEsm: (name: string) => Promise<unknown>;
+    };
     expect(metadata.load("node:path")).toHaveProperty("join");
     expect(() => metadata.load("@openclaw/plugin-sdk-other/used")).toThrow();
     expect(() => metadata.load("@openclaw/not-a-workspace/used")).toThrow();
     expect(() => createRequire(outside.entry).resolve("@openclaw/plugin-sdk/used")).toThrow();
+    for (const relative of ["./plain.js", "./plugin-sdk/unused.js"]) {
+      const target = writeFile(
+        path.dirname(f.entry),
+        relative,
+        "export const url = import.meta.url;",
+      );
+      await expect(metadata.loadEsm(relative)).resolves.toMatchObject({
+        url: pathToFileURL(target).href,
+      });
+    }
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
   });
+
+  it.each(["query", "fragment", "unregistered"] as const)(
+    "keeps native SDK URL evaluation for %s imports",
+    async (kind) => {
+      const f = fixture();
+      const outside = fixture();
+      fs.writeFileSync(f.used, "await Promise.resolve(); export const url = import.meta.url;");
+      installOpenClawPluginSdkNativeResolver({ pluginModulePath: f.entry, devSourceRoot: f.root });
+      const metadata = createRequire(kind === "unregistered" ? outside.entry : f.entry)(
+        kind === "unregistered" ? outside.entry : f.entry,
+      ) as { loadEsm: (name: string) => Promise<unknown> };
+      const url = pathToFileURL(f.used);
+      if (kind === "query") {
+        url.search = "?generation=1";
+      } else if (kind === "fragment") {
+        url.hash = "#generation-1";
+      }
+      await expect(metadata.loadEsm(url.href)).resolves.toMatchObject({ url: url.href });
+    },
+  );
 
   it.each([false, true])(
     "pins a native host across ambient changes and replaces a resolved=%s provider",
@@ -521,33 +629,36 @@ describe("native plugin alias preparation", () => {
     });
   });
 
-  it.each([undefined, "shared", ""])(
-    "preserves explicit alias contents and shared scope %s",
-    (sharedCacheScopeKey) => {
-      const f = fixture();
-      const owner = createPluginCache();
-      const target = writeFile(
+  it("captures explicit aliases before lazy evaluation", () => {
+    const f = fixture();
+    const owner = createPluginCache();
+    const target = writeFile(
+      f.root,
+      "target.ts",
+      'import { value } from "fixture-alias"; export const marker = value;',
+    );
+    const params = {
+      modulePath: target,
+      importerUrl: import.meta.url,
+      tryNative: false,
+      cacheScopeKey: "explicit-aliases",
+    };
+    withPluginCache(owner, () => {
+      const aliases = { "fixture-alias": f.used };
+      const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
+      const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
+      aliases["fixture-alias"] = f.unused;
+      const loaded = first(target);
+      expect(loaded).toMatchObject({ marker: "dist" });
+      expect(same(target)).toBe(loaded);
+      const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
+      const nextTarget = writeFile(
         f.root,
-        "target.ts",
+        "next-target.ts",
         'import { value } from "fixture-alias"; export const marker = value;',
       );
-      const params = {
-        modulePath: target,
-        importerUrl: import.meta.url,
-        tryNative: false,
-        sharedCacheScopeKey,
-      };
-      withPluginCache(owner, () => {
-        const aliases = { "fixture-alias": f.used };
-        const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-        const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
-        expect(same).toBe(first);
-        aliases["fixture-alias"] = f.unused;
-        expect(first(target)).toMatchObject({ marker: "dist" });
-        const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-        expect(next === first).toBe(sharedCacheScopeKey !== undefined);
-        expect(getPluginCache().sdk.contexts.size).toBe(0);
-      });
-    },
-  );
+      expect(next(nextTarget)).toMatchObject({ marker: "unused" });
+      expect(first(target)).toBe(loaded);
+    });
+  });
 });

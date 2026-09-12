@@ -487,7 +487,7 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
       inlineProviderModels: [],
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     },
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
   }),
 );
 const getCurrentPluginMetadataSnapshotMock: Mock<

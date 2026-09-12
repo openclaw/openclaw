@@ -6,15 +6,23 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import * as processTree from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
+
+const sourceImportArgs = resolveRuntimeWorkerUrl(
+  updateExecutorNativeEntrypoints.executor,
+).pathname.endsWith(".ts")
+  ? ["--import", path.resolve("scripts/tsx.mjs")]
+  : [];
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -28,8 +36,7 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     const proceed = path.join(root, "proceed");
     const effect = path.join(root, "effect");
-    const ownerUrl = new URL("./update-command-executor.ts", import.meta.url).href;
-    const loader = path.resolve("scripts/tsx.mjs");
+    const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
     const leaf = `
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
@@ -45,11 +52,11 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
     const intermediate = `
       import fs from "node:fs";
       import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(ownerUrl)};
-      import {runUtf8CommandWithTimeout} from ${JSON.stringify(new URL("../../process/exec.ts", import.meta.url).href)};
+      import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
       const input=JSON.parse(fs.readFileSync(0,"utf8"));
       await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
         const result=await withUpdateCommandExecutorChild(fence,input.grant.root,(grant,beforeInput)=>runUtf8CommandWithTimeout(
-          [process.execPath,"--import",${JSON.stringify(loader)},"--input-type=module","-e",${JSON.stringify(leaf)}],
+          [process.execPath,...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(leaf)}],
           {input:JSON.stringify({...input,grant}),beforeInput,timeoutMs:15000,killProcessTree:true,
            requireProcessTreeExtinction:true,onOutputChunk:chunk=>{process.stdout.write(chunk);}}));
         if(result.code!==0)throw new Error(result.stderr);
@@ -63,7 +70,7 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
       const fence = await executor.enter(root);
       const pending = withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
         runUtf8CommandWithTimeout(
-          [process.execPath, "--import", loader, "--input-type=module", "-e", intermediate],
+          [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", intermediate],
           {
             input: JSON.stringify({ grant, proceed, effect }),
             beforeInput,
@@ -182,11 +189,11 @@ it
     const receiver = `
     import fs from "node:fs";
     import {setTimeout} from "node:timers/promises";
-    import {runGatewayServiceUpdateCommand} from ${JSON.stringify(new URL("../daemon-cli/update-executor.ts", import.meta.url).href)};
-    import {execFileUtf8} from ${JSON.stringify(new URL("../../daemon/exec-file.ts", import.meta.url).href)};
-    import {publishLaunchAgentPlist} from ${JSON.stringify(new URL("../../daemon/launchd-service-files.ts", import.meta.url).href)};
-    import {assertGatewayServiceUpdateCurrent} from ${JSON.stringify(new URL("../../daemon/service-update-authority.ts", import.meta.url).href)};
-    import {createConfigIO} from ${JSON.stringify(new URL("../../config/io.factory.ts", import.meta.url).href)};
+    import {runGatewayServiceUpdateCommand} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)};
+    import {execFileUtf8} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)};
+    import {publishLaunchAgentPlist} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceFiles).href)};
+    import {assertGatewayServiceUpdateCurrent} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceAuthority).href)};
+    import {createConfigIO} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.configIO).href)};
     const root=${JSON.stringify(root)}, fault=${JSON.stringify(fault)};
     const wait=async name=>{while(!fs.existsSync(root+"/"+name))await setTimeout(10);};
     try { await runGatewayServiceUpdateCommand("run","install",async()=>{
@@ -208,8 +215,8 @@ it
     const spawner = `
     import fs from "node:fs";
     import {spawn} from "node:child_process";
-    import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(new URL("./update-command-executor.ts", import.meta.url).href)};
-    import {runUtf8CommandWithTimeout} from ${JSON.stringify(new URL("../../process/exec.ts", import.meta.url).href)};
+    import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
+    import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
     const input=JSON.parse(fs.readFileSync(0,"utf8"));
     try{await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
       const result=await withUpdateCommandExecutorChild(fence,input.grant.root,async(grant,beforeInput)=>{
@@ -217,14 +224,14 @@ it
         if (${JSON.stringify(fault)} === "spawner-killed") {
           const stderr=fs.openSync(${JSON.stringify(file("receiver.stderr"))},"a");
           return new Promise((resolve,reject)=>{
-            const child=spawn(process.execPath,["--import",${JSON.stringify(path.resolve("scripts/tsx.mjs"))},"--input-type=module","-e",${JSON.stringify(receiver)}],{stdio:["pipe","ignore",stderr],detached:true});
+            const child=spawn(process.execPath,[...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(receiver)}],{stdio:["pipe","ignore",stderr],detached:true});
             fs.closeSync(stderr);
             child.once("error",reject);
             child.once("spawn",()=>{try{beforeInput(child.pid);child.stdin.end(JSON.stringify({action:"install",targetRoot:input.grant.root,executor:grant}));}catch(e){child.kill("SIGKILL");reject(e);}});
             child.once("exit",code=>resolve({code,stderr:"receiver exited"}));
           });
         }
-        return runUtf8CommandWithTimeout([process.execPath,"--import",${JSON.stringify(path.resolve("scripts/tsx.mjs"))},"--input-type=module","-e",${JSON.stringify(receiver)}],{
+        return runUtf8CommandWithTimeout([process.execPath,...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(receiver)}],{
           input:JSON.stringify({action:"install",targetRoot:input.grant.root,executor:grant}),beforeInput,timeoutMs:30000,killProcessTree:true,requireProcessTreeExtinction:true});
       });
       if(result.code!==0)throw new Error(result.stderr);
@@ -245,7 +252,7 @@ it
             (resolve, reject) => {
               const child = spawn(
                 process.execPath,
-                ["--import", path.resolve("scripts/tsx.mjs"), "--input-type=module", "-e", spawner],
+                [...sourceImportArgs, "--input-type=module", "-e", spawner],
                 { stdio: ["pipe", "ignore", "pipe"], detached: true },
               );
               let stderr = "";
@@ -271,14 +278,7 @@ it
           );
         }
         return runUtf8CommandWithTimeout(
-          [
-            process.execPath,
-            "--import",
-            path.resolve("scripts/tsx.mjs"),
-            "--input-type=module",
-            "-e",
-            spawner,
-          ],
+          [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", spawner],
           {
             input: JSON.stringify({ grant }),
             beforeInput,

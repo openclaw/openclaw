@@ -248,7 +248,7 @@ describe("PluginsPage", () => {
   });
 
   it.each(["install", "enable", "uninstall"] as const)(
-    "flushes a pending config draft before plugin %s and refreshes afterward",
+    "config.set flushes a pending config draft before plugin %s and refreshes afterward",
     async (action) => {
       vi.useFakeTimers();
       const method =
@@ -292,7 +292,7 @@ describe("PluginsPage", () => {
           order.push(requestMethod);
           config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
           hash = "hash-2";
-          return { hash };
+          return { config, hash };
         }
         if (requestMethod === method) {
           order.push(requestMethod);
@@ -348,7 +348,7 @@ describe("PluginsPage", () => {
           "clawhub:example-plugin",
         );
       } else if (action === "enable") {
-        await page.consentController.updateEnabled("workboard", true);
+        await page.consentController.mutateInstalledPlugin("workboard", "enable");
       } else {
         await page.uninstall("community-thing", "plugin:community-thing");
       }
@@ -404,6 +404,7 @@ describe("PluginsPage", () => {
       throw new Error(`Unexpected method ${method}`);
     });
     const harness = createGateway(client);
+    const reconnect = vi.spyOn(harness.gateway, "connect");
     const runtimeConfigState: RuntimeConfigTestState = {
       configFormDirty: false,
       lastError: null,
@@ -427,6 +428,7 @@ describe("PluginsPage", () => {
       1,
     );
     expect(refreshConfig).toHaveBeenCalledOnce();
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it("does not let an old mutation clear replacement-source busy state", async () => {
@@ -480,7 +482,7 @@ describe("PluginsPage", () => {
     await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
   });
 
-  it("waits for uninstall restart confirmation and sends nothing when cancelled", async () => {
+  it("waits for uninstall confirmation and sends nothing when cancelled", async () => {
     const removable = createPlugin({
       id: "community-thing",
       name: "Community Thing",
@@ -522,7 +524,7 @@ describe("PluginsPage", () => {
       expect.objectContaining({
         title: "Remove Community Thing?",
         message:
-          "Removing this plugin package and all of its entries restarts the Gateway immediately and interrupts active sessions.",
+          "This removes the plugin package and all of its entries. Active work using this plugin finishes before removal.",
         confirmLabel: "Remove",
         danger: true,
       }),
@@ -580,7 +582,7 @@ describe("PluginsPage", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: "community-thing" }),
     );
-    await page.consentController.updateEnabled("workboard", true);
+    await page.consentController.mutateInstalledPlugin("workboard", "enable");
 
     uninstallResult.resolve({
       ok: true,

@@ -233,7 +233,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               state.finishSetupTail.resolve();
               await outcome;
               await parent.drain();
-              lease.release();
+              await lease[Symbol.asyncDispose]();
               await closePreparedModelRuntimeSnapshots();
             }
           },
@@ -313,7 +313,7 @@ it("retains a supplied runtime before the first PDF download awaits", async () =
     try {
       const result = fixture.execute();
       await downloading.promise;
-      fixture.lease.release();
+      await fixture.lease[Symbol.asyncDispose]();
       await setImmediate();
       expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
       finishDownload.resolve();
@@ -343,7 +343,7 @@ it.each(["creation", "result", "late-rejection"] as const)(
       ]);
       abort.abort(new Error("synthetic PDF cancellation"));
       expect(await result).toMatchObject({ message: "synthetic PDF cancellation" });
-      fixture.lease.release();
+      await fixture.lease[Symbol.asyncDispose]();
       await setImmediate();
       expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
       expect(fixture.state.connections[0]?.disposals).toBe(0);
@@ -387,7 +387,7 @@ it.each(["normal", "parent"] as const)(
       await fixture.state.cleanupStarted.promise;
       expect(fixture.state.cancellation.cleanupSignal?.aborted).toBe(true);
       expect(fixture.state.cancellation.registry).toBe(fixture.lease.snapshot.pluginRegistry);
-      fixture.lease.release();
+      await fixture.lease[Symbol.asyncDispose]();
       expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
       fixture.state.finish.resolve();
       expect(await result).toMatchObject({ details: { text: "PDF value 42" } });

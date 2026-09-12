@@ -10,9 +10,10 @@ import { showToast } from "../toast.ts";
 import {
   adoptConfigSetAck,
   applyConfigSnapshot,
-  clearConfigDraftTracking,
+  replayConfigDraftEdits,
   formatConfigMutationError,
   serializeFormForSubmit,
+  type ConfigWriteAck,
 } from "./config-draft-model.ts";
 import {
   beginConfigRead,
@@ -97,10 +98,9 @@ export type ConfigPatchBuilder = (
   config: Readonly<Record<string, unknown>>,
 ) => ConfigPatchBuildResult;
 // Gateway commitGatewayConfigWrite returns persisted hashes; only a no-op patch omits one.
-type ConfigPatchAck = { config: Record<string, unknown> } & (
-  | { noop: true }
-  | { noop?: false; hash: string }
-);
+type ConfigPatchAck =
+  | { noop: true; config: Record<string, unknown> }
+  | (ConfigWriteAck & { noop?: false });
 
 export type RuntimeConfigExternalMutationResult<T> =
   | {
@@ -362,7 +362,7 @@ function applyConfigSchema(state: RuntimeConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
-export type ConfigSubmission = { raw: string; ackHash: string | null };
+export type ConfigSubmission = { raw: string; ack: ConfigWriteAck | null };
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
 export async function submitConfigDraft(
@@ -414,22 +414,17 @@ export async function submitConfigDraft(
       state.chatError = null;
     }
     // Dispatch bytes let reconnect recognize a committed write whose ack was lost.
-    onSubmitted?.({ raw, ackHash: null });
-    const ack = await client.request<{ hash: string }>(
+    onSubmitted?.({ raw, ack: null });
+    const ack = await client.request<ConfigWriteAck>(
       mode === "apply" ? "config.apply" : "config.set",
       { raw, baseHash, ...(mode === "apply" ? { sessionKey: state.applySessionKey } : {}) },
     );
     // Report before the epoch fence: teardown can flush against this flight's ack.
-    onSubmitted?.({ raw, ackHash: ack.hash });
+    onSubmitted?.({ raw, ack });
     if (!isCurrent()) {
       return false;
     }
-    // Compare before adoption: edits and reverts made in flight retain their intent.
-    state.configFormDirty = serializeFormForSubmit(state) !== raw;
-    if (!state.configFormDirty) {
-      clearConfigDraftTracking(state);
-    }
-    adoptConfigSetAck(state, raw, ack.hash);
+    adoptConfigSetAck(state, raw, ack);
     state.configNeedsApply = mode !== "apply";
     if (mode === "apply") {
       state.configAutoSaveStatus = "idle";
@@ -465,13 +460,14 @@ export async function submitConfigDraft(
 
 /**
  * Teardown flush after an in-flight save: submits the latest draft once,
- * based only on that flight's own in-memory ack hash. Callers skip the flush
- * entirely (fail closed) when no in-memory ack hash exists.
+ * replaying edits on that flight's canonical acknowledgement. Callers skip
+ * the flush when no acknowledgement exists.
  */
 export function teardownFlushConfigDraft(
   state: RuntimeConfigState,
   client: GatewayBrowserClient,
-  baseHash: string,
+  submittedRaw: string,
+  ack: ConfigWriteAck,
   canDispatch: () => boolean,
 ): void {
   // Must stay synchronous: page unload destroys the context before any
@@ -482,8 +478,12 @@ export function teardownFlushConfigDraft(
   if (!canDispatch()) {
     return;
   }
-  const raw = serializeFormForSubmit(state);
-  void client.request("config.set", { raw, baseHash }).catch(() => undefined);
+  const draft = replayConfigDraftEdits(submittedRaw, serializeFormForSubmit(state), ack.config);
+  if (draft) {
+    void client
+      .request("config.set", { raw: serializeConfigForm(draft), baseHash: ack.hash })
+      .catch(() => undefined);
+  }
 }
 
 export async function patchConfig(

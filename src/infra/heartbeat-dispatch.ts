@@ -5,13 +5,13 @@ import {
   resolveHeartbeatTerminalToolFailure,
 } from "../auto-reply/heartbeat-reply-payload.js";
 import {
-  resolveHeartbeatScratchProposalFromReplyResult,
-  resolveHeartbeatToolResponseFromReplyResult,
+  selectHeartbeatToolResponse,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -170,7 +170,8 @@ async function prepareHeartbeatDispatchReply(
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
   const selected = resolveHeartbeatReplyPayload(replyResult);
   const execution = resolveReplyOperationAgentTurn(runState);
-  const response = resolveHeartbeatToolResponseFromReplyResult(replyResult);
+  const heartbeatResponse = selectHeartbeatToolResponse(replyResult);
+  const response = heartbeatResponse?.response;
   // Admission can lose to foreground work after preflight. An empty rejected
   // turn must leave its events queued, unlike a completed quiet turn.
   const admissionBusy =
@@ -220,9 +221,9 @@ async function prepareHeartbeatDispatchReply(
     ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   });
   const scratch =
-    outcome.kind === "failure"
+    outcome.kind === "failure" || !heartbeatResponse
       ? undefined
-      : resolveHeartbeatScratchProposalFromReplyResult(replyResult);
+      : getReplyPayloadMetadata(heartbeatResponse.payload)?.heartbeatScratchProposal;
   if (scratch !== undefined && response) {
     if (!preflight.scratchJobId) {
       log.warn("heartbeat: scratch update ignored because no monitor job exists");

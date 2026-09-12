@@ -362,7 +362,6 @@ src/agents/provider-request-config.ts
 src/agents/provider-transport-fetch.test.ts
 src/agents/provider-transport-fetch.ts
 src/agents/runtime-plan/prepare-auth.test.ts
-src/agents/sandbox/ssh.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
@@ -748,7 +747,6 @@ src/plugins/sdk-alias.ts
 src/plugins/setup-registry.test.ts
 src/plugins/setup-registry.ts
 src/plugins/tools.optional.test.ts
-src/plugins/tools.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
 src/proxy-capture/store.sqlite.ts

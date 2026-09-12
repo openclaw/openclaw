@@ -4,13 +4,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  SqliteRepairableForeignKeyError,
+} from "../infra/sqlite-integrity.js";
 import {
   assertSqliteSchemaContains,
   getCanonicalSqliteTableNames,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { withStateSchemaFence } from "../infra/state-database-coordinator.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -19,6 +23,7 @@ import {
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import {
   runCoordinatedStateTransaction,
   withSharedStateWriteCoordinator,
@@ -62,13 +67,14 @@ function assertExistingOpenClawStateSchema(
  * The real handle and write coordinators cover open, transaction, and close.
  */
 export function runExistingOpenClawStateWriteTransaction<T>(
-  operation: (database: { db: DatabaseSync; path: string }) => T,
+  operation: (database: { db: DatabaseSync; path: string; recoveryChanges: string[] }) => T,
   options: OpenClawStateDatabaseOptions,
   contract: {
     schemaSql: string;
     operationLabel: string;
     busyTimeoutMs?: number;
     initializeAdditiveSchema?: boolean;
+    recoverTaskDeliveryOrphans?: true;
   },
 ): T {
   if (options.database || options.readOnly) {
@@ -87,57 +93,86 @@ export function runExistingOpenClawStateWriteTransaction<T>(
       throw new Error("Existing-state database generation changed.");
     }
   };
-  return withSharedStateWriteCoordinator({ databasePath: pathname, busyTimeoutMs }, () =>
-    runWithOpenClawStateWriteAccess(
-      { databasePath: pathname, env, busyTimeoutMs },
-      contract.operationLabel,
-      () => {
-        assertSameFile();
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-        const db = openTrackedStateDatabase(pathname, { existingOnly: true });
-        try {
-          setSqliteBusyTimeout(db, busyTimeoutMs);
-          return runCoordinatedStateTransaction(
-            db,
-            () => {
-              assertSameFile();
-              assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
-              const version = assertExistingOpenClawStateSchema(
-                db,
-                pathname,
-                contract.initializeAdditiveSchema ? "" : contract.schemaSql,
-              );
-              if (contract.initializeAdditiveSchema) {
-                // Validate present objects before first use: CREATE IF NOT EXISTS
-                // must not hide drift or repair an incomplete existing table.
-                assertSqliteSchemaContains(db, pathname, contract.schemaSql, {
-                  allowedMissingTables: getCanonicalSqliteTableNames(contract.schemaSql),
-                });
-                db.exec(contract.schemaSql); // sqlite-allow-raw -- Declared canonical feature-local additive DDL only.
-                assertSqliteSchemaContains(db, pathname, contract.schemaSql);
-              }
-              const schemaVersion = readSqliteSchemaCookie(db);
-              const result = operation({ db, path: pathname });
-              assertSameFile();
-              if (
-                readSqliteUserVersion(db) !== version ||
-                readSqliteSchemaCookie(db) !== schemaVersion
-              ) {
-                throw new Error("Existing-state transaction cannot migrate schema.");
-              }
-              return result;
-            },
-            {
-              busyTimeoutMs,
-              databaseLabel: pathname,
-              operationLabel: contract.operationLabel,
-            },
+  const write = () =>
+    withSharedStateWriteCoordinator({ databasePath: pathname, busyTimeoutMs }, () =>
+      runWithOpenClawStateWriteAccess(
+        { databasePath: pathname, env, busyTimeoutMs },
+        contract.operationLabel,
+        () => {
+          assertSameFile();
+          openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+            pathname,
+            env,
           );
-        } finally {
-          clearNodeSqliteKyselyCacheForDatabase(db);
-          closeTrackedStateDatabase(db);
-        }
-      },
-    ),
-  );
+          const db = openTrackedStateDatabase(pathname, {
+            existingOnly: true,
+            // Match Doctor: inbound dependents must fail validation, never cascade away.
+            ...(contract.recoverTaskDeliveryOrphans ? { enableForeignKeyConstraints: false } : {}),
+          });
+          try {
+            setSqliteBusyTimeout(db, busyTimeoutMs);
+            return runCoordinatedStateTransaction(
+              db,
+              () => {
+                assertSameFile();
+                assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+                const validate = () =>
+                  assertExistingOpenClawStateSchema(
+                    db,
+                    pathname,
+                    contract.initializeAdditiveSchema ? "" : contract.schemaSql,
+                  );
+                let version: number;
+                let recoveryChanges: string[] = [];
+                try {
+                  version = validate();
+                } catch (error) {
+                  if (
+                    !contract.recoverTaskDeliveryOrphans ||
+                    !(error instanceof SqliteRepairableForeignKeyError)
+                  ) {
+                    throw error;
+                  }
+                  recoveryChanges = recoverOrphanTaskDeliveryRows(db, pathname);
+                  version = validate();
+                }
+                if (contract.initializeAdditiveSchema) {
+                  // Validate present objects before first use: CREATE IF NOT EXISTS
+                  // must not hide drift or repair an incomplete existing table.
+                  assertSqliteSchemaContains(db, pathname, contract.schemaSql, {
+                    allowedMissingTables: getCanonicalSqliteTableNames(contract.schemaSql),
+                  });
+                  db.exec(contract.schemaSql); // sqlite-allow-raw -- Declared canonical feature-local additive DDL only.
+                  assertSqliteSchemaContains(db, pathname, contract.schemaSql);
+                }
+                const schemaVersion = readSqliteSchemaCookie(db);
+                const result = operation({ db, path: pathname, recoveryChanges });
+                assertSameFile();
+                if (
+                  readSqliteUserVersion(db) !== version ||
+                  readSqliteSchemaCookie(db) !== schemaVersion
+                ) {
+                  throw new Error("Existing-state transaction cannot migrate schema.");
+                }
+                if (contract.recoverTaskDeliveryOrphans) {
+                  assertSqliteIntegrity(db, pathname);
+                }
+                return result;
+              },
+              {
+                busyTimeoutMs,
+                databaseLabel: pathname,
+                operationLabel: contract.operationLabel,
+              },
+            );
+          } finally {
+            clearNodeSqliteKyselyCacheForDatabase(db);
+            closeTrackedStateDatabase(db);
+          }
+        },
+      ),
+    );
+  return contract.recoverTaskDeliveryOrphans
+    ? withStateSchemaFence({ databasePath: pathname }, write)
+    : write();
 }

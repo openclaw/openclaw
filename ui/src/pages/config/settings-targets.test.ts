@@ -28,6 +28,7 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["sessionStorage", "/settings/ai-agents", "?section=session", "#settings-session-storage"],
       [
         "meetingCapture",
         "/settings/communications",

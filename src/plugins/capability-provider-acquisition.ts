@@ -11,6 +11,7 @@ import {
   isPluginRegistryLoadInFlight,
   resolvePluginRegistryLoadCacheKey,
 } from "./loader.js";
+import type { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -22,7 +23,7 @@ export async function acquirePluginCapabilityProviders<
   const work = new AsyncWorkScope();
   const releases: Array<() => Promise<void>> = [];
   const loads = new Map<string, Promise<PluginRegistry>>();
-  const retained = new Set<PluginRegistry>();
+  const retained = new Map<PluginRegistry, PluginInvocationScope | undefined>();
   const authorities = new Map<PluginRegistry, (() => boolean) | undefined>();
   const captureAuthority = (registry: PluginRegistry) => {
     if (!authorities.has(registry)) {
@@ -32,8 +33,12 @@ export async function acquirePluginCapabilityProviders<
       );
     }
   };
-  const dispose = () =>
-    Promise.allSettled(releases.map(async (releaseClaim) => await releaseClaim())).then(
+  const dispose = () => {
+    // Close executable views before releasing the physical claims awaiting their consumers.
+    for (const invocation of retained.values()) {
+      invocation?.release();
+    }
+    return Promise.allSettled(releases.map(async (releaseClaim) => await releaseClaim())).then(
       (results) => {
         const errors = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
@@ -43,16 +48,23 @@ export async function acquirePluginCapabilityProviders<
         }
       },
     );
+  };
   const retain = (registry: PluginRegistry | undefined) => {
-    if (!registry || retained.has(registry)) {
-      return;
+    if (!registry) {
+      return undefined;
     }
-    retained.add(registry);
-    captureAuthority(registry);
-    const resources = getPluginRegistryInspectionResources(registry);
-    if (resources) {
-      releases.push(resources.retain().release);
+    if (!retained.has(registry)) {
+      captureAuthority(registry);
+      const resources = getPluginRegistryInspectionResources(registry);
+      let invocation: PluginInvocationScope | undefined;
+      if (resources) {
+        releases.push(resources.retain().release);
+        invocation = resources.createInvocationScope(registry);
+      }
+      retained.set(registry, invocation);
     }
+    const invocation = retained.get(registry);
+    return invocation ? <T>(provider: T) => invocation.wrap(provider) : undefined;
   };
   let releaseCompletion: Promise<void> | undefined;
   const release = () =>

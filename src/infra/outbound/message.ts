@@ -322,14 +322,9 @@ async function callMessageGateway<T>(params: {
   await params.onPlatformSendDispatch?.();
   params.assertDirectAdapterHandoff?.();
   return await callGatewayLeastPrivilege<T>({
-    url: gateway.url,
-    token: gateway.token,
+    ...gateway,
     method: params.method,
     params: params.params,
-    timeoutMs: gateway.timeoutMs,
-    clientName: gateway.clientName,
-    clientDisplayName: gateway.clientDisplayName,
-    mode: gateway.mode,
     agentRuntimeIdentityToken,
   });
 }

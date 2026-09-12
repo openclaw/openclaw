@@ -1,5 +1,6 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
@@ -14,7 +15,11 @@ import type { ManagedServiceRootRedirect } from "./update-command-service-plan.j
 export async function handleDryRunPreflightError(
   error: unknown,
   notes: string[],
-  refuseUpdate: (reason: string, message: string) => Promise<void>,
+  refuseUpdate: (
+    reason: string,
+    message: string,
+    failureFacts?: readonly UpdateFailureFact[],
+  ) => Promise<void>,
 ): Promise<OpenClawDatabaseSchemaPreflight> {
   if (!(error instanceof UpdatePreMutationError)) {
     throw error;
@@ -27,7 +32,7 @@ export async function handleDryRunPreflightError(
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
     return { incompatible: [], indeterminate: [] };
   }
-  await refuseUpdate(error.reason, error.message);
+  await refuseUpdate(error.reason, error.message, error.failureFacts);
   return { incompatible: [], indeterminate: [] };
 }
 

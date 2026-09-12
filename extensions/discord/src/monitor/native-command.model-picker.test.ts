@@ -15,7 +15,7 @@ import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseCustomId, serializePayload } from "../internal/discord.js";
+import { parseCustomId, serializePayload, type MessagePayload } from "../internal/discord.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
@@ -42,6 +42,8 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) =>
   const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
   return {
     ...sdk,
+    // The shipped minimum host lacks the shared message export.
+    MODEL_PICKER_CHANGED_MESSAGE: undefined,
     get getModelsRuntimeChoices() {
       return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
     },
@@ -65,7 +67,7 @@ type MockInteraction = {
   reply: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
-  editReply: ReturnType<typeof vi.fn<(_payload?: unknown) => Promise<{ ok: boolean }>>>;
+  editReply: ReturnType<typeof vi.fn<(_payload?: MessagePayload) => Promise<{ ok: boolean }>>>;
   acknowledge: ReturnType<typeof vi.fn>;
   acknowledged: boolean;
   client: object;
@@ -137,7 +139,7 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     update: vi.fn().mockResolvedValue({ ok: true }),
     editReply: vi
-      .fn<(_payload?: unknown) => Promise<{ ok: boolean }>>()
+      .fn<(_payload?: MessagePayload) => Promise<{ ok: boolean }>>()
       .mockResolvedValue({ ok: true }),
     acknowledge: vi.fn(),
     acknowledged: false,
@@ -324,6 +326,68 @@ function createBoundThreadBindingManager(params: {
 }
 
 describe("Discord model picker interactions", () => {
+  it.each([
+    { view: "providers", action: "back", choice: '"value":"openai"' },
+    { view: "models", action: "nav", choice: '"value":"gpt-4.1"' },
+    { view: "recents", action: "recents", choice: '"label":"openai/gpt-4.1 (default)"' },
+  ])("delivers usable $view choices and clears a recovered refresh warning", async (view) => {
+    const context = createModelPickerContext();
+    const data = createModelsProviderData({ openai: ["gpt-4.1"] });
+    data.refreshWarning = "Some models could not be refreshed.";
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
+    const dispatchSpy = createDispatchSpy();
+    const params = {
+      context,
+      data: { cmd: "models", act: view.action, view: view.view, u: "owner", p: "openai" },
+      dispatchCommandInteraction: dispatchSpy,
+    };
+
+    const failedRefresh = await runSubmitButton(params);
+    expect(failedRefresh.editReply).toHaveBeenCalledOnce();
+    const failedPayload = JSON.stringify(
+      serializePayload(failedRefresh.editReply.mock.calls[0]![0]!),
+    );
+    expect(failedPayload).toContain("Some models could not be refreshed.");
+    expect(failedPayload).toContain(view.choice);
+
+    delete data.refreshWarning;
+    const recovered = await runSubmitButton(params);
+    expect(recovered.editReply).toHaveBeenCalledOnce();
+    const recoveredPayload = JSON.stringify(
+      serializePayload(recovered.editReply.mock.calls[0]![0]!),
+    );
+    expect(recoveredPayload).not.toContain("Some models could not be refreshed.");
+    expect(recoveredPayload).toContain(view.choice);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["model", "provider", "runtime"] as const)(
+    "offers the shared recovery when a retained %s dropdown choice disappears",
+    async (action) => {
+      const context = createModelPickerContext();
+      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
+        createModelsProviderData({ openai: ["gpt-4.1"] }),
+      );
+      const dispatchSpy = createDispatchSpy();
+      const interaction = await runModelSelect({
+        context,
+        data: {
+          cmd: "models",
+          act: action,
+          view: "models",
+          u: "owner",
+          p: action === "model" ? "openai" : "removed",
+        },
+        values: [action === "model" ? "removed-model" : "removed"],
+        dispatchCommandInteraction: dispatchSpy,
+      });
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(firstMockArg(interaction.editReply, "removed choice"))).toContain(
+        "Available models changed. Open /models and choose again.",
+      );
+    },
+  );
+
   beforeEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
     tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
@@ -816,7 +880,7 @@ describe("Discord model picker interactions", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(
       JSON.stringify(firstMockArg(legacyInteraction.editReply, "interaction.editReply")),
-    ).toContain("selection expired");
+    ).toContain("Available models changed. Open /models and choose again.");
   });
 
   it("requires submit and retains Gateway ownership through the /model pipeline", async () => {
@@ -837,6 +901,9 @@ describe("Discord model picker interactions", () => {
     });
 
     expect(selectInteraction.editReply).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.stringify(serializePayload(selectInteraction.editReply.mock.calls[0]![0]!)),
+    ).toContain("Selected: openai/gpt-4o · OpenClaw Default (press Submit)");
     expect(dispatchSpy).not.toHaveBeenCalled();
 
     const submitInteraction = await runSubmitButton({
@@ -1229,7 +1296,7 @@ describe("Discord model picker interactions", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(
       JSON.stringify(firstMockArg(legacyInteraction.editReply, "interaction.editReply")),
-    ).toContain("selection expired");
+    ).toContain("Available models changed. Open /models and choose again.");
   });
 
   it("refuses legacy compact recents runtime without dispatch", async () => {

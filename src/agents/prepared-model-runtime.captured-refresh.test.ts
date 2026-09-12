@@ -25,7 +25,7 @@ async function prepareCatalogOwner(
 ) {
   mocks.configuredAgentIds = ["pro"];
   for (const catalog of catalogs) {
-    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(catalog);
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(catalog);
   }
   await refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,

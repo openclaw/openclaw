@@ -170,8 +170,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
             stateDir: state.stateDir,
             configPath: state.configPath,
             workspaceDir: state.workspaceDir,
-            installRoot: state.workspaceDir,
-            ...(candidate ? { candidateRoot } : {}),
+            installRoot: root,
           },
           route: {
             runner: "embedded",

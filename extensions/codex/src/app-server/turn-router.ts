@@ -670,7 +670,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   }
 }
 
-async function waitForPromiseOrAbort(
+export async function waitForPromiseOrAbort(
   promise: Promise<unknown>,
   signal: AbortSignal,
 ): Promise<boolean> {

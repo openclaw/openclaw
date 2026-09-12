@@ -6,6 +6,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
+import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
@@ -27,7 +28,6 @@ import {
   resolveAssistantStreamContentIndex,
   resolveAssistantStreamItemId,
   resolveAssistantTextChunk,
-  resolveCurrentSourceMessagingToolPartial,
   resolveStreamingReply,
   scopeAssistantMessageToStreamBlock,
   shouldSuppressDeterministicApprovalOutput,

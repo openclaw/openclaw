@@ -1,32 +1,36 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 // Guided onboarding verifies the selected AI connection before persisting its route.
 import type { SetupInferenceDetection } from "../system-agent/setup-inference.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
+import {
+  resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
+} from "./onboard-agent-target.js";
 import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
-import { requestGuidedOnboardingConsent } from "./onboard-guided-consent.js";
+import {
+  persistGuidedAccessMode,
+  requestGuidedOnboardingConsent,
+  type GuidedAccessMode,
+} from "./onboard-guided-consent.js";
 import { runManualStage } from "./onboard-guided-manual.js";
 import { enableDefaultOnboardingInternalHooks } from "./onboard-hooks.js";
 import {
   hasInteractiveOnboardingTty,
+  launchHatchTui,
   runInteractiveOnboarding,
 } from "./onboard-interactive-runner.js";
 import type { OnboardOptions } from "./onboard-types.js";
-
-type ActivateSetupInference =
-  typeof import("../system-agent/setup-inference.js").activateSetupInference;
-type DetectSetupInference =
-  typeof import("../system-agent/setup-inference.js").detectSetupInference;
 
 export type GuidedOnboardingDeps = {
   runSystemAgentChat?: (
@@ -37,8 +41,8 @@ export type GuidedOnboardingDeps = {
   ) => Promise<void>;
   launchHatchTui?: (workspace: string) => Promise<void>;
   runForegroundGateway?: typeof import("./onboard-quickstart-host.js").runQuickstartForegroundGateway;
-  detect?: DetectSetupInference;
-  activate?: ActivateSetupInference;
+  detect?: typeof import("../system-agent/setup-inference.js").detectSetupInference;
+  activate?: typeof import("../system-agent/setup-inference.js").activateSetupInference;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<string | void>;
   persistAccessMode?: (mode: GuidedAccessMode) => Promise<void>;
@@ -54,40 +58,15 @@ export type GuidedOnboardingDeps = {
   runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
   runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
   /** Browser-first local hatch handoff. Tests inject this to avoid real browser/Gateway work. */
-  runBrowserHandoff?: typeof runBrowserHatchHandoff;
+  runBrowserHandoff?: typeof import("./onboard-browser-handoff.js").runBrowserHatchHandoff;
   platform?: NodeJS.Platform;
 };
 
-export type GuidedAccessMode = "full" | "guarded";
-
 type GuidedOnboardingHandoff =
   | { workspace: string; next: "browser" }
-  | { workspace: string; next: "foreground-gateway" }
-  | { workspace: string; next: "hatch"; local: boolean }
+  | { workspace: string; next: "foreground-gateway"; agentId?: string }
+  | { workspace: string; next: "hatch"; local: boolean; agentId?: string }
   | { workspace: string; next: "chat"; agentName?: string };
-
-async function openSystemAgentChat(
-  deps: GuidedOnboardingDeps,
-  workspace: string,
-  runtime: RuntimeEnv,
-  acceptRisk: boolean,
-  agentName?: string,
-): Promise<void> {
-  const runChat: NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]> =
-    deps.runSystemAgentChat ??
-    (async (setupWorkspace, chatRuntime, riskAccepted, setupAgentName) => {
-      const { runConversationalOnboarding } = await import("./onboard-interactive.js");
-      await runConversationalOnboarding(
-        {
-          workspace: setupWorkspace,
-          ...(setupAgentName ? { agentName: setupAgentName } : {}),
-          ...(riskAccepted ? { acceptRisk: true } : {}),
-        },
-        chatRuntime,
-      );
-    });
-  await runChat(workspace, runtime, acceptRisk, agentName);
-}
 
 async function runGuidedOnboardingFlow(
   opts: OnboardOptions,
@@ -151,19 +130,26 @@ async function runGuidedOnboardingFlow(
   const { quickstart } = consent;
   const { config: acknowledgedConfig, securityAcknowledgedAt: onboardingSecurityAcknowledgedAt } =
     consent;
+  let localSetup = snapshot.exists
+    ? localOnboarding?.readLocalOnboardingStateForConfig(snapshot.path, existingConfig)
+    : undefined;
+  const resumingSetup = localSetup?.status === "pending";
   const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(snapshot);
-  const firstAgent = await promptFirstOnboardingAgent(
-    hasAuthoredRoster,
-    opts.agentName,
-    prompter,
-    quickstart,
-  );
+  if (opts.team && hasAuthoredRoster) {
+    throw new Error(
+      "An agent roster already exists. Use `openclaw agents team create` to add a team.",
+    );
+  }
+  const firstAgent =
+    resumingSetup && localSetup?.teamCoordinatorId && !hasAuthoredRoster
+      ? { name: localSetup.teamCoordinatorId, team: true }
+      : await promptFirstOnboardingAgent(hasAuthoredRoster, opts.agentName, prompter, quickstart, {
+          team: opts.team,
+          offerTeam: opts.nonInteractive !== true,
+        });
 
   // Reset removes config but keeps SQLite. Only the original, pre-acknowledgement
   // snapshot distinguishes a new installation from an interrupted previous run.
-  let localSetup: LocalOnboardingState | undefined = snapshot.exists
-    ? localOnboarding?.readLocalOnboardingStateForConfig(snapshot.path, existingConfig)
-    : undefined;
   if (previousLocalSetup?.status === "pending" && localSetup === undefined) {
     const currentSnapshot = await readConfigFileSnapshot();
     const currentAcknowledgement = currentSnapshot.valid
@@ -180,7 +166,12 @@ async function runGuidedOnboardingFlow(
     !snapshot.exists ||
     (previousLocalSetup?.status === "pending" && localSetup === undefined) ||
     (previousLocalSetup?.status === "completed" && isUnconfiguredConfigSource(existingConfig));
-  const resumingSetup = localSetup?.status === "pending";
+  const handoffAgentId = firstAgent?.team
+    ? normalizeAgentId(firstAgent.name)
+    : resumingSetup && hasAuthoredRoster
+      ? (localSetup?.teamCoordinatorId ??
+        resolveSystemAgentOnboardingTarget(existingConfig).agentId)
+      : undefined;
   if (
     localSetup?.status === "pending" &&
     opts.workspace?.trim() &&
@@ -227,7 +218,7 @@ async function runGuidedOnboardingFlow(
     accessMode = accessChoice === "guarded" ? "guarded" : "full";
   }
   if (custodianMode && existingConfig.wizard?.accessMode !== accessMode) {
-    await (deps.persistAccessMode ?? persistAccessMode)(accessMode);
+    await (deps.persistAccessMode ?? persistGuidedAccessMode)(accessMode);
   }
 
   // Inference is the only prerequisite for OpenClaw. Use the caller's or
@@ -239,6 +230,34 @@ async function runGuidedOnboardingFlow(
       acknowledgedConfig.agents?.defaults?.workspace?.trim() ||
       onboardHelpers.DEFAULT_WORKSPACE,
   );
+
+  const conversationWorkspace = handoffAgentId
+    ? hasAuthoredRoster
+      ? resolveOnboardingAgentTarget(existingConfig, handoffAgentId).workspaceDir
+      : path.join(workspace, handoffAgentId)
+    : workspace;
+
+  let teamCoordinatorId =
+    (resumingSetup ? localSetup?.teamCoordinatorId : undefined) ??
+    (firstAgent?.team ? normalizeAgentId(firstAgent.name) : undefined);
+  if (resumingSetup && hasAuthoredRoster) {
+    const { matchesLocalSetupWorkspace } = await import("../system-agent/setup-recovery.js");
+    if (
+      localSetup?.teamCoordinatorId &&
+      !(await matchesLocalSetupWorkspace(existingConfig, workspace, localSetup.teamCoordinatorId))
+    ) {
+      throw new Error(
+        "The pending team no longer matches its approved roster and workspace. Inspect `openclaw agents list` and repair the team before retrying setup.",
+      );
+    }
+    if (
+      !teamCoordinatorId &&
+      handoffAgentId &&
+      (await matchesLocalSetupWorkspace(existingConfig, workspace, handoffAgentId))
+    ) {
+      teamCoordinatorId = handoffAgentId;
+    }
+  }
 
   const activateInference =
     deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;
@@ -263,6 +282,7 @@ async function runGuidedOnboardingFlow(
     const claimedSetup = localOnboarding.beginLocalOnboarding({
       configPath: snapshot.path,
       workspace,
+      ...(teamCoordinatorId ? { teamCoordinatorId } : {}),
       securityAcknowledgedAt: committedSecurityAcknowledgedAt,
       runId,
       ...(replacePreviousSetup
@@ -290,15 +310,19 @@ async function runGuidedOnboardingFlow(
       throw new Error("Another onboarding run replaced this setup operation. Retry onboarding.");
     }
   };
-  const activate: ActivateSetupInference = async (params) => {
+  const activate: NonNullable<GuidedOnboardingDeps["activate"]> = async (params) => {
+    const activationParams =
+      resumingSetup && hasAuthoredRoster && localSetup?.teamCoordinatorId
+        ? { ...params, agentId: localSetup.teamCoordinatorId }
+        : params;
     if (
       !localOnboarding ||
       (!resumingSetup && (existingConfig.gateway || detection?.setupComplete === true))
     ) {
-      return await activateInference(params);
+      return await activateInference(activationParams);
     }
     return await activateInference({
-      ...params,
+      ...activationParams,
       onCommitStarted: (sourceConfig) => {
         params.onCommitStarted?.(sourceConfig);
         claimLocalSetup(sourceConfig);
@@ -395,14 +419,10 @@ async function runGuidedOnboardingFlow(
     activate,
   });
   const skippedInference = resultLines === null;
-  if (
-    skippedInference &&
-    localOnboarding &&
-    (resumingSetup || (!existingConfig.gateway && !detection.setupComplete))
-  ) {
+  if (localOnboarding && (resumingSetup || (!existingConfig.gateway && !detection.setupComplete))) {
     const { withConfigMutationExclusive } = await import("../config/config.js");
-    // Skip owns the same resumable baseline as verified inference. Claim before
-    // agent creation so an interruption cannot strand a half-installed roster.
+    // A verified existing route may need no config write. Claim before provisioning
+    // even when activation's commit callback did not run.
     await withConfigMutationExclusive(async (sourceConfig) => claimLocalSetup(sourceConfig));
   }
   if (resultLines?.length) {
@@ -425,9 +445,18 @@ async function runGuidedOnboardingFlow(
       const runMemoryImport =
         deps.runSetupMemoryImportStep ??
         (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
-      await runMemoryImport({ config: persistedConfig, prompter, runtime });
+      await runMemoryImport({
+        config: persistedConfig,
+        prompter,
+        runtime,
+        ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
+      });
     }
-    return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
+    return {
+      workspace: conversationWorkspace,
+      next: "chat",
+      ...(firstAgent ? { agentName: firstAgent.name } : {}),
+    };
   }
 
   // Setup apply installs and restarts the machine-level Gateway service.
@@ -442,6 +471,7 @@ async function runGuidedOnboardingFlow(
   const workspaceSelection = await resolveSetupWorkspaceSelection({
     baseConfig: existingConfig,
     requestedWorkspaceDir: workspace,
+    approvedWorkspaceDir: resumingSetup && teamCoordinatorId ? localSetup?.workspace : undefined,
     prompter,
     canConfirmMove: !alreadyConfigured,
   });
@@ -505,6 +535,7 @@ async function runGuidedOnboardingFlow(
           {
             workspace,
             ...(firstAgent ? { firstAgent } : {}),
+            ...(teamCoordinatorId ? { teamCoordinatorId } : {}),
             allowWorkspaceChange: allowWorkspaceChange || localSetup?.status === "pending",
             ...(resumingSetup ? { resume: true } : {}),
             ...(localSetup?.status === "pending"
@@ -543,6 +574,7 @@ async function runGuidedOnboardingFlow(
             ).completeLocalSetupRecovery({
               owner: localSetup,
               appliedConfigPath: applied.configPath,
+              teamCoordinatorId,
             })
           : await readConfigFileSnapshot();
       if (!appliedSnapshot.valid) {
@@ -552,6 +584,12 @@ async function runGuidedOnboardingFlow(
       applyProgress.stop(t("wizard.guided.setupDone"));
     } catch (error) {
       applyProgress.stop(t("wizard.guided.testFailed"));
+      if (teamCoordinatorId) {
+        throw new Error(
+          `Onboarding did not complete: ${error instanceof Error ? error.message : String(error)} Run \`openclaw agents list\` to inspect the roster, then retry with the same --workspace after resolving the error.`,
+          { cause: error },
+        );
+      }
       await prompter.note(
         t("wizard.guided.applyFailedFallback", {
           detail: error instanceof Error ? error.message : String(error),
@@ -561,12 +599,19 @@ async function runGuidedOnboardingFlow(
       if (skippedInference) {
         throw error;
       }
-      return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
+      return {
+        workspace: conversationWorkspace,
+        next: "chat",
+        ...(firstAgent ? { agentName: firstAgent.name } : {}),
+      };
     }
   }
+  const agentWorkspace = handoffAgentId
+    ? resolveOnboardingAgentTarget(persistedConfig, handoffAgentId).workspaceDir
+    : appliedWorkspace;
   if (skippedInference) {
     await prompter.note(
-      t("wizard.guided.nextStepsWithoutAi", { workspace: appliedWorkspace }),
+      t("wizard.guided.nextStepsWithoutAi", { workspace: agentWorkspace }),
       t("wizard.guided.nextStepsTitle"),
     );
     await prompter.outro(t("wizard.guided.setupDone"));
@@ -578,7 +623,12 @@ async function runGuidedOnboardingFlow(
     const runMemoryImport =
       deps.runSetupMemoryImportStep ??
       (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
-    await runMemoryImport({ config: persistedConfig, prompter, runtime });
+    await runMemoryImport({
+      config: persistedConfig,
+      prompter,
+      runtime,
+      ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
+    });
     const runAppRecommendations =
       deps.runAppRecommendations ??
       (await import("../wizard/setup.app-recommendations.js")).setupAppRecommendations;
@@ -586,7 +636,7 @@ async function runGuidedOnboardingFlow(
       config: persistedConfig,
       prompter,
       runtime,
-      workspaceDir: workspace,
+      workspaceDir: agentWorkspace,
       modelRouteVerified: true,
     });
     const recommendedConfig = recommendationOutcome.config;
@@ -601,14 +651,20 @@ async function runGuidedOnboardingFlow(
     }
     recommendationOutcome.commitResult();
   }
-  const hatchWorkspace = alreadyConfigured
-    ? resolveUserPath(
-        existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
-      )
-    : appliedWorkspace;
+  const hatchWorkspace = handoffAgentId
+    ? agentWorkspace
+    : alreadyConfigured
+      ? resolveUserPath(
+          existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+        )
+      : appliedWorkspace;
   if (quickstart && !gatewayExternallyManaged) {
     await prompter.outro(t("wizard.guided.setupDone"));
-    return { workspace: hatchWorkspace, next: "foreground-gateway" };
+    return {
+      workspace: hatchWorkspace,
+      next: "foreground-gateway",
+      ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
+    };
   }
   if (opts.skipUi === true) {
     await prompter.outro(t("wizard.guided.complete"));
@@ -621,6 +677,7 @@ async function runGuidedOnboardingFlow(
     const handoff = await runBrowserHandoff({
       config: persistedConfig,
       prompter,
+      ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
     });
     if (handoff.handedOff) {
@@ -632,46 +689,12 @@ async function runGuidedOnboardingFlow(
   await prompter.outro(t("wizard.guided.hatchingNow"));
   // The TUI opens the configured default agent/workspace; on a configured
   // rerun that is the persisted default, not the --workspace probe context.
-  return { workspace: hatchWorkspace, next: "hatch", local: alreadyConfigured };
-}
-
-async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
-  const { mutateConfigFileWithRetry } = await import("../config/config.js");
-  await mutateConfigFileWithRetry({
-    mutate: (draft) => {
-      if (draft.wizard?.accessMode === mode) {
-        return;
-      }
-      draft.wizard = { ...draft.wizard, accessMode: mode };
-    },
-  });
-}
-
-async function launchHatchTui(workspace: string, local: boolean): Promise<void> {
-  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, { restoreTerminalState }, fs, path] =
-    await Promise.all([
-      import("../tui/tui-launch.js"),
-      import("../agents/workspace.js"),
-      import("../../packages/terminal-core/src/restore.js"),
-      import("node:fs"),
-      import("node:path"),
-    ]);
-  const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
-  restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
-  try {
-    // Fresh setup already started the Gateway; local mode would contend for its state lock.
-    // No timeoutMs: the run-level TUI timeout overrides the configured agent
-    // timeout for every turn in the session, not just the hatch message.
-    await launchTuiCli({
-      ...(local ? { local: true } : {}),
-      deliver: false,
-      // Seed the first-run hatch only when the workspace bootstrap exists;
-      // re-runs against an established agent open a plain chat instead.
-      ...(hasBootstrap ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
-    });
-  } finally {
-    restoreTerminalState("post guided hatch tui", { resumeStdinIfPaused: false });
-  }
+  return {
+    workspace: hatchWorkspace,
+    next: "hatch",
+    local: alreadyConfigured,
+    ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
+  };
 }
 
 export async function runGuidedOnboarding(
@@ -698,6 +721,7 @@ export async function runGuidedOnboarding(
       (await import("./onboard-quickstart-host.js")).runQuickstartForegroundGateway;
     await runForegroundGateway({
       runtime,
+      ...(handoff.agentId ? { agentId: handoff.agentId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
     });
     return;
@@ -708,7 +732,7 @@ export async function runGuidedOnboarding(
     if (deps.launchHatchTui) {
       await deps.launchHatchTui(handoff.workspace);
     } else {
-      await launchHatchTui(handoff.workspace, handoff.local);
+      await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
     }
     return;
   }
@@ -717,5 +741,17 @@ export async function runGuidedOnboarding(
   }
   // Chat handoff: legacy remote-gateway flow, or local recovery after a
   // failed setup apply — the conversational chat can finish interactively.
-  await openSystemAgentChat(deps, handoff.workspace, runtime, true, handoff.agentName);
+  if (deps.runSystemAgentChat) {
+    await deps.runSystemAgentChat(handoff.workspace, runtime, true, handoff.agentName);
+  } else {
+    const { runConversationalOnboarding } = await import("./onboard-interactive.js");
+    await runConversationalOnboarding(
+      {
+        workspace: handoff.workspace,
+        ...(handoff.agentName ? { agentName: handoff.agentName } : {}),
+        acceptRisk: true,
+      },
+      runtime,
+    );
+  }
 }

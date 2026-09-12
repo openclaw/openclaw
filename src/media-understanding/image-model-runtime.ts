@@ -53,8 +53,7 @@ type PreparedImageRuntime = {
   model: Model;
 };
 
-type ImageRuntimeResources = {
-  release: () => void;
+type ImageRuntimeResources = AsyncDisposable & {
   assertResourcesOpen?: () => void;
 };
 
@@ -240,7 +239,12 @@ export async function resolveImageRuntime(
     ? retainPreparedModelRuntimeSnapshotResources(suppliedSnapshot)
     : undefined;
   const preparedRuntimeLease = suppliedSnapshot
-    ? { snapshot: suppliedSnapshot, release: () => suppliedClaim?.release() }
+    ? {
+        snapshot: suppliedSnapshot,
+        async [Symbol.asyncDispose]() {
+          await suppliedClaim?.release();
+        },
+      }
     : await acquireAgentRunPreparedModelRuntime(
         {
           agentDir: params.agentDir,
@@ -269,7 +273,7 @@ export async function resolveImageRuntime(
       );
   // The operation owns release before setup can leave asynchronous cleanup behind.
   onAcquired({
-    release: preparedRuntimeLease.release,
+    [Symbol.asyncDispose]: () => preparedRuntimeLease[Symbol.asyncDispose](),
     ...(suppliedClaim ? { assertResourcesOpen: suppliedClaim.assertOpen } : {}),
   });
   params.signal?.throwIfAborted();

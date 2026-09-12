@@ -32,7 +32,9 @@ shared `message` tool. Your plugin owns:
   targets
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
-generic `:thread:` bookkeeping, and dispatch.
+generic `:thread:` bookkeeping, and dispatch. For configured agent group
+threads, core also owns participant selection, follow-up rounds, and turn
+budgets. Keep those policies out of channel adapters.
 
 Core also owns model-picker product actions. A channel that renders a
 `ModelPickerAction` declares its `ModelPickerCapabilityProfile`, then encodes
@@ -448,6 +450,22 @@ raw callback string. Actor and source-message checks remain channel-owned.
       its own inbound pipeline. Look at bundled channel plugins
       (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
+
+    Routes registered with `auth: "gateway"` use the Gateway's credential
+    checks. Before a handler performs a mutation or starts other side effects,
+    finish reading and validating its body and waiting for queued work, then call
+    `await getPluginRuntimeGatewayRequestScope()?.revalidate?.()` from
+    `openclaw/plugin-sdk/plugin-runtime`. The request-scoped capability rechecks
+    an admitted device credential and its original scopes through the Gateway
+    auth owner. It writes the standard HTTP 401 error and throws if the grant
+    was revoked, rotated, or narrowed. Let the rejection stop the handler; an
+    error handler must not replace an already-ended response. The capability
+    expires with the HTTP response and is absent for other authentication paths.
+
+    This check authorizes the work about to start. It does not cancel an
+    external operation already in progress. Revalidate again before later
+    independent mutations, such as saving a published or imported profile after
+    relay I/O.
 
   </Step>
 

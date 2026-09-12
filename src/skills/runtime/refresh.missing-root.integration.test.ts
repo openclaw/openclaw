@@ -150,10 +150,13 @@ it("refreshes skills created beneath an initially missing project skills root", 
     const existingSkill = path.join(workspaceDir, "skills", "existing", "SKILL.md");
     // This control covers writes after registration; the cases above cover
     // cached discovery while the initial scan is still pending.
-    await vi.waitFor(() => {
-      expect(registeredPaths.has(workspaceDir)).toBe(true);
-      expect(registeredPaths.has(path.dirname(existingSkill))).toBe(true);
-    });
+    // Bun does not project spy replacements onto already-bound node:fs named exports.
+    if (!process.versions.bun) {
+      await vi.waitFor(() => {
+        expect(registeredPaths.has(workspaceDir)).toBe(true);
+        expect(registeredPaths.has(path.dirname(existingSkill))).toBe(true);
+      });
+    }
     await fs.writeFile(existingSkill, "existing skill");
     await vi.waitFor(() => expect(changes).toContain(existingSkill), { timeout: 3_000 });
     const newSkill = path.join(workspaceDir, ".agents", "skills", "new", "SKILL.md");
@@ -167,9 +170,11 @@ it("refreshes skills created beneath an initially missing project skills root", 
       },
       { timeout: 3_000 },
     );
-    expect(inheritedContexts.length).toBeGreaterThan(0);
-    for (const context of inheritedContexts) {
-      expect(context).toEqual({ turn: undefined, pendingInput: undefined });
+    if (!process.versions.bun) {
+      expect(inheritedContexts.length).toBeGreaterThan(0);
+      for (const context of inheritedContexts) {
+        expect(context).toEqual({ turn: undefined, pendingInput: undefined });
+      }
     }
   } finally {
     unregister();

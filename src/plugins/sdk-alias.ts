@@ -1256,6 +1256,8 @@ function mergeAliasMaps(
   return merged;
 }
 
+const EMPTY_ALIAS_MAP: Record<string, string> = Object.freeze({});
+
 function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
   return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
 }
@@ -1390,24 +1392,40 @@ export function preparePluginLoaderAliases(
   if (cached) {
     return cached;
   }
+  let sourceTransformAliasMap: Record<string, string> | undefined;
   let aliasMap: Record<string, string> | undefined;
   let sdkAliases: ReturnType<typeof createPluginSdkScopedAliases> | undefined;
   const getSdkAliases = () => (sdkAliases ??= createPluginSdkScopedAliases(context));
+  const getSourceTransformAliasMap = () =>
+    withPluginCache(
+      cache,
+      () =>
+        (sourceTransformAliasMap ??= mergeAliasMaps(
+          resolveBundledPluginPackagePublicSurfaceAliasMap(context),
+          resolveWorkspacePackageAliasMap(context),
+          EMPTY_ALIAS_MAP,
+        )),
+    );
   const getAliasMap = () =>
     withPluginCache(
       cache,
       () =>
         (aliasMap ??= mergeAliasMaps(
-          resolveBundledPluginPackagePublicSurfaceAliasMap(context),
-          resolveWorkspacePackageAliasMap(context),
+          getSourceTransformAliasMap(),
+          EMPTY_ALIAS_MAP,
           normalizeAliasTargets(getSdkAliases().getAliasMap()),
         )),
     );
   const prepared = {
+    packageRoot,
     // These are all inputs to the three map builders; installed artifacts stay
     // stable for the loader lifecycle. Key the captured authority, not raw hints.
     cacheKey,
+    sdkRoots: packageRoot
+      ? context.orderedKinds.map((kind) => path.join(packageRoot, kind, "plugin-sdk"))
+      : [],
     getAliasMap,
+    getSourceTransformAliasMap,
     resolveAlias: (specifier: string): string | undefined => {
       if (!isPluginLoaderAliasSpecifier(specifier)) {
         return undefined;
@@ -1570,19 +1588,11 @@ export function buildPluginLoaderJitiOptions(
   };
 }
 
-function supportsNativeModuleRuntime(): boolean {
-  const versions = process.versions as { bun?: string };
-  return typeof versions.bun !== "string";
-}
-
 function isBundledPluginDistModulePath(modulePath: string): boolean {
   return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
 }
 
 function shouldPreferNativeModuleLoad(modulePath: string): boolean {
-  if (!supportsNativeModuleRuntime()) {
-    return false;
-  }
   switch (normalizeLowercaseStringOrEmpty(path.extname(modulePath))) {
     case ".js":
     case ".mjs":
@@ -1605,9 +1615,7 @@ export function resolvePluginLoaderTryNative(
   }
   return (
     shouldPreferNativeModuleLoad(modulePath) ||
-    (supportsNativeModuleRuntime() &&
-      options?.preferBuiltDist === true &&
-      modulePath.includes(`${path.sep}dist${path.sep}`))
+    (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
   );
 }
 

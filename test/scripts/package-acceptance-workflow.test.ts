@@ -2963,6 +2963,7 @@ function runReleaseChecksInputValidation(
   );
   const fixture = frozenWorkflowFixture(RELEASE_CHECKS_WORKFLOW, "resolve_target", {}, {}, {}, [
     "scripts/full-release-validation-policy.mjs",
+    "scripts/lib/release-changelog.mjs",
     "scripts/full-release-candidate-contract.mjs",
     "scripts/lib/cross-os-release-checks/suite-filter.mjs",
     "scripts/lib/canonical-json.mjs",
@@ -5630,6 +5631,8 @@ gh() {
     done
     cp "$RUNNER_TEMP/preflight-manifest.json" "$destination/"
     cp -R "$RUNNER_TEMP/dependency-evidence" "$destination/"
+  elif [[ "$1 $2" == "release view" ]]; then
+    printf '%s\\n' 'Initial release notes'
   elif [[ "$1 $2" == "release edit" ]]; then
     record notes
   else return 99; fi
@@ -10028,6 +10031,21 @@ describe("package artifact reuse", () => {
     expect(openaiDefault.command).not.toContain("OPENCLAW_LIVE_GATEWAY_MODELS=");
   });
 
+  it("retains the full OpenAI Ultra model coverage independently of the fresh default", () => {
+    const ultra = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-openai-gpt56-ultra",
+    );
+    expect(ultra).toMatchObject({
+      profiles: "stable full",
+      timeout_minutes: 75,
+      profile_env_only: false,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_THINKING=ultra OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-sol,openai/gpt-5.6-terra,openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=300000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=900000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+    });
+  });
+
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const providerSuites = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_docker_provider_suites");
@@ -13813,6 +13831,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",
       "scripts/lib/canonical-json.mjs",
       "scripts/lib/cross-os-release-checks/suite-filter.mjs",

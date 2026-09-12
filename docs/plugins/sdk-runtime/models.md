@@ -10,6 +10,36 @@ sidebarTitle: "Model helpers"
 
 Call a model, resolve model-selection policy, and resolve provider auth without importing host internals. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Prepared simple completions
+
+The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a
+model once and completing with it repeatedly. Successful preparation retains the
+provider resources used by its `model`, `auth`, and `selection` fields. The host
+owns those resources, so callers can reuse the result without a disposer:
+
+```typescript
+const result = await prepareSimpleCompletionModelForAgent({ cfg, agentId });
+if ("error" in result) {
+  throw new Error(result.error);
+}
+const prepared = result;
+const response = await completeWithPreparedSimpleCompletionModel({
+  model: prepared.model,
+  auth: prepared.auth,
+  cfg,
+  context: { messages },
+});
+```
+
+Preparation accepts an optional `signal`; cancellation prevents late setup from
+returning a usable model. Resource cleanup can continue after the logical error;
+host shutdown joins admitted setup and cleanup work. Retained results stay owned
+until their host closes, which waits for accepted completion work before releasing
+provider resources. Repeated
+compatible preparations share the existing generation's resources. A result from
+a closed host cannot start another completion; prepare again under the current
+host.
+
 ## Model namespaces
 
 <AccordionGroup>
@@ -39,7 +69,7 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
     const result = await api.runtime.llm.complete({
       messages: [{ role: "user", content: "Return one JSON value." }],
       systemPrompt: "You are a JSON-only function.",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       execution: {
         mode: "isolated-agent-runtime",
         authProfileId: "openai:work",

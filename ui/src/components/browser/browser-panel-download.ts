@@ -1,4 +1,5 @@
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
+import { readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
 import {
   postNativeBrowserMessage,
   type NativeBrowserTab,
@@ -116,8 +117,8 @@ export class BrowserPanelDownload {
           },
         );
         if (!response.ok) {
-          void response.body?.cancel().catch(() => undefined);
-          throw new Error(`HTTP ${response.status}`);
+          const { errorMessage } = await readControlUiJsonResponse(response, request.signal);
+          throw new Error(errorMessage);
         }
         const content = await response.blob();
         if (!current()) {

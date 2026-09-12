@@ -5,6 +5,7 @@ import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import {
   createMockGatewayService,
@@ -75,6 +76,37 @@ async function withServiceHome(run: (home: string) => Promise<void>): Promise<vo
     await fs.rm(home, { recursive: true, force: true });
   }
 }
+
+it.each(["systemd-user-bus-unavailable", "service-manager-access-denied"] as const)(
+  "retains the native inspection reason for failed preflight: %s",
+  (reason) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("linux");
+      const service = createMockGatewayService({
+        readCommand: async () => ({
+          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+          environment: { HOME: home },
+        }),
+        readRuntime: async () => ({ status: "unknown", inspectionReason: reason }),
+        isLoaded: async () => {
+          throw new ServiceInspectionError(reason);
+        },
+      });
+      mocks.service.mockReturnValue(service);
+      await expect(
+        maybeStopManagedServiceBeforeMutableUpdate({
+          root: process.cwd(),
+          updateInstallKind: "package",
+          shouldRestart: true,
+          phase: "inspect",
+          jsonMode: true,
+        }),
+      ).resolves.toMatchObject({
+        serviceUpdateVerdict: { kind: "unavailable", inspectionReason: reason },
+      });
+      expect(service.stop).not.toHaveBeenCalled();
+    }),
+);
 
 type NativeOfflineCase = {
   platform: NodeJS.Platform;

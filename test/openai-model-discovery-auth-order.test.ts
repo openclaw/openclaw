@@ -544,6 +544,7 @@ describe("Provider model discovery auth preparation", () => {
             { provider: providerId, profileId: previousProfileId, status: "ready" },
           ],
         },
+        new Map(),
         undefined,
         auth,
         (provider) => provider,
@@ -559,7 +560,8 @@ describe("Provider model discovery auth preparation", () => {
           ),
           providerOutcomes: outcomes,
         },
-        { ...previous, key: "same-config", pluginFingerprint: "same-plugins" },
+        new Map(),
+        previous,
         auth,
         (provider) => provider,
       );

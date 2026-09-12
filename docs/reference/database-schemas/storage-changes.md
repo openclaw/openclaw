@@ -31,6 +31,22 @@ on the supplied `node:sqlite` connection. Calling Kysely's asynchronous
 dialect can identify syntax coupling, but does not prove driver behavior,
 isolation, or database compatibility.
 
+Task and flow stores keep row codecs and SQLite operations in connection-bound
+kernels. Their existing facades retain global connection acquisition, cache and
+close behavior, and write transaction admission. Compound subagent and cron
+operations call the kernels on their already-admitted connection. Task status
+classification stays with the pure record types, so decoding does not load
+provider or plugin runtime ownership. These operations and their transaction
+callbacks remain synchronous; this separation does not move SQL to a worker.
+
+SQLite worker transport preserves complete result values. Results within the
+64 MiB inline reply budget keep their existing reply path; larger results are
+serialized once and transferred in 8 MiB frames. The original operation retains
+its worker until the complete result and cleanup are acknowledged, including
+during shutdown. Framing does not paginate or repeat the database query, truncate
+results, or change request and queue budgets. Callers still materialize their
+complete result in memory.
+
 Acquire a connection once for an operation and pass that exact connection
 through its transactional helpers. SQLite write callbacks remain synchronous:
 finish asynchronous planning first, then reread authoritative rows after write
@@ -50,6 +66,14 @@ store, with existing revision, grant, and transaction semantics.
 MCP App pinning retains its existing source-interaction checks. A delayed adapter must
 revalidate that source authority at its actual write admission; checking view registration
 alone cannot replace the supported asynchronous interaction policy.
+
+Backup outcome recording and freshness reads expose asynchronous operations from
+the shared-state owner. Archive, SQLite snapshot, and Git backup commands await
+recording before reporting completion; a recording failure remains a warning and
+does not change the backup result. Status and Doctor await freshness before
+formatting it. These operations still execute synchronous SQLite internally;
+they retain the existing insertion-and-pruning transaction, 200-row limit, and
+non-creating freshness reads.
 
 Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
 eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
@@ -122,6 +146,15 @@ phase on the admitted connection. Archive-row and unpublished-name reads follow
 validation. After removing a derived archive file, pruning reacquires before the
 canonical row-deletion transaction; an acquisition failure propagates without
 deleting that recovery row.
+
+Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
+agent-database admission. A cold mutation waits for the existing integrity worker;
+its compare-and-set transaction remains synchronous on the admitted connection.
+Refresh completion and cleanup await persistence. Operations capture their resolved
+database path before admission, and refresh-lock release retains that path and its
+original environment when the caller's directory or environment changes. Doctor reports rejected
+pruning operations before continuing to the next agent. Read-only cache snapshots
+retain their existing synchronous owner and do not create missing databases.
 
 ### Preserve the data and concurrency contracts
 

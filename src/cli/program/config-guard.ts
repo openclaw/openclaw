@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
-import type { DoctorConfigPreflightResult } from "../../commands/doctor-config-preflight.js";
+import type { DoctorConfigPreflightResult } from "../../commands/doctor/shared/config-migration-result.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";

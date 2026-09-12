@@ -152,8 +152,11 @@ flow:
               - set: actual
                 value:
                   expr: "received.map(({ contentType, text, entities }) => ({ contentType, text, entities: entities.map(({ offset, length, type }) => ({ offset, length, type: { '@type': type['@type'], ...(type['@type'] === 'textEntityTypeTextUrl' ? { url: type.url } : {}), ...(type['@type'] === 'textEntityTypePreCode' ? { language: type.language } : {}) } })) }))"
+              - set: expectedNormalized
+                value:
+                  expr: "fixture.expectedChunks.map(({ contentType, text, entities }) => ({ contentType, text, entities: entities.map(({ offset, length, type }) => ({ offset, length, type: { '@type': type['@type'], ...(type['@type'] === 'textEntityTypeTextUrl' ? { url: type.url } : {}), ...(type['@type'] === 'textEntityTypePreCode' ? { language: type.language } : {}) } })) }))"
               - assert:
-                  expr: "received.some((message) => String(message.botApiMessageId) === String(receipt.messageId)) && JSON.stringify(actual) === JSON.stringify(fixture.expectedChunks)"
+                  expr: "received.some((message) => String(message.botApiMessageId) === String(receipt.messageId)) && JSON.stringify(actual) === JSON.stringify(expectedNormalized)"
                   message:
                     expr: "JSON.stringify({ case: fixture.id, expected: fixture.expectedChunks, observed: actual.map((message, index) => ({ contentType: message.contentType, text: message.text === fixture.expectedChunks[index]?.text ? message.text : message.text.replace(/\\S/gu, '?'), nonWhitespaceRedacted: message.text !== fixture.expectedChunks[index]?.text, entities: message.entities.map((entity) => ({ offset: entity.offset, length: entity.length, type: entity.type['@type'], expectedTypePayload: JSON.stringify(entity.type) === JSON.stringify(fixture.expectedChunks[index]?.entities.find((expected) => expected.offset === entity.offset && expected.length === entity.length)?.type) })) })) })"
               - set: proofs

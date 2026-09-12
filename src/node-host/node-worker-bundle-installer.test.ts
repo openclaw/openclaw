@@ -1,6 +1,4 @@
-import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -748,10 +746,13 @@ describe("node worker bundle installer", () => {
   it("cancels prewarming and releases the namespace queue for the next install", async ({
     signal,
   }) => {
+    const slowMarker = path.join(root, "slow-prewarm-started");
     const slow = await bundleFixture({
       fixtureName: "slow",
       bundlePrewarm: 1,
-      workerSource: 'process.stdout.write("started");\nprocess.stdin.resume();\n',
+      workerSource: `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(
+        slowMarker,
+      )}, String(process.pid));\nprocess.stdin.resume();\n`,
     });
     const fastMarker = path.join(root, "fast-prewarm-finished");
     const fast = await bundleFixture({
@@ -783,53 +784,39 @@ describe("node worker bundle installer", () => {
     const controller = new AbortController();
     const cleanupController = new AbortController();
     const testSignal = AbortSignal.any([signal, cleanupController.signal]);
-    const started = createDeferredCore<ChildProcess>();
-    const children = new Map<ChildProcess, Promise<void>>();
-    const entries = [slow, fast].map((fixture) =>
-      path.join(
-        root,
-        fixture.input.gatewayNamespace,
-        "bundles",
-        fixture.input.build.bundleHash,
-        "worker.mjs",
-      ),
-    );
-    const childProcesses = channel("child_process");
-    const trackPrewarm = (message: unknown) => {
-      const child = (message as { process: ChildProcess }).process;
-      child.once("spawn", () => {
-        if (!entries.includes(child.spawnargs[1] ?? "")) {
-          return;
-        }
-        const closed = createDeferredCore();
-        child.once("close", () => closed.resolve());
-        children.set(child, closed.promise);
-        if (child.spawnargs[1] === entries[0]) {
-          child.stdout!.once("data", () => started.resolve(child));
-        }
-      });
-    };
-    childProcesses.subscribe(trackPrewarm);
     const first = installer.ensure({
       input: slow.input,
       gatewayUrl,
       signal: AbortSignal.any([controller.signal, testSignal]),
     });
     const installs = [first];
+    let slowPid: number | undefined;
     cleanupPrewarming = async () => {
       cleanupController.abort();
-      for (const child of children.keys()) {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
+      if (!slowPid) {
+        const rawPid = await fs.readFile(slowMarker, "utf8").catch(() => undefined);
+        slowPid = rawPid ? Number(rawPid) : undefined;
+      }
+      if (slowPid) {
+        try {
+          process.kill(slowPid, "SIGKILL");
+        } catch {
+          // The cancellation path already reaped the process.
         }
       }
-      await Promise.allSettled([...installs, ...children.values()]);
-      childProcesses.unsubscribe(trackPrewarm);
+      await Promise.allSettled(installs);
     };
     // Startup time is not the cancellation contract: hold the real child until
-    // abort, and join its close event even when readiness or assertions fail.
-    const slowChild = await Promise.race([
-      started.promise,
+    // abort, and retain its PID so cleanup can terminate it after assertion failure.
+    await Promise.race([
+      vi.waitFor(
+        async () => {
+          const value = await fs.readFile(slowMarker, "utf8");
+          expect(value).toMatch(/^\d+$/u);
+          slowPid = Number(value);
+        },
+        { timeout: 10_000 },
+      ),
       first.then(() => {
         throw new Error("prewarm finished before cancellation");
       }),
@@ -846,8 +833,9 @@ describe("node worker bundle installer", () => {
       expect(first).rejects.toThrow("launch fenced"),
     ]);
     await expect(second).resolves.toEqual(fast.input.build);
-    await children.get(slowChild);
-    expect(slowChild.killed).toBe(true);
+    await vi.waitFor(() => {
+      expect(() => process.kill(slowPid!, 0)).toThrow();
+    });
     await expect(fs.readFile(fastMarker, "utf8")).resolves.toBe("ready");
   });
 });

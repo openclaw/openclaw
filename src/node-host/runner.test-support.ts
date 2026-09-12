@@ -63,7 +63,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: mocks.startGatewayClientWhenEventLoopReady,
 }));
 

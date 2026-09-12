@@ -18,9 +18,10 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
@@ -52,6 +53,91 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
+  it("keeps a queued condition's ownership after a state edit before evaluation", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:04.000Z");
+    const activeJob = createDueIsolatedJob({
+      id: "active-before-condition-evaluation",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const waitingJob = createDueIsolatedJob({
+      id: "condition-state-before-evaluation",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    waitingJob.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
+    waitingJob.trigger = { script: "fire", once: true };
+    waitingJob.state.triggerState = { owner: "original" };
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
+
+    const activeStarted = createDeferred();
+    const releaseActive = createDeferred<{ status: "ok" }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
+      if (job.id === activeJob.id) {
+        activeStarted.resolve();
+        return await releaseActive.promise;
+      }
+      return { status: "ok" as const };
+    });
+    const evaluateCronTrigger = vi.fn(async () => ({
+      kind: "evaluated" as const,
+      fire: true,
+      state: { owner: "completed evaluation" },
+    }));
+    const state = createAdmissionTestState({
+      storePath: store.storePath,
+      testAdmissionLimit: 1,
+      cronConfig: { triggers: { enabled: true } },
+      nowMs: () => dueAt,
+      runIsolatedAgentJob,
+      evaluateCronTrigger,
+    });
+    const activeRun = run(state, activeJob.id, "force");
+    let waitingRun: ReturnType<typeof run> | undefined;
+    try {
+      await activeStarted.promise;
+      waitingRun = run(state, waitingJob.id, "due");
+      await vi.waitFor(async () => {
+        const waiting = (await loadCronStore(store.storePath)).jobs.find(
+          (job) => job.id === waitingJob.id,
+        );
+        expect(waiting?.state.queuedAtMs).toBe(dueAt);
+        expect(waiting?.state.runningAtMs).toBeUndefined();
+      });
+      expect(
+        inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: waitingJob.id }),
+      ).toBeDefined();
+      expect(evaluateCronTrigger).not.toHaveBeenCalled();
+      await update(state, waitingJob.id, { state: { triggerState: { owner: "queued edit" } } });
+
+      releaseActive.resolve({ status: "ok" });
+      await activeRun;
+      await expect(waitingRun).resolves.toEqual({ ok: true, ran: true });
+
+      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      expect(evaluateCronTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({ state: { owner: "queued edit" } }),
+      );
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      const persisted = (await loadCronStore(store.storePath)).jobs.find(
+        (job) => job.id === waitingJob.id,
+      );
+      expect(persisted).toMatchObject({
+        enabled: false,
+        state: { triggerState: { owner: "completed evaluation" }, triggerEvalCount: 1 },
+      });
+      expect(persisted?.state.nextRunAtMs).toBeUndefined();
+      expect(
+        inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: waitingJob.id }),
+      ).toBeUndefined();
+    } finally {
+      releaseActive.resolve({ status: "ok" });
+      stop(state);
+      await Promise.allSettled([activeRun, waitingRun]);
+    }
+  });
+
   it("rechecks a queued if-enabled run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);

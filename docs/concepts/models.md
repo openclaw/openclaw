@@ -89,12 +89,15 @@ Other selection rules:
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
-and native apps. Ordinary CLI and chat browsing do not start provider discovery,
-including after a restart. Use **Refresh** in Models or
-`openclaw models list --refresh` to discover provider models. The Models page also
-requests discovery the first time you open a default-model picker for its current
-page data; later opens read the published catalog. If the catalog is not ready,
-retry after Gateway startup or the current refresh finishes.
+and native apps. Ordinary browsing and opening or reopening a model picker read
+the published catalog without starting provider discovery.
+
+After sign-in, starter models are available immediately. The provider shows
+“checking models…” while the Gateway discovers account models, then updates the
+open picker when discovery completes. Gateway startup and credential changes
+also refresh the affected catalog. Use **Refresh** in Models or
+`openclaw models list --refresh` to request another refresh, including newly
+released models. **Retry** requests discovery again after a failure.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
@@ -133,7 +136,7 @@ openclaw onboard
 Sets up model and auth for common providers without hand-editing config, including OpenAI Codex subscription OAuth and Anthropic (API key or Claude CLI reuse).
 
 With no primary model configured, fresh OpenAI API-key and ChatGPT/Codex OAuth
-setup select the exact `openai/gpt-5.6-sol` catalog ref. The bare direct-API
+setup select the exact `openai/gpt-6-astra` catalog ref. The bare direct-API
 `openai/gpt-5.6` alias remains supported and resolves to the Sol tier.
 Reauthentication preserves an existing explicit primary model, including
 `openai/gpt-5.5`. If GPT-5.6 is unavailable to the account, select

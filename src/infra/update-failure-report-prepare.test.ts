@@ -14,6 +14,94 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it.each(
+    (["check", "code", "pluginId", "affectedKey"] as const).flatMap((field) =>
+      [
+        "private-host.example",
+        "private-host.example:8123",
+        "10.20.30.40",
+        "mcp.servers.private-host.example",
+      ].map((host) => ({
+        field,
+        host,
+      })),
+    ),
+  )("does not publish endpoint $host supplied as $field", async ({ field, host }) => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "poisoned-identifier",
+        result: {
+          status: "error",
+          mode: "npm",
+          durationMs: 0,
+          steps: [
+            {
+              name: "verify",
+              command: "",
+              cwd: "",
+              durationMs: 0,
+              exitCode: 1,
+              failureFacts: [{ check: "readyz", code: "readyz-unhealthy", [field]: host }],
+            },
+          ],
+        },
+      },
+      context,
+    );
+    expect(report.body).not.toContain(host);
+    expect(report.body).toContain("Failing check");
+  });
+  it.each([
+    'Permission denied at "/Users/Example Person/private documents/secret.json"',
+    "Permission denied at /home/example/private file.json",
+    'Permission denied at "C:\\Users\\Example Person\\private\\secret.json"',
+    "Permission denied at ~/private/secret.json",
+    "Permission denied at \u001b[31m/Users/example/private/secret.json\u001b[0m",
+    "Permission denied at file:///Users/example/private/secret.json",
+  ])("keeps a failing check while removing private paths: %s", async (message) => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "failure-fact-redaction",
+        result: {
+          mode: "npm",
+          status: "error",
+          reason: "doctor-failed",
+          durationMs: 1,
+          steps: [
+            {
+              name: "doctor",
+              command: "",
+              cwd: "",
+              durationMs: 1,
+              exitCode: 1,
+              failureFacts: [
+                {
+                  check: "core/doctor/gateway-config",
+                  code: "EACCES",
+                  affectedKey: "mcp.servers",
+                  message: `token=synthetic-token-value ${message}\nprivate second line`,
+                },
+              ],
+            },
+          ],
+        },
+      },
+      context,
+    );
+    expect(report.body).toContain("Failing check core/doctor/gateway-config (EACCES)");
+    expect(report.body).toContain("Permission denied");
+    expect(report.body).toContain("mcp.servers");
+    for (const secret of [
+      "synthetic-token-value",
+      "Example Person",
+      "example/",
+      "secret.json",
+      "private second line",
+      "private file",
+    ]) {
+      expect(report.body).not.toContain(secret);
+    }
+  });
   it("does not imply rollback when candidate repair stops before activation", async () => {
     const report = await prepareUpdateFailureReport(
       {
@@ -220,4 +308,80 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).toContain("- Failed phase: doctor-failed\n");
     expect(report.body).not.toContain("openclaw doctor");
   });
+
+  it("retains failed phases from the durable run when the handoff result is compact", async () => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "durable-failure-history",
+        result: {
+          mode: "git",
+          status: "error",
+          reason: "state-migrated-no-rollback",
+          steps: [],
+          durationMs: 1,
+        },
+        recordedRun: {
+          runId: "durable-failure-history",
+          steps: [
+            { step: "custom-tool private-customer-text", status: "failed" },
+            { step: "activating", status: "failed" },
+            {
+              step: "package rollback",
+              status: "failed",
+              detail: "Gateway service ownership or manager identity changed",
+            },
+          ],
+        },
+      },
+      context,
+    );
+
+    expect(report.body).toContain("- Failed phase: package-rollback\n");
+    expect(report.body).toContain("Failed phase activating: exit unknown");
+    expect(report.body).toContain("Failed phase package-rollback: exit unknown");
+    expect(report.body).toContain("Failed phase [redacted-command]: exit unknown");
+    expect(report.body).not.toContain("private-customer-text");
+    expect(report.body).not.toContain("Gateway service ownership");
+  });
+
+  it.each([{ earlierFailures: [] }, { earlierFailures: ["activating"] }])(
+    "preserves ledger order and measured exits after $earlierFailures",
+    async ({ earlierFailures }) => {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "measured-failure-history",
+          result: {
+            mode: "git",
+            status: "error",
+            reason: "verification-failed",
+            steps: [
+              {
+                name: "verifying",
+                command: "not copied",
+                cwd: "/private",
+                durationMs: 1,
+                exitCode: 7,
+              },
+            ],
+            durationMs: 1,
+          },
+          recordedRun: {
+            runId: "measured-failure-history",
+            steps: [...earlierFailures, "verifying"].map((step) => ({ step, status: "failed" })),
+          },
+        },
+        context,
+      );
+
+      expect(report.body).toContain("- Failed phase: verifying\n");
+      expect(report.body).toContain("Failed phase verifying: exit 7");
+      expect(report.body.match(/Failed phase verifying:/gu)).toHaveLength(1);
+      for (const earlier of earlierFailures) {
+        expect(report.body.indexOf(`Failed phase ${earlier}: exit unknown`)).toBeGreaterThan(-1);
+        expect(report.body.indexOf(`Failed phase ${earlier}: exit unknown`)).toBeLessThan(
+          report.body.indexOf("Failed phase verifying: exit 7"),
+        );
+      }
+    },
+  );
 });

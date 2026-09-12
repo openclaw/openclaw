@@ -268,27 +268,30 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const workspaceDir = params.workspace?.trim()
                 ? resolveUserPath(params.workspace.trim())
                 : undefined;
-              const prepared = await prepareAuthChoiceLoadedPluginProvider({
-                authChoice: params.authChoice,
-                ...(params.agentId ? { agentId: params.agentId } : {}),
-                config: baseConfig,
-                prompter,
-                runtime: {
-                  ...defaultRuntime,
-                  exit: (code: number | undefined): never => {
-                    throw new Error(`setup step exited with code ${String(code)}`);
+              const prepared = await prepareAuthChoiceLoadedPluginProvider(
+                {
+                  authChoice: params.authChoice,
+                  ...(params.agentId ? { agentId: params.agentId } : {}),
+                  config: baseConfig,
+                  prompter,
+                  runtime: {
+                    ...defaultRuntime,
+                    exit: (code: number | undefined): never => {
+                      throw new Error(`setup step exited with code ${String(code)}`);
+                    },
+                  },
+                  setDefaultModel: false,
+                  preserveExistingDefaultModel: true,
+                  ...(workspaceDir ? { workspaceDir } : {}),
+                  signal,
+                  isRemote: true,
+                  beforePersistentEffect: () => {
+                    signal.throwIfAborted();
+                    runnerSession.lockCancellationForPreparation();
                   },
                 },
-                setDefaultModel: false,
-                preserveExistingDefaultModel: true,
-                ...(workspaceDir ? { workspaceDir } : {}),
-                signal,
-                isRemote: true,
-                beforePersistentEffect: () => {
-                  signal.throwIfAborted();
-                  runnerSession.lockCancellationForPreparation();
-                },
-              });
+                (result) => result,
+              );
               if (!prepared || prepared.retrySelection) {
                 throw new Error(
                   `Provider setup resolution failed for "${params.authChoice}". Run \`openclaw doctor --fix\`, restart the Gateway, and try again.`,
@@ -465,7 +468,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         const engine = new SystemAgentChatEngine({
           surface: "gateway",
-          deps: { gatewayHostLifecycle: context.hostLifecycle },
+          deps: {
+            gatewayHostLifecycle: context.hostLifecycle,
+            applyPluginRuntime: context.applyPluginLifecycleChange,
+          },
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,
           ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
@@ -489,7 +495,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             welcome = onboardingWelcome.text;
             welcomeQuestion = onboardingWelcome.question;
           } else if (params.welcomeVariant === "new-agent") {
-            welcome = buildNewAgentWelcome({ engine });
+            welcome = await buildNewAgentWelcome({ engine });
           } else {
             const overview = await engine.loadOverview();
             const facts = loadSystemAgentGreetingFacts();

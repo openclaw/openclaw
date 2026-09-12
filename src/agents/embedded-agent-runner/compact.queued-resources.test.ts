@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
@@ -109,12 +110,14 @@ module.exports = { id: '${pluginId}', register(api) {
         logger: { info() {}, warn() {}, error() {}, debug() {} },
         activateGlobalSideEffects: false,
       });
-      const source = new PluginRegistryInspectionResources();
-      source.attach(donor.registry);
       const record = createPluginRecord({
         id: pluginId,
         source: path.join(pluginRoot, "index.cjs"),
       });
+      const source = new PluginRegistryInspectionResources(async () => {
+        await getPluginInstance(record)?.dispose();
+      });
+      source.attach(donor.registry);
       donor.registry.plugins.push(record);
       const api = donor.createApi(record, { config, registrationMode: "full" });
       const file = state.path("donor.sqlite");

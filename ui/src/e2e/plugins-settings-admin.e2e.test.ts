@@ -272,7 +272,7 @@ function pluginResponses() {
       ok: true,
       pluginId: workboard.id,
       removed: ["config entry", "install record"],
-      restartRequired: true,
+      restartRequired: false,
     },
   };
 }
@@ -581,13 +581,10 @@ suite.define(() => {
         await openWorkboard(page, suite.server.baseUrl);
 
         const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
-        // The mutation reconnects to refresh hello-owned plugin tabs before the outcome settles.
         const connections = (await gateway.getRequests("connect")).length;
-        await gateway.deferNext("connect");
         await toggle.click();
         await gateway.waitForRequest("plugins.setEnabled");
-        await gateway.waitForRequest("connect", { after: connections });
-        await gateway.resolveDeferred("connect");
+
         await expect
           .poll(() =>
             page
@@ -597,6 +594,7 @@ suite.define(() => {
               .count(),
           )
           .toBe(1);
+        expect(await gateway.getRequests("connect")).toHaveLength(connections);
 
         await page.getByRole("tab", { name: "Configuration", exact: true }).click();
         const workspace = page.getByLabel("Workspace label", { exact: true });
@@ -631,6 +629,8 @@ suite.define(() => {
           .getByRole("status")
           .filter({ hasText: /removed|uninstalled/iu })
           .waitFor();
+        expect(await gateway.getRequests("connect")).toHaveLength(connections);
+        expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
       },
     );
   });

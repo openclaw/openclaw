@@ -1,13 +1,17 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 const mocks = vi.hoisted(() => ({
   acquireRuntimeLease: vi.fn(),
+  disposeRuntime: vi.fn(async () => {}),
   getApiKeyForModel: vi.fn(),
   prepareProviderRuntimeAuth: vi.fn(),
   resolvePluginMetadataSnapshot: vi.fn(),
@@ -85,6 +89,7 @@ let preparedModelRuntime: PreparedModelRuntimeSnapshot & { testGeneration: strin
 beforeEach(() => {
   mocks.publishedGeneration = "A";
   mocks.acquireRuntimeLease.mockReset();
+  mocks.disposeRuntime.mockReset();
   mocks.getApiKeyForModel.mockReset();
   mocks.prepareProviderRuntimeAuth.mockReset();
   mocks.resolvePluginMetadataSnapshot
@@ -109,7 +114,10 @@ beforeEach(() => {
     activeProjectKeys: [],
     createStores: () => ({ authStorage, modelRegistry }),
   };
-  mocks.acquireRuntimeLease.mockResolvedValue({ snapshot: preparedModelRuntime, release: vi.fn() });
+  mocks.acquireRuntimeLease.mockResolvedValue({
+    snapshot: preparedModelRuntime,
+    [Symbol.asyncDispose]: mocks.disposeRuntime,
+  });
 });
 
 it("keeps route rematerialization and runtime auth on the supplied generation", async () => {
@@ -122,6 +130,8 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
       }
       const generation = mocks.readGeneration();
       observedModelGenerations.push(generation);
+      mocks.publishedGeneration = "B";
+      await Promise.resolve();
       const configured = cfg?.models?.providers?.openai;
       return {
         model: {
@@ -147,8 +157,7 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
     mocks.publishedGeneration = "B";
     return {
       apiKey: "sk-platform",
-      profileId: "openai:platform",
-      source: "profile:openai:platform",
+      source: "models.providers.openai",
       mode: "api-key",
     };
   });
@@ -159,7 +168,11 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
 
   const result = await prepareSimpleCompletionModel({
     preparedModelRuntime,
-    cfg: {},
+    cfg: {
+      models: {
+        providers: { openai: { baseUrl: "", models: [], apiKey: "fixture-api-key" } },
+      },
+    },
     agentId: "main",
     provider: "openai",
     modelId: "gpt-5.5",
@@ -171,10 +184,78 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
   if ("error" in result) {
     throw new Error(result.error);
   }
-  expect(result.model.params).toMatchObject({ generation: "A" });
+  const prepared = result;
+  expect(prepared.model.params).toMatchObject({ generation: "A" });
   expect(observedModelGenerations).toEqual(["A", "A"]);
   expect(observedRuntimeAuthGenerations).toEqual(["A"]);
 });
+
+it.each([false, true])(
+  "disposes uncooperative preparation after cancellation (cleanup failure: %s)",
+  async (cleanupFails) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const controller = new AbortController();
+    const cancelled = new Error("completion preparation cancelled");
+    const cleanupError = new Error("completion preparation cleanup failed");
+    const parent = new AsyncWorkScope();
+    const cleanupEntered = createDeferredCore();
+    const releaseCleanup = createDeferredCore();
+    const dispose = mocks.disposeRuntime.mockImplementation(async () => {
+      cleanupEntered.resolve();
+      await releaseCleanup.promise;
+      if (cleanupFails) {
+        throw cleanupError;
+      }
+    });
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "local-fixture",
+      source: "local marker",
+      mode: "api-key",
+    });
+    const resolve = createOllamaModelResolver();
+    const preparing = parent.run(() =>
+      acquireSimpleCompletionModel({
+        cfg: {},
+        agentId: "main",
+        provider: "ollama",
+        modelId: "fixture-model",
+        signal: controller.signal,
+        modelResolver: async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return await resolve(...args);
+        },
+      }),
+    );
+    try {
+      await entered.promise;
+      controller.abort(cancelled);
+      release.resolve();
+      await expect(preparing).rejects.toBe(cancelled);
+      let parentClosed = false;
+      const draining = parent.drain().then(() => {
+        parentClosed = true;
+      });
+      await cleanupEntered.promise;
+      await nextTurn();
+      expect(parentClosed).toBe(false);
+      releaseCleanup.resolve();
+      await draining;
+      expect(dispose).toHaveBeenCalledOnce();
+      const cleanup = dispose.mock.results[0]!.value;
+      if (cleanupFails) {
+        await expect(cleanup).rejects.toBe(cleanupError);
+      } else {
+        await expect(cleanup).resolves.toBeUndefined();
+      }
+    } finally {
+      release.resolve();
+      releaseCleanup.resolve();
+      await Promise.allSettled([preparing, parent.drain()]);
+    }
+  },
+);
 
 it("acquires direct completion runtime for the exact selected model", async () => {
   const modelResolver = createOllamaModelResolver();
@@ -213,7 +294,7 @@ it("acquires direct completion runtime for the exact selected model", async () =
     );
     expect(modelResolver).toHaveBeenCalledOnce();
   } finally {
-    acquired.release();
+    await acquired[Symbol.asyncDispose]();
   }
 });
 
@@ -242,7 +323,7 @@ it("selects an explicit agent completion model before runtime acquisition", asyn
     expect(modelResolver).toHaveBeenCalledOnce();
   } finally {
     if (!("error" in result)) {
-      result.release();
+      await result[Symbol.asyncDispose]();
     }
   }
 });
@@ -304,7 +385,7 @@ it("acquires the canonical manifest-derived utility model selection", async () =
     });
   } finally {
     if (!("error" in result)) {
-      result.release();
+      await result[Symbol.asyncDispose]();
     }
   }
 });
@@ -328,8 +409,11 @@ it.each(["/", "entry"])(
       source: "local marker",
       mode: "api-key",
     });
-    const release = vi.fn();
-    mocks.acquireRuntimeLease.mockResolvedValue({ snapshot: preparedModelRuntime, release });
+    const release = vi.fn(async () => {});
+    mocks.acquireRuntimeLease.mockResolvedValue({
+      snapshot: preparedModelRuntime,
+      [Symbol.asyncDispose]: release,
+    });
     const resolveModel = createOllamaModelResolver();
     const modelResolver: SimpleCompletionModelResolver = async (...args) => {
       const resolved = await resolveModel(...args);
@@ -360,7 +444,7 @@ it.each(["/", "entry"])(
       );
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
     expect(release).toHaveBeenCalledOnce();

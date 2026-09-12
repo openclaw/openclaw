@@ -1,4 +1,4 @@
-import type { VerboseLevel } from "../auto-reply/thinking.js";
+import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
 import type {
   AgentRunApprovalLeases,
   AgentRunApprovalClosureReason,

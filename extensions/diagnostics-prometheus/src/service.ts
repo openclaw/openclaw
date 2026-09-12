@@ -1110,7 +1110,8 @@ export function createDiagnosticsPrometheusExporter() {
             );
           }
         },
-        undefined,
+        // Metrics do not consume logs; avoid enabling their diagnostic copy/formatting path.
+        { exclude: ["log.record"] },
         { includePrivateData: false },
       );
       internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;

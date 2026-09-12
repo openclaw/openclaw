@@ -15,8 +15,52 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { handleDryRunPreflightError } from "./update-command-dry-run.js";
+import { handleDryRunPreflightError, printUpdateDryRun } from "./update-command-dry-run.js";
+import type { RefuseUpdate } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import type { resolveUpdateCommandTarget } from "./update-command-target.js";
+
+/** Render prepared preview facts without initializing runtime state. */
+export async function previewUpdateCommand(params: {
+  target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
+  prepared: {
+    shouldRestart: boolean;
+    installKind: "git" | "package" | "unknown";
+    requestedChannel: UpdateChannel | null;
+  };
+  opts: UpdateCommandOptions;
+  runId: string;
+  invocationCwd?: string;
+  updateStepTimeoutMs: number;
+  preflight?: NonNullable<Awaited<ReturnType<typeof preflightUpdateCommandSchemas>>>;
+}): Promise<void> {
+  const { target, prepared, opts } = params;
+  const preflight =
+    params.preflight ??
+    (await preflightUpdateCommandSchemas({
+      ...target,
+      shouldRestart: prepared.shouldRestart,
+      updateStepTimeoutMs: params.updateStepTimeoutMs,
+      invocationCwd: params.invocationCwd,
+      packageTargetVersion: target.targetVersion ?? undefined,
+      opts,
+    }));
+  if (preflight) {
+    printUpdateDryRun({
+      ...target,
+      ...preflight,
+      runId: params.runId,
+      installKind: prepared.installKind,
+      mode:
+        target.updateInstallKind === "git"
+          ? "git"
+          : (target.packageInstallTarget?.manager ?? "unknown"),
+      shouldRestart: prepared.shouldRestart,
+      requestedChannel: prepared.requestedChannel,
+      opts,
+    });
+  }
+}
 
 /** Record validation, then inspect package admission or Git previews before mutation. */
 export async function preflightUpdateCommandSchemas(params: {
@@ -34,7 +78,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageTargetVersion?: string;
   packageInstallSpec?: string | null;
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
-  refuseUpdate: (reason: string, message?: string) => Promise<void>;
+  refuseUpdate: RefuseUpdate;
 }): Promise<
   { packageSchemaPreflight: OpenClawDatabaseSchemaPreflight; preflightNotes: string[] } | undefined
 > {
@@ -52,8 +96,10 @@ export async function preflightUpdateCommandSchemas(params: {
     opts,
     refuseUpdate,
   } = params;
-  const run = opts.run!;
-  recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
+  const run = opts.run;
+  if (run) {
+    recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
+  }
   let packageSchemaPreflight: OpenClawDatabaseSchemaPreflight = {
     incompatible: [],
     indeterminate: [],
@@ -105,19 +151,20 @@ export async function preflightUpdateCommandSchemas(params: {
           const { preflightConfiguredNpmPluginTargets } =
             await import("./update-command-plugin-preflight.js");
           const context = admission.contexts.at(-1)!;
-          await preflightConfiguredNpmPluginTargets({
+          const pluginWarnings = await preflightConfiguredNpmPluginTargets({
             config: context.configSnapshot.sourceConfig,
             env: context.env,
             targetVersion: params.packageTargetVersion ?? null,
             channel,
             timeoutMs: updateStepTimeoutMs,
           });
+          preflightNotes.push(...pluginWarnings.map((warning) => warning.message));
         }
       }
     } catch (error) {
       if (!opts.dryRun) {
         if (error instanceof UpdatePreMutationError) {
-          await refuseUpdate(error.reason, error.message);
+          await refuseUpdate(error.reason, error.message, error.failureFacts);
           return undefined;
         }
         throw error;

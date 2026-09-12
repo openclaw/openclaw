@@ -6,6 +6,7 @@ import { listSessionEntryKeysReadOnly } from "../config/sessions/session-accesso
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { listAgentIds, resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -24,6 +25,9 @@ export async function listWorkspaceStateDirs(params: {
   const dirs = new Set(listAgentWorkspaceDirs(params.cfg, params.env));
 
   for (const agentId of listAgentIds(params.cfg)) {
+    if (readAgentDatabaseAdmissionRefusal(agentId, { env: params.env })) {
+      continue;
+    }
     const sandbox = resolveSandboxConfigForAgent(params.cfg, agentId);
     if (sandbox.mode === "off" || sandbox.workspaceAccess === "rw") {
       continue;

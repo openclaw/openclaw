@@ -381,6 +381,7 @@
     <string name="native_33b31bc65885eb0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پخش صدا"</string>
     <string name="native_33b93476cf597a33" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"زمان"</string>
     <string name="native_33c8e8de41c3a351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تأییدنشده"</string>
+    <string name="native_340bd53cf39d26fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کلید API ذخیره شد. برای اعمال آن، روی «تازه‌سازی» بزنید."</string>
     <string name="native_347de0eefc8c2b98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yield"</string>
     <string name="native_349f96d2f47c34bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کپی دستور تأیید"</string>
     <string name="native_34d29e78d246ae8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سرویس متصل است"</string>
@@ -1067,6 +1068,7 @@
     <string name="native_94da52ecd6c5c3b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عامل پیش‌فرض"</string>
     <string name="native_94ea9b1d33a02975" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نمایش کمتر"</string>
     <string name="native_94f5698f54d7d31a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ساعت"</string>
+    <string name="native_9514b7ff4860ead7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Plugins"</string>
     <string name="native_95204ae1796ddfab" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نصب %1$s از ClawHub ممکن نشد."</string>
     <string name="native_953a8bd0a18d7a3d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"به OpenClaw خوش آمدید"</string>
     <string name="native_958074a2ffa6bae8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کنترل برنامه‌های دیگر"</string>
@@ -1078,7 +1080,6 @@
     <string name="native_9709a3b2e51f0ef3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پنهان کردن نوار کناری"</string>
     <string name="native_973769a32161f8de" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"روی این Gateway آماده است. Android می‌تواند آن را به‌صورت سراسری فعال یا غیرفعال کند؛ راه‌اندازی و پیکربندی همچنان از طریق دسکتاپ یا CLI انجام می‌شود."</string>
     <string name="native_973cbee2e75ade09" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پخش صدا در دسترس نیست"</string>
-    <string name="native_976f2f9461eeb2c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کلید API ذخیره شد. برای اعمال آن، Gateway را دوباره راه‌اندازی کنید."</string>
     <string name="native_97a5e41b45ddd2b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اعمال"</string>
     <string name="native_97cbc43c27dd76ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بارگذاری اطلاعات مصرف امکان‌پذیر نبود."</string>
     <string name="native_97f1b0890fc8e065" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گره را هنگام انجام کار در دسترس نگه دارید."</string>
@@ -1088,6 +1089,7 @@
     <string name="native_983f92956ac1a23e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"یک فایل را خواند"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هیچ ورودی اخیری در گزارش ثبت نشده است."</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway دستی"</string>
+    <string name="native_98a75b6c4b7f4dcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اطلاعات ورود تازه‌سازی شد."</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تغییر نام گروه"</string>
     <string name="native_98ed7669b6d1be9b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Update Goal"</string>
     <string name="native_992a0f626b0714b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وضعیت دسترس‌پذیری ارائه‌دهنده نامشخص است"</string>

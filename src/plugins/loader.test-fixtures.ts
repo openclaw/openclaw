@@ -5,7 +5,7 @@ import path from "node:path";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 import { loadOpenClawPlugins } from "./loader.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 export { loadOpenClawPlugins };
@@ -32,7 +32,7 @@ export function mkdirSafe(dir: string) {
   chmodSafeDir(dir);
 }
 
-const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
+const fixtureRoot = fs.realpathSync(mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-")));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
@@ -177,7 +177,7 @@ export function resetPluginLoaderTestStateForTest() {
 
 /** Clears loader state for test isolation without exposing a production-only reset export. */
 export function clearPluginLoaderCache(): void {
-  pluginLoaderCacheState.clear();
+  getPluginLoaderCacheState().clear();
   resetPluginRuntimeStateForTest();
 }
 

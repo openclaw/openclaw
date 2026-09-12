@@ -1,18 +1,11 @@
 // Decides task executor delivery, terminal update, and follow-up message policy.
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import type { TaskEventRecord, TaskRecord, TaskStatus } from "./task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskEventRecord,
+  type TaskRecord,
+} from "./task-registry.types.js";
 import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
-
-/** Returns whether a task status is terminal for delivery and retention policy. */
-export function isTerminalTaskStatus(status: TaskStatus): boolean {
-  return (
-    status === "succeeded" ||
-    status === "failed" ||
-    status === "timed_out" ||
-    status === "cancelled" ||
-    status === "lost"
-  );
-}
 
 function resolveTaskDisplayTitle(task: TaskRecord): string {
   return formatTaskStatusTitleText(

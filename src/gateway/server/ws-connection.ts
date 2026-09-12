@@ -617,16 +617,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         next.personPresence = { onlineSince: Date.now() };
         refreshClientPresence(clients, next);
       }
-      stopKeepalive = startWebSocketKeepalive(socket, (diagnostics) => {
-        // A half-open control connection must release its node and worker owners.
-        heartbeatDiagnostics = diagnostics;
-        setCloseCause("heartbeat-timeout");
-        try {
-          socket.terminate();
-        } catch {
-          close();
-        }
-      });
+      stopKeepalive = startWebSocketKeepalive(
+        socket,
+        (diagnostics) => {
+          // A half-open control connection must release its node and worker owners.
+          heartbeatDiagnostics = diagnostics;
+          setCloseCause("heartbeat-timeout");
+          try {
+            socket.terminate();
+          } catch {
+            close();
+          }
+        },
+        upgradeReq.socket,
+      );
       return true;
     };
 

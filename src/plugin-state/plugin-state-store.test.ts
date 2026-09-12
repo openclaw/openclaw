@@ -1,10 +1,11 @@
 // Plugin state store tests cover per-plugin persisted state reads and writes.
 import { chmodSync, existsSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -15,7 +16,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   countPluginStateLiveEntries,
   createCorePluginStateKeyedStore,
   createCorePluginStateSyncKeyedStore,
@@ -25,6 +25,7 @@ import {
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import {
   clearPluginStateStoreForTests,
   probePluginStateStore,
@@ -78,19 +79,20 @@ async function expectPluginStateStoreError(
 }
 
 describe("plugin state keyed store", () => {
-  it("registers and looks up values across store instances", async () => {
+  it("round-trips nested VM realm values across store instances", async () => {
     await withPluginStateTestState(async () => {
-      const store = createPluginStateKeyedStore<{ count: number }>("discord", {
-        namespace: "components",
-        maxEntries: 10,
-      });
-      await store.register("interaction:1", { count: 1 });
+      const options = { namespace: "components", maxEntries: 10 };
+      const store = createPluginStateKeyedStore("discord", options);
+      const value: unknown = runInNewContext(
+        '({ nested: [{ count: 1, labels: ["retained", null] }] })',
+      );
+      await store.register("interaction:1", value);
+      closePluginStateDatabase();
 
-      const reopened = createPluginStateKeyedStore<{ count: number }>("discord", {
-        namespace: "components",
-        maxEntries: 10,
+      const reopened = createPluginStateSyncKeyedStore("discord", options);
+      expect(reopened.lookup("interaction:1")).toEqual({
+        nested: [{ count: 1, labels: ["retained", null] }],
       });
-      await expect(reopened.lookup("interaction:1")).resolves.toEqual({ count: 1 });
     });
   });
 

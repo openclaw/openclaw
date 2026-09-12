@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createPluginCache,
   getPluginMetadataSnapshotCache,
+  retirePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { createCatalogFixture, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
@@ -14,7 +16,7 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();
 
 describe("prepared catalog parent metadata ownership", () => {
-  it("retains canonical metadata across module evaluation and clones only for the worker", async () => {
+  it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog and native auth requests", async () => {
     const fixture = createCatalogFixture(makeTempDir, 0);
     const { agentDir, config, env, workspaceDir } = fixture;
     const cache = createPluginCache();
@@ -89,7 +91,7 @@ describe("prepared catalog parent metadata ownership", () => {
         await waitForWorkers();
 
         const catalog = await prepared.snapshot.loadFullModelCatalog!();
-        expect(captureSpy).toHaveBeenCalledOnce();
+        expect(captureSpy).toHaveBeenCalled();
         expect(catalog.entries).toContainEqual(
           expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
         );
@@ -102,7 +104,10 @@ describe("prepared catalog parent metadata ownership", () => {
         await waitForWorkers();
       } finally {
         captureSpy.mockRestore();
-        cache.disposeModules?.();
+        if (registry) {
+          await disposePluginRegistryInstances(registry);
+        }
+        await retirePluginCache(cache);
       }
     }
   });

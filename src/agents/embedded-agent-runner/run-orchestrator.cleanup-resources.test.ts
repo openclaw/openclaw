@@ -18,13 +18,10 @@ import { createAgentCleanupScope, runOwnedAgentCleanup } from "../run-cleanup-ti
 import { SessionManager } from "../sessions/session-manager.js";
 import { immediateEnqueue } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { runEmbeddedAgent } from "./run-orchestrator.js";
-import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-const loop = vi.hoisted(() =>
-  vi.fn<(input: PreparedEmbeddedRunInput) => Promise<EmbeddedAgentRunResult>>(),
-);
+const loop = vi.hoisted(() => vi.fn<(typeof import("./run-loop.js"))["runPreparedEmbeddedLoop"]>());
 vi.mock("./run-loop.js", () => ({ runPreparedEmbeddedLoop: loop }));
 
 type Registration = {
@@ -87,7 +84,8 @@ it.each([
         `module.exports = { id: "candidate-cleanup", register(api) {
         const state = globalThis[${JSON.stringify(fixtureKey)}];
         const label = "candidate-registration-" + (++state.next);
-        const file = require("node:path").join(__dirname, label + ".sqlite");
+        // The database belongs to the test state, not the disposable source generation.
+        const file = require("node:path").join(${JSON.stringify(state.path())}, label + ".sqlite");
         const db = new (require("node:sqlite").DatabaseSync)(file);
         db.exec("CREATE TABLE observations (value INTEGER); INSERT INTO observations VALUES (42)");
         const record = { file, read: () => db.prepare("SELECT value FROM observations").get().value, disposed: 0, close: state.deferred() };
@@ -136,7 +134,7 @@ it.each([
           entries: { [fixture.pluginId]: { enabled: true } },
         },
       };
-      loop.mockImplementation(async (input) => {
+      loop.mockImplementation(async (_refresh, input) => {
         const prepared = input.preparedModelRuntime;
         if (!prepared) {
           throw new Error("Runner did not supply its prepared candidate runtime");

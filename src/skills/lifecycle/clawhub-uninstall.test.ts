@@ -8,6 +8,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { untrackClawHubSkill } from "./clawhub-store.js";
 import { applyClawHubSkillUninstall, planClawHubSkillUninstall } from "./clawhub-uninstall.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
@@ -83,6 +84,27 @@ async function replaceTrackedOwner(
 }
 
 describe("ClawHub skill uninstall lifecycle", () => {
+  it.each(["untrack", "rollback"])("fences %s after its awaited lock read", async (phase) => {
+    const current = await fixture();
+    let owned = true;
+    const guard = () => {
+      if (!owned) {
+        throw new Error("removal superseded");
+      }
+    };
+    const restore =
+      phase === "rollback"
+        ? await untrackClawHubSkill(current.workspaceDir, current.slug, guard)
+        : undefined;
+    const before = await readFile(current.lockPath, "utf8");
+    const pending = restore
+      ? restore()
+      : untrackClawHubSkill(current.workspaceDir, current.slug, guard);
+    owned = false;
+    await expect(pending).rejects.toThrow("removal superseded");
+    await expect(readFile(current.lockPath, "utf8")).resolves.toBe(before);
+  });
+
   it("plans and removes an unchanged tracked skill", async () => {
     const current = await fixture();
     const handler = vi.fn();
@@ -248,6 +270,47 @@ describe("ClawHub skill uninstall lifecycle", () => {
     );
     await expect(readFile(current.lockPath, "utf8")).resolves.toBe(beforeLock);
   });
+
+  it.each(["staging", "destination"])(
+    "does not restore over a changed %s owner",
+    async (changed) => {
+      const current = await fixture();
+      const planned = await planClawHubSkillUninstall({
+        workspaceDir: current.workspaceDir,
+        slug: current.slug,
+        expectedVersion: "1.0.0",
+      });
+      if (!planned.ok) {
+        throw new Error(planned.error);
+      }
+      let active = true;
+      let replacement = "";
+      const result = await applyClawHubSkillUninstall(planned.plan, {
+        beforePersistentApply: () => {
+          if (!active) {
+            throw new Error("Parent deletion ended.");
+          }
+        },
+        rename: async (from, to) => {
+          await rename(from, to);
+          active = false;
+          replacement = changed === "staging" ? String(to) : current.skillDir;
+          if (changed === "staging") {
+            await rename(to, `${String(to)}.original`);
+          }
+          await mkdir(replacement);
+          await writeFile(join(replacement, "SKILL.md"), "successor skill");
+        },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("staging or destination changed"),
+      });
+      await expect(readFile(join(replacement, "SKILL.md"), "utf8")).resolves.toBe(
+        "successor skill",
+      );
+    },
+  );
 
   it("restores the staged skill when lockfile untracking fails", async () => {
     const current = await fixture();

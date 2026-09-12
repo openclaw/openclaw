@@ -14,6 +14,15 @@ export const UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV =
 export const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
   "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
 
+/** Shipped canaries clear IN_PROGRESS for lint but retain the writable-parent marker. */
+export function isUpdateDoctorLintPass(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]) ||
+    isPostCoreConvergencePass(env) ||
+    isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+  );
+}
+
 /**
  * True iff the caller is the doctor pass that runs WHILE the core package
  * files are actively being swapped (e.g. inside `runGlobalPackageUpdateSteps`'

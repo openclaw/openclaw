@@ -525,15 +525,22 @@ describe("node worker supervisor", () => {
         expect(workerEnv).not.toHaveProperty("HTTPS_PROXY");
         expect(workerEnv).not.toHaveProperty("SUPPLIED_SECRET");
         expect(JSON.stringify(workerEnv)).not.toContain(TEST_WORKER_CREDENTIAL);
-        const platformInjectedKeys =
-          process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : [];
-        expect(Object.keys(workerEnv).toSorted()).toEqual(
-          [...Object.keys(expectedWorkerEnv), ...platformInjectedKeys]
-            .filter(
-              (key) => expectedWorkerEnv[key] !== undefined || platformInjectedKeys.includes(key),
-            )
+        const platformInjectedKeys = new Set(
+          process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : [],
+        );
+        expect(
+          Object.keys(workerEnv)
+            .filter((key) => !platformInjectedKeys.has(key))
+            .toSorted(),
+        ).toEqual(
+          Object.keys(expectedWorkerEnv)
+            .filter((key) => expectedWorkerEnv[key] !== undefined)
             .toSorted(),
         );
+        if (workerEnv["__CF_USER_TEXT_ENCODING"] !== undefined) {
+          expect(process.platform).toBe("darwin");
+          expect(workerEnv["__CF_USER_TEXT_ENCODING"]).toBeTypeOf("string");
+        }
         await supervisor.close();
       },
     );

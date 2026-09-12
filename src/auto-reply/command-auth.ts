@@ -13,7 +13,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
@@ -432,8 +432,8 @@ function resolveFallbackAllowFrom(params: {
     | undefined;
   const channelCfg = channels?.[providerId];
   const accountCfg =
-    resolveFallbackAccountConfig(channelCfg?.accounts, params.accountId) ??
-    resolveFallbackDefaultAccountConfig(channelCfg);
+    resolveFallbackAccountConfig(channelCfg?.accounts, providerId, params.accountId) ??
+    resolveFallbackDefaultAccountConfig(channelCfg, providerId);
   const allowFrom =
     accountCfg?.allowFrom ??
     accountCfg?.dm?.allowFrom ??
@@ -444,29 +444,35 @@ function resolveFallbackAllowFrom(params: {
 
 function resolveFallbackAccountConfig(
   accounts: AllowFromChannelConfig["accounts"],
+  channelId: string,
   accountId?: string | null,
 ) {
   const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
   if (!accounts || !normalizedAccountId) {
     return undefined;
   }
-  // Preserve existing inherited-key precedence before the canonical own-key/case-insensitive lookup.
-  return accounts[normalizedAccountId] ?? resolveAccountEntry(accounts, normalizedAccountId);
+  return resolveChannelAccountEntry(accounts, normalizedAccountId, channelId);
 }
 
-function resolveFallbackDefaultAccountConfig(channelCfg: AllowFromChannelConfig | undefined) {
+function resolveFallbackDefaultAccountConfig(
+  channelCfg: AllowFromChannelConfig | undefined,
+  channelId: string,
+) {
   const accounts = channelCfg?.accounts;
   if (!accounts) {
     return undefined;
   }
   const preferred =
-    resolveFallbackAccountConfig(accounts, channelCfg?.defaultAccount) ??
-    resolveFallbackAccountConfig(accounts, "default");
+    resolveFallbackAccountConfig(accounts, channelId, channelCfg?.defaultAccount) ??
+    resolveFallbackAccountConfig(accounts, channelId, "default");
   if (preferred) {
     return preferred;
   }
-  const definedAccounts = Object.values(accounts).filter(Boolean);
-  return definedAccounts.length === 1 ? definedAccounts[0] : undefined;
+  const definedAccountIds = Object.keys(accounts).filter((id) => accounts[id]);
+  const accountId = definedAccountIds.length === 1 ? definedAccountIds[0] : undefined;
+  return accountId === undefined
+    ? undefined
+    : resolveChannelAccountEntry(accounts, accountId, channelId);
 }
 
 function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {

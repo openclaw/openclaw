@@ -6,7 +6,11 @@ import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
-import type { GatewayServiceEnv, GatewayServiceUnitInspection } from "./service-types.js";
+import type {
+  GatewayServiceEnv,
+  GatewayServiceUnitInspection,
+  SystemdServiceReadBinding,
+} from "./service-types.js";
 import { execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
@@ -27,6 +31,7 @@ export async function readLoadedSystemdServiceRuntime(
   env: GatewayServiceEnv,
   timeoutMs?: number,
   inspection?: GatewayServiceUnitInspection,
+  binding?: SystemdServiceReadBinding,
 ): Promise<GatewayServiceRuntime> {
   const unitName = `${resolveSystemdServiceName(env)}.service`;
   const budget =
@@ -44,6 +49,21 @@ export async function readLoadedSystemdServiceRuntime(
     const remaining = deadline - performance.now();
     if (remaining <= 0 || remainingQueries <= 0) {
       throw unavailable();
+    }
+    if (binding) {
+      if (binding.unit !== unitName) {
+        throw unavailable();
+      }
+      remainingQueries--;
+      const values = await binding.query(args, signatures, deadline, inspection);
+      if (!values) {
+        throw unavailable();
+      }
+      assertCurrent?.();
+      if (performance.now() >= deadline) {
+        throw unavailable();
+      }
+      return values;
     }
     const result = await execBusctlUser(
       env,
@@ -68,6 +88,10 @@ export async function readLoadedSystemdServiceRuntime(
     return values.map((value) => value?.data);
   };
   const readOwner = async () => {
+    if (binding) {
+      binding.verify();
+      return binding.destination;
+    }
     const [value] = await query(
       ["call", BUS, "/org/freedesktop/DBus", BUS, "GetNameOwner", "s", MANAGER],
       ["s"],
@@ -85,10 +109,12 @@ export async function readLoadedSystemdServiceRuntime(
   try {
     // Address every unit query to the observed unique bus owner, never a newly started manager.
     const owner = await readOwner();
-    const [credentials] = await query(
-      ["call", BUS, "/org/freedesktop/DBus", BUS, "GetConnectionUnixUser", "s", owner],
-      ["u"],
-    );
+    const [credentials] = binding
+      ? [[binding.managerUid]]
+      : await query(
+          ["call", BUS, "/org/freedesktop/DBus", BUS, "GetConnectionUnixUser", "s", owner],
+          ["u"],
+        );
     if (
       !Array.isArray(credentials) ||
       credentials.length !== 1 ||

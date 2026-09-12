@@ -11,6 +11,7 @@ import {
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
+import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inventory-module-refs.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -382,18 +383,21 @@ function listBundledPluginEntrySources(
     sourceEntries: string[];
   }>,
 ): Record<string, string> {
-  return Object.fromEntries(
-    entries.flatMap(({ id, sourceEntries }) =>
-      sourceEntries.map((entry) => {
-        const normalizedEntry = entry.replace(/^\.\//u, "");
-        const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
-        return [
-          entryKey,
-          normalizedEntry ? `extensions/${id}/${normalizedEntry}` : `extensions/${id}`,
-        ];
-      }),
-    ),
-  );
+  const sources: Record<string, string> = {};
+  for (const { id, sourceEntries } of entries) {
+    for (const entry of sourceEntries) {
+      const normalizedEntry = entry.replace(/^\.\//u, "");
+      const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
+      const source = normalizedEntry ? `extensions/${id}/${normalizedEntry}` : `extensions/${id}`;
+      if (sources[entryKey] && sources[entryKey] !== source) {
+        throw new Error(
+          `Plugin build entries share output ${entryKey}: ${sources[entryKey]}, ${source}`,
+        );
+      }
+      sources[entryKey] = source;
+    }
+  }
+  return sources;
 }
 
 function buildCoreDistEntries(): Record<string, string> {
@@ -415,8 +419,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
-    "config/sessions/session-model-context.worker":
-      "src/config/sessions/session-model-context.worker.ts",
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
@@ -591,6 +593,37 @@ const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries().filter(
   ({ isolated }) => !isolated,
+);
+const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) => {
+  const sourceEntries = plugin.sourceEntries.filter(
+    (source) =>
+      source === plugin.packageJson?.openclaw?.setupEntry ||
+      plugin.catalogSourceEntries.includes(source) ||
+      /^\.\/setup-api\.[cm]?[jt]s$/u.test(source),
+  );
+  if (!sourceEntries.length) {
+    return [];
+  }
+  const entries = [{ id: plugin.id, sourceEntries }];
+  const runtime = listBundledPluginEntrySources([
+    {
+      id: plugin.id,
+      sourceEntries: plugin.packageJson?.openclaw?.extensions?.length
+        ? plugin.packageJson.openclaw.extensions
+        : ["./index.ts"],
+    },
+  ]);
+  const runtimeSources = new Set(Object.values(runtime).map((source) => fs.realpathSync(source)));
+  for (const [name, source] of Object.entries(listBundledPluginEntrySources(entries))) {
+    // One public artifact cannot carry both native runtime and reloadable inventory ownership.
+    if (Object.hasOwn(runtime, name) || runtimeSources.has(fs.realpathSync(source))) {
+      throw new Error(`Plugin ${plugin.id} inventory entry overlaps its runtime: ${source}`);
+    }
+  }
+  return entries;
+});
+const bundledInventoryEntryNames = new Set(
+  Object.keys(listBundledPluginEntrySources(bundledInventoryEntries)),
 );
 
 function buildUnifiedDistEntries(): Record<string, string> {
@@ -816,7 +849,11 @@ const configs: UserConfig[] = [
       // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: {
-        ...sharedRuntimeProcessBuildEntries(unifiedDistEntries),
+        ...Object.fromEntries(
+          Object.entries(sharedRuntimeProcessBuildEntries(unifiedDistEntries)).filter(
+            ([name]) => !bundledInventoryEntryNames.has(name),
+          ),
+        ),
         "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
       },
       deps: unifiedDeps,
@@ -831,6 +868,30 @@ const configs: UserConfig[] = [
     },
     false,
   ),
+  ...bundledInventoryEntries.map((plugin) => {
+    const entry = listBundledPluginEntrySources([plugin]);
+    const privateChunks = `${bundledPluginRoot(plugin.id)}/.setup/[name]-[hash].mjs`;
+    return nodeBuildConfig(
+      {
+        name: TSDOWN_UNIFIED_CONFIG_GROUP,
+        // Inventory generations own their lazy chunks; host SDK singletons stay native.
+        entry,
+        plugins: [createPluginInventoryModuleRefsPlugin(bundledPluginRoot(plugin.id))],
+        deps: {
+          ...unifiedDeps,
+          neverBundle: [...rootDependencyOptions.neverBundle, /^openclaw(?:\/|$)/u],
+          alwaysBundle: (id) => !/^openclaw(?:\/|$)/u.test(id) && shouldAlwaysBundleDependency(id),
+        },
+        outputOptions: {
+          entryFileNames: (chunk) =>
+            Object.hasOwn(entry, chunk.name) ? "[name].js" : privateChunks,
+          chunkFileNames: privateChunks,
+          assetFileNames: `${bundledPluginRoot(plugin.id)}/.setup/[name]-[hash][extname]`,
+        },
+      },
+      false,
+    );
+  }),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,

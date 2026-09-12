@@ -1,17 +1,22 @@
 // Plugins CLI policy tests cover plugin command policy checks and warnings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   applyExclusiveSlotSelectionMock,
   createTestInstalledPluginIndex,
   enablePluginInConfigMock,
+  resolvePluginLifecycleGatewayMock,
+  pluginLifecycleGatewayMock,
   loadPluginManifestRegistryMock,
+  loadPluginMetadataSnapshotMock,
   pluginCliConfigMock,
   replaceConfigFileMock,
   refreshPluginRegistryMock,
@@ -49,6 +54,12 @@ describe("plugins cli policy mutations", () => {
 
   beforeEach(async () => {
     resetPluginsCliTestState();
+    // Policy cases derive metadata from their config-sensitive registry fixture;
+    // the shared install-output snapshot assumes synthetic enabled artifacts.
+    const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
+      "../plugins/plugin-metadata-snapshot.js",
+    );
+    loadPluginMetadataSnapshotMock.mockImplementation(metadata.loadPluginMetadataSnapshot);
     // Resolve after the shared CLI fixture registers its record-IO mock.
     ({ loadInstalledPluginIndexInstallRecordsSync: readInstallRecords } =
       await import("../plugins/installed-plugin-index-record-reader.js"));
@@ -166,6 +177,120 @@ describe("plugins cli policy mutations", () => {
     return config.plugins.entries;
   }
 
+  it.each(["enable", "disable"])(
+    "applies online %s through the running owner without a local config write",
+    async (command) => {
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      pluginLifecycleGatewayMock.mockResolvedValue({
+        plugin: { id: "alpha" },
+        runtime: { generation: 2 },
+      });
+      await runPluginsCommand(["plugins", command, "alpha"]);
+      expect(pluginLifecycleGatewayMock.mock.calls[0]?.slice(0, 2)).toEqual([
+        "plugins.setEnabled",
+        {
+          pluginId: "alpha",
+          enabled: command === "enable",
+          ...(command === "enable" ? { allowlistPolicy: "preserve" } : {}),
+        },
+      ]);
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { mode: undefined, json: false, acceptCapabilities: true },
+    { mode: "OPENCLAW_CONFIG_READONLY", json: false, acceptCapabilities: true },
+    { mode: "OPENCLAW_NIX_MODE", json: false, acceptCapabilities: true },
+    { mode: undefined, json: true, acceptCapabilities: false },
+    { mode: undefined, json: true, acceptCapabilities: true },
+  ])(
+    "reloads one CLI-selected plugin (mode=$mode, json=$json, accept=$acceptCapabilities)",
+    async ({ mode, json, acceptCapabilities }) => {
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      const receipt = {
+        ok: true,
+        pluginIds: ["alpha"],
+        restartRequired: false,
+        runtime: { operationId: "reload-alpha", generation: 2, pluginIds: ["alpha"] },
+      };
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: "alpha",
+        manifest: { name: "Alpha", hooks: ["agent:bootstrap"] },
+        record: { source: "npm", spec: "@acme/alpha" },
+        config: {},
+      });
+      const consentRequired = new Error("Plugin alpha requires capability consent.");
+      pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
+        if (json) {
+          const consent = args[2];
+          if (typeof consent !== "function") {
+            throw consentRequired;
+          }
+          expect(await consent(review)).toEqual({ reviewToken: review.reviewToken });
+        }
+        return receipt;
+      });
+      const streams = [process.stdin, process.stdout].map((stream) => ({
+        stream,
+        descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+      }));
+      try {
+        for (const { stream } of streams) {
+          Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
+        }
+        await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
+          const reload = runPluginsCommand([
+            "plugins",
+            "reload",
+            "alpha",
+            ...(json ? ["--json"] : []),
+            ...(acceptCapabilities ? ["--accept-capabilities"] : []),
+          ]);
+          if (json && !acceptCapabilities) {
+            await expect(reload).rejects.toBe(consentRequired);
+          } else {
+            await reload;
+          }
+        });
+      } finally {
+        for (const { stream, descriptor } of streams) {
+          if (descriptor) {
+            Object.defineProperty(stream, "isTTY", descriptor);
+          } else {
+            Reflect.deleteProperty(stream, "isTTY");
+          }
+        }
+      }
+      expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
+        "plugins.reload",
+        { plugins: [{ pluginId: "alpha" }] },
+        acceptCapabilities ? expect.any(Function) : undefined,
+      );
+      expect(promptYesNoMock).not.toHaveBeenCalled();
+      if (json) {
+        if (acceptCapabilities) {
+          expect(JSON.parse(pluginsCliRuntimeLogs.join("\n"))).toEqual(receipt);
+        } else {
+          expect(pluginsCliRuntimeLogs).toEqual([]);
+        }
+      } else {
+        expect(pluginsCliRuntimeLogs).toContain('Reloaded plugin "alpha" (generation 2).');
+      }
+      expect(configWriteMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses offline reload without modifying config or dispatching a mutation", async () => {
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(null);
+    await expect(runPluginsCommand(["plugins", "reload", "alpha"])).rejects.toThrow(
+      "The Gateway is not running. Start it before reloading a plugin.",
+    );
+    expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+  });
+
   it("refreshes the persisted plugin registry after enabling a plugin", async () => {
     const sourceConfig = {} as OpenClawConfig;
     const enabledConfig = {
@@ -184,6 +309,7 @@ describe("plugins cli policy mutations", () => {
       sourceConfig: enabledConfig,
       baseHash: "mock",
       writeOptions: expect.objectContaining({
+        assertConfigPathForWrite: expect.any(Function),
         explicitSetPaths: [["plugins", "entries", "alpha"]],
       }),
     });
@@ -406,6 +532,7 @@ describe("plugins cli policy mutations", () => {
       sourceConfig: nextConfig,
       baseHash: "mock",
       writeOptions: expect.objectContaining({
+        assertConfigPathForWrite: expect.any(Function),
         explicitSetPaths: [["plugins", "entries", "alpha"]],
       }),
     });
@@ -440,6 +567,7 @@ describe("plugins cli policy mutations", () => {
         sourceConfig: enabledConfig,
         baseHash: "mock",
         writeOptions: expect.objectContaining({
+          assertConfigPathForWrite: expect.any(Function),
           explicitSetPaths: [["plugins", "entries", pluginId]],
         }),
       });
@@ -469,6 +597,7 @@ describe("plugins cli policy mutations", () => {
         sourceConfig: nextConfig,
         baseHash: "mock",
         writeOptions: expect.objectContaining({
+          assertConfigPathForWrite: expect.any(Function),
           explicitSetPaths: [["plugins", "entries", pluginId]],
         }),
       });

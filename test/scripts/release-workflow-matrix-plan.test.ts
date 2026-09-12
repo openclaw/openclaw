@@ -337,6 +337,9 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         "live-codex-harness-gpt56-luna-docker",
       ],
     ],
+    ["full", "live-codex-harness-gpt56-sol-docker", ["live-codex-harness-gpt56-sol-docker"]],
+    ["stable", "live-codex-harness-gpt56-sol-docker", ["live-codex-harness-gpt56-sol-docker"]],
+    ["beta", "live-codex-harness-gpt56-sol-docker", []],
     ["beta", "live-cache", []],
   ])(
     "binds focused Docker consumer rows for %s / %s",

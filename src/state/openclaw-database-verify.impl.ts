@@ -233,11 +233,11 @@ export function collectOpenClawDatabaseVerifyTargets(options: {
 }
 
 /** Reconfirm worker failures on live owners before quarantine and latching. */
-export function applyOpenClawDatabaseVerificationResults(options: {
+export async function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
   results: readonly OpenClawDatabaseVerifyResult[];
   targets: readonly OpenClawDatabaseVerifyTarget[];
-}): void {
+}): Promise<void> {
   const targetByPath = new Map(options.targets.map((target) => [target.path, target]));
 
   for (const result of options.results) {
@@ -264,7 +264,7 @@ export function applyOpenClawDatabaseVerificationResults(options: {
     }
     const confirmation =
       target.kind === "state"
-        ? confirmOpenClawStateDatabaseIntegrity(result.path)
+        ? await confirmOpenClawStateDatabaseIntegrity(result.path)
         : confirmOpenClawAgentDatabaseIntegrity(result.path);
     if (confirmation.status === "healthy") {
       log.info("discarding stale database integrity verification result", {

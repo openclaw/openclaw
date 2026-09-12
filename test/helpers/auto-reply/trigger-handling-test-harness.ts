@@ -8,6 +8,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-
 import type { EmbeddedAgentQueueMessageOutcome } from "../../../src/agents/embedded-agent-runner/runs.js";
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import { captureEnv } from "../../../src/test-utils/env.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMock = any;
@@ -131,6 +132,8 @@ const installModelCatalogMock = () =>
 installModelCatalogMock();
 
 vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogOwnerSnapshot: () => undefined,
+  materializePreparedModelCatalogOwner: (owner: object) => owner,
   readPreparedModelCatalog: (...args: unknown[]) =>
     modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
@@ -202,45 +205,8 @@ installWebSessionMock();
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 
-type TempHomeEnvSnapshot = {
-  home: string | undefined;
-  userProfile: string | undefined;
-  homeDrive: string | undefined;
-  homePath: string | undefined;
-  openclawHome: string | undefined;
-  stateDir: string | undefined;
-};
-
 let suiteTempHomeRoot = "";
 let suiteTempHomeId = 0;
-
-function snapshotTempHomeEnv(): TempHomeEnvSnapshot {
-  return {
-    home: process.env.HOME,
-    userProfile: process.env.USERPROFILE,
-    homeDrive: process.env.HOMEDRIVE,
-    homePath: process.env.HOMEPATH,
-    openclawHome: process.env.OPENCLAW_HOME,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
-}
-
-function restoreTempHomeEnv(snapshot: TempHomeEnvSnapshot): void {
-  const restoreKey = (key: string, value: string | undefined) => {
-    if (value === undefined) {
-      delete process.env[key];
-      return;
-    }
-    process.env[key] = value;
-  };
-
-  restoreKey("HOME", snapshot.home);
-  restoreKey("USERPROFILE", snapshot.userProfile);
-  restoreKey("HOMEDRIVE", snapshot.homeDrive);
-  restoreKey("HOMEPATH", snapshot.homePath);
-  restoreKey("OPENCLAW_HOME", snapshot.openclawHome);
-  restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
-}
 
 function setTempHomeEnv(home: string): void {
   process.env.HOME = home;
@@ -278,7 +244,14 @@ afterAll(async () => {
 
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const home = join(suiteTempHomeRoot, `case-${++suiteTempHomeId}`);
-  const snapshot = snapshotTempHomeEnv();
+  const snapshot = captureEnv([
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+  ]);
   await fs.mkdir(join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
   setTempHomeEnv(home);
 
@@ -300,7 +273,7 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
     modelFallbackMocks.runWithModelFallback.mockClear();
     return await fn(home);
   } finally {
-    restoreTempHomeEnv(snapshot);
+    snapshot.restore();
   }
 }
 

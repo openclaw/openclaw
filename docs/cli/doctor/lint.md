@@ -70,6 +70,8 @@ Explicit lint exit codes:
 
 `--severity-min` controls both which findings print and the exit threshold: `openclaw doctor --lint --severity-min error` can print nothing and exit `0` even when lower-severity `info`/`warning` findings exist.
 
+When the updater runs lint, warning-severity findings below its error threshold are retained in a separate JSON `warnings` array. They do not change the lint exit code. The updater records these advisories in its run history, including intentional open channel policies, so they remain available in `openclaw update status`. Ordinary standalone lint keeps the selected output threshold.
+
 Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors or runtime failures before a payload can be produced remain nonzero.
 
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
@@ -82,6 +84,9 @@ receive `openclaw doctor --fix` guidance, not a guarantee that every backup will
 be retired. Preserved roots require manual review of workspace ownership, backup
 manifests, and workspace migration blockers. If both kinds remain, Doctor reports
 both next steps. Do not delete preserved backups to clear the warning.
+The check uses the configured agent directories and actual filesystem paths even
+when lint reads a private state snapshot. Correctly placed Workshop targets do
+not need relocation merely because lint uses a temporary directory.
 
 ## Check selection
 

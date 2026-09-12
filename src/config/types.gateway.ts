@@ -294,7 +294,7 @@ export type GatewayTerminalConfig = {
   detachedSessionTimeoutSeconds?: number;
 };
 
-/** Labs-gated external CLI session targets in the Control UI. */
+/** External CLI session targets in the Control UI. */
 export type GatewayCliAgentsConfig = {
   /** Show catalog-backed CLI agents in the new-session model picker. Default: true. */
   enabled?: boolean;

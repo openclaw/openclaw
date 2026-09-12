@@ -2,23 +2,32 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { ensureAbsoluteDirectory } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { SQLITE_INSPECTION_BYTES_PER_SECOND } from "./sqlite-readonly-worker.js";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import {
   collectStateDatabasePaths,
   UpdateCandidateStateInventorySchema,
+  UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
+import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
+import {
+  UpdateSnapshotCapacityError,
+  type UpdateSnapshotCapacity,
+} from "./update-snapshot-capacity.js";
 
-type SnapshotSize = { bytes: number; largest: number };
+type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
 
 async function measureSnapshotFiles(
   files: z.infer<typeof UpdateCandidateStateInventorySchema>,
@@ -41,37 +50,119 @@ async function measureSnapshotFiles(
     bytes += family;
     largest = Math.max(largest, family);
   }
-  return { bytes, largest };
+  return { bytes, largest, pluginBytes: null };
 }
 
 function requiredSnapshotBytes(size: SnapshotSize): number {
   // Keep the completed generation and Doctor backup, plus the largest raw,
   // compacting and publication copies. Metadata needs room on an empty state too.
-  return size.bytes * 2 + size.largest * 3 + 64 * 1024 * 1024;
+  return size.bytes * 2 + size.largest * 3 + (size.pluginBytes ?? 0) + 64 * 1024 * 1024;
 }
 
-function chooseSnapshotRoot(stateDir: string, size: SnapshotSize): string {
-  const required = requiredSnapshotBytes(size);
-  const roots = [os.tmpdir(), path.resolve(stateDir, "tmp")];
-  const available = roots.map((root) => tryReadDiskSpace(root));
-  const index = available.findIndex((space) => !space || space.availableBytes >= required);
-  if (index >= 0) {
-    return roots[index]!;
+function measureSnapshotCapacity(
+  stateDir: string,
+  size: SnapshotSize,
+  env: NodeJS.ProcessEnv,
+  previous?: UpdateSnapshotCapacity,
+): UpdateSnapshotCapacity {
+  const roots: Array<{
+    kind: NonNullable<UpdateSnapshotCapacity["selection"]>["kind"];
+    directory: string;
+  }> = [];
+  if (env.TMPDIR?.trim()) {
+    roots.push({ kind: "explicit-tmpdir", directory: path.resolve(env.TMPDIR) });
   }
-  throw new Error(
-    `Update state snapshot requires ${formatDiskSpaceBytes(required)} for ${formatDiskSpaceBytes(size.bytes)} of SQLite state and scratch space; ${roots.map((root, i) => `${root}: ${formatDiskSpaceBytes(available[i]!.availableBytes)} available`).join("; ")}. Free space on either filesystem before retrying.`,
+  const configuredTempDir = os.tmpdir();
+  // POSIX os.tmpdir() includes TMPDIR; keep its remaining defaults as a separate fallback.
+  const systemTempDir =
+    process.platform !== "win32" &&
+    env.TMPDIR?.trim() &&
+    path.resolve(configuredTempDir) === path.resolve(env.TMPDIR)
+      ? process.env.TMP || process.env.TEMP || "/tmp"
+      : configuredTempDir;
+  roots.push(
+    {
+      kind: "state-volume",
+      directory: resolveUpdateCaptureRoot(resolvePathViaExistingAncestorSync(stateDir)),
+    },
+    { kind: "system-tmpdir", directory: path.resolve(systemTempDir) },
   );
+  const candidates = roots
+    .filter(
+      (root, index) => roots.findIndex((other) => other.directory === root.directory) === index,
+    )
+    .map((root) => {
+      const candidate: UpdateSnapshotCapacity["candidates"][number] = {
+        kind: root.kind,
+        directory: root.directory,
+        availableBytes: tryReadDiskSpace(root.directory)?.availableBytes ?? null,
+      };
+      const allocationError = previous?.candidates.find(
+        (entry) => entry.directory === root.directory,
+      )?.allocationError;
+      if (allocationError) {
+        candidate.allocationError = allocationError;
+      }
+      return candidate;
+    });
+  const requiredBytes = requiredSnapshotBytes(size);
+  return {
+    reason: "snapshot-capacity-insufficient",
+    sqliteBytes: size.bytes,
+    pluginBytes: size.pluginBytes,
+    requiredBytes,
+    candidates,
+    selection: null,
+  };
 }
 
-async function allocateSnapshotRoot(root: string, stateDir: string): Promise<string> {
-  const directory =
-    root === path.resolve(stateDir, "tmp")
-      ? resolvePreferredOpenClawTmpDir({
-          preferredDir: path.join(root, "openclaw"),
-          tmpdir: () => root,
-        })
-      : root;
-  return fs.realpath(await fs.mkdtemp(path.join(directory, "openclaw-update-canary-")));
+async function allocateSnapshotRoot(
+  capacity: UpdateSnapshotCapacity,
+  current?: { root: string; directory: string },
+): Promise<string> {
+  const fits = (candidate: UpdateSnapshotCapacity["candidates"][number]) =>
+    candidate.availableBytes !== null && candidate.availableBytes >= capacity.requiredBytes;
+  for (const candidate of capacity.candidates.filter(fits)) {
+    if (candidate.allocationError) {
+      continue;
+    }
+    try {
+      let directory = current?.root === candidate.directory ? current.directory : undefined;
+      if (!directory) {
+        const root =
+          candidate.kind === "state-volume"
+            ? candidate.directory
+            : resolvePathViaExistingAncestorSync(candidate.directory);
+        const ensured = await ensureAbsoluteDirectory(root, {
+          mode: 0o700,
+          scopeLabel: "update snapshot",
+        });
+        if (!ensured.ok) {
+          throw ensured.error;
+        }
+        directory = await fs.realpath(
+          await createPrivateSqliteTempDirectory(root, "openclaw-update-canary-"),
+        );
+      }
+      capacity.reason = candidate.kind;
+      capacity.selection = { kind: candidate.kind, directory: candidate.directory };
+      return directory;
+    } catch (error) {
+      if (
+        !(error instanceof FsSafeError) &&
+        !["EACCES", "EPERM", "EROFS", "ENOTDIR", "ENOENT", "EEXIST", "ELOOP", "ENOSPC"].some(
+          (code) => hasNodeErrorCode(error, code),
+        )
+      ) {
+        throw error;
+      }
+      candidate.allocationError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  capacity.reason = capacity.candidates.some(fits)
+    ? "snapshot-location-unavailable"
+    : "snapshot-capacity-insufficient";
+  throw new UpdateSnapshotCapacityError(capacity);
 }
 
 async function snapshotProgress(directory: string): Promise<string> {
@@ -109,18 +200,38 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<{ stateDir: string; pluginPaths: Record<string, string> }> {
+}): Promise<{
+  stateDir: string;
+  pluginPaths: Record<string, string>;
+  snapshotCapacity: UpdateSnapshotCapacity;
+  cleanupDirectories: string[];
+}> {
   const initialFiles = await collectStateDatabasePaths(params);
   let size = await measureSnapshotFiles(initialFiles);
-  let selectedRoot = chooseSnapshotRoot(params.stateDir, size);
-  let directory = await allocateSnapshotRoot(selectedRoot, params.stateDir);
-  const run = async (mode: "inventory" | "snapshot") => {
+  let capacity = measureSnapshotCapacity(params.stateDir, size, params.env);
+  let directory = await allocateSnapshotRoot(capacity);
+  let selectedRoot = capacity.selection!;
+  const inventoryDirectory = directory;
+  const cleanupDirectories = () => [...new Set([directory, inventoryDirectory])];
+  const run = async (
+    request:
+      | { mode: "inventory" }
+      | {
+          mode: "snapshot";
+          pluginPlanPath: string;
+          databaseInventory: string[];
+        },
+  ) => {
     params.signal?.throwIfAborted();
     // This path copies, compares, scans, compacts and hashes the same bytes.
     // Budget every pass at the read-only owner's conservative throughput.
     const budget = Math.max(
       params.timeoutMs ?? 300_000,
-      300_000 + Math.ceil((12 * size.bytes) / SQLITE_INSPECTION_BYTES_PER_SECOND) * 1000,
+      300_000 +
+        Math.ceil(
+          (12 * size.bytes + 2 * (size.pluginBytes ?? 0)) / SQLITE_INSPECTION_BYTES_PER_SECOND,
+        ) *
+          1000,
     );
     const stalled = new AbortController();
     const finished = new AbortController();
@@ -139,7 +250,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           } else if (Date.now() >= deadline) {
             stalled.abort(
               new Error(
-                `Update state snapshot made no progress for ${budget / 1000} seconds (${formatDiskSpaceBytes(size.bytes)} of SQLite state). Check storage performance before retrying.`,
+                `Update state snapshot made no progress for ${budget / 1000} seconds (${formatDiskSpaceBytes(size.bytes + (size.pluginBytes ?? 0))} of state and plugin files). Check storage performance before retrying.`,
               ),
             );
             break;
@@ -162,7 +273,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         ],
         {
           input: JSON.stringify({
-            mode,
+            ...request,
             stateDir: params.stateDir,
             config: params.config,
             targetStateDir: directory,
@@ -197,32 +308,33 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     }
   };
   try {
-    const shared = path.resolve(params.stateDir, "state", "openclaw.sqlite");
-    if (
-      await fs.stat(shared).then(
-        () => true,
-        (error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
-      )
-    ) {
-      size = await measureSnapshotFiles(
-        UpdateCandidateStateInventorySchema.parse(await run("inventory")),
-      );
-      const fullSetRoot = chooseSnapshotRoot(params.stateDir, size);
-      if (fullSetRoot !== selectedRoot) {
-        await fs.rm(directory, { recursive: true, force: true });
-        selectedRoot = fullSetRoot;
-        directory = await allocateSnapshotRoot(selectedRoot, params.stateDir);
-      }
-    }
-    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(await run("snapshot"));
-    return { stateDir: directory, pluginPaths };
+    const inventory = UpdateCandidateSnapshotInventorySchema.parse(
+      await run({ mode: "inventory" }),
+    );
+    size = {
+      ...(await measureSnapshotFiles(inventory.databases)),
+      pluginBytes: inventory.pluginBytes,
+    };
+    capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
+    directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });
+    selectedRoot = capacity.selection!;
+    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
+      await run({
+        mode: "snapshot",
+        pluginPlanPath: path.join(inventoryDirectory, inventory.pluginPlan),
+        databaseInventory: [...inventory.databases.keys()],
+      }),
+    );
+    return {
+      stateDir: directory,
+      pluginPaths,
+      snapshotCapacity: { ...capacity, selection: { ...selectedRoot, directory } },
+      cleanupDirectories: cleanupDirectories(),
+    };
   } catch (error) {
-    await fs.rm(directory, { recursive: true, force: true });
+    for (const ownedDirectory of cleanupDirectories()) {
+      await fs.rm(ownedDirectory, { recursive: true, force: true });
+    }
     throw error;
   }
 }

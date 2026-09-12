@@ -10,7 +10,9 @@ type PluginLifecycleProps = {
   inspection: PluginsInspectResult | null;
   mutationBlockedReason: string | null;
   canMutate: boolean;
+  reloadBlockedReason: string | null;
   busy: Readonly<Record<string, boolean>>;
+  onReload: (pluginId: string, rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
 };
 
@@ -21,6 +23,8 @@ export function renderPluginLifecycle(
   const key = pluginRowKey(plugin.id);
   const source = props.inspection?.source;
   const trust = props.inspection?.trust;
+  const reloadReason = props.reloadBlockedReason;
+  const canReload = reloadReason === null;
   const rows = html`
     ${renderSettingsRow({
       title: t("pluginsPage.detailPluginId"),
@@ -81,6 +85,28 @@ export function renderPluginLifecycle(
           })
         : nothing
     }
+    ${renderSettingsRow({
+      title: t("pluginsPage.reload"),
+      description: t("pluginsPage.reloadHint"),
+      control: renderReasonedDisabledControl(
+        reloadReason,
+        html`<button
+          type="button"
+          class="btn plugins-reload oc-action oc-action-secondary"
+          ?disabled=${!reloadReason && (!canReload || Boolean(props.busy[key]))}
+          aria-disabled=${!canReload ? "true" : nothing}
+          aria-label=${t("pluginsPage.reloadNamed", { name: plugin.name })}
+          @click=${() => {
+            if (canReload && !props.busy[key]) {
+              props.onReload(plugin.id, key);
+            }
+          }}
+        >
+          ${t("pluginsPage.reload")}
+        </button>`,
+      ),
+      carapace: true,
+    })}
     ${
       plugin.removable
         ? renderSettingsRow({

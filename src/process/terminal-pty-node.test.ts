@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
 import { spawnNodeTerminalPty } from "./terminal-pty-node.js";
 import type { TerminalPtyEvent } from "./terminal-pty-protocol.js";
@@ -94,7 +95,8 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
 
   it("reaps the PTY and its background process when the owning host disconnects", async () => {
     const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
-    const child = spawn(process.execPath, resolveRuntimeWorkerArgv(worker), {
+    const node = resolveTestNodeExecPath();
+    const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       serialization: "json",
     });

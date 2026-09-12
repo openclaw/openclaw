@@ -332,25 +332,6 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     }
   });
 
-  it("preserves legacy device-token auth when no operator roles are configured", async () => {
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-      ok: true,
-      method: "device-token",
-    });
-
-    await expect(
-      authorizeGatewayHttpRequestOrReply({
-        req: createReq(),
-        res: {} as ServerResponse,
-        auth: { mode: "token", allowTailscale: false, token: "shared-secret" },
-      }),
-    ).resolves.toEqual({
-      authMethod: "device-token",
-      trustDeclaredOperatorScopes: true,
-      authenticatedUserProfile: ownerProfile,
-    });
-  });
-
   it.each(["trusted-proxy", "tailscale", "bootstrap-token"] as const)(
     "rejects identity-less %s authentication when operator roles require durable identity",
     async (method) => {

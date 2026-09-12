@@ -343,6 +343,8 @@ describe("registerPluginCliCommands", () => {
 
   it("loads root-help descriptors from manifests without entering the plugin module loader", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
+    const siblingConfig = { enabled: false };
+    autoEnabledConfig.plugins!.entries!["external-cli"] = siblingConfig;
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: autoEnabledConfig,
       changes: [],
@@ -350,7 +352,30 @@ describe("registerPluginCliCommands", () => {
         demo: ["demo configured"],
       },
     });
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createCliMetadataSnapshot());
+    const snapshot = createCliMetadataSnapshot();
+    const sibling = {
+      id: "external-cli",
+      origin: "global",
+      format: "openclaw",
+      cliCommands: [
+        { name: "external-cli", description: "External utilities", hasSubcommands: false },
+      ],
+    };
+    const plugins = [...snapshot.plugins, sibling];
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      ...snapshot,
+      index: {
+        ...snapshot.index,
+        plugins: [
+          ...snapshot.index.plugins,
+          { pluginId: "matrix", enabled: true, enabledByDefault: false, origin: "bundled" },
+          { pluginId: sibling.id, enabled: true, origin: sibling.origin },
+        ],
+      },
+      manifestRegistry: { plugins, diagnostics: [] },
+      plugins,
+      byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    });
 
     await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual([
       {
@@ -363,6 +388,11 @@ describe("registerPluginCliCommands", () => {
     const help = await renderRootHelpText({ config: rawConfig });
     expect(help).toContain("matrix *");
     expect(help).toContain("Matrix channel utilities");
+    expect(help).not.toContain("External utilities");
+
+    autoEnabledConfig.plugins!.entries!.matrix = { enabled: false };
+    siblingConfig.enabled = true;
+    await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual(sibling.cliCommands);
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
       expect.objectContaining({ config: rawConfig }),

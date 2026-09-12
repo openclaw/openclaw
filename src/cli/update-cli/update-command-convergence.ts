@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
+import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -15,6 +16,7 @@ import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import { preparePostCorePluginConfig } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import { collectPostCorePluginFailureFacts } from "./update-command-plugins-internals.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
@@ -26,6 +28,7 @@ export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
   result: UpdateRunResult;
   root: string;
+  previousInstallRoot?: string;
   installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: UpdateChannel | null;
@@ -56,12 +59,34 @@ export async function convergeUpdatePlugins(params: {
       }
     : undefined;
 
+  const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+  const versionComparison =
+    postUpdateInstalledVersion && VERSION
+      ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
+      : null;
+  const runtimeRootChanged = !updateInstallRootsMatch(
+    params.previousInstallRoot ?? params.root,
+    postUpdateRoot,
+  );
+  const retainedDifferentRuntime =
+    params.coreAlreadyCurrent === true &&
+    (runtimeRootChanged || (versionComparison !== null && versionComparison !== 0));
   const shouldResumePostCoreInFreshProcess =
-    !params.coreAlreadyCurrent &&
+    (!params.coreAlreadyCurrent || retainedDifferentRuntime) &&
     shouldResumePostCoreUpdateInFreshProcess({
-      result: params.result,
-      downgradeRisk: params.downgradeRisk,
-      installKindChanged: params.installKindChanged,
+      // An already-current install can still differ from the retained updater.
+      // Route by that runtime transition without changing the reported core result.
+      result: retainedDifferentRuntime
+        ? {
+            ...params.result,
+            status: "ok",
+            before: { ...params.result.before, version: VERSION },
+            after: { ...params.result.after, version: postUpdateInstalledVersion },
+          }
+        : params.result,
+      downgradeRisk: params.downgradeRisk || (versionComparison !== null && versionComparison > 0),
+      installKindChanged:
+        params.installKindChanged || (retainedDifferentRuntime && runtimeRootChanged),
     });
 
   let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
@@ -91,11 +116,6 @@ export async function convergeUpdatePlugins(params: {
 
   return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
     const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
-    const versionComparison =
-      postUpdateInstalledVersion && VERSION
-        ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
-        : null;
     const compatibilityDowngradeTarget =
       versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
     if (compatibilityDowngradeTarget) {
@@ -132,6 +152,18 @@ export async function convergeUpdatePlugins(params: {
         }
         pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
         postCorePluginUpdate = freshProcessResult.pluginUpdate;
+      }
+
+      if (retainedDifferentRuntime && !pluginsUpdatedInFreshProcess) {
+        return {
+          resultWithPostUpdate: {
+            ...params.result,
+            status: "error" as const,
+            reason: "post-core-update-failed",
+          },
+          detail:
+            "The installed target could not resume plugin convergence. Run openclaw update using the installed target executable.",
+        };
       }
 
       if (!pluginsUpdatedInFreshProcess) {
@@ -176,57 +208,70 @@ export async function convergeUpdatePlugins(params: {
         postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
       }
 
-      let resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
-        ? {
-            ...params.result,
-            status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
-            ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
-            postUpdate: {
-              ...params.result.postUpdate,
-              plugins: postCorePluginUpdate,
-            },
-          }
-        : params.result;
-      if (doctorWarnings.length) {
-        resultWithPostUpdate = {
-          ...resultWithPostUpdate,
-          steps: [
-            ...resultWithPostUpdate.steps,
-            ...normalizeUpdatePostInstallDoctorWarnings(doctorWarnings).map((message, index) => ({
-              name: `post-plugin doctor warning ${index + 1}`,
-              command: "openclaw doctor --fix",
-              cwd: postUpdateRoot,
-              durationMs: 0,
-              exitCode: 0,
-              advisory: { kind: "package-post-install-doctor" as const, message },
-            })),
-          ],
-        };
-      }
-      const pluginAdvisories = (postCorePluginUpdate?.warnings ?? []).filter(
-        (warning) => warning.reason === "plugin-target-unavailable",
-      );
-      resultWithPostUpdate = {
-        ...resultWithPostUpdate,
-        steps: [
-          ...resultWithPostUpdate.steps,
-          ...pluginAdvisories.map((warning, index) => ({
-            name: `finalize:plugins:${index}`,
-            command: "openclaw plugins update",
-            cwd: postUpdateRoot,
-            durationMs: 0,
-            exitCode: 0,
-            advisory: { kind: "recoverable-maintenance" as const, message: warning.message },
-          })),
-        ],
+      const resultWithPostUpdate: UpdateRunResult = {
+        ...params.result,
+        steps: [...params.result.steps],
+        ...(postCorePluginUpdate
+          ? {
+              status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
+              ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
+              postUpdate: {
+                ...params.result.postUpdate,
+                plugins: postCorePluginUpdate,
+              },
+            }
+          : {}),
       };
+      const failureFacts = postCorePluginUpdate
+        ? collectPostCorePluginFailureFacts(postCorePluginUpdate)
+        : [];
+      if (failureFacts.length) {
+        resultWithPostUpdate.steps.push({
+          name: "post-update verification",
+          command: "openclaw plugins update",
+          cwd: postUpdateRoot,
+          durationMs: 0,
+          exitCode: 1,
+          failureFacts,
+        });
+      }
+      resultWithPostUpdate.steps.push(
+        ...normalizeUpdatePostInstallDoctorWarnings(doctorWarnings).map((message, index) => ({
+          name: `post-plugin doctor warning ${index + 1}`,
+          command: "openclaw doctor --fix",
+          cwd: postUpdateRoot,
+          durationMs: 0,
+          exitCode: 0,
+          advisory: { kind: "package-post-install-doctor" as const, message },
+        })),
+      );
+      const pluginAdvisories = [
+        ...(postCorePluginUpdate?.warnings ?? []).filter(
+          (warning) =>
+            warning.reason === "plugin-target-unavailable" || warning.reason === "doctor-advisory",
+        ),
+        // Committed handoff files can acknowledge success without npm details.
+        ...(postCorePluginUpdate?.npm?.outcomes ?? []).filter(
+          (outcome) => outcome.code === "source-bundled-plugin",
+        ),
+      ];
+      resultWithPostUpdate.steps.push(
+        ...pluginAdvisories.map((warning, index) => ({
+          name: `finalize:plugins:${index}`,
+          command: "openclaw plugins update",
+          cwd: postUpdateRoot,
+          durationMs: 0,
+          exitCode: 0,
+          advisory: { kind: "recoverable-maintenance" as const, message: warning.message },
+        })),
+      );
       if (
         params.coreAlreadyCurrent &&
         resultWithPostUpdate.status !== "error" &&
         (postCorePluginUpdate?.changed ||
           (params.requestedChannel !== null && params.requestedChannel !== params.storedChannel))
       ) {
-        resultWithPostUpdate = { ...resultWithPostUpdate, status: "ok" };
+        resultWithPostUpdate.status = "ok";
         delete resultWithPostUpdate.reason;
       }
       if (params.opts.run) {
@@ -241,6 +286,7 @@ export async function convergeUpdatePlugins(params: {
             step: "post-update verification",
             status: postCorePluginUpdate?.status === "error" ? "failed" : "completed",
             endedAtMs: Date.now(),
+            ...(failureFacts.length ? { failureFacts } : {}),
           },
           { env: params.opts.run.env },
         );

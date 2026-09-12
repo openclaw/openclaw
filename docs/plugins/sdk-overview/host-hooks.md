@@ -271,6 +271,18 @@ separately when distinct identities share a combined reference. Human-name
 matching, alias/date version selection, and case-insensitive glob scopes remain
 available.
 
+`ModelRegistry.fork(authStorage, publishedModels?)` creates an isolated registry.
+`authStorage` supplies that caller's credentials. The optional `publishedModels`
+is a read-only map from provider ID to complete validated runtime model rows;
+an empty array withdraws that provider's rows. Omitted providers keep the captured
+catalog. Forks retain the current source's authored request settings and runtime
+registrations, and later `refresh()` calls retain the captured model publication.
+Published model metadata does not supply credentials or authorize an account.
+The optional argument requires a host release containing executable catalog
+publication; the v2026.9.4 host supports only `fork(authStorage)`.
+This session-extension subpath is runtime-only and does not publish TypeScript
+declarations.
+
 Session extension SDK and supported TypeBox imports share the host's modules.
 
 The contracts intentionally split authority:
@@ -318,3 +330,75 @@ normal OpenClaw plugin hooks for work that does not need pre-model tool-result
 timing. The old
 embedded-runner-only extension factory registration path has been removed.
 </Accordion>
+
+## Sandbox backends
+
+`openclaw/plugin-sdk/sandbox` owns backend registration, remote filesystem bridges,
+and remote-shell execution. Register a backend with
+`registerSandboxBackend(id, { factory, manager, resolveWorkdir })` and dispose the
+registration with the plugin lifecycle.
+
+A backend that allocates external resources can provide `reserveRuntimeId(params)`
+to generate a fresh candidate ID without contacting its provider. Core reserves
+one generation per backend/scope in the sandbox registry before calling the
+factory. Replays receive the original reserved `workspaceDir`, including shared
+scopes reached from a different caller workspace. The
+`ReservedSandboxBackendFactoryV1` contract requires `runtimeId` and
+`assertRuntimeCurrent` through `CreateReservedSandboxBackendParamsV1`. The
+authority check is synchronous: provision that exact ID and recheck after awaited
+work before side effects. Prepared exec specifications carry this check as
+`assertCurrent`, which the process supervisor retains through queued admission
+and native process construction. Recreate rejects work still awaiting admission;
+already-admitted commands follow the backend's normal shutdown lifecycle. Unknown
+provisioning failures retain the ID for replay. Throw
+`SandboxRuntimeRetiredError(runtimeId)` only after the provider confirms that exact
+generation is permanently released. Core replaces it at most once per request.
+Recreate and prune keep failed cleanup recorded and prevent late publication.
+
+Use `createRemoteShellSandboxBackend(params, options)` to reuse the shared
+workspace bootstrap, skills refresh, workdir validation, and filesystem bridge.
+`options.createSession` returns a `RemoteShellSandboxSession`. For a reserved
+backend, set `options.runtimeId` to `params.runtimeId`; `backendId` defaults to
+`params.cfg.backend`. `configLabel` and `configLabelKind` describe the runtime.
+By default, paths still derive from `params.cfg.ssh.workspaceRoot` and the sandbox
+scope. `preprovisionedWorkdir: { runtimeId, remoteWorkspaceDir }` adopts an existing
+placement-owned worktree without seeding or refreshing its files.
+
+Initial seeding stages all required workspace trees beside the final runtime root
+and atomically publishes the complete directory without replacement. Concurrent
+publication preserves the first workspace, even if a caller later empties its
+root. Existing roots remain
+authoritative without a new completion marker. Normal failures and lost publish
+races remove only their exact temporary directory, restoring owner access to
+read-only staged directories without following symlinks. Abrupt process loss or an
+unreachable provider can leave a `<runtime-root>.bootstrap-<uuid>` sibling; it is
+never treated as a completed workspace. Remove only a known orphan after
+initialization has stopped. Releasing a Crabbox lease removes these artifacts with
+the machine; static SSH does not glob-delete siblings during runtime cleanup.
+
+`createRemoteShellSandboxSession({ buildCommand, assertCurrent, dispose })` derives
+command execution, guarded tar uploads, and private exec-script staging from one
+transport adapter. `buildCommand({ remoteCommand, tty })` returns local `argv`,
+`env`, and optional `cwd`. The local environment belongs to the transport process;
+the requested remote environment is staged separately. `cwd` must identify the
+provider's owning workspace when repository admission depends on it. It also
+travels in `SandboxBackendExecSpec` to the process supervisor, independently of the
+remote workdir. The returned session exposes `runCommand`, `uploadDirectory`,
+`prepareExec`, and `dispose`. Optional `dispose` releases local session resources
+after completion or failure; optional `formatFailure(stderr, exitCode)` customizes
+command failure messages. Remote PTY requests affect the command built by the
+adapter; the local transport still runs with piped input.
+
+Pass the reserved `assertRuntimeCurrent` as the session's `assertCurrent`. The
+shared owner checks it around asynchronous preparation, and uploads recheck after
+local traversal immediately before spawning. Provider authority remains with the
+transport command: preparing local argv or retaining connection credentials does
+not authorize a later effect. Staging, execution, uploads, and cleanup must all
+cross that provider boundary. Cleanup retains the same provider admission even
+when it follows a failed or revoked core operation.
+
+The Crabbox adapter uses `crabbox exec --id <lease-id> [--pty] -- /bin/sh -c ...`
+and `stop --current-repo --id <lease-id>` from the original owning workspace. Its
+pre-allocation `exec --check` probe requires `execution` and `currentRepoStop` to
+both be true; initial support is for direct Daytona leases. Static SSH continues
+to use its existing settings through an adapter into the same workspace owner.

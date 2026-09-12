@@ -338,6 +338,8 @@ export type NormalizedMessage = {
 export type ToolCard = {
   id: string;
   callId?: string;
+  runId?: string;
+  parentToolCallId?: string;
   name: string;
   args?: unknown;
   inputText?: string;

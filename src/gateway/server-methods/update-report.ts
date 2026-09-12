@@ -62,6 +62,7 @@ function projectReportInput(payload: RestartSentinelPayload): UpdateFailureRepor
           cwd: "",
           durationMs: step.durationMs ?? 0,
           exitCode: step.log?.exitCode ?? null,
+          failureFacts: step.failureFacts,
         };
         if (step.advisory) {
           projected.advisory = PACKAGE_POST_INSTALL_DOCTOR_ADVISORY;
@@ -100,6 +101,7 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
     (run.target.channel ? `${run.target.channel} channel` : matching?.target);
   const input: UpdateFailureReportInput = {
     attemptId: run.runId,
+    recordedRun: run,
     ...(target ? { target } : {}),
     result: {
       status: "error",
@@ -108,17 +110,7 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
       before: readIdentity(run.before),
       after: readIdentity(run.after),
       durationMs: Math.max(0, (run.finishedAtMs ?? run.updatedAtMs) - run.createdAtMs),
-      steps: run.steps
-        .filter((step) => step.status === "failed")
-        .map((step) => ({
-          name: step.step,
-          command: "",
-          cwd: "",
-          durationMs: Math.max(0, (step.endedAtMs ?? 0) - (step.startedAtMs ?? 0)),
-          exitCode:
-            matching?.result.steps.find((entry) => !entry.advisory && entry.name === step.step)
-              ?.exitCode ?? null,
-        })),
+      steps: matching?.result.steps ?? [],
       // The ledger's rolled-back label is not a verification receipt. Only
       // the same failed attempt's final sentinel can supply rollback facts.
       ...(matching?.result.recovery ? { recovery: matching.result.recovery } : {}),

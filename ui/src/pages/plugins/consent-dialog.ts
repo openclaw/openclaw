@@ -5,11 +5,13 @@ import {
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
+import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import "../../components/modal-dialog.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
@@ -18,13 +20,15 @@ import type {
   PluginOperatorGrants,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { pluginArtPath, pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+import { pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+
+registerPluginManagementEnglish();
 
 registerPluginConsentEnglish();
 
 export type PluginConsentIntent =
   | { kind: "install"; request: PluginInstallRequest; installIdentity: string }
-  | { kind: "enable"; pluginId: string; rowKey: string };
+  | { kind: "enable" | "reload"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -60,35 +64,33 @@ export function renderArtTile(
   onIconError?: () => void,
   className = "plugins-tile",
 ): TemplateResult {
-  // The resolved plugin-owned icon is authoritative; bundled UI art is the legacy fallback.
-  if (iconUrl) {
-    return html`<span class=${className} data-plugin-icon-id=${slug}>
-      <img
-        class="plugins-icon"
-        src=${iconUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        @error=${onIconError}
-      />
+  return html`${imageWithFallback(iconUrl, (url, onError) => {
+    if (url) {
+      return html`<span class=${className} data-plugin-icon-id=${slug}>
+        <img
+          class="plugins-icon"
+          src=${url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          @error=${() => {
+            onError();
+            onIconError?.();
+          }}
+        />
+      </span>`;
+    }
+    const [from, to] = pluginFallbackGradient(slug);
+    const monogram = pluginMonogram(name);
+    return html`<span
+      class=${`${className} ${className}--fallback`}
+      data-plugin-icon-id=${slug}
+      style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
+      aria-hidden="true"
+    >
+      ${monogram ? html`<span>${monogram}</span>` : icons.plug}
     </span>`;
-  }
-  const art = pluginArtPath(slug);
-  if (art) {
-    return html`<span class=${className} data-plugin-icon-id=${slug}>
-      <img src=${art} alt="" loading="lazy" decoding="async" />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(slug);
-  const monogram = pluginMonogram(name);
-  return html`<span
-    class=${`${className} ${className}--fallback`}
-    data-plugin-icon-id=${slug}
-    style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
-    aria-hidden="true"
-  >
-    ${monogram ? html`<span>${monogram}</span>` : icons.plug}
-  </span>`;
+  })}`;
 }
 
 function renderPluginMetaRow(label: string, value: TemplateResult | string, warning = false) {
@@ -394,7 +396,9 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
         : t("pluginsPage.installNamed", { name })
       : props.busy
         ? t("pluginsPage.working")
-        : t("pluginConsent.enableNamed", { name });
+        : consent.intent.kind === "reload"
+          ? t("pluginsPage.reloadNamed", { name })
+          : t("pluginConsent.enableNamed", { name });
   const confirmUnavailable =
     !props.canMutate || props.busy || props.loading || Boolean(props.error) || !inspection;
   const confirm = html`

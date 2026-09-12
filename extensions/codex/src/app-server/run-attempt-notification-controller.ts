@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isTerminalCodexTurnNotificationForTurn } from "./attempt-notification-state.js";
 import {
   isCodexTurnAbortMarkerNotification,
@@ -17,7 +18,10 @@ import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
+import {
+  CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
+  waitForPromiseOrAbort,
+} from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
 
 export function createCodexAttemptNotificationController(
@@ -47,6 +51,30 @@ export function createCodexAttemptNotificationController(
     reportExecutionNotification,
     maybeAnnounceFastModeAutoOff,
   } = lifecycle;
+  const pendingNativeCommandItems = new Set<string>();
+  const nativeItemObservers = new Set<() => void>();
+  const waitForNativeTerminalItems = async (signal: AbortSignal) => {
+    // Exited commands disappear from native inventory before their final item arrives.
+    // Receipt-owned command facts exclude older turns and withheld dynamic replies.
+    if (pendingNativeCommandItems.size === 0) {
+      return;
+    }
+    const completion = createDeferred<void>();
+    const observe = () => {
+      if (pendingNativeCommandItems.size === 0) {
+        completion.resolve();
+      }
+    };
+    nativeItemObservers.add(observe);
+    try {
+      observe();
+      if (!(await waitForPromiseOrAbort(completion.promise, signal))) {
+        signal.throwIfAborted();
+      }
+    } finally {
+      nativeItemObservers.delete(observe);
+    }
+  };
   const isTerminalTurnNotificationForTurn = (
     notification: CodexServerNotification,
     notificationTurnId: string,
@@ -153,6 +181,15 @@ export function createCodexAttemptNotificationController(
       });
     } finally {
       state.activeLocalProjections -= 1;
+      if (isCurrentTurn && notification.method === "item/completed") {
+        const item = readCodexNotificationItem(notification.params);
+        if (item?.type === "commandExecution" && typeof item.id === "string") {
+          pendingNativeCommandItems.delete(item.id);
+        }
+      }
+      for (const observe of nativeItemObservers) {
+        observe();
+      }
       if (isTerminal) {
         const completedTurn = readCodexTurnCompletedNotification(notification.params)?.turn;
         // App-server collapses abort reasons; the marker preserves explicit
@@ -209,6 +246,13 @@ export function createCodexAttemptNotificationController(
         allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
       }
       const nativeItem = readCodexNotificationItem(notification.params);
+      if (
+        notification.method === "item/started" &&
+        nativeItem?.type === "commandExecution" &&
+        typeof nativeItem.id === "string"
+      ) {
+        pendingNativeCommandItems.add(nativeItem.id);
+      }
       if (nativeItem?.type === "webSearch") {
         // Native result provenance must survive an abandoned transcript projection.
         projector.settlement.turnTainted ||= notification.method === "item/completed";
@@ -232,6 +276,7 @@ export function createCodexAttemptNotificationController(
   registerNativeSubagentMonitor(resourceState.thread.threadId);
   return {
     waitForActiveNativeTurnCompletion,
+    waitForNativeTerminalItems,
     noteNotificationReceived,
     enqueueNotification,
     drainNotificationQueue,

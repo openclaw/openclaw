@@ -24,7 +24,6 @@ import {
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
-  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
@@ -37,6 +36,7 @@ import {
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
   resolveThinkingProfile,
+  type ThinkingCatalogResolver,
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
@@ -61,6 +61,7 @@ function listGatewayThinkingLevelOptions(params: {
   provider: string;
   model: string;
   modelCatalog?: ModelCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   agentRuntime: string;
   configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
@@ -69,6 +70,7 @@ function listGatewayThinkingLevelOptions(params: {
     provider: params.provider,
     model: params.model,
     catalog: params.modelCatalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime: params.agentRuntime,
     configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
@@ -81,12 +83,14 @@ function resolveGatewaySessionThinkingLevel(params: {
   model: string;
   level: NonNullable<ReturnType<typeof normalizeThinkLevel>>;
   modelCatalog?: ModelCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   agentRuntime: string;
   configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
+  rowContext?: SessionListRowContext;
 }) {
   const catalogEntry = params.modelCatalog
-    ? findModelCatalogEntry(params.modelCatalog, {
+    ? (params.rowContext?.findModelCatalogEntry ?? findModelCatalogEntry)(params.modelCatalog, {
         provider: params.catalogProvider ?? params.provider,
         modelId: params.model,
       })
@@ -107,6 +111,7 @@ function resolveGatewaySessionThinkingLevel(params: {
     model: params.model,
     level: params.level,
     catalog: params.modelCatalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime: params.agentRuntime,
     configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
@@ -120,29 +125,25 @@ function resolveGatewaySessionThinkingDefault(params: {
   model: string;
   agentId?: string;
   modelCatalog?: ModelCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   agentRuntime: string;
   configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
+  rowContext?: SessionListRowContext;
 }) {
   const agentThinkingDefault = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
     : undefined;
-  const resolveDefault =
-    params.providerPolicySource !== undefined && params.providerPolicySource !== "active-or-bundled"
-      ? (defaultParams: Parameters<typeof resolveThinkingDefault>[0]) =>
-          resolveThinkingDefaultCore({
-            ...defaultParams,
-            providerPolicySource: params.providerPolicySource,
-          })
-      : resolveThinkingDefault;
   const defaultLevel =
     agentThinkingDefault ??
-    resolveDefault({
+    resolveThinkingDefaultCore({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
       catalog: params.modelCatalog,
+      catalogResolver: params.catalogResolver,
       agentRuntime: params.agentRuntime,
+      providerPolicySource: params.providerPolicySource,
     });
   return resolveGatewaySessionThinkingLevel({
     provider: params.thinkingPolicyProvider ?? params.provider,
@@ -150,9 +151,11 @@ function resolveGatewaySessionThinkingDefault(params: {
     model: params.model,
     level: defaultLevel,
     modelCatalog: params.modelCatalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime: params.agentRuntime,
     configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
+    rowContext: params.rowContext,
   });
 }
 
@@ -165,13 +168,14 @@ export function resolveGatewayModelThinkingProfile(params: {
   configuredReasoning?: boolean;
   thinkingPolicyProvider?: string;
   modelCatalog?: ModelCatalogEntry[];
+  catalogResolver?: ThinkingCatalogResolver;
   rowContext?: SessionListRowContext;
   sessionKey?: string;
   providerPolicySource?: ThinkingProviderPolicySource;
 }): GatewayModelThinkingProfile {
   const catalogEntry =
     params.agentRuntime == null && params.modelCatalog
-      ? findModelCatalogEntry(params.modelCatalog, {
+      ? (params.rowContext?.findModelCatalogEntry ?? findModelCatalogEntry)(params.modelCatalog, {
           provider: params.provider,
           modelId: params.model,
         })
@@ -202,6 +206,7 @@ export function resolveGatewayModelThinkingProfile(params: {
     provider: thinkingPolicyProvider,
     model: params.model,
     modelCatalog: params.modelCatalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime,
     configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
@@ -217,9 +222,11 @@ export function resolveGatewayModelThinkingProfile(params: {
             model: params.model,
             agentId: params.agentId,
             modelCatalog: params.modelCatalog,
+            catalogResolver: params.catalogResolver,
             agentRuntime,
             configuredReasoning: params.configuredReasoning,
             providerPolicySource: params.providerPolicySource,
+            rowContext: params.rowContext,
           })
         : undefined,
   };
@@ -270,13 +277,13 @@ export function resolveGatewaySessionThinkingProjectionInternal(
   params: GatewaySessionThinkingProjectionParams,
 ) {
   const { acpMeta, agentRuntime } = resolveGatewaySessionRuntimeProjection(params);
-  const catalogEntry =
-    !acpMeta && params.modelCatalog
-      ? findModelCatalogEntry(params.modelCatalog, {
-          provider: params.provider,
-          modelId: params.model,
-        })
-      : undefined;
+  // ACP owns runtime selection, but context-window projection still needs model metadata.
+  const catalogEntry = params.modelCatalog
+    ? (params.rowContext?.findModelCatalogEntry ?? findModelCatalogEntry)(params.modelCatalog, {
+        provider: params.provider,
+        modelId: params.model,
+      })
+    : undefined;
   const thinkingRuntime = acpMeta
     ? concretizeAgentRuntime(acpMeta.backend ?? agentRuntime.id)
     : resolveEffectiveAgentRuntime({
@@ -308,9 +315,11 @@ export function resolveGatewaySessionThinkingProjectionInternal(
         modelCatalog: params.modelCatalog,
         agentRuntime: thinkingRuntime,
         providerPolicySource: params.providerPolicySource,
+        rowContext: params.rowContext,
       })
     : undefined;
   return {
+    catalogEntry,
     agentRuntime,
     thinkingLevel,
     effectiveThinkingLevel: thinkingLevel ?? metadata.thinkingDefault,
@@ -694,14 +703,8 @@ export function projectSessionPatchResult(params: {
     entry: params.entry,
     modelCatalog,
   });
-  const catalogEntry = modelCatalog
-    ? findModelCatalogEntry(modelCatalog, {
-        provider: resolved.provider,
-        modelId: resolved.model,
-      })
-    : undefined;
   const contextWindow = resolveModelContextWindowProfile({
-    catalogEntry,
+    catalogEntry: thinking.catalogEntry,
     selected: params.entry.contextWindow,
   });
   return {

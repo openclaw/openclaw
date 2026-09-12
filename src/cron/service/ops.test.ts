@@ -21,6 +21,7 @@ import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -824,7 +825,7 @@ describe("cron service ops seam coverage", () => {
       ).toEqual({ name: "cron_run_receipts" });
     } finally {
       stop(state);
-      runReceiptStore.inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+      inspectActiveCronRunReceipt({ storePath, jobId: job.id });
     }
   });
 

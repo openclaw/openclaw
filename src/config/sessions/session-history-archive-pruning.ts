@@ -69,9 +69,11 @@ function checkpointArchivePruning(
 export async function reclaimSqliteFreePages(
   databaseOptions: OpenClawAgentDatabaseOptions,
   diagnostics?: SqliteSessionArchivePruningDiagnostics,
+  limits?: { maxPasses?: number; assertCurrent?: () => void },
 ): Promise<void> {
   let remaining: number | undefined;
-  while (remaining === undefined || remaining > 0) {
+  const maxPasses = limits?.maxPasses ?? Infinity;
+  for (let pass = 0; pass < maxPasses && (remaining === undefined || remaining > 0); pass++) {
     if (remaining !== undefined) {
       await setImmediate();
     }
@@ -80,6 +82,7 @@ export async function reclaimSqliteFreePages(
       databaseOptions,
       diagnostics,
       (database) => {
+        limits?.assertCurrent?.();
         checkpointArchivePruning(database, diagnostics);
         // sqlite-allow-raw -- Physical budget decisions need current SQLite page accounting.
         const freePages = () =>

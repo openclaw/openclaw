@@ -17,20 +17,22 @@ export function renderChatModelCatalogState(
     return nothing;
   }
   const { status } = state;
-  const refreshWarning = status === "ready" && state.refreshFailed;
-  if (status === "ready" && hasSelectableOptions && !refreshWarning) {
+  const checking = state.pendingProviders?.join(", ");
+  if (status === "ready" && hasSelectableOptions && !checking) {
     return nothing;
   }
   const label =
     status === "offline"
       ? t("common.offline")
-      : status === "error" || refreshWarning
+      : status === "error"
         ? hasOptions
           ? t("chat.modelControls.modelsRefreshFailed")
           : errorLabel
-        : status === "ready"
-          ? t("chat.modelControls.noModelsAvailable")
-          : t("chat.modelControls.loadingModels");
+        : checking
+          ? t("chat.modelControls.checkingProviderModels", { providers: checking })
+          : status === "ready"
+            ? t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${
@@ -41,7 +43,7 @@ export function renderChatModelCatalogState(
       aria-live="polite"
     >
       <span class="chat-controls__model-catalog-state-label">
-        ${status === "error" || refreshWarning ? icons.alertTriangle : nothing}
+        ${status === "error" ? icons.alertTriangle : nothing}
         <span>${label}</span>
       </span>
       ${

@@ -332,7 +332,7 @@
     "openai": {
       "capabilities": ["image", "audio"],
       "defaultModels": {
-        "image": "gpt-5.6-sol",
+        "image": "gpt-6-astra",
         "audio": "gpt-4o-transcribe"
       },
       "autoPriority": {

@@ -1557,6 +1557,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toContain("signal threshold");
+    expect(applied.rejectedCandidates[0]?.category).toBe("signal threshold");
   });
 
   it("does not let recall days satisfy the apply-time query gate", async (workspaceDir) => {
@@ -1596,6 +1597,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("query threshold (0 < 3)");
+    expect(applied.rejectedCandidates[0]?.category).toBe("query threshold");
   });
 
   it("does not rank contaminated dreaming snippets from an existing short-term store", async (workspaceDir) => {
@@ -1757,6 +1759,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toContain("age threshold");
+    expect(applied.rejectedCandidates[0]?.category).toBe("age threshold");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
@@ -1800,6 +1803,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
+    expect(applied.rejectedCandidates[0]?.category).toBe("contamination");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
@@ -1861,6 +1865,7 @@ describe("short-term promotion", () => {
     const applied = await applyAllCandidates(workspaceDir, ranked);
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
+    expect(applied.rejectedCandidates[0]?.category).toBe("origin");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 

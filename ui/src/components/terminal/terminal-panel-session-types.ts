@@ -19,6 +19,9 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     controller: GhosttyTerminalController;
     shell: string;
     host: HTMLDivElement;
+    pendingOpen?: TerminalPanelOpenAction;
+    /** Retires only the queued intent that booted this placeholder. */
+    cancelPendingIntent?: () => void;
     /** Why an in-flight open/attach must not adopt this disposed terminal. */
     cancelled?: "close" | "lifecycle";
   };
@@ -32,6 +35,7 @@ export type TerminalOperation = {
   generation: number;
   client: TerminalGatewayClient;
   signal: AbortSignal;
+  cancelIntent?: () => void;
 };
 
 export type TerminalPanelCatalogReference = {
@@ -55,10 +59,15 @@ export type TerminalPanelAction =
   | { kind: "catalog"; agentId: string | null; catalog: TerminalPanelCatalogReference }
   | { kind: "attach"; sessionId: string; agentOwned: boolean };
 
+export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
+
+export type TerminalPanelError = { text: string; retryAction?: TerminalPanelOpenAction };
+
 export type TerminalPanelSessionControllerState = {
   tabs: TerminalPanelSessionTab[];
   activeId: string | null;
   booting: boolean;
+  error: TerminalPanelError | null;
 };
 
 export interface TerminalPanelSessionControllerHost extends ReactiveControllerHost {
@@ -73,7 +82,6 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly routeTarget: TerminalRouteTarget;
   readonly terminalPanelOpen: boolean;
   readonly catalogReadyTimeoutMs: number;
-  terminalPanelErrorText: string | null;
   readonly terminalPanelUploadController: TerminalPanelUploadController;
   createTerminalController(
     options: CreateGhosttyTerminalOptions,

@@ -586,59 +586,67 @@ describe("plugin npm package manifest staging", () => {
     expect(generateCalls).toBe(1);
   });
 
-  it("overlays generated channel configs while packing and restores source manifest", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
-    const packageDir = join(repoDir, "extensions", "twitch");
-    mkdirSync(packageDir, { recursive: true });
-    const sourceManifest = {
-      id: "twitch",
-      channels: ["twitch"],
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-    };
-    writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);
-    writeGeneratedChannelMetadata(repoDir);
+  it.each([undefined, "providerCatalogEntry", "capabilityCatalogEntry"] as const)(
+    "overlays manifest-only channel configs and restores catalog metadata (%s)",
+    (catalogField) => {
+      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
+      const packageDir = join(repoDir, "extensions", "twitch");
+      mkdirSync(packageDir, { recursive: true });
+      const sourceManifest = {
+        id: "twitch",
+        ...(catalogField ? { [catalogField]: "./catalog.ts" } : {}),
+        channels: ["twitch"],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      };
+      writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);
+      writeGeneratedChannelMetadata(repoDir);
 
-    const resolved = resolveAugmentedPluginNpmManifest({
-      repoRoot: repoDir,
-      packageDir,
-    });
-    expect(resolved.changed).toBe(true);
-    expect(resolved.manifest).toEqual({
-      id: "twitch",
-      channels: ["twitch"],
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      channelConfigs: {
-        twitch: {
-          description: "Twitch chat integration",
-          label: "Twitch",
-          schema: {
-            type: "object",
-            required: ["channelName"],
-            properties: {
-              channelName: { type: "string" },
+      const resolved = resolveAugmentedPluginNpmManifest({
+        repoRoot: repoDir,
+        packageDir,
+      });
+      expect(resolved.changed).toBe(true);
+      expect(resolved.manifest).toEqual({
+        ...sourceManifest,
+        channelConfigs: {
+          twitch: {
+            description: "Twitch chat integration",
+            label: "Twitch",
+            schema: {
+              type: "object",
+              required: ["channelName"],
+              properties: {
+                channelName: { type: "string" },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    const originalText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
-    withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
-      const stagedManifest = JSON.parse(
-        readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8"),
+      const originalText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
+      const result = withAugmentedPluginNpmManifestForPackage(
+        { repoRoot: repoDir, packageDir },
+        (context) => {
+          const stagedManifest = JSON.parse(
+            readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8"),
+          );
+          expect(stagedManifest.channelConfigs.twitch.description).toBe("Twitch chat integration");
+          expect(context.packageJsonApplied).toBe(false);
+          if (catalogField) {
+            expect(stagedManifest[catalogField]).toBe("./catalog.ts");
+          }
+          return "overlay-ran";
+        },
       );
-      expect(stagedManifest.channelConfigs.twitch.description).toBe("Twitch chat integration");
-    });
-    expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalText);
-  });
+      expect(result).toBe("overlay-ran");
+      expect(existsSync(join(packageDir, "package.json"))).toBe(false);
+      expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(originalText);
+    },
+  );
 
   it("overlays package-local runtime metadata while packing and restores source package json", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-");
@@ -738,7 +746,7 @@ describe("plugin npm package manifest staging", () => {
     { name: "missing specifier", partial: { exportName: "hasState" } },
     { name: "blank specifier", partial: { specifier: " \t", exportName: "hasState" } },
   ])(
-    "packs and loads both channel-state probes from one package artifact ($name)",
+    "packs the plugin icon and loads both channel-state probes from one artifact ($name)",
     ({ partial }) => {
       const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-state-runtime-");
       const packageDir = writePublishablePluginPackage(repoDir);
@@ -774,6 +782,8 @@ describe("plugin npm package manifest staging", () => {
       );
       writeFileText(join(packageDir, "dist", "index.cjs"), "module.exports = {};\n");
       writeFileText(join(packageDir, "dist", "setup-entry.cjs"), "module.exports = {};\n");
+      writeFileText(join(packageDir, "assets", "icon.png"), "portable-package-icon");
+      writeFileText(join(packageDir, "assets", "design-source.svg"), "unpublished-design");
       writeFileText(
         join(packageDir, "dist", "configured-state.cjs"),
         "exports.hasConfiguredChannelState = () => true;\n",
@@ -831,6 +841,8 @@ describe("plugin npm package manifest staging", () => {
         const packedFiles = packedPackage.files.map((file) => file.path);
         expect(packedFiles).toContain("dist/configured-state.cjs");
         expect(packedFiles).toContain("dist/auth-presence.cjs");
+        expect(packedFiles).toContain("assets/icon.png");
+        expect(packedFiles).not.toContain("assets/design-source.svg");
         expect(packedFiles).not.toContain("configured-state.ts");
         expect(packedFiles).not.toContain("auth-presence.ts");
 
@@ -845,6 +857,9 @@ describe("plugin npm package manifest staging", () => {
         expect(extract.status, extract.stderr).toBe(0);
 
         const packageRoot = join(consumerDir, "package");
+        expect(readFileSync(join(packageRoot, "assets", "icon.png"), "utf8")).toBe(
+          "portable-package-icon",
+        );
         if (partial) {
           const channel = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
             .openclaw.channel;

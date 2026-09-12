@@ -15,9 +15,21 @@ export function sortAndLimitBy<T extends object>(
       if (!beforeFirst && worst && compare(entry, worst) >= 0) {
         continue;
       }
-      const insertAt = beforeFirst
-        ? 0
-        : selected.findIndex((candidate, index) => index > 0 && compare(entry, candidate) < 0);
+      let insertAt = 0;
+      if (!beforeFirst) {
+        let low = 1;
+        let high = selected.length;
+        // Insert after equal entries to preserve the input order for ties.
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if (compare(entry, selected[middle]!) < 0) {
+            high = middle;
+          } else {
+            low = middle + 1;
+          }
+        }
+        insertAt = low < selected.length ? low : -1;
+      }
       if (insertAt >= 0) {
         selected.splice(insertAt, 0, entry);
         if (selected.length > limit) {

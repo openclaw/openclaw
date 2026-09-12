@@ -17,6 +17,10 @@ const EXTERNAL_SERVICE_RECOVERY =
 
 export type ServiceInspectionReason = keyof typeof SERVICE_INSPECTION_MESSAGES;
 
+export function isServiceInspectionReason(value: string): value is ServiceInspectionReason {
+  return Object.hasOwn(SERVICE_INSPECTION_MESSAGES, value);
+}
+
 export function formatServiceInspectionReason(reason: ServiceInspectionReason): string {
   return `${SERVICE_INSPECTION_MESSAGES[reason]} ${EXTERNAL_SERVICE_RECOVERY}`;
 }

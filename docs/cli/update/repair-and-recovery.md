@@ -164,8 +164,12 @@ package root; a broken same-ID source copy does not trigger replacement of a
 healthy managed package.
 
 With `--json`, stdout contains one JSON document. Doctor panels and other
-diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
-plugin finalization steps still exit non-zero.
+diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
+availability, installation, or load failures appear in
+`postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
+successfully when required checks pass. Failed required Doctor execution,
+invalid configuration or state, ownership errors, and failed required readiness
+checks still exit nonzero.
 
 Doctor repair uses the same enabled-plugin and default-check selection as
 ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,
@@ -223,9 +227,13 @@ overall deadline still fails finalization.
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
 accept capability changes, and JSON mode does not prompt. An unresolved review
-preserves the previous plugin, exits non-zero, and blocks any requested Gateway
-restart. This also applies when a bundled plugin moves to an external package or
-a missing configured plugin has no install record yet. Automatic repair can
+preserves the previous plugin payload and appears in `postUpdate.plugins.warnings`
+with a `PLUGIN_CAPABILITY_CONSENT_REQUIRED` outcome. When required checks pass,
+`openclaw update` can complete the core update and requested Gateway restart with
+`status: "ok"`; `update repair` reports `status: "warning"` and never restarts the
+Gateway. Both commands exit successfully. This also applies when a bundled plugin
+moves to an external package or a missing configured plugin has no install record
+yet; the unreviewed replacement is not installed. Automatic repair can
 report a deferred replacement as a notice when a usable, enabled artifact remains
 installed; that retained artifact still undergoes payload validation.
 
@@ -234,6 +242,29 @@ interactive terminal to review plugin capabilities. After reviewing the changes,
 automation can use `openclaw update repair --accept-capabilities`. Acceptance
 applies to each artifact's recomputed declared surface during this invocation;
 it does not approve future capability additions.
+
+### Skipped legacy audit recovery
+
+Doctor can leave a legacy audit source in place when its raw archive has no
+checkpoint and begins with ambiguous whitespace, changed other than by append,
+or cannot obtain another durable raw-archive checkpoint. These conditions produce
+a `skipped` migration receipt with a warning. Other repairs continue, and update
+finalization can complete with warnings. An unsafe recovery failure, such as an
+interrupted archive that cannot be restored, still stops Doctor.
+
+Preserve the reported source, its sanitized companion (for example,
+`logs/config-audit.jsonl.migrated` beside `logs/config-audit.jsonl.migrated.raw`),
+and any recovery journals or backups. Follow [backup guidance](/install/backups)
+before attempting recovery, and include the warning and archive filenames when
+requesting help. Do not delete or rewrite archives or checkpoints to suppress
+the warning.
+
+The warning repeats on later Doctor or `openclaw update repair` runs until the
+archive is resolved. Successful finalization does not mean this historical audit
+data was imported. There is currently no supported sanitized-only import when
+the raw archive is unusable: accepting the companion as a recovery source needs
+an explicit reconciliation procedure that preserves duplicate events, retained
+history, and checkpoint evidence.
 
 ## `update cleanup`
 

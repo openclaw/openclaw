@@ -2,18 +2,10 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import net from "node:net";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type TestContext,
-} from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { listenServer, withNativeSsConnection } from "./ports.test-support.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -113,36 +105,6 @@ function mockWindowsCommands(params: {
               : undefined;
     return resolveCommandReply(reply);
   });
-}
-
-async function listenServer(
-  skip: TestContext["skip"],
-  server: net.Server,
-  port: number,
-  host?: string,
-): Promise<net.AddressInfo> {
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      if (host) {
-        server.listen(port, host, resolve);
-        return;
-      }
-      server.listen(port, resolve);
-    });
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "EACCES" || code === "EADDRNOTAVAIL") {
-      skip(`TCP listener bind unavailable: ${code}`);
-    }
-    throw err;
-  }
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected tcp address");
-  }
-  return address;
 }
 
 beforeAll(async () => {
@@ -798,6 +760,98 @@ describeUnix("inspectPortUsage", () => {
     ).toBeLessThanOrEqual(4);
   });
 
+  it("keeps ss quoted process names out of established connection endpoints", async () => {
+    mockUnixCommands({
+      lsof: commandOutput("", 1, "lsof: not found\n"),
+      // ss quotes the kernel task name without splitting its spaces or colons.
+      ss: commandOutput(
+        '0 0 127.0.0.1:50123 127.0.0.1:18789 users:(("node worker:1",pid=111,fd=12))\n',
+      ),
+      commandLine: "node fixture-client",
+      user: "tester",
+      parentPid: "1",
+    });
+
+    const result = await inspectPortConnections(18789);
+
+    expect(result.connections).toEqual([
+      {
+        address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+        direction: "client",
+        pid: 111,
+        command: "node worker:1",
+        commandLine: "node fixture-client",
+        user: "tester",
+        ppid: 1,
+      },
+    ]);
+    expect(result.errors).toBeUndefined();
+  });
+
+  it("preserves ss rows with IPv6, unknown processes, and multiple process owners", async () => {
+    mockUnixCommands({
+      lsof: commandOutput("", 2),
+      ss: commandOutput(
+        [
+          '0 0 [::1]:50123 [::1]:18789 users:(("node users:1",pid=111,fd=12),("other",pid=222,fd=13))',
+          '0 0 [::]:18789 [::1]:50124 users:(("node worker:2",pid=333,fd=14))',
+          "0 0 127.0.0.1:50125 [::ffff:127.0.0.1]:18789",
+          '0 0 127.0.0.1:50126 198.51.100.7:18789 users:(("remote :1",pid=444,fd=15))',
+          "0 0 127.0.0.1:50127 127.0.0.1:187890",
+          "0 0 127.0.0.1:50128 127.0.0.1:18789abc",
+          "0 0 127.0.0.1:50129 127.0.0.1:99999",
+          "malformed row",
+          "",
+        ].join("\n"),
+      ),
+    });
+
+    const result = await inspectPortConnections(18789);
+
+    expect(result.connections).toEqual([
+      {
+        address: "TCP [::1]:50123->[::1]:18789 (ESTABLISHED)",
+        direction: "client",
+        pid: 111,
+        command: "node users:1",
+      },
+      {
+        address: "TCP [::]:18789->[::1]:50124 (ESTABLISHED)",
+        direction: "server",
+        pid: 333,
+        command: "node worker:2",
+      },
+      {
+        address: "TCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)",
+        direction: "client",
+      },
+    ]);
+    expect(result.errors).toBeUndefined();
+  });
+
+  it("preserves ss rows for exact-port listeners without reading process text as socket fields", async () => {
+    mockUnixCommands({
+      lsof: commandOutput("", 2),
+      ss: commandOutput(
+        [
+          'LISTEN 0 128 [::1]:18789 [::]:* users:(("node worker:1",pid=111,fd=12))',
+          "LISTEN 0 128 127.0.0.1:18789 0.0.0.0:*",
+          'LISTEN 0 128 127.0.0.1:187890 0.0.0.0:* users:(("other",pid=222,fd=13))',
+          'ESTAB 0 0 127.0.0.1:18789 127.0.0.1:50123 users:(("LISTEN :1",pid=333,fd=14))',
+        ].join("\n"),
+      ),
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toEqual([
+      { address: "[::1]:18789", pid: 111, command: "node worker:1" },
+      { address: "127.0.0.1:18789" },
+    ]);
+    expect(result.errors).toBeUndefined();
+  });
+
   it("falls back to ss for established gateway client connections", async () => {
     mockUnixCommands({
       lsof: commandOutput("", 1, "lsof: not found\n"),
@@ -1029,4 +1083,20 @@ describeWindows("native tasklist CSV contract", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(new RegExp(`^"[^"]+","${process.pid}",`, "m"));
   });
+});
+
+describe.skipIf(process.platform !== "linux")("native ss process metadata contract", () => {
+  it("preserves a spaced and colon-bearing native TCP client name", async ({ skip }) => {
+    await withNativeSsConnection(skip, async ({ port, clientPort, pid, stdout }) => {
+      mockUnixCommands({ lsof: commandOutput("", 2), ss: commandOutput(stdout) });
+      const result = await inspectPortConnections(port);
+      expect(result.connections).toContainEqual({
+        pid,
+        command: "node worker:1",
+        direction: "client",
+        address: `TCP 127.0.0.1:${clientPort}->127.0.0.1:${port} (ESTABLISHED)`,
+      });
+      expect(result.errors).toBeUndefined();
+    });
+  }, 30_000);
 });

@@ -31,6 +31,7 @@ import {
   runMediaGenerationTask,
   type MusicGenerationTaskHandle,
 } from "./media-generate-background.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import { acquireMusicGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   applyAgentDefaultModelConfig,
@@ -499,22 +500,11 @@ export function createMusicGenerateTool(options?: {
           acquired?.assertOpen();
         }
       } catch (error) {
-        let cleanupFailure: { error: unknown } | undefined;
-        try {
-          await acquired?.release();
-        } catch (cleanupError) {
-          cleanupFailure = { error: cleanupError };
-        }
-        if (cleanupFailure) {
-          throw new AggregateError(
-            [error, cleanupFailure.error],
-            "Music preflight and cleanup failed",
-            {
-              cause: error,
-            },
-          );
-        }
-        throw error;
+        return rethrowAfterMediaCleanup(
+          error,
+          () => acquired?.release(),
+          "Music preflight and cleanup failed",
+        );
       }
       if (prepared.kind === "result") {
         await acquired?.release();

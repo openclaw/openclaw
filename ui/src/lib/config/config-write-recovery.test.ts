@@ -58,7 +58,7 @@ function createRecoveryHarness(
     }
     storedRaw = submission.raw;
     hash = "explicit-save";
-    return { hash };
+    return { config: JSON.parse(storedRaw), hash };
   });
   const { runtimeConfig, publish } = createConfigCapabilityHarness(
     request as GatewayBrowserClient["request"],

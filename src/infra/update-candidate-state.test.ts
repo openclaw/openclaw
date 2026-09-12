@@ -7,23 +7,24 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { projectUpdateCandidatePlugins } from "./update-candidate-plugins.js";
+import {
+  copyUpdateCandidatePlugins,
+  prepareUpdateCandidatePlugins,
+} from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import {
   readUpdateStateSchemaVersions,
-  type snapshotUpdateCandidateState,
   updateStateSchemaVersionsMatch,
-  UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
+import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
 
 let root: string;
 beforeEach(async () => {
@@ -46,31 +47,13 @@ async function createDatabase(file: string, sql = ""): Promise<void> {
   }
 }
 
-async function runSnapshotWorker(
-  input: Omit<Parameters<typeof snapshotUpdateCandidateState>[0], "candidateRoot">,
+function runSnapshotWorker(
+  input: Omit<Parameters<typeof runUpdateCandidateSnapshotWorker>[0], "candidateRoot">,
 ) {
-  // Backup/VACUUM cannot be cancelled in-process; use the canary's worker before fixture cleanup.
-  const result = await runCommandBuffered(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-      ),
-    ],
-    {
-      input: JSON.stringify({
-        ...input,
-        candidateRoot: path.join(root, "candidate-host"),
-        mode: "snapshot",
-      }),
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-    },
-  );
-  expect(result.code, result.stderr.toString("utf8")).toBe(0);
-  return UpdateCandidateStateSnapshotSchema.parse(JSON.parse(result.stdout.toString("utf8")))
-    .versions;
+  return runUpdateCandidateSnapshotWorker({
+    ...input,
+    candidateRoot: path.join(root, "candidate-host"),
+  });
 }
 
 it.each(["DELETE", "WAL"])(
@@ -569,7 +552,6 @@ it.each([
       );
       expect(config.plugins!.load!.paths).toEqual([entry]);
       expect(config.plugins!.installs!.demo!.sourcePath).toBe(sourcePackage);
-      expect(await rehearsal.changedConfigKeys()).toEqual([]);
     } finally {
       await rehearsal.cleanup();
     }
@@ -916,12 +898,14 @@ it("projects through an aliased temporary state directory without changing sourc
   await fs.writeFile(path.join(dependency, "package.json"), '{"name":"dependency"}');
   await fs.writeFile(path.join(dependency, "value.txt"), "source");
   await fs.symlink(dependency, path.join(plugin, "node_modules", "dependency"), "junction");
-  const paths = await projectUpdateCandidatePlugins({
+  const params = {
     config: { plugins: { load: { paths: [plugin] } } },
     stateDir: source,
     targetStateDir: path.join(alias, "candidate"),
     candidateRoot: root,
-  });
+  } satisfies Parameters<typeof prepareUpdateCandidatePlugins>[0];
+  const projection = await prepareUpdateCandidatePlugins(params);
+  const paths = await copyUpdateCandidatePlugins(projection, params);
   const copied = path.join(paths[plugin]!, "node_modules", "dependency", "value.txt");
   expect((await fs.realpath(copied)).startsWith(physical + path.sep)).toBe(true);
   await fs.writeFile(copied, "private");

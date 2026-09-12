@@ -9737,7 +9737,7 @@ struct ChatViewModelTests {
                 modelProvider: "anthropic",
                 thinkingLevels: [thinkingOption("off"), thinkingOption("high"), thinkingOption("ultra")]))
         let models = [
-            modelChoice(id: "gpt-5.6-sol", name: "Sol", provider: "openai", reasoning: true),
+            modelChoice(id: "gpt-5.6-luna", name: "Sol", provider: "openai", reasoning: true),
         ]
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
@@ -9745,23 +9745,23 @@ struct ChatViewModelTests {
             modelResponses: [models],
             modelPatchResults: [
                 openAIModelPatchResult(
-                    "gpt-5.6-sol",
+                    "gpt-5.6-luna",
                     thinking: "high",
                     levels: [thinkingOption("off"), thinkingOption("high"), thinkingOption("ultra")]),
             ],
             setSessionModelHook: { model in
-                if model == "openai/gpt-5.6-sol" {
+                if model == "openai/gpt-5.6-luna" {
                     await modelPatchGate.wait()
                 }
             })
 
         try await loadAndWaitBootstrap(vm: vm)
         await MainActor.run {
-            vm.selectModel("openai/gpt-5.6-sol")
+            vm.selectModel("openai/gpt-5.6-luna")
             vm.selectThinkingLevel("ultra")
         }
         try await waitUntil("model patch starts") {
-            await transport.patchedModels() == ["openai/gpt-5.6-sol"]
+            await transport.patchedModels() == ["openai/gpt-5.6-luna"]
         }
         try await Task.sleep(for: .milliseconds(50))
         #expect(await (transport.patchedThinkingLevels()).isEmpty)
@@ -9771,7 +9771,7 @@ struct ChatViewModelTests {
             await transport.patchedThinkingLevels() == ["ultra"]
         }
         await vm.waitForPendingSessionSettings(in: "main")
-        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-sol")
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-luna")
         #expect(await MainActor.run { vm.thinkingLevel } == "ultra")
     }
 
@@ -11489,26 +11489,26 @@ struct ChatViewModelTests {
 
     @Test func `model patch decoder falls back to entry when resolved is absent`() throws {
         let data = Data(
-            #"{"key":"agent:main:main","entry":{"providerOverride":"openai","modelOverride":"gpt-5.6-sol","thinkingLevel":"high"}}"#
+            #"{"key":"agent:main:main","entry":{"providerOverride":"openai","modelOverride":"gpt-5.6-luna","thinkingLevel":"high"}}"#
                 .utf8)
 
         let result = try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
 
         #expect(result.key == "agent:main:main")
         #expect(result.modelProvider == "openai")
-        #expect(result.model == "gpt-5.6-sol")
+        #expect(result.model == "gpt-5.6-luna")
         #expect(result.thinkingLevel == "high")
         #expect(result.thinkingLevels == nil)
     }
 
     @Test func `model patch decoder uses entry thinking when resolved omits it`() throws {
         let data = Data(
-            #"{"entry":{"thinkingLevel":"high"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-sol"}}"#.utf8)
+            #"{"entry":{"thinkingLevel":"high"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-luna"}}"#.utf8)
 
         let result = try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
 
         #expect(result.modelProvider == "openai")
-        #expect(result.model == "gpt-5.6-sol")
+        #expect(result.model == "gpt-5.6-luna")
         #expect(result.thinkingLevel == "high")
         #expect(result.thinkingLevels == nil)
     }

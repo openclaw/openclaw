@@ -566,7 +566,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps published models visible and retries a failed passive read on reopen", async () => {
+  it("keeps published models visible and retries a failed publication read on reopen", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const startupModel = {
         id: "startup-model",
@@ -604,6 +604,9 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-model-select="true"]').click();
+      await composer.locator('[data-chat-model-option="openai/startup-model"]').waitFor();
+      expect(await gateway.getRequests("models.list")).toHaveLength(1);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
@@ -648,7 +651,7 @@ suite.define(() => {
             ],
           },
           "models.list": {
-            sequence: [{ models: [] }, { models: [] }, { models: [routedModel] }],
+            sequence: [{ models: [] }, { models: [routedModel] }],
           },
         },
       });
@@ -686,7 +689,7 @@ suite.define(() => {
         .toBe(1);
 
       await pickerTrigger.click();
-      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(4);
+      expect(await gateway.getRequests("models.list")).toHaveLength(2);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
         .toBe(true);
@@ -701,7 +704,7 @@ suite.define(() => {
     });
   });
 
-  it("reads a newer account catalog on reopen without a cooldown or provider discovery", async () => {
+  it("reuses the account catalog on reopen and follows publications without provider discovery", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const existing = { id: "existing", name: "Existing", provider: "example", available: true };
       const firstOpen = {
@@ -728,6 +731,7 @@ suite.define(() => {
       const picker = composer.locator("details.chat-controls__model-picker");
       const trigger = composer.locator('[data-chat-model-select="true"]');
       await gateway.setMethodResponse("models.list", { models: [existing, firstOpen] });
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await trigger.click();
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/first-open"]').isVisible())
@@ -785,6 +789,11 @@ suite.define(() => {
       });
 
       expect(reopened).toEqual({ open: true, connected: true });
+      expect(await gateway.getRequests("models.list")).toHaveLength(previousRequestCount);
+      expect(
+        await composer.locator('[data-chat-model-option="example/first-open"]').isVisible(),
+      ).toBe(true);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await gateway.waitForRequest("models.list", { after: previousRequestCount });
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/published"]').isVisible())

@@ -109,9 +109,9 @@ describe("renderSkills", () => {
       ["Main (default)", undefined],
       ["Research", undefined],
     ]);
-    expect(
-      selector?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
-    ).toBe("R");
+    await vi.waitFor(() =>
+      expect(selector?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
 
     selector?.onSelect("main");
 

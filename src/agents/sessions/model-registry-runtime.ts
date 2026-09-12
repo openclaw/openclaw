@@ -7,10 +7,11 @@ import {
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import "../ai-transport-runtime-host.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
 
 type ModelRegistryRuntime = {
   apiRegistry: ApiRegistry;
-  llmRuntime: LlmRuntime;
+  llmRuntime: LlmRuntime & { runStream: typeof runPluginStreamConsumer };
 };
 
 const modelRegistryRuntimes = new WeakMap<object, ModelRegistryRuntime>();
@@ -23,7 +24,7 @@ function resetApiRegistry(runtime: ModelRegistryRuntime): void {
 /** Creates the runtime facts owned by one model-registry lifecycle. */
 export function initializeModelRegistryRuntime(owner: object): void {
   const apiRegistry = createApiRegistry();
-  const llmRuntime = createLlmRuntime(apiRegistry);
+  const llmRuntime = { ...createLlmRuntime(apiRegistry), runStream: runPluginStreamConsumer };
   const runtime = { apiRegistry, llmRuntime };
   bindStreamLlmRuntime(llmRuntime.streamSimple, llmRuntime);
   resetApiRegistry(runtime);

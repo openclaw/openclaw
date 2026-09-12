@@ -16,7 +16,9 @@ title: "Integrity, troubleshooting, and recovery"
 | Gateway background verifier                 | Run the full scan about once daily and log results                  |
 | Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database        |
 
-The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+The Gateway startup preflight reads schema headers only. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its source-reader lease stays held through native close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. These headers are not cached compatibility or integrity proof: full readiness and writable admission retain their existing validation and fresh authority checks.
+
+Private snapshots remain necessary inside owner-held source-exclusion or canonical-mutation scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
 
 Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
 
@@ -69,9 +71,42 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
+### Doctor reports orphan task delivery rows
+
+If `foreign_key_check` names `task_delivery_state` referencing `task_runs`,
+stop the Gateway and run `openclaw doctor --fix`. Doctor can recover this known
+relation when the database is structurally intact and has no unrelated
+foreign-key violations or unrecognized delivery-table schema or triggers.
+
+Before removing any orphan rows, Doctor preserves a complete WAL-aware database
+copy and a lossless row export in a private `openclaw-task-delivery-recovery-*`
+directory beside the shared database. Its report names that directory. It contains:
+
+- `database.sqlite`: the pre-repair database, including the orphan rows.
+- `orphan-rows.jsonl`: the original delivery payload, with SQLite integers encoded
+  as decimal strings to avoid precision loss.
+- `manifest.json`: file hashes, row count, and preservation metadata.
+
+Doctor removes only delivery rows whose task no longer exists, within the existing
+repair transaction, and requires clean integrity and foreign-key checks before
+commit. It does not fabricate tasks or replay deliveries. If preservation or a
+later repair step fails, row removal rolls back and any recovery artifacts remain.
+A manifest proves preservation, not that the repair committed; rerun Doctor to
+verify completion.
+
+Keep these files private: they can contain delivery destinations and other user
+data. Retain them until the updated Gateway is verified and any needed payload
+has been recovered. Do not overwrite newer runtime state with this original
+copy. This recovery does not establish which writer created the orphan rows.
+
 ### Why you cannot go back after updating to 2026.7.2
 
 Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.
+
+Some older packages omit schema metadata. The updater recognizes the schema-1
+contract for plain 2026 stable releases through `2026.7.1` and checks it before
+activation, including when updating from a local package tarball. An incompatible
+target is refused while the current installation remains in place.
 
 Downgrading the binary never downgrades the data. Use the managed recovery path
 or restore the verified pre-update backup with its matching release. Retain

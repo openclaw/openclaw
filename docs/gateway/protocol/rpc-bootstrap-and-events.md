@@ -98,6 +98,8 @@ count.
 - `device.pair.setup.deliveryUncertain`: replay-safe setup-code retirement whose
   credential response delivery could not be confirmed, scoped to `operator.pairing`.
 - `voicewake.changed`: wake-word trigger config changed.
+- `plugins.changed`: plugin runtime publication completed. The payload is
+  `{ generation }`; refresh `plugins.list` to reconcile installed and runtime state.
 - `config.changed`: a config write persisted (payload carries the config path,
   the new snapshot hash, and a timestamp — never config content). Operator-read
   scoped; clients refresh via `config.get`.

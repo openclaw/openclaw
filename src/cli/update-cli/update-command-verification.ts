@@ -1,9 +1,16 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { readPackageVersion } from "../../infra/package-json.js";
+import {
+  normalizeUpdateFailureFacts,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
@@ -17,11 +24,57 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
+import {
+  createPluginUpdateWarning,
+  type PluginUpdateWarning,
+} from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import {
+  gatewayServiceCommandUsesRoot,
+  resolveUpdatedGatewayRestartPort,
+} from "./update-command-service-plan.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
 } from "./update-command-service-recovery.js";
+
+export async function verifyPreviousGatewayForUpdate(params: {
+  root: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const { config, env } = params;
+  const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
+  const [expectedVersion, expectedBuildId] = await Promise.all([
+    readPackageVersion(params.root),
+    readBuiltGatewayBuildId(params.root),
+  ]);
+  const [health, readiness, servesPreviousPackage] = await Promise.all([
+    inspectGatewayRestart({
+      service: resolveGatewayService(),
+      env,
+      port,
+      expectedVersion,
+      expectedBuildId: expectedBuildId ?? undefined,
+      requirePluginHealth: false,
+    }),
+    waitForGatewayHttpReadiness({
+      config,
+      port,
+      deadlineAt: Date.now() + 3_000,
+      attempts: 1,
+      delayMs: 0,
+    }),
+    gatewayServiceCommandUsesRoot({ root: params.root, env }),
+  ]);
+  return Boolean(
+    expectedVersion &&
+    servesPreviousPackage === true &&
+    health.healthy &&
+    health.runtime.status === "running" &&
+    readiness.readyz === 200,
+  );
+}
 
 export function recordUpdateGatewayHealth(
   run: UpdateCommandOptions["run"],
@@ -46,7 +99,10 @@ export function recordUpdateGatewayHealth(
               health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch,
           }
         : {}),
-      pluginErrors: health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
+      pluginErrors: [
+        ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
+        ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
+      ],
       channelsReady: health.healthy && !health.channelProbeErrors?.length,
       settled: health.healthy,
       readyz,
@@ -55,7 +111,7 @@ export function recordUpdateGatewayHealth(
   );
 }
 
-/** The same independent oracles decide ordinary restart and repair outcomes. */
+/** Verify core activation while preserving plugin failures as separate notices. */
 export async function verifyUpdatedGateway(params: {
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
@@ -77,7 +133,8 @@ export async function verifyUpdatedGateway(params: {
     health: GatewayRestartSnapshot;
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
-}): Promise<UpdateRepairValidation> {
+}): Promise<UpdateRepairValidation & { pluginWarnings?: PluginUpdateWarning[] }> {
+  const startedAtMs = Date.now();
   // Readiness belongs to the original live executor through every awaited probe.
   const originalRun = params.opts.run;
   const originalExecutor = originalRun?.executorFence;
@@ -110,6 +167,7 @@ export async function verifyUpdatedGateway(params: {
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
+    requirePluginHealth: false,
     env: params.serviceEnv,
     ...(params.signal ? { signal: params.signal } : {}),
   };
@@ -177,27 +235,73 @@ export async function verifyUpdatedGateway(params: {
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
+  const recordVerificationStep = (failureFacts?: UpdateFailureFact[], detail?: string) => {
+    const endedAtMs = Date.now();
+    const step: UpdateStepResult = {
+      name: params.result.recovery?.packageRollbackVerified
+        ? "rollback gateway verification"
+        : "gateway verification",
+      command: "gateway verification",
+      cwd: params.result.root ?? process.cwd(),
+      durationMs: endedAtMs - startedAtMs,
+      exitCode: failureFacts ? 1 : 0,
+      ...(failureFacts ? { failureFacts } : {}),
+    };
+    // Repair reuses the result: the last observation replaces its earlier failure.
+    const index = params.result.steps.findIndex((entry) => entry.name === step.name);
+    if (index === -1) {
+      if (failureFacts) {
+        params.result.steps.push(step);
+      }
+    } else {
+      params.result.steps[index] = step;
+    }
+    if (proofOptions.run) {
+      recordUpdateRunStep(
+        proofOptions.run.runId,
+        {
+          step: step.name,
+          status: failureFacts ? "failed" : "completed",
+          endedAtMs,
+          detail,
+          failureFacts,
+        },
+        { env: proofOptions.run.env },
+      );
+    }
+  };
   if (health.healthy && serviceRunning && readyz) {
+    const pluginFailures = new Map<string, string>();
+    for (const failure of health.activatedPluginErrors ?? []) {
+      pluginFailures.set(failure.id, failure.error);
+    }
+    for (const failure of health.unavailablePlugins ?? []) {
+      pluginFailures.set(failure.id, `${failure.reason}: ${failure.detail}`);
+    }
+    const pluginWarnings = Array.from(pluginFailures, ([pluginId, reason]) =>
+      createPluginUpdateWarning({ pluginId, reason, kind: "load", env: params.serviceEnv }),
+    );
     assertCurrent();
     const verifiedAtMs = Date.now();
     recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
     params.onVerified?.(verifiedAtMs);
     assertCurrent();
-    if (params.opts.run) {
-      recordUpdateRunStep(
-        params.opts.run.runId,
-        { step: "gateway verification", status: "completed", endedAtMs: Date.now() },
-        { env: params.opts.run.env },
-      );
-    }
+    recordVerificationStep();
 
     if (!params.opts.json) {
       defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+      for (const warning of pluginWarnings) {
+        defaultRuntime.log(theme.warn(warning.message));
+      }
     }
     return {
       ok: true,
       score: 7,
-      summary: "Gateway service, version, plugins, channels, and readiness verified.",
+      summary:
+        pluginWarnings.length > 0
+          ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
+          : "Gateway service, version, plugins, channels, and readiness verified.",
+      ...(pluginWarnings.length > 0 ? { pluginWarnings } : {}),
     };
   }
   recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
@@ -232,18 +336,64 @@ export async function verifyUpdatedGateway(params: {
             : !serviceRunning
               ? "service-not-running"
               : (health.waitOutcome ?? "restart-unhealthy");
-  if (params.opts.run) {
-    recordUpdateRunStep(
-      params.opts.run.runId,
-      {
-        step: "gateway verification",
-        status: "failed",
-        endedAtMs: Date.now(),
-        detail: !readyz ? "Gateway /readyz did not return HTTP 200." : reason,
-      },
-      { env: params.opts.run.env },
-    );
+  const facts: UpdateFailureFact[] = [];
+  if (health.versionMismatch) {
+    facts.push({
+      check: "versionMatch",
+      code: "version-mismatch",
+      message: `Expected Gateway version ${health.versionMismatch.expected}; observed ${health.versionMismatch.actual ?? "unavailable"}.`,
+    });
   }
+  if (health.buildIdMismatch) {
+    facts.push({
+      check: "versionMatch",
+      code: "build-id-mismatch",
+      message: `Expected Gateway build ${health.buildIdMismatch.expected}; observed ${health.buildIdMismatch.actual ?? "unavailable"}.`,
+    });
+  }
+  if (!readyz) {
+    facts.push({
+      check: "readyz",
+      code: "readyz-unhealthy",
+      message: `Gateway readiness endpoint returned HTTP ${http.readyz ?? "unavailable"}; expected HTTP 200.`,
+    });
+  }
+  if (!serviceRunning) {
+    facts.push({
+      check: "service",
+      code: "service-not-running",
+      message: `Managed Gateway service status: ${health.runtime.status ?? "unknown"}.`,
+    });
+  }
+  for (const error of health.activatedPluginErrors ?? []) {
+    facts.push({
+      check: "pluginErrors",
+      code: "plugin-errors",
+      pluginId: error.id,
+      message: error.error,
+    });
+  }
+  for (const error of health.channelProbeErrors ?? []) {
+    facts.push({
+      check: "channelsReady",
+      code: "channel-errors",
+      pluginId: error.id,
+      message: error.error,
+    });
+  }
+  if (!facts.length) {
+    facts.push({
+      check: "settled",
+      code: health.waitOutcome ?? "restart-unhealthy",
+      message:
+        health.probeError ??
+        `Gateway did not settle${health.startupPhase ? `; startup phase: ${health.startupPhase}` : "."}`,
+    });
+  }
+  recordVerificationStep(
+    normalizeUpdateFailureFacts(facts, params.serviceEnv),
+    !readyz ? "Gateway /readyz did not return HTTP 200." : reason,
+  );
   if (params.opts.json) {
     defaultRuntime.error(diagnosticLines.join("\n"));
   } else {

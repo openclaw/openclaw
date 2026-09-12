@@ -2263,6 +2263,7 @@ describe("Crabbox worker provider", () => {
       "--desktop-env",
       "xfce",
     ]);
+    expect(provider.allowsDesktopResize).toBe(true);
     expect(
       provider.resolveProvisionTimeoutMs?.({
         ...PROFILE,

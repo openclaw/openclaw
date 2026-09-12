@@ -1,3 +1,4 @@
+import type { PluginInstanceAdmission } from "./plugin-instance.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 // Stores plugin runtime registry state for the current process lifecycle.
 import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
@@ -10,6 +11,7 @@ type MemoryCapabilityRegistrar = import("./types.js").OpenClawPluginApi["registe
 export type RegistryState = {
   activeRegistry: PluginRegistry | null;
   activeVersion: number;
+  registryVersions?: WeakMap<PluginRegistry, number>;
   agentEventBridgeUnsubscribe?: (() => void) | undefined;
   key: string | null;
   workspaceDir: string | null;
@@ -18,6 +20,7 @@ export type RegistryState = {
   registrationContext?: {
     registry: PluginRegistry;
     pluginId: string;
+    instance?: PluginInstanceAdmission;
     registerMemoryCapability?: MemoryCapabilityRegistrar;
   };
   commandRegistryClearTail?: Promise<void>;
@@ -34,6 +37,11 @@ type GlobalRegistryState = typeof globalThis & {
 
 export function getPluginRegistryState(): RegistryState | undefined {
   return (globalThis as GlobalRegistryState)[PLUGIN_REGISTRY_STATE];
+}
+
+/** Publication provenance follows the selected registry, including retained request snapshots. */
+export function getPluginRegistryVersion(registry: PluginRegistry | null): number | undefined {
+  return registry ? getPluginRegistryState()?.registryVersions?.get(registry) : undefined;
 }
 
 /** Policy reads the process-active registry, independently of request or registration scopes. */

@@ -576,7 +576,7 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
   if (collectExplicitDirectoryTargetArgs(argv, cwd).length > 0) {
     return argv;
   }
-  const testTargets = argv
+  const testTargets = collectVitestFileFilters(argv)
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
   if (testTargets.length > 0 && testTargets.every(isToolingDockerTestTarget)) {

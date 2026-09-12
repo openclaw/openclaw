@@ -2,6 +2,7 @@
 // Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -19,7 +20,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import {
   GatewayClient,
   GatewayClientRequestError,

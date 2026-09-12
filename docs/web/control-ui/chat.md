@@ -33,6 +33,8 @@ navigable without a card; links to other origins keep normal browser behavior.
 Document-relative hrefs are never session links; file references such as
 `src/utils/foo.ts` retain workspace file handling.
 
+When authentication status is available, each provider heading in the chat model picker says how that provider is signed in: **API** for an API key (or an explicitly selected API-key account), the plan name for a provider with one subscription, and **Subscription** for a provider with several. With several subscriptions, the heading adds the email of an explicitly selected account when the Gateway supplies it, and the **Account** rows show each account's email; automatic selection shows no account identity. Hover a truncated heading to read the full text.
+
 ## Composer capability menu
 
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
@@ -56,12 +58,28 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+New Session shows the agent's known default model while the model catalog loads.
+Model choices are cached in memory for the current connection, agent, session,
+and account, so reopening a picker or returning to a draft can show them
+immediately. Catalog and account changes invalidate these copies; reconnecting
+loads current choices again. Reopening a picker after a reported cooldown expires
+checks readiness again. A catalog refresh keeps existing controls visible,
+and the Gateway still validates the model and account when starting a run.
+
+If a New Session model lookup does not finish within 30 seconds, the controls
+show **Models unavailable**. Open the model picker to retry; your draft stays
+in place.
+
 When you open an existing session, you can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
-composer keeps your draft and focus when the conversation appears. Send shows
-**Loading chat** until the initial history is ready; text typed during that wait
-stays in the composer and is not queued for automatic sending. Existing `/stop`
-and `/approve` controls remain available while history loads.
+composer keeps your draft and focus when the conversation appears. You can send
+ordinary messages and attachments while history loads: the message enters the
+outbox immediately, leaving the composer ready for your next draft. The open
+chat confirms its current session and conversation branch before delivery
+continues automatically. Switching chats keeps queued messages tied to their
+original conversation. If history fails to load, the queued message stays
+available while you resolve the history error. Goals and other slash commands
+wait for history; `/stop` and `/approve` remain available.
 
 On wide desktop panes, a compact rail of horizontal marks sits in the transcript's left gutter. Hover for a short message preview, or click a mark to jump to that message. Tab focuses the rail; arrow keys move between marks, Enter or Space jumps, Home and End select the endpoints, and Escape dismisses the preview. At rest, all marks are identical 8 × 2px strokes at 12px spacing. They stay faint; marks for messages currently visible in the transcript light up together as you scroll. Hovering a mark grows it to 32px and lights only that mark in text color, with progressively shorter strokes across three neighbors on either side. The other marks keep their resting colors. Outside that hover range, widths stay fixed. An empty message preview shows “Preview unavailable.” Every message keeps its own mark. Long rails scroll internally within 45% of the viewport height, with fades only at ends that hide more messages. Scrolling the transcript keeps the current mark visible; you can also scroll the rail to explore other messages. The rail stays hidden on mobile, in narrow or short panes, and when your saved message width leaves too little gutter space. A jump briefly tints the target message with a soft background, fading over 1.2 seconds without a border or ring. Reduced motion disables mark transitions and shows the target tint statically for one second.
 
@@ -74,6 +92,8 @@ unchanged; click a title to rename it.
 
 Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details for a compact activity feed with formatted assistant text, grouped tool calls, and timestamps. Expand a tool row to inspect each command, path, or query. The panel shows current progress above the feed; finished tasks show their outcome and duration. **Show earlier** loads history without moving the entry you were reading. New activity follows the bottom only while you are already there.
 
+Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Collapsed activity keeps the failure count and a short, redacted excerpt from the first failed operation visible, even when later calls succeed. Expand the activity and each tool row to inspect its command or source, full output, and reported exit status. Nested operation relationships come from recorded call metadata and remain available after reloading the conversation.
+
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
@@ -82,6 +102,7 @@ Chat error banners, including cloud runner failures, show short messages in full
   <Accordion title="Send and history semantics">
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Before sending, use **Remove attachment** at the corner of a staged attachment; the control supports touch and keyboard input in both Chat and New Session.
+    - Opening a Markdown attachment (`.md`, `.markdown`, or a Markdown MIME type) in the side panel shows formatted headings, lists, tables, and code blocks. Other text attachments stay literal. Previews keep the 256 KiB UTF-8 limit and the original download link; Markdown does not execute embedded HTML or automatically load remote images.
     - Staged attachments scroll horizontally when they no longer fit. Faded edges show where more attachments remain, including after adding files or resizing the composer.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
@@ -113,7 +134,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - **Review** follows your latest selection. A pending file or artifact cannot replace a newer task or detail, reopen a closed Review tab, or return after you leave the chat page. Switching tabs or hiding the whole side panel preserves the pending preview without changing your chosen layout when it finishes.
     - Each task has a main view and a unified side panel. The task toolbar's **Swap** button exchanges the main view and active side-panel tab; its tooltip names both views, for example **Swap Chat and Dashboard**. Chat, Dashboard, Browser, Terminal, Files, and Review can all be main. Other side-panel tabs remain available. **Focus** in the main pane header gives that view the full task area; **Restore split** brings the side panel back. Swapping or focusing preserves live content and drafts. Closing the whole side panel hides it without changing the main view, and the browser remembers each task's arrangement.
     - The task toolbar's **Layout** menu positions the side panel left, right, or below the main area. It adapts to each pane's own width rather than the window, falls back to a bottom strip in a narrow pane or compact window, and hides its dock controls until the pane widens. Phone-sized viewports still open review content full-screen.
-    - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
+    - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options. For catalog-backed OpenAI models, the effort picker offers **Off** only when the model advertises disabled reasoning. Inheriting the model's default effort does not turn reasoning off.
     - Diff syntax highlighting uses each file's language and the current theme; unknown file types and oversized previews remain plain text. Inline and session diffs do not require the optional [Diffs plugin](/tools/diffs), which creates standalone viewer links and PNG/PDF attachments.
     - **Split view:** open it from the chat title bar (beside the thread diff, background tasks, and thread files toggles), then split the active pane right or down for as many panes as fit. Each pane has its own thread, transcript, composer, and tool stream.
     - Agents with the `screen` tool can request the same pane, sidebar, terminal, browser, focus, and navigation changes while a capable Control UI is connected. Protocol v1 applies the command to every connected capable Control UI; see [Screen](/tools/screen).
@@ -124,7 +145,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - On the New Session page, press **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere to create and start the draft in a background session without leaving the page. The selected local, cloud-profile, or paired-device placement is preserved. With the **Modifier+Enter** send preference, use **Cmd/Ctrl+Shift+Enter** for background start; Cmd/Ctrl+Enter remains ordinary submit. Explicit Draft visibility keeps its create-only behavior. A completion notice offers to open the new session.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows configured entries plus providers with usable auth; aliases and settings under `agents.defaults.models` do not restrict it. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
-    - **Account for this chat** in the model menu lets an identified person choose a saved account for the selected provider in Chat or **New Session**, even when **Automatic** has no eligible models. A New Session choice previews eligible models and is attached when the session is created; it does not change the personal new-chat default or saved model preference. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+    - Expand the **Account** category in the model menu to choose a saved account for the selected provider in Chat or **New Session**, even when **Automatic** has no eligible models. A New Session choice previews eligible models and is attached when the session is created; it does not change the personal new-chat default or saved model preference. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
     - Chat and New Session block sending when the Gateway reports missing provider credentials or a confirmed authentication failure. Missing credentials point to **Model Setup**; authentication failures ask you to review the credential or sign-in. An explicit account choice in New Session also waits for a successful preview confirming that account and an eligible model; pending or failed previews show why Start is blocked. Otherwise, temporary credential cooldowns and unknown model availability do not block sending or show an authentication banner; run errors remain visible in the transcript. Unavailable model choices stay disabled in the picker.
     - After a config change or a published credential update, connected Chat and New Session views re-read model readiness automatically; no page reload or picker action is needed. Chat also re-reads its session projection after a model or auth-profile selection changes. An existing missing-credential or authentication-failure block stays in place while that read is pending or fails, until replacement metadata changes it. Existing chats keep their session's selected auth profile; New Session readiness reflects its draft account choice when one is set. This refresh is event-driven, not a timed polling guarantee.
     - The chat composer usage ring follows the selected session and agent, including global sessions. Open it for the current context window, latest-run token counts, and the current provider's account, plan, and quota when reported. Subscription quota replaces dollar estimates; other sessions can show estimated total cost and the latest provider response's input/output/cache cost breakdown. Fresh usage switches to warning styling at high context pressure; stale token snapshots remain visible as approximate usage without that warning. During an agent switch, the previous agent's session row is not reused for the ring.
@@ -205,17 +226,24 @@ an explanation in chat.
 ### Source previews and copying code
 
 Select **Open** on a text attachment to read it directly in the **Files** side
-panel. Same-origin text attachments, including pasted `.txt` files, Markdown,
-CSV, and JSON, display as selectable, read-only text with line breaks and
-indentation preserved. HTML and other markup remain literal text, never an
-embedded page. Previews require UTF-8 content no larger than 256 KiB; unsupported,
-external, oversized, or unavailable files keep their **Download** action.
+panel. Plain-text attachments, including pasted `.txt` files, CSV, and JSON,
+preserve line breaks and indentation. Markdown attachments render as documents
+with interactive code blocks. When an open attachment refreshes with unchanged
+text, its code blocks keep your expansion and wrapping choices after loading.
+A different attachment or changed text starts with fresh controls. HTML and
+other markup remain literal text, never an embedded page. Same-origin previews
+require UTF-8 content no larger than 256 KiB; unsupported, external, oversized,
+or unavailable files keep their **Download** action.
 
 **View Raw Text** keeps Markdown notation literal, including nested code fences.
 Decoded text artifacts use the same literal preview. **Copy code** preserves the
 code's leading whitespace and final newline when present. Indented Markdown code
 blocks also work at the start of a message and remain literal while streaming,
 including blank lines within the block.
+
+Completed top-level code blocks keep your expansion and wrapping choices while
+later paragraphs stream into the same assistant reply. Replacing the message or
+correcting earlier content starts a fresh view.
 
 **Copy URL** in browser tab cards also works on plain HTTP connections where the
 browser does not provide its Clipboard API.
@@ -228,7 +256,7 @@ cancel native clipboard writes that the browser has already accepted.
 ### Markdown tables
 
 Markdown tables scroll horizontally within the conversation. **Copy table** copies
-tab-separated cells, and **Expand table** opens a larger view. In Chat, workspace
+tab-separated cells, and **Expand table** opens a larger view. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 

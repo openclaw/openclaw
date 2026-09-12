@@ -77,7 +77,7 @@ describe("runIsolatedCompletion", () => {
     if (stage === "runtime") {
       mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
         await pause();
-        return { snapshot: preparedModelRuntime, release: releaseRuntimeLease };
+        return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
       });
     } else if (stage === "plugin") {
       mocks.ensureSelectedAgentHarnessPlugin.mockImplementationOnce(pause);
@@ -172,7 +172,7 @@ describe("runIsolatedCompletion", () => {
       mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
         entered.resolve();
         await release.promise;
-        return { snapshot: preparedModelRuntime, release: releaseRuntimeLease };
+        return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
       });
       const mutableRequest = {
         ...isolatedRequest(),
@@ -204,6 +204,7 @@ describe("runIsolatedCompletion", () => {
           await expect(completion).resolves.toMatchObject({ text: "done" });
           expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
             expect.objectContaining({ modelId: "gpt-test", profileId: "openai:original" }),
+            expect.any(Function),
           );
           expect(dispatch).toHaveBeenCalledOnce();
           expect(dispatch).toHaveBeenCalledWith(
@@ -261,6 +262,7 @@ describe("runIsolatedCompletion", () => {
             provider: "openai",
             modelId: "gpt-test",
           }),
+          expect.any(Function),
         );
       }
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
@@ -289,6 +291,7 @@ describe("runIsolatedCompletion", () => {
         preparedModelRuntime,
         workspaceDir: "/tmp/workspace",
       }),
+      expect.any(Function),
     );
     expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
@@ -663,7 +666,7 @@ describe("isolated completion work ownership", () => {
       if (stage === "acquisition") {
         mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
           await pause();
-          return { snapshot: preparedModelRuntime, release: releaseRuntimeLease };
+          return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
         });
       } else {
         mocks.prepareSimpleCompletionModel.mockImplementationOnce(async () => {

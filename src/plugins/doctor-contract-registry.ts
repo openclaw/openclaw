@@ -38,6 +38,7 @@ import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 export { collectRelevantDoctorPluginIds } from "./doctor-contract-relevance.js";
@@ -90,18 +91,14 @@ function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolea
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
-function loadPluginDoctorContractModule(params: {
-  modulePath: string;
-  rootDir: string;
-}): PluginDoctorContractModule {
+function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
   return getCachedPluginModuleLoader({
-    modulePath: params.modulePath,
-    rootDir: params.rootDir,
+    modulePath,
     importerUrl: import.meta.url,
     ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
       : {}),
-  })(params.modulePath) as PluginDoctorContractModule;
+  })(modulePath) as PluginDoctorContractModule;
 }
 
 function hasScopedProviderAuthAlias(
@@ -168,10 +165,7 @@ function loadPluginDoctorContractEntry(
   }
   let mod: PluginDoctorContractModule;
   try {
-    mod = loadPluginDoctorContractModule({
-      modulePath: contractArtifact.modulePath,
-      rootDir: contractArtifact.boundaryRoot,
-    });
+    mod = loadPluginDoctorContractModule(contractArtifact.modulePath);
   } catch (error) {
     log.warn(
       `failed to load doctor contract for ${record.id} from ${contractArtifact.modulePath}: ${formatErrorMessage(error)}`,
@@ -357,34 +351,35 @@ export function listPluginDoctorSessionStoreAgentIds(params?: {
 function loadLegacyChannelStateMigrationDetector(
   record: PluginManifestRegistryRecord,
 ): BundledChannelLegacyStateMigrationDetector | null {
-  if (!record.setupSource) {
+  const source = record.setupSource;
+  if (!source) {
     return null;
   }
   try {
-    const entry = unwrapDefaultModuleExport(
-      loadPluginDoctorContractModule({
-        modulePath: record.setupSource,
-        rootDir: record.rootDir,
-      }),
-    ) as Partial<BundledChannelSetupEntryContract> | null;
-    if (
-      entry?.kind !== "bundled-channel-setup-entry" ||
-      typeof entry.loadSetupPlugin !== "function"
-    ) {
-      return null;
-    }
-    const directDetector =
-      typeof entry.loadLegacyStateMigrationDetector === "function"
-        ? entry.loadLegacyStateMigrationDetector()
-        : undefined;
-    if (typeof directDetector === "function") {
-      return directDetector;
-    }
-    if (entry.features?.legacyStateMigrations !== true) {
-      return null;
-    }
-    const lifecycleDetector = entry.loadSetupPlugin().lifecycle?.detectLegacyStateMigrations;
-    return typeof lifecycleDetector === "function" ? lifecycleDetector : null;
+    const moduleLoader = getPluginSetupModuleLoader(record, source, record.rootDir);
+    return moduleLoader.initialize(() => {
+      const entry = unwrapDefaultModuleExport(
+        moduleLoader(source),
+      ) as Partial<BundledChannelSetupEntryContract> | null;
+      if (
+        entry?.kind !== "bundled-channel-setup-entry" ||
+        typeof entry.loadSetupPlugin !== "function"
+      ) {
+        return null;
+      }
+      const directDetector =
+        typeof entry.loadLegacyStateMigrationDetector === "function"
+          ? entry.loadLegacyStateMigrationDetector()
+          : undefined;
+      if (typeof directDetector === "function") {
+        return directDetector;
+      }
+      if (entry.features?.legacyStateMigrations !== true) {
+        return null;
+      }
+      const lifecycleDetector = entry.loadSetupPlugin().lifecycle?.detectLegacyStateMigrations;
+      return typeof lifecycleDetector === "function" ? lifecycleDetector : null;
+    });
   } catch (error) {
     log.warn(
       `failed to load legacy state migration for ${record.id} from ${record.setupSource}: ${formatErrorMessage(error)}`,

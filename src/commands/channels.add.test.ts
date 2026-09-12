@@ -4,14 +4,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { defineChannelSetupContract } from "../channels/plugins/setup-contract.js";
+import { patchScopedAccountConfig } from "../channels/plugins/setup-helpers.js";
 import type { SetupChannelsOptions } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { resolveMergedAccountConfig } from "../config/channel-account-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginPackageChannelCliOption } from "../plugins/manifest.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { WizardSession } from "../wizard/session.js";
 import {
@@ -1487,6 +1489,120 @@ describe("channelsAddCommand", () => {
       },
     });
   });
+
+  it.each([
+    ...["Work Phone", "work-phone", "WORK-PHONE"].flatMap((storedKey) =>
+      [undefined, "work-phone"].map((defaultAccount) => ({
+        storedKey,
+        defaultAccount,
+        pluginTarget: undefined,
+        extraAccounts: {},
+        target: storedKey === "Work Phone" ? "default" : "work-phone",
+        preserveStoredEntry: storedKey === "Work Phone",
+      })),
+    ),
+    {
+      storedKey: "Work Phone",
+      defaultAccount: undefined,
+      pluginTarget: "work-phone",
+      extraAccounts: {},
+      target: "work-phone",
+      preserveStoredEntry: true,
+    },
+    {
+      storedKey: "Default",
+      defaultAccount: "missing",
+      pluginTarget: undefined,
+      extraAccounts: {},
+      target: "default",
+      preserveStoredEntry: false,
+    },
+    {
+      storedKey: "WORK-PHONE",
+      defaultAccount: undefined,
+      pluginTarget: "WORK-PHONE",
+      extraAccounts: { "work-phone": { dmPolicy: "allowlist", allowFrom: ["+12025550124"] } },
+      target: "work-phone",
+      preserveStoredEntry: true,
+    },
+  ])(
+    "channelsAddCommand preserves identity and access during promotion: $storedKey, default=$defaultAccount, callback=$pluginTarget",
+    async ({
+      storedKey,
+      defaultAccount,
+      pluginTarget,
+      extraAccounts,
+      target,
+      preserveStoredEntry,
+    }) => {
+      const channel = "promotion-chat";
+      const accountKeyPolicy = { canonicalAliasesRequireOwnField: "account" };
+      const ignored = { dmPolicy: "open", allowFrom: ["*"] };
+      const cfg: OpenClawConfig = {
+        channels: {
+          [channel]: {
+            account: "+12025550123",
+            dmPolicy: "allowlist",
+            allowFrom: ["+12025550124"],
+            defaultAccount,
+            accounts: { [storedKey]: ignored, ...extraAccounts },
+          },
+        },
+      };
+      const plugin = {
+        ...createChannelTestPluginBase({
+          id: channel,
+          config: {
+            resolveAccount: (config, accountId) =>
+              resolveMergedAccountConfig({
+                channelConfig: config.channels?.[channel],
+                accounts: config.channels?.[channel]?.accounts,
+                accountId: normalizeAccountId(accountId),
+                accountKeyPolicy,
+              }),
+          },
+        }),
+        setupContract: defineChannelSetupContract({
+          fields: {},
+          adapter: {
+            accountKeyPolicy,
+            singleAccountKeysToMove: ["account"],
+            namedAccountPromotionKeys: ["account"],
+            resolveSingleAccountPromotionTarget: () => pluginTarget,
+            applyAccountConfig: ({ cfg: current, accountId }) =>
+              patchScopedAccountConfig({
+                cfg: current,
+                channelKey: channel,
+                accountId,
+                accountKeyPolicy,
+                patch: { account: "+12025550125" },
+              }),
+          },
+        }),
+      };
+      setActivePluginRegistry(createTestRegistry([{ pluginId: channel, plugin, source: "test" }]));
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
+      const before = requireRecord(
+        plugin.config.resolveAccount(cfg, "work-phone"),
+        "prior account",
+      );
+
+      await channelsAddCommand({ channel, account: "second" }, runtime, { hasFlags: true });
+
+      const next = configFiles.read("/tmp/openclaw.json").snapshot.sourceConfig;
+      expect(plugin.config.resolveAccount(next, target)).toMatchObject({ account: "+12025550123" });
+      expect(plugin.config.resolveAccount(next, "second")).toMatchObject({
+        account: "+12025550125",
+      });
+      expect(plugin.config.resolveAccount(next, "work-phone")).toMatchObject({
+        dmPolicy: before.dmPolicy,
+        allowFrom: before.allowFrom,
+      });
+      if (preserveStoredEntry) {
+        expect(next.channels?.[channel]?.accounts?.[storedKey]).toEqual(ignored);
+      }
+    },
+  );
 
   it("uses channel-owned setup parsing for bundled plugins", async () => {
     const applyAccountConfig = vi.fn(({ cfg, input }) => ({
