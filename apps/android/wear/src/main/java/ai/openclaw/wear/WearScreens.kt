@@ -158,6 +158,7 @@ internal fun OpenClawWearScreens(
   initialPage: WearHomePage = WearHomePage.Chat,
   navigationRequest: WearNavigationRequest? = null,
   voiceSwipeHintEnabled: Boolean = true,
+  realtimeStopping: Boolean = false,
   onNavigationRequestHandled: (Int) -> Unit = {},
   onTalk: () -> Unit,
   onType: () -> Unit,
@@ -319,6 +320,7 @@ internal fun OpenClawWearScreens(
             voicePagerState = voicePagerState,
             showSwipeHint = showVoiceSwipeHint && homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice,
             realtimeTalk = snapshot.realtimeTalk,
+            realtimeStopping = realtimeStopping,
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
@@ -603,6 +605,7 @@ private fun VoicePage(
   voicePagerState: androidx.wear.compose.foundation.pager.PagerState,
   showSwipeHint: Boolean,
   realtimeTalk: WearRealtimeTalkSnapshot,
+  realtimeStopping: Boolean,
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
@@ -670,6 +673,7 @@ private fun VoicePage(
         VOICE_HOME_MODE -> {
           VoiceHomeMode(
             realtimeTalk = realtimeTalk,
+            realtimeStopping = realtimeStopping,
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
@@ -690,7 +694,7 @@ private fun VoicePage(
           ThreadVoiceMode(
             conversation = realtimeTalk.conversation,
             thinking =
-              realtimeThinkingOverride || realtimeTalk.status == WearRealtimeTalkStatus.THINKING,
+              !realtimeStopping && (realtimeThinkingOverride || realtimeTalk.status == WearRealtimeTalkStatus.THINKING),
             realtimeActive = realtimeTalk.active || realtimeCapturing,
             actionBusy = actionBusy,
             inputEnabled = inputEnabled,
@@ -720,6 +724,7 @@ private fun VoicePage(
 @Composable
 private fun VoiceHomeMode(
   realtimeTalk: WearRealtimeTalkSnapshot,
+  realtimeStopping: Boolean,
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
@@ -744,7 +749,7 @@ private fun VoiceHomeMode(
       realtimeCapturing = realtimeCapturing,
       realtimePlaying = realtimePlaying,
       realtimePlaybackFailed = realtimePlaybackFailed,
-      realtimeThinkingOverride = realtimeThinkingOverride,
+      realtimeThinkingOverride = realtimeThinkingOverride && !realtimeStopping,
     )
   var dictatePreview by remember { mutableStateOf(false) }
   val coroutineScope = rememberCoroutineScope()
@@ -781,6 +786,7 @@ private fun VoiceHomeMode(
     }
   val statusText =
     when {
+      realtimeStopping -> stringResource(R.string.stopping)
       dictatePreview -> stringResource(R.string.listening)
       label == null -> null
       realtimeActive -> "$label · ${formatVoiceElapsedTime(realtimeElapsedSeconds)}"

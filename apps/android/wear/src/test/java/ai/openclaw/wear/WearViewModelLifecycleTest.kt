@@ -1,11 +1,23 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearProxyCapability
+import ai.openclaw.wear.shared.WearRealtimeTalkCodec
+import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
@@ -19,6 +31,86 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = WearApplication::class, sdk = [35])
 class WearViewModelLifecycleTest {
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun stopClearsRemoteSpeakingProjectionWhileRpcIsStalledAndClearClosesResources() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val app = RuntimeEnvironment.getApplication() as WearApplication
+      val owner = TestViewModelStoreOwner()
+      val viewModel = ViewModelProvider(owner, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[WearViewModel::class.java]
+      val client = viewModel.realtimeTalkClientForTest()
+      val fixture = WearTalkTestFixture(app, client)
+      try {
+        (viewModel.talkTestField("loadJob") as? Job)?.cancel()
+        testScheduler.runCurrent()
+        @Suppress("UNCHECKED_CAST")
+        val state = viewModel.talkTestField("mutableState") as MutableStateFlow<WearUiState>
+        viewModel.setTalkTestField("talkAttemptId", "attempt-1")
+        state.value =
+          WearUiState(
+            loading = false,
+            connected = true,
+            phoneNodeId = "phone-a",
+            realtimeTalk =
+              WearRealtimeTalkSnapshot(
+                attemptId = "attempt-1",
+                active = true,
+                speaking = true,
+                status = WearRealtimeTalkStatus.SPEAKING,
+              ),
+          )
+        fixture.activate()
+        viewModel.stopRealtimeTalk()
+        testScheduler.runCurrent()
+        assertTrue(fixture.rpcEntered.isCompleted)
+        assertFalse(fixture.rpcReply.isCompleted)
+        assertTrue(state.value.talkBusy)
+        assertFalse(
+          "production snapshot cannot retain remote Speaking after local Stop",
+          state.value
+            .toConversationSnapshot()!!
+            .realtimeTalk.speaking,
+        )
+        assertFalse(state.value.realtimeTalk.active)
+        assertEquals(1, fixture.input.closes.get())
+        assertTrue(state.value.talkStopping)
+        (viewModel.talkTestField("eventSourceTracker") as WearEventSourceTracker).adopt("phone-a")
+        (viewModel.talkTestField("eventSequenceTracker") as WearEventSequenceTracker).adoptSnapshot("stream-a", 1L)
+        viewModel.callTalkTestMethod(
+          "handleEvent",
+          WearInboundEvent(
+            sourceNodeId = "phone-a",
+            sequence = 2L,
+            event = WearEventType.Talk,
+            streamId = "stream-a",
+            payload =
+              WearRealtimeTalkCodec.encode(
+                WearRealtimeTalkSnapshot(
+                  attemptId = "attempt-1",
+                  active = true,
+                  listening = true,
+                  status = WearRealtimeTalkStatus.LISTENING,
+                ),
+              ),
+          ),
+        )
+        assertTrue(state.value.talkStopping)
+        assertFalse(state.value.realtimeTalk.listening)
+        fixture.rpcReply.complete(Unit)
+        testScheduler.runCurrent()
+        assertFalse(state.value.talkStopping)
+        assertFalse(state.value.talkBusy)
+        owner.viewModelStore.clear()
+        testScheduler.runCurrent()
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+      } finally {
+        owner.viewModelStore.clear()
+        Dispatchers.resetMain()
+      }
+    }
+
   @Test
   fun recreatedViewModelGetsALiveTalkClientAfterThePreviousOneClears() {
     val app = RuntimeEnvironment.getApplication() as WearApplication
@@ -26,8 +118,13 @@ class WearViewModelLifecycleTest {
     val firstOwner = TestViewModelStoreOwner()
     val firstViewModel = ViewModelProvider(firstOwner, factory)[WearViewModel::class.java]
     val firstClient = firstViewModel.realtimeTalkClientForTest()
+    val fixture = WearTalkTestFixture(app, firstClient)
+    fixture.activate()
 
     firstOwner.viewModelStore.clear()
+    assertEquals(1, fixture.input.closes.get())
+    assertEquals(1, fixture.output.closes.get())
+    assertEquals(1, fixture.channelCloses.get())
 
     val reopenedOwner = TestViewModelStoreOwner()
     val reopenedViewModel = ViewModelProvider(reopenedOwner, factory)[WearViewModel::class.java]

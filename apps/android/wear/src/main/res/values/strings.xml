@@ -28,6 +28,8 @@
     <string name="speak_reply">Speak latest reply</string>
     <string name="speaking">Speaking</string>
     <string name="listening">Listening</string>
+    <!-- The serialized native-locale refresh publishes this pending translation after merge. -->
+    <string name="stopping" tools:ignore="MissingTranslation">Ending call…</string>
     <string name="connecting">Connecting</string>
     <string name="thinking">Thinking</string>
     <string name="typing">Typing</string>
