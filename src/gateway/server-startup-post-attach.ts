@@ -304,14 +304,10 @@ function scheduleTranscriptsAutoStartSidecar(params: {
   };
 }
 
-async function hasRestartSentinelFast(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  return await hasRestartSentinel(env);
-}
-
 async function refreshLatestUpdateRestartSentinelIfPresent(): Promise<Awaited<
   ReturnType<typeof refreshLatestUpdateRestartSentinel>
 > | null> {
-  if (!(await hasRestartSentinelFast())) {
+  if (!(await hasRestartSentinel())) {
     return null;
   }
   return await (await loadGatewayRestartSentinelModule()).refreshLatestUpdateRestartSentinel();
@@ -662,12 +658,10 @@ export async function startGatewaySidecars(params: {
   const shouldStartPluginServices =
     params.pluginRuntimeClaim?.isCurrent() !== false &&
     params.shouldStartPluginServices?.() !== false;
-  let pluginServicesStopRequested = false;
-  let pluginServicesOwner: PluginServicesHandle | undefined;
-  let resolvePluginServicesOwner: ((handle: PluginServicesHandle | null) => void) | undefined;
   if (shouldStartPluginServices) {
+    let pluginServicesStopRequested = false;
     const ownedPluginServices = createDeferredCore<PluginServicesHandle | null>();
-    pluginServicesOwner = {
+    const pluginServicesOwner: PluginServicesHandle = {
       reload: async (config, serviceIds) => {
         const handle = await ownedPluginServices.promise;
         if (pluginServicesStopRequested || !handle) {
@@ -678,8 +672,7 @@ export async function startGatewaySidecars(params: {
       stop: (options) => {
         pluginServicesStopRequested = true;
         // Pending startup owns no services and may be waiting on this replacement.
-        resolvePluginServicesOwner?.(null);
-        resolvePluginServicesOwner = undefined;
+        ownedPluginServices.resolve(null);
         // Share the service owner, never a caller's expired replacement deadline.
         const stopPromise = ownedPluginServices.promise.then((handle) => handle?.stop(options));
         const deadlineAtMs = options?.strict ? options.deadlineAtMs : undefined;
@@ -711,12 +704,9 @@ export async function startGatewaySidecars(params: {
         });
       },
     };
-    resolvePluginServicesOwner = ownedPluginServices.resolve;
     // Startup may outlive a replacement deadline. Final shutdown retains this
     // owner without making startup rejoin its pending service cleanup.
     params.onPluginServices?.(pluginServicesOwner);
-  }
-  if (shouldStartPluginServices) {
     await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
       try {
         const { startPluginServices } = await import("../plugins/services.js");
@@ -726,8 +716,7 @@ export async function startGatewaySidecars(params: {
           params.pluginRuntimeClaim?.isCurrent() === false ||
           params.shouldStartPluginServices?.(pluginServicesOwner) === false
         ) {
-          resolvePluginServicesOwner?.(null);
-          resolvePluginServicesOwner = undefined;
+          ownedPluginServices.resolve(null);
           return;
         }
         await startPluginServices({
@@ -738,8 +727,7 @@ export async function startGatewaySidecars(params: {
           broadcastPluginEvent: params.broadcastPluginEvent,
           getCronService: params.getCronService,
           onHandle: (handle) => {
-            resolvePluginServicesOwner?.(handle);
-            resolvePluginServicesOwner = undefined;
+            ownedPluginServices.resolve(handle);
             // Transfer the pending owner to the real service handle before startup yields.
             // A replacement or same-claim recovery must keep its own published handle.
             if (
@@ -751,8 +739,7 @@ export async function startGatewaySidecars(params: {
           },
         });
       } catch (err) {
-        resolvePluginServicesOwner?.(null);
-        resolvePluginServicesOwner = undefined;
+        ownedPluginServices.resolve(null);
         params.log.warn(`plugin services failed to start: ${String(err)}`);
       }
     });
@@ -844,7 +831,7 @@ export async function startGatewaySidecars(params: {
         if (!shouldCheckRestartSentinel() || isStopped()) {
           return;
         }
-        if (!(await hasRestartSentinelFast()) || isStopped()) {
+        if (!(await hasRestartSentinel()) || isStopped()) {
           return;
         }
         restartSentinelWake = scheduleRestartSentinelWakeAfterReady({
@@ -1677,7 +1664,6 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const testing = {
-  hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,
   hydrateConfiguredExternalCliAuth,
   publishConfiguredModelRuntimeSnapshots,

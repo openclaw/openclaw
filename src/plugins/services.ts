@@ -262,9 +262,6 @@ export async function startPluginServices(
     failures: unknown[],
     deadline?: number,
   ) => {
-    for (const entry of reversed) {
-      entry.stopRequested = true;
-    }
     const oneShotTimeouts = deadline === undefined ? params.oneShotStopTimeouts : undefined;
     // One-shot registries are already scoped; every cleanup follows the drain, without changing grants.
     const afterDrain = oneShotTimeouts
@@ -322,6 +319,7 @@ export async function startPluginServices(
         }
         for (const entry of selected) {
           entry.reloading = reloading;
+          entry.stopRequested = true;
         }
         const failures: unknown[] = [];
         try {

@@ -44,6 +44,29 @@ export function createCliRuntimeCapture(): CliRuntimeCapture {
   };
 }
 
+export function createCliTtyMock() {
+  const streams = [process.stdin, process.stdout].map((stream) => ({
+    stream,
+    descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+  }));
+  return {
+    set: (value: boolean) => {
+      for (const { stream } of streams) {
+        Object.defineProperty(stream, "isTTY", { value, configurable: true });
+      }
+    },
+    restore: () => {
+      for (const { stream, descriptor } of streams) {
+        if (descriptor) {
+          Object.defineProperty(stream, "isTTY", descriptor);
+        } else {
+          Reflect.deleteProperty(stream, "isTTY");
+        }
+      }
+    },
+  };
+}
+
 export async function mockRuntimeModule<TModule extends { defaultRuntime: OutputRuntimeEnv }>(
   loadActual: () => Promise<TModule>,
   defaultRuntime: TModule["defaultRuntime"],

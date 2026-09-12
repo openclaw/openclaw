@@ -164,29 +164,14 @@ export async function reloadGatewayPlugins(
   const skipChannels =
     isTruthyEnvValue(params.env?.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(params.env?.OPENCLAW_SKIP_PROVIDERS);
-  const stopReplacedChannels = async () => {
-    for (const { plugin } of previousRegistry.channels) {
-      if (!channelTargets.has(plugin.id)) {
-        continue;
-      }
-      await cleanup(`Plugin channel ${plugin.id} cleanup failed`, () =>
-        channelManager.stopChannel(plugin.id, undefined, {
-          manual: false,
-          strict: true,
-          routeHandoff: true,
-        }),
-      );
-    }
-  };
-  const stopReplacedServices = async (services: PluginServicesHandle | null | undefined) => {
-    await cleanup("Plugin service cleanup failed", async () => {
+  const stopReplacedServices = (services: PluginServicesHandle | null | undefined) =>
+    cleanup("Plugin service cleanup failed", async () => {
       await services?.stop({
         strict: true,
         deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
         pluginIds: changedPluginIds,
       });
     });
-  };
   const startReplacedChannels = async (registry: typeof previousRegistry, errors: unknown[]) => {
     for (const { plugin } of registry.channels) {
       if (skipChannels || !channelTargets.has(plugin.id)) {
@@ -409,7 +394,18 @@ export async function reloadGatewayPlugins(
     await cleanup("Plugin stop hook failed", () =>
       runLifecycleHooks(previousRegistry, false, previousConfig),
     );
-    await stopReplacedChannels();
+    for (const { plugin } of previousRegistry.channels) {
+      if (!channelTargets.has(plugin.id)) {
+        continue;
+      }
+      await cleanup(`Plugin channel ${plugin.id} cleanup failed`, () =>
+        channelManager.stopChannel(plugin.id, undefined, {
+          manual: false,
+          strict: true,
+          routeHandoff: true,
+        }),
+      );
+    }
     await stopReplacedServices(previousServices);
     for (const record of previousRegistry.plugins) {
       if (changedPluginIds.has(record.id)) {

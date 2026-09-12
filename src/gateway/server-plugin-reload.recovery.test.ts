@@ -46,6 +46,7 @@ import {
 } from "./server-plugin-reload.managed-candidate.test-support.js";
 import { verifyGatewayMemoryReplacement } from "./server-plugin-reload.memory.test-support.js";
 import {
+  createRecoveryChannelManager,
   createPluginReloadRecoveryFixture,
   verifyChannelReplacementContracts,
   verifyColdAccountReplacement,
@@ -252,12 +253,7 @@ it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
         }
       },
     });
-    const manager = createChannelManager({
-      getRuntimeConfig: fixture.getConfig,
-      channelLogs: {},
-      channelRuntimeEnvs: {},
-      getPluginRegistry: () => fixture.registryOwner.registry,
-    });
+    const manager = createRecoveryChannelManager(fixture);
     fixture.runtime.channelManager = manager;
     cleanups.push(() => manager.stopChannel(channelId));
     await expect(fixture.reload()).rejects.toMatchObject({ details: { committed: false } });
