@@ -25,8 +25,16 @@ const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
 /** Wall-clock budget for outgoing webhook requests including response body. */
 const POST_REQUEST_TIMEOUT_MS = 30_000;
-let lastSendTime = 0;
-let sendQueue: Promise<void> = Promise.resolve();
+
+type SendSlotState = {
+  tail: Promise<void>;
+  lastSendTime: number;
+  waiters: number;
+};
+
+// Pace sends per incoming webhook endpoint so a burst on one account cannot
+// head-of-line block an independent account's webhook.
+const sendSlots = new Map<string, SendSlotState>();
 
 const UNPROVEN_TRANSPORT_ERROR_BRANCH = "unproven transport error branch";
 
@@ -147,7 +155,7 @@ export async function sendMessage(
     // Synology Chat API requires numeric user_ids to specify the recipient.
     const body = buildWebhookBody({ text: chunk }, userId);
     // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
-    await waitForSendSlot();
+    await waitForSendSlot(incomingUrl);
     await onPlatformSendDispatch?.();
     let result: SynologyHostedFileSendResult["status"];
     try {
@@ -158,7 +166,7 @@ export async function sendMessage(
         delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
         sleep: async (delayMs) => {
           await sleepWithAbort(delayMs);
-          await waitForSendSlot();
+          await waitForSendSlot(incomingUrl);
           await onPlatformSendDispatch?.();
         },
       });
@@ -189,7 +197,7 @@ export async function sendHostedFileUrl(
     return { status: "not-dispatched" };
   }
 
-  await waitForSendSlot();
+  await waitForSendSlot(incomingUrl);
   await onPlatformSendDispatch?.();
 
   try {
@@ -310,16 +318,39 @@ async function fetchChatUsers(
   });
 }
 
-async function waitForSendSlot(): Promise<void> {
-  const next = sendQueue.then(async () => {
-    const elapsed = Date.now() - lastSendTime;
+async function waitForSendSlot(incomingUrl: string): Promise<void> {
+  pruneIdleSendSlots();
+  const slot = sendSlots.get(incomingUrl) ?? {
+    tail: Promise.resolve(),
+    lastSendTime: 0,
+    waiters: 0,
+  };
+  sendSlots.set(incomingUrl, slot);
+  slot.waiters += 1;
+  const next = slot.tail.then(async () => {
+    const elapsed = Date.now() - slot.lastSendTime;
     if (elapsed < MIN_SEND_INTERVAL_MS) {
       await sleep(MIN_SEND_INTERVAL_MS - elapsed);
     }
-    lastSendTime = Date.now();
+    slot.lastSendTime = Date.now();
   });
-  sendQueue = next.catch(() => {});
-  await next;
+  slot.tail = next.catch(() => {});
+  try {
+    await next;
+  } finally {
+    slot.waiters -= 1;
+  }
+}
+
+function pruneIdleSendSlots(): void {
+  const now = Date.now();
+  for (const [incomingUrl, slot] of sendSlots) {
+    // Retire a slot only after its cooldown elapses so a follow-up send to the
+    // same endpoint still honors the minimum interval.
+    if (slot.waiters === 0 && now - slot.lastSendTime >= MIN_SEND_INTERVAL_MS) {
+      sendSlots.delete(incomingUrl);
+    }
+  }
 }
 
 function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
