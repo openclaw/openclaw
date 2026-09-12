@@ -109,6 +109,9 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         secretValue,
         {
           isInboundUserMessage: true,
+          currentInboundContext: {
+            text: "Replied message (untrusted, for context): Enter the requested credential",
+          },
           userTurnTranscriptRecorder: recorder,
           ...(kind === "offloaded"
             ? { media: [{ path: "/tmp/image.png", contentType: "image/png" }] }
@@ -149,6 +152,39 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
   });
+
+  it.each([false, true])(
+    "forwards quoted context separately with transcript wait=%s",
+    async (waitForTranscriptCommit) => {
+      let emit: ((event: unknown) => void) | undefined;
+      const currentInboundContext = { text: "Replied message: Which color?" };
+      const queuedMessage = queuedTextMessage("", 1);
+      const steer = vi.fn<EmbeddedAgentActiveSessionSteerTarget["steer"]>(
+        async (text, _images, _recorder, _media, _imageOrder, queueIdentity) => {
+          queuedMessage.content = [{ type: "text", text }];
+          setSteeringMessageIdentity(queuedMessage, queueIdentity);
+          emit?.({ type: "message_end", message: queuedMessage });
+        },
+      );
+      await steerActiveSessionWithOptionalDeliveryWait(
+        {
+          steer,
+          subscribe: (listener) => {
+            emit = listener;
+            return () => {};
+          },
+        },
+        "Use the same color as before.",
+        {
+          isInboundUserMessage: true,
+          waitForTranscriptCommit,
+          currentInboundContext,
+        },
+      );
+      expect(steer.mock.calls[0]?.[0]).toBe("Use the same color as before.");
+      expect(steer.mock.calls[0]?.[7]).toBe(currentInboundContext);
+    },
+  );
 
   it("forwards ordered images with a queued steering message", async () => {
     const steer = vi.fn(async () => undefined);

@@ -56,7 +56,6 @@ import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
-  CurrentInboundPromptContext,
   EmbeddedRunTrigger,
   ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
@@ -66,6 +65,7 @@ import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-lo
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
+import type { CurrentInboundPromptContext } from "../internal-runtime-context.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import type { RootedExecutionRequest } from "../rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";

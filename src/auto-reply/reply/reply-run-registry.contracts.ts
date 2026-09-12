@@ -1,3 +1,4 @@
+import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -29,6 +30,8 @@ export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  /** This turn's runtime context, separate from its literal answer and transcript. */
+  currentInboundContext?: CurrentInboundPromptContext;
   /** Exact tool authority resolved for an inbound user turn before steering. */
   toolAuthorityFingerprint?: string;
   /** Internal proof that a mismatched route recomputes to the active run's full authority. */
