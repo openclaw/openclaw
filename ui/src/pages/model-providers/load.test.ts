@@ -142,6 +142,7 @@ describe("loadModelProvidersData", () => {
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
       agentId: "writer",
+      includeDefaultModels: true,
     });
     expect(
       request.mock.calls.filter(
@@ -181,7 +182,10 @@ describe("loadModelProvidersData", () => {
       agentId: "writer",
     });
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
-      ["models.list", { view: "configured", agentId: "writer", refresh: true }],
+      [
+        "models.list",
+        { view: "configured", agentId: "writer", includeDefaultModels: true, refresh: true },
+      ],
     ]);
     expect(result.providerOutcomes).toEqual([]);
     expect(request.mock.calls.some(([method]) => method === "usage.status")).toBe(false);
@@ -456,8 +460,11 @@ describe("loadModelProvidersData", () => {
     expect(result.catalogError).toBe("catalog refresh failed: OPENAI_API_KEY=sk-123...cdef");
     expect(result.models).toEqual([{ id: "cached", name: "Cached", provider: "openai" }]);
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
-      ["models.list", { view: "configured", agentId: "writer", refresh: true }],
-      ["models.list", { view: "configured", agentId: "writer" }],
+      [
+        "models.list",
+        { view: "configured", agentId: "writer", includeDefaultModels: true, refresh: true },
+      ],
+      ["models.list", { view: "configured", agentId: "writer", includeDefaultModels: true }],
     ]);
   });
 });

@@ -50,13 +50,23 @@ uuid = { version = "1.26.0", features = ["v4"] }
 zeroize = "1.9.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+cairo-rs = { version = "0.18.5", features = ["png"] }
 gtk = "0.18.2"
 libc = "0.2.189"
+webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSBitmapImageRep", "NSImage", "NSImageRep", "NSPanel", "NSResponder", "NSSavePanel", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSDictionary", "NSError", "NSKeyValueObserving", "NSString"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKDownload", "WKDownloadDelegate", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration", "WKNavigation", "WKNavigationDelegate", "objc2-app-kit", "block2"] }
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38.2"
+windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-core = "0.61.2"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }

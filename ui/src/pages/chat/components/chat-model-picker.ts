@@ -9,6 +9,7 @@ import {
   renderProviderBrandIcon,
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
+import type { ModelProviderAuthLabel as ChatModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
 import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,
@@ -38,11 +39,7 @@ import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-p
 
 export type { ChatModelCatalogState } from "./chat-model-catalog-state.ts";
 
-export type ChatModelProviderAuth = {
-  kind: "subscription" | "api" | "missing";
-  label: string;
-  detail?: string;
-};
+export type { ModelProviderAuthLabel as ChatModelProviderAuth } from "../../../lib/model-provider-auth-label.ts";
 
 type ChatModelPickerParams = {
   providerAuth?: ReadonlyMap<string, ChatModelProviderAuth>;

@@ -204,7 +204,8 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              accounts: [personal],
+              // Reopening retries an empty inventory; a populated one stays cached.
+              accounts: input === "keyboard" ? [] : [personal],
               nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
@@ -261,13 +262,17 @@ suite.define(() => {
         }
         await trigger.press("Enter");
         await expect.poll(() => more.isVisible()).toBe(true);
+        const pendingMoreTarget = await more.elementHandle();
+        expect(pendingMoreTarget).not.toBeNull();
         if (input === "keyboard") {
-          await gateway.waitForRequest("users.listModelAccounts", {
+          const refresh = await gateway.waitForRequest("users.listModelAccounts", {
             after: refreshRequests.length,
           });
+          expect(refresh.params).toEqual({});
           const loading = picker.locator('[data-chat-account-option="loading"]');
           await expect.poll(() => loading.isVisible()).toBe(true);
-          await more.focus();
+          expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+          await pendingMoreTarget!.focus();
           await gateway.resolveDeferred("users.listModelAccounts", {
             profileId: "test-person",
             accounts: [personal],
@@ -275,6 +280,14 @@ suite.define(() => {
             links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
           });
           await expect.poll(() => loading.isVisible()).toBe(false);
+          await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+          await expect
+            .poll(() =>
+              pendingMoreTarget!.evaluate((element) => element === document.activeElement),
+            )
+            .toBe(true);
+        } else {
+          expect(await gateway.getRequests("users.listModelAccounts")).toEqual(refreshRequests);
         }
         expect(
           await picker
@@ -283,23 +296,95 @@ suite.define(() => {
         ).toBe("true");
         const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
         await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
+        const beforePaginationUrl = page.url();
         if (input === "keyboard") {
-          // Refresh must preserve the action focused before Loading disappeared.
           await page.keyboard.press("Enter");
-          expect(page.url()).toContain("/chat/");
         } else {
-          await more.click();
+          await pendingMoreTarget!.click();
         }
+        await expect
+          .poll(async () => {
+            const requests = await gateway.getRequests("users.listModelAccounts");
+            return requests.length > inventoryRequests.length || page.url() !== beforePaginationUrl;
+          })
+          .toBe(true);
+        expect(page.url()).toBe(beforePaginationUrl);
         const nextPage = await gateway.waitForRequest("users.listModelAccounts", {
           after: inventoryRequests.length,
         });
         expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
+        const loading = picker.locator('[data-chat-account-option="loading"]');
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+        if (input === "keyboard") {
+          await page.keyboard.press("Enter");
+        } else {
+          const bounds = await pendingMoreTarget!.boundingBox();
+          expect(bounds).not.toBeNull();
+          await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+        }
+        expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+          inventoryRequests.length + 1,
+        );
+        expect(page.url()).toBe(beforePaginationUrl);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",
           accounts: [work],
+          nextCursor: "accounts-page-3",
           links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
         });
+        await expect.poll(() => loading.isVisible()).toBe(false);
+        await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+        const pageRequests = await gateway.getRequests("users.listModelAccounts");
+        await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-3" });
+        const beforeLastPageUrl = page.url();
+        if (input === "keyboard") {
+          expect(await pendingMoreTarget!.evaluate((row) => row === document.activeElement)).toBe(
+            true,
+          );
+          await page.keyboard.press("Enter");
+        } else {
+          await pendingMoreTarget!.click();
+        }
+        await expect
+          .poll(async () => {
+            const requests = await gateway.getRequests("users.listModelAccounts");
+            return requests.length > pageRequests.length || page.url() !== beforeLastPageUrl;
+          })
+          .toBe(true);
+        expect(page.url()).toBe(beforeLastPageUrl);
+        const lastPage = await gateway.waitForRequest("users.listModelAccounts", {
+          after: pageRequests.length,
+        });
+        expect(lastPage.params).toEqual({ cursor: "accounts-page-3" });
+        await expect.poll(() => loading.isVisible()).toBe(true);
+        expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+        if (input === "keyboard") {
+          await page.keyboard.press("Enter");
+        } else {
+          const bounds = await pendingMoreTarget!.boundingBox();
+          expect(bounds).not.toBeNull();
+          await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+        }
+        expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(
+          pageRequests.length + 1,
+        );
+        expect(page.url()).toBe(beforeLastPageUrl);
+        const manage = picker.locator('[data-chat-account-option="manage"]');
+        if (input === "keyboard") {
+          await manage.focus();
+        }
+        await gateway.resolveDeferred("users.listModelAccounts", {
+          profileId: "test-person",
+          accounts: [],
+          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        });
+        await expect.poll(() => loading.isVisible()).toBe(false);
+        await expect.poll(() => more.isVisible()).toBe(false);
+        if (input === "keyboard") {
+          expect(await manage.evaluate((button) => button === document.activeElement)).toBe(true);
+        }
         const workOption = picker.locator(
           `[data-chat-account-option="account:${work.authProfileId}"]`,
         );

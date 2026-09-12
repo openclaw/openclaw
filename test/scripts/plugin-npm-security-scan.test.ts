@@ -499,6 +499,32 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it("reviews the inert sandbox composition fixture only for current packages", async () => {
+    const packageName = "@openclaw/codex";
+    const fixturePath = "src/app-server/sandbox-exec-server.fs-bridge-composition.test.ts";
+    const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+    const artifact = writePluginArtifact({
+      extensionId: "codex",
+      packageName,
+      files: {
+        [fixturePath]:
+          'import { spawn } from "node:child_process";\nspawn("sh", ["-c", "printf ok"]);\n',
+      },
+    });
+
+    const current = await scanPublishablePluginPackages([artifact.artifact]);
+    expect(current.scanErrors).toEqual([]);
+    expect(current.packageResults[0]?.reviewedCriticalFindings).toEqual([fixtureKey]);
+    expect(current.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+
+    const frozen = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.3");
+    expect(frozen.scanErrors).toEqual([]);
+    expect(frozen.packageResults[0]?.reviewedCriticalFindings).toEqual([]);
+    expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toMatchObject([
+      { path: fixturePath, ruleId: "dangerous-exec" },
+    ]);
+  });
+
   it.each([1, 2])(
     "reviews exactly one current hardware probe, preserving frozen policy: %s",
     async (count) => {

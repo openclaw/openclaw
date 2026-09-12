@@ -196,7 +196,8 @@ export async function exportTranscriptLibrary(
         : summary
           ? `${renderTranscriptsMarkdown({ ...summary, title, transcript: parts, utteranceCount: entry.utteranceCount })}\n\nSummary covers ${summary.utteranceCount} saved utterances.\n`
           : `# ${title}\n\nSession: ${sanitizeTerminalText(entry.session.sessionId)}\nStarted: ${entry.session.startedAt}\n\n## Transcript\n${parts.map((line) => `- ${line}`).join("\n")}\n`;
-  assertTranscriptByteLimit(body, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+  const bodySizeBytes = Buffer.byteLength(body, "utf8");
+  assertTranscriptByteCount(bodySizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
   const digest = createHash("sha256").update(entry.selector).digest("hex").slice(0, 12);
   const filename = `transcript-${safeTranscriptPathSegment(entry.session.startedAt.slice(0, 10))}-${digest}.${params.format === "markdown" ? "md" : "jsonl"}`;
   return {
@@ -208,6 +209,6 @@ export async function exportTranscriptLibrary(
         : "application/x-ndjson;charset=utf-8",
     encoding: "base64",
     data: Buffer.from(body, "utf8").toString("base64"),
-    sizeBytes: Buffer.byteLength(body, "utf8"),
+    sizeBytes: bodySizeBytes,
   };
 }

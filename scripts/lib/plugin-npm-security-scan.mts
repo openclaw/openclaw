@@ -176,6 +176,10 @@ CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
   "@openclaw/codex:dangerous-exec:src/doctor.test.ts",
   1,
 );
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.fs-bridge-composition.test.ts",
+  1,
+);
 
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,

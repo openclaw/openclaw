@@ -49,12 +49,16 @@ it.each(["main", "workspace"])(
     state.agentsList = { defaultId: "main", mainKey: "workspace", scope: "global" };
     const request = vi.spyOn(state.client!, "request");
     await loadChatHistory(state);
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey,
-      agentId: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey,
+        agentId: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   },
 );
 

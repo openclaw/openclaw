@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
@@ -31,6 +32,7 @@ export async function repairUpdateService(params: {
   onVerified?: (verifiedAtMs: number) => void;
 }): Promise<UpdateRunResult> {
   const root = params.result.root ?? params.root;
+  let result = params.result;
   let turnPendingValidation = false;
   let pinnedService: typeof params.expectedService | undefined;
   const inspectOwner = async (signal: AbortSignal) => {
@@ -151,10 +153,13 @@ export async function repairUpdateService(params: {
           assertCurrent();
         }
       }
+      if (validation.ok && validation.pluginWarnings?.length) {
+        result = appendPluginUpdateWarnings(result, validation.pluginWarnings);
+      }
       return validation;
     },
   });
   return repair.status === "repaired"
-    ? { ...params.result, status: "ok", reason: undefined, recovery: undefined }
-    : params.result;
+    ? { ...result, status: "ok", reason: undefined, recovery: undefined }
+    : result;
 }

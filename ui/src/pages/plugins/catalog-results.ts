@@ -3,6 +3,7 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
+import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -124,14 +125,22 @@ function renderCatalogIcon(
   const iconUrl = resolvePluginCatalogIconUrl(
     {
       pluginId: plugin.local.pluginId,
-      packageName: plugin.catalog.packageName,
       imageUrl: plugin.catalog.imageUrl,
     },
     props,
   );
-  return iconUrl
-    ? html`<img class="plugins-icon" src=${iconUrl} alt="" loading="lazy" decoding="async" />`
-    : categoryIcon(plugin.catalog.icon);
+  return html`${imageWithFallback(iconUrl, (url, onError) =>
+    url
+      ? html`<img
+          class="plugins-icon"
+          src=${url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          @error=${onError}
+        />`
+      : categoryIcon(plugin.catalog.icon),
+  )}`;
 }
 
 export function formatCompactCount(value: number): string {

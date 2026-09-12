@@ -118,7 +118,20 @@ function startDropdownLabelSync(event: Event) {
   queueMicrotask(() => {
     // SAFETY: The registered wa-dropdown host exposes its boolean open property.
     if (!event.defaultPrevented && (dropdown as HTMLElement & { open: boolean }).open) {
-      occludeNativeBrowserSurface(dropdown, "wa-after-hide");
+      occludeNativeBrowserSurface(dropdown, "wa-after-hide", function* () {
+        const menu = dropdown.shadowRoot?.querySelector('[part="menu"]');
+        if (menu) {
+          yield menu;
+        }
+        // The host bounds belong to the trigger. Submenus have their own
+        // top-layer rectangles, including while their hide animation runs.
+        for (const item of dropdown.querySelectorAll("wa-dropdown-item")) {
+          const submenu = item.shadowRoot?.querySelector('[part="submenu"]');
+          if (submenu) {
+            yield submenu;
+          }
+        }
+      });
     }
   });
   // Reopening must restore the menu before Web Awesome moves focus into it.

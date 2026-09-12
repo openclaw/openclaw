@@ -172,7 +172,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-91 plugins
+92 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `clawhub:@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -301,6 +301,8 @@ Each entry lists the package, distribution route, and description.
 - **[qqbot](/plugins/reference/qqbot)** (`@tencent-connect/openclaw-qqbot`) - npm. OpenClaw QQ Bot channel plugin for group and direct-message workflows.
 
 - **[qwen](/plugins/reference/qwen)** (`@openclaw/qwen-provider`) - npm or ClawHub: `clawhub:@openclaw/qwen-provider`. Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Token Plan, Bailian Token Plan model provider support to OpenClaw.
+
+- **[radius](/plugins/reference/radius)** (`@openclaw/radius-provider`) - npm or ClawHub: `clawhub:@openclaw/radius-provider`. Radius model gateway provider.
 
 - **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm or ClawHub. OpenClaw Raft channel plugin for secure CLI wake bridges.
 

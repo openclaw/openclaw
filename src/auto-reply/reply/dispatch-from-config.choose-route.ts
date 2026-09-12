@@ -22,6 +22,7 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -201,6 +202,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   type BlockDelivery = { outcome: ReplyDispatchDeliveryOutcome; pending?: boolean };
   const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
   const recordBlockOutcome = (payload: ReplyPayload, outcome: Promise<BlockDelivery>) => {
+    setBlockReplyDelivery(outcome);
     const key = createBlockReplyContentKey(payload);
     const outcomes = blockDeliveryOutcomes.get(key) ?? [];
     outcomes.push(outcome);

@@ -118,7 +118,7 @@
     "@mistralai/mistralai": "2.6.4",
     "openai": "7.10.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.25"
+    "typebox": "1.3.26"
   },
   "devDependencies": {
     "@openclaw/model-catalog-core": "workspace:*",

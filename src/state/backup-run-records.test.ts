@@ -2,12 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildBackupStatusValue,
-  noteBackupDoctorHint,
-  readBackupFreshness,
-} from "../commands/backup-health.js";
-import { recordBackupRunOutcome } from "./backup-run-records.js";
+import { buildBackupStatusValue, noteBackupDoctorHint } from "../commands/backup-health.js";
+import { readBackupRunFreshness, recordBackupRunOutcome } from "./backup-run-records.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -44,7 +40,7 @@ afterEach(async () => {
 describe("backup run records", () => {
   it("records archive and Git outcomes and prunes the operational log to 200 rows", async () => {
     const env = await testEnv({ bootstrap: true });
-    recordBackupRunOutcome({
+    await recordBackupRunOutcome({
       env,
       archivePath: "/backups/archive.tar.gz",
       status: "failed",
@@ -53,7 +49,7 @@ describe("backup run records", () => {
       createdAt: 1,
     });
     for (let index = 2; index <= 202; index += 1) {
-      recordBackupRunOutcome({
+      await recordBackupRunOutcome({
         env,
         archivePath: "/backups/git",
         status: "ok",
@@ -80,15 +76,39 @@ describe("backup run records", () => {
       target: "commit-202",
       pushFailed: true,
     });
-    expect(readBackupFreshness(env)).toMatchObject({
-      latest: { createdAt: 202, pushFailed: true },
+    await recordBackupRunOutcome({
+      env,
+      archivePath: "/backups/failed.tar.gz",
+      kind: "archive",
+      status: "failed",
+      createdAt: 203,
+    });
+    expect(await readBackupRunFreshness(env)).toMatchObject({
+      latest: { createdAt: 203, status: "failed" },
       latestOk: { createdAt: 202, pushFailed: true },
     });
   });
 
+  it("binds each outcome and read to its requested state directory", async () => {
+    const firstEnv = await testEnv({ bootstrap: true });
+    const secondEnv = await testEnv({ bootstrap: true });
+    const mutableEnv = { ...firstEnv };
+    const pending = recordBackupRunOutcome({
+      env: mutableEnv,
+      archivePath: "/backups/first.tar.gz",
+      status: "ok",
+      kind: "archive",
+    });
+    mutableEnv.OPENCLAW_STATE_DIR = secondEnv.OPENCLAW_STATE_DIR;
+    await pending;
+    const reading = readBackupRunFreshness(firstEnv);
+    expect(await readBackupRunFreshness(secondEnv)).toEqual({});
+    expect(await reading).toMatchObject({ latest: { archivePath: "/backups/first.tar.gz" } });
+  });
+
   it("does not split surrogate pairs at the persisted diagnostic limit", async () => {
     const env = await testEnv({ bootstrap: true });
-    recordBackupRunOutcome({
+    await recordBackupRunOutcome({
       env,
       archivePath: "/backups/git",
       status: "ok",
@@ -98,7 +118,7 @@ describe("backup run records", () => {
       createdAt: 1,
     });
 
-    const persisted = readBackupFreshness(env).latest?.error;
+    const persisted = (await readBackupRunFreshness(env)).latest?.error;
     expect(persisted).toBe("x".repeat(1_199));
   });
 
@@ -110,12 +130,18 @@ describe("backup run records", () => {
     const raw = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
     raw.exec("DROP TABLE backup_runs");
     raw.close();
-    expect(readBackupFreshness(env)).toEqual({});
+    expect(await readBackupRunFreshness(env)).toEqual({});
   });
 
   it("keeps absent status reads read-only and formats none, failed, fresh, and stale states", async () => {
     const env = await testEnv();
-    expect(readBackupFreshness(env)).toEqual({});
+    await recordBackupRunOutcome({
+      env,
+      archivePath: "/backups/failed.tar.gz",
+      kind: "archive",
+      status: "failed",
+    });
+    expect(await readBackupRunFreshness(env)).toEqual({});
     await expect(fs.access(resolveOpenClawStateSqlitePath(env))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -135,7 +161,7 @@ describe("backup run records", () => {
         formatTimeAgo,
       }),
     ).toBe("last attempt failed 72h ago (archive)");
-    noteBackupDoctorHint(env);
+    await noteBackupDoctorHint(env);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("No successful backup is recorded."),
       "Backups",
@@ -145,7 +171,7 @@ describe("backup run records", () => {
     // recording phase the way a real gateway host already has.
     runOpenClawStateWriteTransaction(() => undefined, { env });
     vi.spyOn(Date, "now").mockReturnValue(1_000);
-    recordBackupRunOutcome({
+    await recordBackupRunOutcome({
       env,
       archivePath: "/backup",
       status: "ok",
@@ -153,17 +179,17 @@ describe("backup run records", () => {
       createdAt: 1,
     });
     mocks.note.mockClear();
-    noteBackupDoctorHint(env);
+    await noteBackupDoctorHint(env);
     expect(mocks.note).not.toHaveBeenCalled();
 
     vi.mocked(Date.now).mockReturnValue(1 + 15 * 24 * 3_600_000);
-    noteBackupDoctorHint(env);
+    await noteBackupDoctorHint(env);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("more than 14 days old"),
       "Backups",
     );
 
-    recordBackupRunOutcome({
+    await recordBackupRunOutcome({
       env,
       archivePath: "/backups/git",
       status: "ok",
@@ -171,7 +197,7 @@ describe("backup run records", () => {
       pushFailed: true,
       createdAt: 2,
     });
-    const pushFailed = readBackupFreshness(env);
+    const pushFailed = await readBackupRunFreshness(env);
     expect(
       buildBackupStatusValue({
         freshness: pushFailed,
@@ -181,7 +207,7 @@ describe("backup run records", () => {
     ).toBe("last ok 1h ago (git, push failing)");
     mocks.note.mockClear();
     vi.mocked(Date.now).mockReturnValue(3_600_002);
-    noteBackupDoctorHint(env);
+    await noteBackupDoctorHint(env);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringMatching(/configured Git remote.*\/backups\/git/su),
       "Backups",

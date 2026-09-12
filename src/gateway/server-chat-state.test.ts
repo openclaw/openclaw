@@ -32,6 +32,52 @@ describe("createChatRunState", () => {
     },
   );
 
+  it("expires idle recipients while activity extends another run's lifetime", () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const state = createChatRunState();
+      state.toolEventRecipients.add("idle", "conn-idle");
+      state.toolEventRecipients.add("active", "conn-active");
+      now = 301_000;
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+      now = 600_999;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(true);
+      now += 1;
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("idle")).toBe(false);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "expires new recipients after clock rollback (clear previous state: %s)",
+    (clear) => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const state = createChatRunState();
+        state.toolEventRecipients.add("previous", "conn-previous");
+        if (clear) {
+          state.clear();
+        }
+        now = 1_000;
+        state.toolEventRecipients.add("early", "conn-early");
+        now = 500_000;
+        state.toolEventRecipients.add("active", "conn-active");
+        now = 601_000;
+        expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+        expect(state.runs.has("early")).toBe(false);
+        expect(state.runs.has("previous")).toBe(!clear);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("clears transient projection state without dropping run ownership or abort tombstones", () => {
     const state = createChatRunState();
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });

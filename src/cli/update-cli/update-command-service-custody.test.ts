@@ -59,6 +59,9 @@ it.each([
     const fs=await import("node:fs");
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
     if(mode==="check") {
+      if(!process.argv.includes("--json")) {
+        process.stdout.write("Recorded warnings from the current update. ");
+      }
       const {DatabaseSync}=await import("node:sqlite");
       const {createManagedHandoffLeaseStore}=await import(${JSON.stringify(new URL("../../infra/update-managed-service-handoff-lease.ts", import.meta.url).href)});
       const databasePath=${JSON.stringify(path.join(control, "managed-update-handoffs.sqlite"))};

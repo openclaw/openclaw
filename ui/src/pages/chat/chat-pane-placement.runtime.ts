@@ -6,6 +6,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import type { ApplicationPlacementStartup } from "../../app/session-placement-startup.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
@@ -100,7 +101,6 @@ export async function moveChatPanePlacement(params: {
     placement.runner?.kind === "device" && placement.runner.status === "offline";
   let target: SessionMoveTarget | null;
   if (abandonSource) {
-    const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
     const confirmed = await showConfirmDialog({
       message: t("sessionsView.continueOnGatewayConfirm", {
         session: params.row.label || params.row.key,
@@ -258,7 +258,6 @@ export async function reclaimChatPanePlacement(params: {
     params.publishError(access.reason);
     return;
   }
-  const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
   const worker = resolveChatPaneWorkerPresentation(
     params.row,
     params.placementStartup.get(params.row.key),

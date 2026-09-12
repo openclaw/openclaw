@@ -92,11 +92,15 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     expect(request).not.toHaveBeenCalled();
 
     await loadChatHistory(state, { deferBranches: true });
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "notes",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "notes",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     progress.hostUpdate();
     await vi.waitFor(() => expect(progress.card).toEqual(card));
     expect(request).toHaveBeenLastCalledWith("progressCard.get", {

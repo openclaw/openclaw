@@ -153,7 +153,8 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
         closed = true;
         playback.close();
         harness.close();
-        bridge?.close();
+        // The synthetic provider closes synchronously, including reentrant player callbacks.
+        void bridge?.close();
         cancel.mockRestore();
       },
     };

@@ -5,10 +5,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import {
-  invalidateChatMetadataStore,
-  beginChatMetadataPublication,
-} from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { beginChatMetadataPublication } from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,

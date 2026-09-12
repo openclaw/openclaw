@@ -20,6 +20,7 @@ import { runInNewContext } from "node:vm";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-ready.mjs";
@@ -34,6 +35,7 @@ import {
   fullReleaseTrustedWorkflowFields,
   githubApi,
   isDirectReleaseCandidateExecution,
+  loadCandidateShippedBaseline,
   parseArgs,
   parseRunIdFromDispatchOutput,
   preflightCorePackageTarballs,
@@ -52,6 +54,7 @@ import {
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mts";
+import { loadReleaseNotesForTag } from "../../scripts/render-github-release-notes.mts";
 import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -93,6 +96,41 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("reads cumulative frozen shipped records after split prose changes", () => {
+    const target = "a".repeat(40);
+    const section = (version: string, number: number) =>
+      [
+        `## ${version}`,
+        "",
+        "### Complete contribution record",
+        "",
+        `This audited record covers the complete v2026.5.1..${target} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
+        "",
+        "#### Pull requests",
+        "",
+        `- **PR #${number}** fix: example.`,
+        "",
+      ].join("\n");
+    const { root, git } = candidateGitFixture({
+      "CHANGELOG.md": `${section("2026.7.1", 12)}\n${section("2026.6.1", 11)}`,
+    });
+    git("tag", "v2026.7.1-beta.1");
+    expect(loadCandidateShippedBaseline("v2026.7.1-beta.1", root).pullRequests).toEqual(
+      new Set([12, 11]),
+    );
+    splitChangelog({ rootDir: root });
+    writeFileSync(
+      join(root, "CHANGELOG/2026.7.1.md"),
+      "## 2026.7.1\n\n<!-- openclaw-docs-mirror-v1 {} -->\n\nPublished reader prose without accounting rows.\n",
+    );
+    git("add", ".");
+    git("commit", "-m", "docs: replace visible prose");
+    git("tag", "v2026.7.1-beta.2");
+    expect(loadCandidateShippedBaseline("v2026.7.1-beta.2", root).pullRequests).toEqual(
+      new Set([12, 11]),
+    );
+  });
+
   it.each<{
     tag: string;
     pin: string;
@@ -175,7 +213,7 @@ describe("release candidate checklist", () => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
         "apps/android/version.json": JSON.stringify({ version: pin, versionCode: 2026070401 }),
-        "CHANGELOG.md": "# Fixture changelog\n",
+        "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
       const targetSha = git("rev-parse", "HEAD");
       // The target ref is authoritative even if another checkout has prepared a newer pin.
@@ -269,6 +307,7 @@ describe("release candidate checklist", () => {
         isRecord,
         requireString: (value: string) => value,
         releaseNotesVersionForTag: () => "2026.9.1",
+        loadReleaseNotesForTag,
         validateCandidateReleaseNotes: () => ({ status: "passed" }),
         validateCandidateChangelogProvenance: () => ({ status: "passed", shippedBaselines: [] }),
         runLocalGeneratedCheckIfNeeded: generatedChecks,
@@ -867,7 +906,9 @@ describe("release candidate checklist", () => {
     expect(check).toMatchObject({ status: "passed", mode: "compact" });
     expect(validationIndex).toBeGreaterThanOrEqual(0);
     expect(fullMatrixDispatchIndex).toBeGreaterThan(validationIndex);
-    expect(source).toContain('run("git", ["show", `${targetSha}:CHANGELOG.md`]');
+    expect(source).toContain("const releaseChangelog = loadReleaseNotesForTag({");
+    expect(source).toContain("ref: targetSha,");
+    expect(source).toContain("changelog: releaseChangelog.record ?? releaseChangelog.section,");
   });
 
   it("rejects contribution-record provenance outside the release tag history", () => {

@@ -6,9 +6,10 @@ import { resolveIsNixMode } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { BackupRunFreshness } from "../state/backup-run-records.js";
 import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
-import { buildBackupStatusValue, readBackupFreshness } from "./backup-health.js";
+import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusOverviewRowsFromSurface,
@@ -82,6 +83,7 @@ function buildStatusDegradationRows(
 export function buildStatusCommandOverviewRows(
   params: {
     env: NodeJS.ProcessEnv;
+    backupFreshness: BackupRunFreshness;
     opts: {
       deep?: boolean;
     };
@@ -191,7 +193,7 @@ export function buildStatusCommandOverviewRows(
       {
         Item: "Backups",
         Value: buildBackupStatusValue({
-          freshness: readBackupFreshness(params.env),
+          freshness: params.backupFreshness,
           formatTimeAgo: params.formatTimeAgo,
         }),
       },

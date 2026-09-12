@@ -54,7 +54,7 @@ describe("new-session CLI-agent model targets", () => {
     picker!.dispatchEvent(new Event("toggle"));
 
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
       expect(request.mock.calls.some(([, params]) => params?.refresh)).toBe(false);
       expect(catalogCalls(request)).toHaveLength(2);
     });

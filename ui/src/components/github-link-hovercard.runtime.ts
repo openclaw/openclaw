@@ -578,6 +578,14 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     trigger: "focus" | "pointer",
     delay: number,
   ): void {
+    let owner: Element | null = anchor.parentElement;
+    while (owner && !(owner instanceof GitHubLinkHovercardProvider)) {
+      owner = owner.parentElement;
+    }
+    // Nested providers own their agent scope even when intent bubbles to the app provider.
+    if (owner !== this) {
+      return;
+    }
     this.activate(anchor, target, delay);
     this.activeTrigger = trigger;
     if (trigger === "pointer") {

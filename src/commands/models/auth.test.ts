@@ -665,6 +665,84 @@ describe("modelsAuthLoginCommand", () => {
     },
   );
 
+  it.each([
+    { source: "new", profileId: "openai:user@example.com" },
+    { source: "imported", profileId: "openai:imported" },
+  ])(
+    "retains the $source profile and model-access choice after direct refresh fails",
+    async ({ source, profileId }) => {
+      currentConfig = {
+        agents: {
+          defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
+        },
+      };
+      if (source === "imported") {
+        mocks.tryImportProviderCredential.mockResolvedValueOnce({
+          profileId,
+          provider: "openai",
+          mode: "oauth",
+          configUpdated: false,
+        });
+      }
+      const onModelAccessRequested = vi.fn();
+      const result = await runModelsAuthLoginFlowCore({
+        provider: "openai",
+        runtime: createRuntime(),
+        prompter: mocks.createClackPrompter(),
+        refreshAfterLogin: async () => {
+          throw new Error("Auth publication failed.");
+        },
+        onModelAccessRequested,
+      });
+      expect(result).toMatchObject({
+        authRefresh: "gateway-rejected",
+        profiles: [{ profileId, provider: "openai", mode: "oauth" }],
+      });
+      expect(onModelAccessRequested).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          provider: "openai",
+          policy: { path: "agents.defaults.modelPolicy.allow", refs: ["other/current"] },
+        }),
+      );
+      expect(currentConfig.agents?.defaults).toEqual({
+        model: "other/current",
+        modelPolicy: { allow: ["other/current"] },
+      });
+    },
+  );
+
+  it.each(["cancelled", "revoked"] as const)(
+    "does not complete a saved login when authority is %s during a rejected refresh",
+    async (reason) => {
+      const controller = new AbortController();
+      let current = true;
+      const onModelAccessRequested = vi.fn();
+      await expect(
+        runModelsAuthLoginFlowCore({
+          provider: "openai",
+          runtime: createRuntime(),
+          prompter: mocks.createClackPrompter(),
+          signal: controller.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Login authority ended.");
+            }
+          },
+          refreshAfterLogin: async () => {
+            if (reason === "cancelled") {
+              controller.abort(new Error("Login authority ended."));
+            } else {
+              current = false;
+            }
+            throw new Error("Auth publication failed.");
+          },
+          onModelAccessRequested,
+        }),
+      ).rejects.toThrow("Login authority ended.");
+      expect(onModelAccessRequested).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns the refresh outcome after importing a provider credential", async () => {
     mocks.tryImportProviderCredential.mockResolvedValueOnce({
       profileId: "openai:imported",

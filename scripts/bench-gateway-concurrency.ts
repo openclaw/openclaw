@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 // Bench Gateway Concurrency script measures gateway probes during synthetic streaming turns.
 import { randomUUID } from "node:crypto";
 import {
@@ -20,6 +20,11 @@ import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
+import {
+  controlGatewayHeapProfile,
+  readGatewayHeapProfile,
+  type GatewayHeapProfile,
+} from "./lib/gateway-bench-heap.ts";
 import { getFreePort, readProcessRssMb } from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
@@ -102,6 +107,7 @@ type GatewayChildExit = {
 };
 
 type BenchmarkRun = {
+  heapProfile?: GatewayHeapProfile;
   controlPlane: Array<TimedProbe & { method: string }>;
   controlUi: ControlUiProbe[];
   durationMs: number;
@@ -139,6 +145,7 @@ type CliOptions = {
   concurrency: number;
   controlPlane: boolean;
   cpuProfDir?: string;
+  heapProfDir?: string;
   diagnosticsTimeline: boolean;
   entry: string;
   historyBurst: number;
@@ -199,6 +206,7 @@ const VALUE_FLAGS = new Set([
   "--cadence-ms",
   "--concurrency",
   "--cpu-prof-dir",
+  "--heap-prof-dir",
   "--entry",
   "--history-burst",
   "--history-clients",
@@ -261,6 +269,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     ),
     controlPlane: hasFlag(argv, "--control-plane"),
     cpuProfDir: resolveOutputPath(parseFlagValue(argv, "--cpu-prof-dir")),
+    heapProfDir: resolveOutputPath(parseFlagValue(argv, "--heap-prof-dir")),
     diagnosticsTimeline: !hasFlag(argv, "--no-diagnostics-timeline"),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
     historyBurst: parseBoundedPositiveInt(
@@ -382,6 +391,7 @@ Options:
   --history-messages <n> Inject up to 500 synthetic messages per seeded session
   --history-message-chars <n> Synthetic message size (default: 1024, max: 65536)
   --cpu-prof-dir <p> Write Gateway V8 CPU profiles to this directory
+  --heap-prof-dir <p> Sample load-phase allocations, including GC-collected objects
   --runs <n>         Measured gateway runs (default: ${DEFAULT_RUNS})
   --warmup <n>       Warmup gateway runs (default: ${DEFAULT_WARMUP})
   --cadence-ms <ms>  Probe cadence (default: ${DEFAULT_CADENCE_MS})
@@ -584,10 +594,13 @@ function tailLines(output: string, lineCount: number): string {
   return output.trimEnd().split(/\r?\n/u).slice(-lineCount).join("\n");
 }
 
-function captureChildOutput(child: ChildProcessWithoutNullStreams): {
+function captureChildOutput(child: ChildProcess): {
   readOutput: () => string;
   readStderrTail: () => string;
 } {
+  if (!child.stdout || !child.stderr) {
+    throw new Error("Gateway benchmark children require piped stdout and stderr");
+  }
   let output = "";
   let stderr = "";
   const appendOutput = (chunk: Buffer) => {
@@ -1027,6 +1040,7 @@ async function runGatewaySample(options: {
   diagnosticsTimeline: boolean;
   entry: string;
   cpuProfDir?: string;
+  heapProfDir?: string;
   historyBurst: number;
   historyClients: number;
   historyMessages: number;
@@ -1047,8 +1061,11 @@ async function runGatewaySample(options: {
   const runStartedAt = performance.now();
   const timelinePath = path.join(root, "diagnostics-timeline.jsonl");
   const requestLogPath = path.join(root, "mock-provider-requests.jsonl");
+  const heapProfilePath = options.heapProfDir
+    ? path.resolve(options.heapProfDir, `gateway-load-${randomUUID()}.heapprofile`)
+    : undefined;
   const protocolVersion = await readGatewayProtocolVersion(options.entry);
-  let gateway: ChildProcessWithoutNullStreams | undefined;
+  let gateway: ChildProcess | undefined;
   let mockProvider: ChildProcessWithoutNullStreams | undefined;
   let client: Awaited<ReturnType<typeof connectGateway>> | undefined;
   const auxiliaryClients: Array<Awaited<ReturnType<typeof connectGateway>>> = [];
@@ -1089,6 +1106,13 @@ async function runGatewaySample(options: {
         mkdirSync(options.cpuProfDir, { recursive: true });
       }
       const gatewayArgs = buildGatewayBenchChildArgs(options.entry, port);
+      if (heapProfilePath) {
+        mkdirSync(path.dirname(heapProfilePath), { recursive: true });
+        gatewayArgs.unshift(
+          "--import",
+          new URL("./lib/gateway-bench-heap-preload.ts", import.meta.url).href,
+        );
+      }
       gateway = spawn(
         process.execPath,
         options.cpuProfDir
@@ -1097,6 +1121,7 @@ async function runGatewaySample(options: {
         {
           cwd: process.cwd(),
           detached: process.platform !== "win32",
+          stdio: heapProfilePath ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
           env: {
             ...createGatewayBenchEnv(root, configPath, {
               caseEnv: {
@@ -1270,6 +1295,9 @@ async function runGatewaySample(options: {
         auxiliaryClients.push(subscriptionProbeClient);
       }
       const memoryBefore = await readGatewayMemory(rpc, runStartedAt);
+      if (heapProfilePath) {
+        await controlGatewayHeapProfile(gateway, "start", heapProfilePath);
+      }
       const setupDurationMs = performance.now() - setupStartedAt;
       // Large session fixtures are setup, not benchmarked load. Every measured
       // run therefore gets its complete timeout after all clients are ready.
@@ -1432,22 +1460,33 @@ async function runGatewaySample(options: {
       ).finally(() => {
         updatesDone = true;
       });
-      await Promise.all([turns, sampler, historyLoad, sessionUpdateLoad]);
+      const [freshConnectionResult] = await Promise.all([
+        freshConnection,
+        turns,
+        sampler,
+        historyLoad,
+        sessionUpdateLoad,
+      ]);
       const loadEndMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
+      const turnsDurationMs = performance.now() - turnsStartedAt;
+      const memoryAfter = await readGatewayMemory(rpc, runStartedAt);
+      timelineWindow = { from: timelineFrom, through: Date.now() };
+      let heapProfile: GatewayHeapProfile | undefined;
+      if (heapProfilePath) {
+        await controlGatewayHeapProfile(gateway, "stop", heapProfilePath);
+        heapProfile = readGatewayHeapProfile(heapProfilePath);
+      }
       if (options.historyClients > 0 && !history.some((sample) => sample.ok)) {
         const failure = history[0]?.error ?? "no requests completed before turns finished";
         throw new Error(`all configured chat.history load probes failed: ${failure}`);
       }
-      const freshConnectionResult = await freshConnection;
-      const turnsDurationMs = performance.now() - turnsStartedAt;
-      const memoryAfter = await readGatewayMemory(rpc, runStartedAt);
       peakRssMb = Math.max(peakRssMb, memoryAfter.rssMb);
       const modelRequestCount = existsSync(requestLogPath)
         ? readFileSync(requestLogPath, "utf8").split(/\r?\n/u).filter(Boolean).length
         : 0;
 
-      timelineWindow = { from: timelineFrom, through: Date.now() };
       result = {
+        ...(heapProfile ? { heapProfile } : {}),
         controlPlane,
         controlUi,
         durationMs: performance.now() - runStartedAt,
@@ -1585,6 +1624,14 @@ function summarizeRuns(
   });
   return {
     budgetViolations,
+    gatewaySampledAllocatedBytes: summarizeNumbers(
+      runs.flatMap((run) => (run.heapProfile ? [run.heapProfile.sampledAllocatedBytes] : [])),
+    ),
+    gatewaySampledAllocatedBytesPerTurn: summarizeNumbers(
+      runs.flatMap((run) =>
+        run.heapProfile ? [run.heapProfile.sampledAllocatedBytes / run.turnCount] : [],
+      ),
+    ),
     controlPlane: Object.fromEntries(
       controlMethodProbes.map(({ method, samples }) => [
         method,

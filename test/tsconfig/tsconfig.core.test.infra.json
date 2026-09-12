@@ -5,7 +5,9 @@
   },
   "include": [
     "../../src/infra/**/*.test.ts",
-    "../../src/infra/**/*.test.tsx"
+    "../../src/infra/**/*.test.tsx",
+    "../../src/media/**/*.test.ts",
+    "../../src/media/**/*.test.tsx"
   ],
   "exclude": [
     "../../node_modules",

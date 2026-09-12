@@ -5,8 +5,6 @@ import OpenClawKit
 import SwiftUI
 
 struct ConnectionSettingsView: View {
-    static let fieldWidth: CGFloat = 250
-
     @Bindable var state: AppState
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -15,6 +13,7 @@ struct ConnectionSettingsView: View {
         localDisplayName: InstanceIdentity.displayName)
     @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
+    @State private var showConnectionEditor = false
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -67,6 +66,11 @@ struct ConnectionSettingsView: View {
             self.updateActiveWork(active: active)
         }
         .onDisappear { self.gatewayDiscovery.stop() }
+        .sheet(isPresented: self.$showConnectionEditor) {
+            PrimaryGatewayConnectionEditor(state: self.state) {
+                self.remoteStatus = .idle
+            }
+        }
     }
 
     private func updateActiveWork(active: Bool) {
@@ -181,13 +185,21 @@ struct ConnectionSettingsView: View {
     private var gatewayModeSection: some View {
         Section {
             LabeledContent {
-                Picker("Gateway location", selection: self.$state.connectionMode) {
-                    Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
-                    Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
-                    Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
-                }
-                .labelsHidden()
-                .fixedSize()
+                Picker("Gateway location", selection: Binding(
+                    get: { self.state.connectionMode },
+                    set: { mode in
+                        if mode == .remote, self.state.connectionMode != .remote {
+                            self.showConnectionEditor = true
+                        } else {
+                            self.state.connectionMode = mode
+                        }
+                    })) {
+                        Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
+                        Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
+                        Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
+                    }
+                    .labelsHidden()
+                        .fixedSize()
             } label: {
                 Text("OpenClaw runs")
                 Text("Own a Gateway on this Mac, or attach to one on another host.")
@@ -293,89 +305,20 @@ struct ConnectionSettingsView: View {
 
     private var remoteAccessSection: some View {
         Section {
-            LabeledContent("Transport") {
-                Picker("Transport", selection: self.$state.remoteTransport) {
-                    Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
-                    Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
+            LabeledContent(
+                self.state.remoteTransport == .ssh ? "SSH target" : "Gateway URL",
+                value: self.state.remoteTransport == .ssh ? self.state.remoteTarget : self.state.remoteUrl)
+            HStack {
+                Button("Change connection…") { self.showConnectionEditor = true }
+                Spacer()
+                self.remoteTestButton(disabled: self.state.remoteTransport == .ssh
+                    ? self.state.remoteTarget.isEmpty : self.state.remoteUrl.isEmpty)
             }
-
-            if self.state.remoteTransport == .ssh {
-                self.remoteSshRow
-            } else {
-                self.remoteDirectRow
-            }
-
-            LabeledContent {
-                SecureField("Gateway token", text: self.$state.remoteToken, prompt: Text("gateway.remote.token"))
-                    .labelsHidden()
-                    .multilineTextAlignment(.leading)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: Self.fieldWidth)
-            } label: {
-                Text("Gateway token")
-                Text("Used when the remote Gateway requires token auth.")
-            }
-
-            if self.state.remoteTokenUnsupported {
-                Text(
-                    "The current gateway.remote.token value is not plain text. "
-                        + "OpenClaw for macOS cannot use it directly; "
-                        + "enter a plaintext token here to replace it.")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-            }
-
             GatewayConfigConflictRecoveryView(state: self.state)
-
-            if self.state.remoteTransport == .ssh {
-                self.sshCommandDetails
-            }
         } header: {
             Text("Remote Access")
         } footer: {
             self.remoteAccessFooter
-        }
-    }
-
-    private var sshValidationMessage: String? {
-        let trimmed = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-        return CommandResolver.sshTargetValidationMessage(trimmed)
-    }
-
-    private var remoteSshRow: some View {
-        let trimmedTarget = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canTest = !trimmedTarget.isEmpty && self.sshValidationMessage == nil
-
-        return LabeledContent("SSH target") {
-            HStack(spacing: 8) {
-                TextField("SSH target", text: self.$state.remoteTarget, prompt: Text("user@host[:22]"))
-                    .labelsHidden()
-                    .multilineTextAlignment(.leading)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: Self.fieldWidth)
-                self.remoteTestButton(disabled: !canTest)
-            }
-        }
-    }
-
-    private var remoteDirectRow: some View {
-        LabeledContent("Gateway URL") {
-            HStack(spacing: 8) {
-                TextField(
-                    "Gateway URL",
-                    text: self.$state.remoteUrl,
-                    prompt: Text(verbatim: "wss://gateway.example.ts.net"))
-                    .labelsHidden()
-                    .multilineTextAlignment(.leading)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: Self.fieldWidth)
-                self.remoteTestButton(
-                    disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
         }
     }
 
@@ -395,33 +338,28 @@ struct ConnectionSettingsView: View {
 
     @ViewBuilder
     private var remoteAccessFooter: some View {
-        if self.state.remoteTransport == .ssh, let validationMessage = self.sshValidationMessage {
-            Text(validationMessage)
-                .foregroundStyle(.red)
-        } else {
-            switch self.remoteStatus {
-            case .idle:
-                Text(self.state.remoteTransport == .ssh
-                    ? "SSH keeps the Gateway private. Tailscale plus an SSH tunnel gives stable private access."
-                    : "Use wss:// for public hosts; ws:// is allowed for localhost, LAN, .local, and Tailnet hosts. "
-                    + "Tailscale Serve provides a valid HTTPS certificate.")
-            case .checking:
-                Text("Testing the remote Gateway…")
-            case let .ok(success):
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(success.title)
-                        if let detail = success.detail {
-                            Text(detail)
-                        }
+        switch self.remoteStatus {
+        case .idle:
+            Text(self.state.remoteTransport == .ssh
+                ? "SSH keeps the Gateway private. Tailscale plus an SSH tunnel gives stable private access."
+                : "Use wss:// for public hosts; ws:// is allowed for localhost, LAN, .local, and Tailnet hosts. "
+                + "Tailscale Serve provides a valid HTTPS certificate.")
+        case .checking:
+            Text("Testing the remote Gateway…")
+        case let .ok(success):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(success.title)
+                    if let detail = success.detail {
+                        Text(detail)
                     }
                 }
-            case let .failed(message):
-                Text(message)
-                    .foregroundStyle(.red)
             }
+        case let .failed(message):
+            Text(message)
+                .foregroundStyle(.red)
         }
     }
 
@@ -440,25 +378,6 @@ struct ConnectionSettingsView: View {
         } footer: {
             Text(self.gatewayDiscovery.statusText)
         }
-    }
-
-    private var sshCommandDetails: some View {
-        DisclosureGroup("SSH command details") {
-            TextField(
-                "Identity file",
-                text: self.$state.remoteIdentity,
-                prompt: Text(verbatim: "/Users/you/.ssh/id_ed25519"))
-            TextField(
-                "Project root",
-                text: self.$state.remoteProjectRoot,
-                prompt: Text(verbatim: "/home/you/Projects/openclaw"))
-            TextField(
-                "CLI path",
-                text: self.$state.remoteCliPath,
-                prompt: Text(verbatim: "/Applications/OpenClaw.app/.../openclaw"))
-        }
-        .multilineTextAlignment(.leading)
-        .textFieldStyle(.roundedBorder)
     }
 
     // MARK: - Dashboard handoff
@@ -511,7 +430,9 @@ extension ConnectionSettingsView {
     @MainActor
     func testRemote() async {
         self.remoteStatus = .checking
-        switch await RemoteGatewayProbe.run() {
+        let result = await RemoteGatewayProbe.run()
+        guard !Task.isCancelled else { return }
+        switch result {
         case let .ready(success):
             self.remoteStatus = .ok(success)
         case let .authIssue(issue):
@@ -542,9 +463,9 @@ extension ConnectionSettingsView {
         alert.runModal()
     }
 
-    private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
+    private func applyDiscoveredGateway(_: GatewayDiscoveryModel.DiscoveredGateway) {
+        // Discovery is only a setup hint. The editor requires independent trusted input.
+        self.showConnectionEditor = true
     }
 }
 

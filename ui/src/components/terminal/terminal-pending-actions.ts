@@ -13,13 +13,15 @@ export type TerminalIntentHost = {
   bootQueue: Pick<TerminalTaskQueue, "enqueue">;
   currentGeneration: () => number;
   canRun: () => boolean;
-  attach: (sessionId: string, agentOwned: boolean) => Promise<boolean>;
+  attach: (sessionId: string, agentOwned: boolean, cancelIntent: () => void) => Promise<boolean>;
   open: (
     catalog: TerminalPanelCatalogReference | undefined,
     agentId: string | null,
+    cancelIntent: () => void,
   ) => Promise<boolean>;
-  reattach: () => Promise<void>;
-  ensureInitial: (agentId: string | null) => Promise<boolean>;
+  reattach: (cancelIntent?: () => void) => Promise<boolean>;
+  cancelledRestoreCompleted: () => void;
+  ensureInitial: (agentId: string | null, cancelIntent: () => void) => Promise<boolean>;
   hasTabs: () => boolean;
   requestUpdate: () => void;
   setBooting: (booting: boolean) => void;
@@ -200,14 +202,13 @@ export class TerminalIntentQueue {
         if (!action || !isCurrent() || !this.canRun(host)) {
           return;
         }
-        const completed = await this.execute(host, action);
+        const completed = await this.execute(host, action, () => this.retireAction(action));
         if (!completed || !isCurrent()) {
           return;
         }
-        const index = this.actions.indexOf(action);
-        if (index !== -1) {
-          this.actions.splice(index, 1);
-          this.persist();
+        this.retireAction(action);
+        if (completed === "cancelled-restore" && this.host === host) {
+          host.cancelledRestoreCompleted();
         }
       });
     } finally {
@@ -218,6 +219,14 @@ export class TerminalIntentQueue {
       } else if (this.actions.length === 0 && current && !current.hasTabs()) {
         current.setBooting(false);
       }
+    }
+  }
+
+  private retireAction(action: TerminalPanelAction): void {
+    const index = this.actions.indexOf(action);
+    if (index !== -1) {
+      this.actions.splice(index, 1);
+      this.persist();
     }
   }
 
@@ -237,22 +246,28 @@ export class TerminalIntentQueue {
     return !this.refreshPending && host.canRun();
   }
 
-  private async execute(host: TerminalIntentHost, action: TerminalPanelAction): Promise<boolean> {
+  private async execute(
+    host: TerminalIntentHost,
+    action: TerminalPanelAction,
+    cancelIntent: () => void,
+  ): Promise<boolean | "cancelled-restore"> {
     if (action.kind === "attach") {
-      return host.attach(action.sessionId, action.agentOwned);
+      return host.attach(action.sessionId, action.agentOwned, cancelIntent);
     }
     if (action.kind === "open") {
-      return host.open(undefined, action.agentId);
+      return host.open(undefined, action.agentId, cancelIntent);
     }
-    await host.reattach();
+    const userClosedTab = await host.reattach(action.kind === "restore" ? cancelIntent : undefined);
     // A second panel mounting mid-flight must not strand this action: the host
     // that started it is still connected, so it finishes what it began.
     if (!this.canRun(host)) {
       return false;
     }
     return action.kind === "catalog"
-      ? host.open(action.catalog, action.agentId)
-      : host.ensureInitial(action.agentId);
+      ? host.open(action.catalog, action.agentId, cancelIntent)
+      : userClosedTab
+        ? "cancelled-restore"
+        : host.ensureInitial(action.agentId, cancelIntent);
   }
 
   private clearRefreshTimer(): void {
@@ -318,6 +333,9 @@ export function terminalToggleIntent(
     return null;
   }
   const agentId = detail.agentId?.trim() || fallbackAgentId;
+  if (detail.newSession === true) {
+    return { kind: "open", agentId };
+  }
   if (detail.terminalSessionId) {
     return {
       kind: "attach",

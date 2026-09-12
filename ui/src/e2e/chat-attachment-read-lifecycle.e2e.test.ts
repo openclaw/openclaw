@@ -234,6 +234,17 @@ suite.define(() => {
             await page.keyboard.down("Enter");
             if (!held) {
               await page.keyboard.up("Enter");
+              await expect.poll(() => composer.inputValue()).toBe("");
+              await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(0);
+              await composer.fill(followUpText);
+              if (attachment) {
+                await pane.locator(".agent-chat__file-input").setInputFiles({
+                  name: fileName,
+                  mimeType: "text/plain",
+                  buffer: Buffer.from(fileContents),
+                });
+                await pane.locator(".chat-attachment-thumb", { hasText: fileName }).waitFor();
+              }
             }
             await page.keyboard.down("Enter");
           } finally {
@@ -246,8 +257,9 @@ suite.define(() => {
           ]);
           expect(await gateway.getRequests("chat.history")).toHaveLength(historyBefore + 1);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-          expect(await composer.inputValue()).toBe(followUpText);
-          expect(await pane.locator(".chat-attachment-thumb").count()).toBe(attachment ? 1 : 0);
+          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(0);
+          await expect.poll(() => pane.locator(".chat-queue__item").count()).toBe(expectedTurns);
 
           const sendsBefore = (await gateway.getRequests("chat.send")).length;
           await gateway.deferNext("chat.send");

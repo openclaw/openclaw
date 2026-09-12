@@ -190,9 +190,10 @@ if [[ "${packed_mode}" == "false" ]]; then
   if [[ -n "${metadata_root}" ]]; then
     metadata_args=(--clawhub-metadata "${metadata_root}/${package_dir}")
   fi
+  # Bash 3.2 treats an empty array as unset under nounset; metadata is optional.
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
-    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" "${metadata_args[@]}" -- \
+    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" ${metadata_args[@]+"${metadata_args[@]}"} -- \
     "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
   printf '%s\n' "${pack_output}"

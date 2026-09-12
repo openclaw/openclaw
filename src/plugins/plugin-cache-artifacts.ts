@@ -47,8 +47,14 @@ export function createPluginCacheArtifacts(): {
   moduleLoaders: Map<string, PluginModuleLoader>;
   sources: Map<string, PluginSourceCacheRecord>;
   sourceAliases: Map<string, string>;
+  runtimeRecordRoots: WeakMap<object, { rootDir: string; resolvedRootDir: string; prefix: string }>;
 } {
-  return { moduleLoaders: new Map(), sources: new Map(), sourceAliases: new Map() };
+  return {
+    moduleLoaders: new Map(),
+    sources: new Map(),
+    sourceAliases: new Map(),
+    runtimeRecordRoots: new WeakMap(),
+  };
 }
 
 export function createPluginRootArtifacts(): PluginRootArtifactCache {

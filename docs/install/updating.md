@@ -26,7 +26,15 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
-An already-installed registry package version or Git target SHA still runs plugin convergence, preserves exact pins with retained-pin advisories, and restarts a running managed Gateway only when plugins change and `--no-restart` is not set; unchanged runs finish as `skipped` / `already-current`.
+An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway only when plugins change and `--no-restart` is not set; unchanged runs finish as `skipped` / `already-current`.
+
+Plugin maintenance does not fail an otherwise successful core update. If a plugin
+cannot be updated, OpenClaw continues with the remaining plugins, keeps the previous
+installation where possible, and prints a short next action. A running updated
+Gateway can also report a plugin that did not load without turning the core update
+into a failure. Individual plugin outcomes remain available in `--json` output.
+Failures to install core, repair required configuration or state, or start the
+updated Gateway remain update failures.
 An explicit package artifact (for example, a tarball path or URL) is validated
 and installed even when its version matches; matching versions do not prove
 that two artifacts contain the same code.
@@ -50,17 +58,22 @@ Package updates also check npm availability for enabled configured plugins befor
 stopping the serving Gateway or replacing the installed core. Registry targets
 are checked early; explicit package artifacts are checked using the privately
 staged package version before rehearsal, live-state preparation, or activation.
-The check uses the same plugin version rules as post-update synchronization, including release-cohort
-tracking, beta selection, and extended-stable targets. A missing version or registry
-error refuses the update with `plugin-target-unavailable`; registry-target
-`--dry-run` reports the same refusal. For explicit artifacts, `--dry-run` does not
-stage the package and reports that plugin availability checking remains pending.
-Retry when the registry or mirror is ready, select an older available
-core with `openclaw update --tag <version>`, or disable the affected plugin before
-retrying. Extended-stable does not accept `--tag`; retry later or explicitly switch
-channels. Bundled and path-installed plugins do not require registry requests.
-This metadata check does not reserve downloads, so later download failures can
-still require recovery.
+The check uses the same plugin version rules as post-update synchronization,
+including release-cohort tracking, beta selection, and extended-stable targets.
+A missing plugin version or registry error produces a warning naming the
+affected plugin; the core update can continue. Registry-target `--dry-run`
+includes those warnings. For explicit artifacts, `--dry-run` does not stage the
+package and reports that plugin availability checking remains pending.
+Extended-stable does not accept `--tag`. Bundled and path-installed plugins do not
+require registry requests.
+
+This metadata check does not reserve downloads. Plugin-only download, install,
+or load failures remain actionable warnings after an otherwise successful core
+update. The updater preserves recorded choices and retains the previous plugin
+payload where possible. Follow the reported `openclaw plugins update <id>` command for a
+failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
+configuration or state, ownership errors, and failed core startup or readiness
+checks still prevent completion.
 
 Switch channels or target a specific version:
 
@@ -98,16 +111,20 @@ checks only the verified `extended-stable` selector for update availability.
 That direct command is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.
 After the core swap, eligible official npm and trusted official ClawHub plugins with bare/default or
-`latest` intent converge to that exact core version. Exact pins and explicit
-non-`latest` tags, third-party plugins, custom registries, and other sources remain unchanged.
+`latest` intent converge to that exact core version. Eligible older OpenClaw release
+pins resume that default update policy. Explicit non-`latest` tags, independently
+versioned pins, third-party plugins, custom ClawHub registries, and other sources retain
+their existing behavior.
 Version-bound runtime plugins converge to the base release cohort when the
 core is a correction release (for example, `YYYY.M.P-2` uses plugin
 `YYYY.M.P`).
 Catalog installs created by current OpenClaw versions retain that default
-intent. Older records that contain only an exact version remain pinned because
-OpenClaw cannot safely distinguish an old automatic pin from a user pin. For npm
-installs, run `openclaw plugins update @openclaw/name` once on the extended-stable
-channel to opt that plugin back into exact-core tracking.
+intent. Verified OpenClaw-owned packages recorded at an exact OpenClaw release
+no newer than core resume their catalog's default selector after a successful
+update. This includes old automatic and manual pins. Their recorded registry
+and plugin settings are preserved, and subsequent updates continue following
+the selected channel. A version explicitly supplied to a plugin update command
+still applies to that operation.
 
 `--channel dev` gives a persistent moving GitHub `main` checkout for npm-owned
 package installs and existing Git checkouts. Package
@@ -115,6 +132,12 @@ installs reject the `--tag main` shorthand because the workspace checkout is
 not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
+
+On source installs, Doctor and plugin updates keep plugins built with the host.
+A registry plugin with the same version string can target a different SDK, so
+it does not replace the source build without matching SDK build evidence.
+Existing registry generations remain on disk; convergence reports the bundled
+selection and skips their refresh. `OPENCLAW_DEV_SOURCE_ROOT` is not required.
 
 Managed npm plugins on the beta channel use the same newest-of-beta/latest
 selection, including official plugins such as `@openclaw/codex`. An older beta
@@ -167,10 +190,19 @@ starting the Gateway.
 
 ### From chat
 
-The OpenClaw owner can say "update" (the agent uses the `gateway` action
-`update.run`) or send `/update`. The candidate validates while the old Gateway
-serves, and an already-current update restarts it only when plugins change. Update runs can send
-these notices in that chat as the Gateway observes the recorded milestones:
+Ask the agent to update OpenClaw, or send `/update` from Discord or another
+connected chat. Natural-language requests use the existing `gateway` tool's
+`update.run` action. The minimal, coding, and messaging profiles expose that update
+action without granting configuration reads or other Gateway controls. Explicit tool
+restrictions still apply.
+
+`/update` is the model-independent fallback: it works without a functioning model
+or access to the `gateway` tool. The tool, slash command, and Control UI all use
+the same Gateway update handler and current authorization checks.
+
+The candidate validates while the old Gateway serves, and an already-current
+update restarts it only when plugins change. Update runs can send these notices
+in that chat as the Gateway observes the recorded milestones:
 
 1. An acknowledgement when the update is accepted.
 2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
@@ -201,9 +233,17 @@ restart; `--json` exposes the `activeRun` and `lastRun` records. See
 queries.
 
 The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
-`/update` also requires `commands.restart` (enabled by default).
+Being allowed to chat does not grant owner permissions. If your account is not
+an owner, the reply explains how the Gateway operator can connect it. Channel
+setup and [pairing](/channels/pairing) distinguish owner access from chat access;
+existing allowed users are not automatically promoted.
+External-chat updates through `/update` or the tool require `commands.restart`
+(enabled by default), including managed installations. The slash command also
+follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
+configured update channel and install method.
 Agents must never run `npm install -g openclaw` or stop the Gateway service
-from a chat shell; use the update action so restart and notification stay coordinated.
+from a chat shell; use `/update` or the update action so restart and notification
+stay coordinated.
 
 ## Stale update history
 

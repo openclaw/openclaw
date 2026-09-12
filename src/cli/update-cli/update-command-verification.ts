@@ -1,6 +1,9 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { readPackageVersion } from "../../infra/package-json.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -17,11 +20,57 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
+import {
+  createPluginUpdateWarning,
+  type PluginUpdateWarning,
+} from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import {
+  gatewayServiceCommandUsesRoot,
+  resolveUpdatedGatewayRestartPort,
+} from "./update-command-service-plan.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
 } from "./update-command-service-recovery.js";
+
+export async function verifyPreviousGatewayForUpdate(params: {
+  root: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const { config, env } = params;
+  const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
+  const [expectedVersion, expectedBuildId] = await Promise.all([
+    readPackageVersion(params.root),
+    readBuiltGatewayBuildId(params.root),
+  ]);
+  const [health, readiness, servesPreviousPackage] = await Promise.all([
+    inspectGatewayRestart({
+      service: resolveGatewayService(),
+      env,
+      port,
+      expectedVersion,
+      expectedBuildId: expectedBuildId ?? undefined,
+      requirePluginHealth: false,
+    }),
+    waitForGatewayHttpReadiness({
+      config,
+      port,
+      deadlineAt: Date.now() + 3_000,
+      attempts: 1,
+      delayMs: 0,
+    }),
+    gatewayServiceCommandUsesRoot({ root: params.root, env }),
+  ]);
+  return Boolean(
+    expectedVersion &&
+    servesPreviousPackage === true &&
+    health.healthy &&
+    health.runtime.status === "running" &&
+    readiness.readyz === 200,
+  );
+}
 
 export function recordUpdateGatewayHealth(
   run: UpdateCommandOptions["run"],
@@ -46,7 +95,10 @@ export function recordUpdateGatewayHealth(
               health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch,
           }
         : {}),
-      pluginErrors: health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
+      pluginErrors: [
+        ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
+        ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
+      ],
       channelsReady: health.healthy && !health.channelProbeErrors?.length,
       settled: health.healthy,
       readyz,
@@ -55,7 +107,7 @@ export function recordUpdateGatewayHealth(
   );
 }
 
-/** The same independent oracles decide ordinary restart and repair outcomes. */
+/** Verify core activation while preserving plugin failures as separate notices. */
 export async function verifyUpdatedGateway(params: {
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
@@ -77,7 +129,7 @@ export async function verifyUpdatedGateway(params: {
     health: GatewayRestartSnapshot;
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
-}): Promise<UpdateRepairValidation> {
+}): Promise<UpdateRepairValidation & { pluginWarnings?: PluginUpdateWarning[] }> {
   // Readiness belongs to the original live executor through every awaited probe.
   const originalRun = params.opts.run;
   const originalExecutor = originalRun?.executorFence;
@@ -110,6 +162,7 @@ export async function verifyUpdatedGateway(params: {
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
+    requirePluginHealth: false,
     env: params.serviceEnv,
     ...(params.signal ? { signal: params.signal } : {}),
   };
@@ -178,6 +231,16 @@ export async function verifyUpdatedGateway(params: {
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
   if (health.healthy && serviceRunning && readyz) {
+    const pluginFailures = new Map<string, string>();
+    for (const failure of health.activatedPluginErrors ?? []) {
+      pluginFailures.set(failure.id, failure.error);
+    }
+    for (const failure of health.unavailablePlugins ?? []) {
+      pluginFailures.set(failure.id, `${failure.reason}: ${failure.detail}`);
+    }
+    const pluginWarnings = Array.from(pluginFailures, ([pluginId, reason]) =>
+      createPluginUpdateWarning({ pluginId, reason, kind: "load", env: params.serviceEnv }),
+    );
     assertCurrent();
     const verifiedAtMs = Date.now();
     recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
@@ -193,11 +256,18 @@ export async function verifyUpdatedGateway(params: {
 
     if (!params.opts.json) {
       defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+      for (const warning of pluginWarnings) {
+        defaultRuntime.log(theme.warn(warning.message));
+      }
     }
     return {
       ok: true,
       score: 7,
-      summary: "Gateway service, version, plugins, channels, and readiness verified.",
+      summary:
+        pluginWarnings.length > 0
+          ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
+          : "Gateway service, version, plugins, channels, and readiness verified.",
+      ...(pluginWarnings.length > 0 ? { pluginWarnings } : {}),
     };
   }
   recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
