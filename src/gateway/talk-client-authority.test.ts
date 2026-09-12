@@ -21,6 +21,7 @@ import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { prepareTalkClientControlAuthority } from "./talk-client-agent-consult.js";
 import { resolveTalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import { prepareTalkSessionTarget } from "./talk-session-target.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
@@ -48,6 +49,14 @@ it.each([true, false])(
           },
         },
         plugins: { enabled: false },
+        models: {
+          providers: {
+            "mock-openai": buildMockOpenAiResponsesProvider(
+              "https://example.invalid/v1",
+              "gpt-5.6-luna",
+            ).config,
+          },
+        },
       });
       await state.writeConfig(config);
       const client = sharingPolicyClient({ deviceId: "caller-device", scopes: ["operator.admin"] });

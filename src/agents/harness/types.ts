@@ -142,8 +142,10 @@ export type AgentHarnessSettledTurnFinalizationResult = {
   assistant: import("../../llm/types.js").AssistantMessage;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;
-  /** True when the harness already persisted the assistant into the application transcript. */
+  /** The harness owns assistant persistence, including intentional suppression. */
   assistantTranscriptOwned?: boolean;
+  /** Physical ID of the persisted assistant row, when available; not a stream index. */
+  assistantTranscriptEntryId?: string;
   /** Exact idempotency key for the harness-owned assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
   /** Assistant stream generation index used to correlate final reply delivery. */

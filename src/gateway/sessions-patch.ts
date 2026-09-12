@@ -19,11 +19,7 @@ import {
 } from "../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import {
-  resolveAllowedModelRef,
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "../agents/model-selection.js";
+import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -46,11 +42,7 @@ import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKeyOwnedBy,
   resolveMissingAgentHarnessSessionError,
@@ -96,7 +88,7 @@ export function resolveSessionPatchModelSelection(params: {
   raw: string;
   defaultProvider: string;
   defaultModel: string;
-  subagentModelHint?: string;
+  sessionKey?: string;
 }):
   | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
   | { ok: false; error: string } {
@@ -107,7 +99,8 @@ export function resolveSessionPatchModelSelection(params: {
     catalog: params.catalog,
     raw: modelWithoutProfile,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.subagentModelHint ?? params.defaultModel,
+    defaultModel: params.defaultModel,
+    sessionKey: params.sessionKey,
   });
   if ("error" in resolved) {
     return { ok: false, error: resolved.error };
@@ -225,10 +218,11 @@ function* projectSessionPatchSteps(
   const sessionAgentId = normalizeAgentId(
     params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
   );
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
-  const subagentModelHint = isSubagentSessionKey(storeKey)
-    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
-    : undefined;
+  const resolvedDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId: sessionAgentId,
+    sessionKey: storeKey,
+  });
   const resolveThinkingRuntime = (
     provider: string,
     model: string,
@@ -578,7 +572,7 @@ function* projectSessionPatchSteps(
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
-        subagentModelHint,
+        sessionKey: storeKey,
       });
       if (!resolved.ok) {
         return invalid(resolved.error);

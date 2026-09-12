@@ -142,9 +142,6 @@ const state = vi.hoisted(() => ({
   loadProviderScopedThinkingCatalogMock: vi.fn(
     async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
   ),
-  loadFullModelCatalogMock: vi.fn(async () => {
-    throw new Error("full model catalog should not materialize");
-  }),
   loadPreparedModelCatalogSnapshotMock: vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
     entries: [],
     routeVariants: [],
@@ -553,7 +550,12 @@ vi.mock("../sessions/level-overrides.js", () => ({
   applyVerboseOverride: vi.fn(),
 }));
 
-vi.mock("../sessions/model-overrides.js", () => ({
+vi.mock("../sessions/model-overrides.js", async () => ({
+  createConfiguredPrimarySessionEntry: (
+    await vi.importActual<typeof import("../sessions/model-overrides.js")>(
+      "../sessions/model-overrides.js",
+    )
+  ).createConfiguredPrimarySessionEntry,
   applyModelOverrideToSessionEntry: (params: unknown) =>
     state.applyModelOverrideToSessionEntryMock(params),
   isModelSelectionLocked: (entry: unknown) => state.isModelSelectionLockedMock(entry),
@@ -674,6 +676,9 @@ vi.mock("./model-catalog.runtime.js", () => ({
     }
     return (await state.loadPreparedModelCatalogSnapshotMock()).entries;
   },
+}));
+
+vi.mock("./prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
 }));
 
@@ -1044,7 +1049,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.resolvePluginMetadataSnapshotMock.mockReturnValue(manifestMetadataSnapshot);
     state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
-    state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
       entries: [],
       routeVariants: [],
@@ -1610,6 +1614,53 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(fallbackParams.fallbacksOverride).toEqual(fallbacks);
     expect(state.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "keeps a blocked pin while attempting only the primary (fails: %s)",
+    async (fails) => {
+      setupSingleAttemptFallback();
+      state.runtimeConfigMock = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude", fallbacks: ["openai/gpt-5.4"] },
+            models: { "openai/gpt-5.4": {} },
+            modelPolicy: { allow: ["openai/gpt-5.4"] },
+          },
+        },
+      };
+      state.sessionEntryMock = createCommandSessionEntry({
+        providerOverride: "fixture",
+        modelOverride: "blocked",
+        modelOverrideSource: "user",
+        skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      });
+      if (fails) {
+        state.runAgentAttemptMock.mockRejectedValue(new Error("primary unavailable"));
+        await expect(runBasicAgentCommand()).rejects.toThrow("configured default could not answer");
+      } else {
+        state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+        await runBasicAgentCommand();
+        expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
+          allowListPolicyFallback: {
+            pinnedModel: "fixture/blocked",
+            primaryModel: "anthropic/claude",
+          },
+          payloads: [expect.objectContaining({ text: "ok" })],
+        });
+      }
+      expectRecordFields(mockCallArg(state.runWithModelFallbackMock), {
+        provider: "anthropic",
+        model: "claude",
+        fallbacksOverride: [],
+      });
+      expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+      expect(state.sessionEntryMock).toMatchObject({
+        providerOverride: "fixture",
+        modelOverride: "blocked",
+        modelOverrideSource: "user",
+      });
+    },
+  );
 
   it("skips legacy override repair when continuing an ordinary locked harness session", async () => {
     setupSingleAttemptFallback();
@@ -2912,10 +2963,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         reasoning: true,
       },
     ]);
-    state.loadPreparedModelCatalogSnapshotMock.mockImplementation(async () => {
-      await state.loadFullModelCatalogMock();
-      return { entries: [], routeVariants: [] };
-    });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await runInitialFallbackAttempt(params);
       const result = await runSubsequentFallbackAttempt(
@@ -2955,8 +3002,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
-    expect(state.loadPreparedModelCatalogSnapshotMock).not.toHaveBeenCalled();
-    expect(state.loadFullModelCatalogMock).not.toHaveBeenCalled();
+    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledExactlyOnceWith({
+      config: state.runtimeConfigMock,
+      agentId: "default",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
   });
 
   it("keeps later provider capability metadata after hydrating a Codex primary", async () => {
@@ -2971,22 +3022,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
       },
     };
-    state.loadManifestModelCatalogMock.mockReturnValue([
-      {
-        provider: "openai",
-        id: "gpt-5.6-sol",
-        name: "GPT 5.6 Sol",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["max"] },
-      },
-      {
-        provider: "gmn",
-        id: "gpt-5.4",
-        name: "GPT 5.4 via GMN",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-      },
-    ]);
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      routeVariants: [],
+      entries: [
+        {
+          provider: "openai",
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["max"] },
+        },
+        {
+          provider: "gmn",
+          id: "gpt-5.4",
+          name: "GPT 5.4 via GMN",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+        },
+      ],
+    });
     state.loadProviderScopedThinkingCatalogMock.mockImplementation(async (params: unknown) => {
       const { provider } = params as { provider?: string };
       if (provider !== "openai") {
@@ -4228,12 +4282,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       thinking: "xhigh",
     });
 
-    if (allowlisted) {
-      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
-      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ metadataSnapshot: manifestMetadataSnapshot }),
-      );
-    }
+    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledExactlyOnceWith({
+      config: state.runtimeConfigMock,
+      agentId: "default",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",
@@ -4269,11 +4323,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           provider: "OLLAMA",
           id: "minimax-m3:cloud",
           name: "minimax-m3:cloud",
-          reasoning: true,
         },
       ],
       routeVariants: [],
     });
+    state.loadProviderScopedThinkingCatalogMock.mockResolvedValue([
+      {
+        provider: "OLLAMA",
+        id: "minimax-m3:cloud",
+        name: "minimax-m3:cloud",
+        reasoning: true,
+      },
+    ]);
     state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
       const { catalog, level } = args as {
         catalog?: Array<{ reasoning?: boolean }>;
@@ -4338,7 +4399,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       allowModelOverride: true,
     });
 
-    expect(state.loadPreparedModelCatalogSnapshotMock).not.toHaveBeenCalled();
+    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledExactlyOnceWith({
+      config: state.runtimeConfigMock,
+      agentId: "default",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
+    expect(state.loadProviderScopedThinkingCatalogMock).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
       modelOverride: "minimax-m3:cloud",
       resolvedThinkLevel: "off",

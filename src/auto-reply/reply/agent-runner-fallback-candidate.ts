@@ -93,10 +93,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
     const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
       provider,
-      entry: activeEntry,
+      entry: params.effectiveRun.blockedModelOverrideUsesPrimary ? undefined : activeEntry,
       cfg: params.runtimeConfig,
     });
-    const pinnedHarnessId = resolveSessionPinnedHarnessId(activeEntry);
+    const pinnedHarnessId = params.effectiveRun.blockedModelOverrideUsesPrimary
+      ? undefined
+      : resolveSessionPinnedHarnessId(activeEntry);
     const locksPersistedHarness =
       pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
     const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
@@ -138,6 +140,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
+        missingConfiguredPrimary: selection.missingConfiguredPrimary,
         userLockedAuthProfileId:
           turn.followupRun.run.authProfileIdSource === "user"
             ? turn.followupRun.run.authProfileId
@@ -160,7 +163,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
             provider,
-            entry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
+            entry: params.effectiveRun.blockedModelOverrideUsesPrimary
+              ? undefined
+              : (params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry()),
             cfg: params.runtimeConfig,
           }),
         resolveContextEngineHost: (provider, model) => {
@@ -211,6 +216,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
         params.state.maintenanceAuthProfile = undefined;
         params.state.compactionRequestBudget = undefined;
+        params.state.settledWriter = undefined;
         invalidateTurnCompactionContext(params.state.compaction);
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
@@ -310,6 +316,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           });
           params.state.bootstrapPromptWarningSignaturesSeen =
             candidate.bootstrapPromptWarningSignaturesSeen;
+          params.state.settledWriter = candidate.settledWriter;
           return candidate.result;
         }
         const candidate = await runEmbeddedFallbackCandidate({
@@ -332,6 +339,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
           messageToolDeliveryState,
           onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {
+            if (accounting?.kind === "durable") {
+              params.state.settledWriter = accounting.target;
+            }
             if (accounting) {
               recordTurnCompaction(params.state.compaction, accounting);
             }

@@ -157,6 +157,44 @@ describe("handleCompactCommand", () => {
     expect(params.command.ownerList).toEqual(ownerIds);
   });
 
+  it("compacts on the selected primary without the blocked pin's auth or fallbacks", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({ ok: true, compacted: false });
+    const params = buildCompactParams("/compact", {
+      agents: {
+        defaults: {
+          model: { primary: "openai/primary", fallbacks: ["anthropic/backup"] },
+          compaction: { model: "anthropic/summary" },
+        },
+      },
+    });
+    params.provider = "openai";
+    params.model = "primary";
+    params.blockedModelOverrideUsesPrimary = true;
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "blocked",
+      modelOverrideSource: "user",
+      authProfileOverride: "anthropic:pinned",
+      agentRuntimeOverride: "claude-cli",
+    };
+    const result = await handleCompactCommand(params, true);
+    expect(result?.reply?.text).toContain("Compaction skipped");
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      provider: "openai",
+      model: "primary",
+      useSelectedModel: true,
+      modelFallbacksOverride: [],
+      authProfileId: undefined,
+    });
+    expect(params.sessionEntry).toMatchObject({
+      modelOverride: "blocked",
+      authProfileOverride: "anthropic:pinned",
+      agentRuntimeOverride: "claude-cli",
+    });
+  });
+
   it("treats already-under-target manual compaction as skipped", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: false,

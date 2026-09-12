@@ -93,6 +93,43 @@ async function createFixture(selected = diagnostic) {
   };
 }
 
+it("keeps blocked-pin state while accounting for a reply on the configured primary", async () => {
+  const fixture = await createFixture();
+  const { context } = fixture;
+  const entry = context.activeSessionEntry!;
+  const pin = {
+    providerOverride: "pin-provider",
+    modelOverride: "blocked-model",
+    modelOverrideSource: "user" as const,
+    authProfileOverride: "pinned-account",
+    authProfileOverrideSource: "user" as const,
+    agentRuntimeOverride: "pinned-runtime",
+    modelPolicyNotice: { sessionId: entry.sessionId, pinnedModel: "pin-provider/blocked-model" },
+  };
+  Object.assign(entry, pin);
+  entry.modelProvider = "pin-provider";
+  entry.model = "blocked-model";
+  await fixture.replace(entry);
+  context.followupRun.run.blockedModelOverrideRef = "pin-provider/blocked-model";
+  context.followupRun.run.blockedModelOverrideUsesPrimary = true;
+  context.execution.result.meta.agentMeta = {
+    sessionId: entry.sessionId,
+    provider: diagnostic.provider,
+    model: diagnostic.model,
+    runtimeModelSelection: diagnostic,
+    usage: { input: 12, output: 3, total: 15 },
+  };
+
+  await accountAgentTurn(context);
+
+  expect(fixture.read()).toMatchObject({
+    ...pin,
+    modelProvider: "pin-provider",
+    model: "blocked-model",
+  });
+  expect(fixture.read()?.fallbackNotice).toBeUndefined();
+});
+
 it("does not persist or project a fallback for the selected model's wire identity", async () => {
   const fixture = await createFixture({ provider: "arcee", model: "trinity-large-preview" });
   const { context } = fixture;

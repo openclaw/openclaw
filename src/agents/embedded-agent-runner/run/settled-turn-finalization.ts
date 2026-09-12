@@ -287,7 +287,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       markReplyPayloadForSourceSuppressionDelivery(payload);
     }
     if (sessionWriterDeliveryAuthority) {
-      setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority });
+      setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority, hostFinalReply: true });
     }
   });
   // A failure-honest final answer cannot turn a settled cron denial into success.
@@ -452,6 +452,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
     assistantTexts: [text],
     assistantTranscriptOwned: result.assistantTranscriptOwned,
+    assistantTranscriptEntryId: result.assistantTranscriptEntryId,
     assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
     lastAssistantTextMessageIndex: result.assistantMessageIndex,
     lastAssistant: result.assistant,

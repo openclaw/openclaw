@@ -1,5 +1,8 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
@@ -143,6 +146,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
   embeddedSessionState: EmbeddedSessionState;
   suppressVisibleSessionEffects: boolean;
   preserveUserFacingSessionModelState: boolean;
+  allowListPolicyFallback?: { pinnedModel: string; primaryModel: string };
+  missingConfiguredPrimary?: string;
   currentRunDeliveryContext?: DeliveryContext;
   sessionOwnership: {
     runOwnedSessionId: string;
@@ -309,6 +314,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
           sessionEntry = transcriptResult.sessionEntry;
         }
         persistedCliTurnTranscript = transcriptResult.kind === "persisted";
+        if (
+          transcriptResult.kind === "persisted" &&
+          transcriptResult.assistantTranscript &&
+          finalVisiblePayload
+        ) {
+          setReplyPayloadMetadata(finalVisiblePayload, {
+            assistantTranscriptOwned: true,
+            assistantTranscriptEntryId: transcriptResult.assistantTranscript.messageId,
+          });
+        }
       } catch (error) {
         log.warn(
           `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -522,6 +537,31 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionEntry,
       result,
       payloads,
+      allowListPolicyFallback: params.allowListPolicyFallback,
+      modelNoticeTranscript:
+        params.attempt.modelNoticeTranscriptStart && sessionKey && sessionEntry
+          ? {
+              start: params.attempt.modelNoticeTranscriptStart,
+              scope: compactionFact?.target ?? {
+                agentId: sessionAgentId,
+                sessionId: sessionEntry.sessionId,
+                sessionKey,
+                storePath,
+              },
+              expectedSession: { ...sessionEntry, ...compactionFact?.target },
+              assertCurrent: () => {
+                params.opts.abortSignal?.throwIfAborted();
+                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+              },
+            }
+          : undefined,
+      missingPrimaryFallback: params.missingConfiguredPrimary
+        ? {
+            missingPrimary: params.missingConfiguredPrimary,
+            primaryModel: `${params.attempt.fallbackProvider ?? params.attempt.provider}/${params.attempt.fallbackModel ?? params.attempt.model}`,
+          }
+        : undefined,
+      storePath,
       assertDeliveryCurrent: () => {
         params.opts.abortSignal?.throwIfAborted();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);

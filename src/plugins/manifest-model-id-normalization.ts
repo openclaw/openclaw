@@ -4,7 +4,7 @@ import {
   type ManifestModelIdNormalizationProvider,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { ManifestModelIdNormalizationSource } from "./manifest-model-id-normalization.types.js";
 // Snapshot reads go through the registration-slot bridge so this module stays
 // off the control-plane/kysely graph; doctor closures cold-load it via
 // parseModelRef consumers.
@@ -12,13 +12,7 @@ import {
   getCurrentPluginMetadataSnapshotRuntime,
   resolvePluginMetadataSnapshotRuntime,
 } from "./plugin-metadata-snapshot.runtime.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
-
-/** Caller-owned declarations or facts from an already selected metadata snapshot. */
-export type ManifestModelIdNormalizationSource =
-  | readonly Pick<PluginManifestRecord, "modelIdNormalization">[]
-  | { owners: Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> };
 
 type ManifestModelIdNormalizationLookupParams = {
   config?: OpenClawConfig;

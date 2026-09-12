@@ -15,6 +15,7 @@ extension OpenClawChatViewModel {
                 return
             }
             self.modelChoices = catalog.choices
+            self.modelAllowList = catalog.allowList
             self.modelAvailabilityIsSessionScoped = catalog.availabilityIsSessionScoped
             self.modelCatalogMessage = catalog.message
             if target == self.currentModelPatchTarget(),
@@ -58,8 +59,8 @@ extension OpenClawChatViewModel {
 
     public var modelPickerSections: ChatModelPickerSections {
         let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
-            provider: self.sessionDefaults?.modelProvider,
-            model: self.sessionDefaults?.model)
+            provider: self.modelCatalogDefault.provider,
+            model: self.modelCatalogDefault.model)
         return ChatModelPickerStore.sections(
             choices: self.modelChoices,
             favorites: self.modelPickerFavorites,
@@ -78,6 +79,25 @@ extension OpenClawChatViewModel {
 
     public func isModelUnavailable(_ model: OpenClawChatModelChoice) -> Bool {
         self.modelAvailabilityIsSessionScoped && model.available == false
+    }
+
+    public var modelAllowListNotice: String? {
+        guard let allowList = self.modelAllowList else { return nil }
+        var lines: [String] = []
+        if allowList.hiddenCount > 0 {
+            lines.append(String(
+                format: String(localized: "Models hidden by your allow list: %lld"),
+                allowList.hiddenCount))
+        }
+        if self.modelChoices.isEmpty {
+            lines.append(String(localized: "No models match your allow list."))
+        }
+        if allowList.selectedModelBlocked == true {
+            lines.append(String(localized: "The pinned model is not in your allow list."))
+        }
+        guard !lines.isEmpty else { return nil }
+        lines.append(String(format: String(localized: "Review %@ in Settings."), allowList.settingsPath))
+        return lines.joined(separator: "\n")
     }
 
     public func canSelectModel(_ selectionID: String) -> Bool {
@@ -180,8 +200,19 @@ extension OpenClawChatViewModel {
     public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
         ChatModelPickerStore.isDefaultModel(
             model,
-            defaultProvider: self.sessionDefaults?.modelProvider,
-            defaultModel: self.sessionDefaults?.model)
+            defaultProvider: self.modelCatalogDefault.provider,
+            defaultModel: self.modelCatalogDefault.model)
+    }
+
+    var modelCatalogDefault: (provider: String?, model: String?) {
+        if let model = self.modelChoices.first(where: { $0.tags?.contains("default") == true }) {
+            return (model.provider, model.modelID)
+        }
+        // Row tags are optional on the wire; tagless catalogs retain legacy session defaults.
+        if self.modelChoices.contains(where: { $0.tags != nil }) {
+            return (nil, nil)
+        }
+        return (self.sessionDefaults?.modelProvider, self.sessionDefaults?.model)
     }
 
     public var isSelectedModelPinned: Bool {
@@ -241,6 +272,30 @@ extension OpenClawChatViewModel {
                 self.modelSelectionID
         }
         return label.split(separator: "/").last.map(String.init) ?? label
+    }
+
+    func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
+        guard let modelID else { return nil }
+        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let provider = Self.normalizedProvider(provider) {
+            let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
+            if let match = modelChoices.first(where: {
+                $0.selectionID == providerQualified ||
+                    ($0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider)
+            }) {
+                return match.selectionID
+            }
+            return providerQualified
+        }
+        if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
+            return trimmed
+        }
+        let matches = self.modelChoices.filter { $0.modelID == trimmed || $0.selectionID == trimmed }
+        if matches.count == 1 {
+            return matches[0].selectionID
+        }
+        return trimmed
     }
 
     public var canonicalModelSelectionID: String {

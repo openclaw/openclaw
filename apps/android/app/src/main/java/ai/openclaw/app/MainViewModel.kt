@@ -650,6 +650,7 @@ class MainViewModel private constructor(
     runtimeState(initial = defaultChatThinkingLevelSelection) { it.chatThinkingLevelSelection }
   val chatSelectedModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatSelectedModelRef }
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
+  val chatModelAllowList: StateFlow<GatewayModelAllowList?> = runtimeState(initial = null) { it.chatModelAllowList }
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chatPendingSessionSettingsKeys }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }

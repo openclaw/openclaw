@@ -18,6 +18,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { isSignalTimeoutReason, isTimeoutError } from "../failover-error.js";
+import { copyCliRunSettledWriter } from "./settled-writer.js";
 import type { RunCliAgentParams } from "./types.js";
 
 type ClaudeCliRunPhase = DiagnosticHarnessRunErrorEvent["phase"];
@@ -160,7 +161,10 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
         ? { errorMessage: resultErrorMessage }
         : undefined,
     );
-    return result.diagnosticTrace ? result : { ...result, diagnosticTrace: harnessTrace };
+    return copyCliRunSettledWriter(
+      result,
+      result.diagnosticTrace ? result : { ...result, diagnosticTrace: harnessTrace },
+    );
   } catch (error) {
     const errorMessage = diagnosticErrorMessage(error);
     const harnessOutcome = errorHarnessOutcome(error, params.abortSignal);

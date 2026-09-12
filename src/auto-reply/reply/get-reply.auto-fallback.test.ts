@@ -340,7 +340,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runParams?.resolvedReasoningLevel).toBe("off");
   });
 
-  it("uses the policy-selected model defaults when the primary probe is filtered out", async () => {
+  it("keeps the configured primary usable outside the session-switch allow list", async () => {
     const { sessionKey } = mockAutoFallbackSession();
     mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
     const cfg = makeReasoningModelConfig();
@@ -369,13 +369,13 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
     const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
     expect(runParams?.modelState).toMatchObject({
-      provider: "anthropic",
-      model: "claude-fallback",
+      provider: "openai",
+      model: "gpt-5.5",
     });
     expect(runParams).toMatchObject({
       provider: "openai",
       model: "gpt-5.5",
-      resolvedThinkLevel: "off",
+      resolvedThinkLevel: "high",
       resolvedReasoningLevel: "off",
     });
   });

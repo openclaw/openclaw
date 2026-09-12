@@ -82,6 +82,7 @@ describe("models.list provider catalog outcomes", () => {
           catalogProjector: projector,
         }),
       ).resolves.toEqual({
+        allowList: { hiddenCount: 0, settingsPath: "agents.defaults.modelPolicy.allow" },
         models: [expect.objectContaining({ provider: "ollama", id: "qwen3.5", available })],
       });
     },
@@ -213,6 +214,7 @@ describe("models.list provider catalog outcomes", () => {
         catalogProjector: projector,
       }),
     ).resolves.toEqual({
+      allowList: { hiddenCount: 0, settingsPath: "agents.defaults.modelPolicy.allow" },
       models: [
         expect.objectContaining({
           id: "gpt-5.6-sol",
@@ -351,12 +353,18 @@ describe("models.list provider catalog outcomes", () => {
       catalogProjector: projector,
     });
 
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
+    expect(prepared.read().models).toEqual([
+      { ...model, tags: ["default", "configured"], ...expected },
+    ]);
     const hostEvaluations = evaluateEntry.mock.calls.length;
     evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+    expect(prepared.read().models).toEqual([
+      { ...model, tags: ["default", "configured"], available: true },
+    ]);
     evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+    expect(prepared.read().models).toEqual([
+      { ...model, tags: ["default", "configured"], available: false },
+    ]);
     expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
   });
 });

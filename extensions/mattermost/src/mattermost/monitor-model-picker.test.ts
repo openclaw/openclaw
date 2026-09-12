@@ -18,7 +18,11 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
 vi.mock("./model-picker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./model-picker.js")>()),
   parseMattermostModelPickerContext: mocks.parseContext,
-  resolveMattermostModelPickerCurrentModel: () => "openai/gpt-5.4",
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  getSessionEntry: () => undefined,
 }));
 
 vi.mock("./monitor-auth.js", () => ({
@@ -98,13 +102,19 @@ describe("Mattermost model-picker interaction dispatch", () => {
     });
   });
 
-  it.each(
-    ["providers", "back", "list", "select"].flatMap((action) =>
-      ["ready", "failed", "empty"].map((catalogStatus) => ({ action, catalogStatus })),
+  it.each([
+    ...["providers", "back", "list", "select"].flatMap((action) =>
+      ["ready", "failed", "empty"].map((catalogStatus) => ({
+        action,
+        catalogStatus,
+        defaultState: "legacy",
+      })),
     ),
-  )(
-    "updates the $action picker once with $catalogStatus catalog text and choices",
-    async ({ action, catalogStatus }) => {
+    { action: "providers", catalogStatus: "ready", defaultState: "replacement" },
+    { action: "list", catalogStatus: "ready", defaultState: "missing" },
+  ])(
+    "registered interaction updates $action once with $catalogStatus catalog and $defaultState default",
+    async ({ action, catalogStatus, defaultState }) => {
       const order: string[] = [];
       const hasModels = catalogStatus !== "empty";
       const refreshWarning =
@@ -123,7 +133,16 @@ describe("Mattermost model-picker interaction dispatch", () => {
           byProvider: new Map(hasModels ? [["openai", new Set(["gpt-5.4"])]] : []),
           modelNames: new Map(),
           modelCatalog: [],
-          resolvedDefault: { provider: "openai", model: "gpt-5.4" },
+          resolvedDefault: {
+            provider: "openai",
+            model: defaultState === "legacy" ? "gpt-5.4" : "missing-primary",
+          },
+          ...(defaultState === "legacy"
+            ? {}
+            : {
+                effectiveDefault:
+                  defaultState === "replacement" ? { provider: "openai", model: "gpt-5.4" } : null,
+              }),
           refreshWarning,
         };
       });
@@ -192,6 +211,10 @@ describe("Mattermost model-picker interaction dispatch", () => {
           refreshWarning !== undefined,
         );
         if (hasModels) {
+          expect(sent?.message).toContain(
+            defaultState === "missing" ? "Current: not set" : "Current: openai/gpt-5.4",
+          );
+          expect(sent?.message).not.toContain("missing-primary");
           expect(JSON.stringify(sent?.buttons)).toContain(
             action === "list" ? '"model":"gpt-5.4"' : '"provider":"openai"',
           );

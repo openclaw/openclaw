@@ -1,6 +1,7 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import type { DeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
@@ -67,6 +68,7 @@ export type AgentFallbackCycleState = {
   /** Turn admission time; terminal backstops must not stamp failure time as the start. */
   turnStartedAtMs: number;
   compaction: AgentTurnCompaction;
+  settledWriter?: CompactionAccountingTarget;
   /** Failure attribution only; model start does not prove current token freshness. */
   postCompactionModelAttempted: boolean;
   attemptedRuntimeProvider: string;

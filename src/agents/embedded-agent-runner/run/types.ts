@@ -265,6 +265,8 @@ export type EmbeddedRunAttemptResult = {
   terminal: AgentRunAttemptTerminal;
   /** True when the runtime made the authoritative final-assistant transcript decision. */
   assistantTranscriptOwned?: boolean;
+  /** Physical assistant row emitted by the runtime after its persistence decision. */
+  assistantTranscriptEntryId?: string;
   /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
   /** Host-private terminal identity used to close the accepted transcript turn. */

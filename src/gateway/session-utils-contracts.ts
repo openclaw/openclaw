@@ -27,7 +27,7 @@ export type GatewaySessionModelSource = {
 
 export type SessionListRowContext = {
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
-  selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
+  selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef> | null>;
   thinkingMetadataByModelRef: Map<string, GatewayModelThinkingProfile>;
   findModelCatalogEntry: typeof findModelCatalogEntry;
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;

@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveConfiguredModelEntries } from "./configured-model-entries.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
@@ -21,7 +22,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         { provider: "fixture", id: "mixedcase", name: "Small", contextWindow: 16_000 },
         { provider: "fixture", id: "fixture/MixedCase", name: "Namespaced", contextWindow: 32_000 },
       ];
-      const result = await resolveLogicalVisibleModelCatalog({
+      const { entries: result } = await resolveLogicalVisibleModelCatalog({
         cfg: { agents: { defaults: { modelPolicy: { allow: ["fixture/*"] } } } },
         catalog,
         defaultProvider: "fixture",
@@ -44,7 +45,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       { provider: "fixture", id: "reader", name: "Base" },
       { provider: "fixture", id: "reader@variant", name: "Literal variant" },
     ];
-    const result = await resolveLogicalVisibleModelCatalog({
+    const { entries: result } = await resolveLogicalVisibleModelCatalog({
       cfg: {},
       catalog,
       defaultProvider: "fixture",
@@ -94,6 +95,69 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       routePolicy: openAIModelCatalogRoutePolicy,
     });
 
+  it.each([
+    [["openai/*"], ["openai/atlas", "openai/beta", "other/primary"], 1, true],
+    [["openai/atlas"], ["openai/atlas", "other/primary"], 2, true],
+    [["openai/missing"], ["other/primary"], 3, true],
+    [["openai/missing"], [], 4, false],
+    [["openai/atlas"], ["openai/atlas", "other/fallback"], 2, true, "agent:main:subagent:worker"],
+    [["openai/atlas"], ["openai/atlas", "other/primary"], 2, true, "agent:main:main"],
+    [
+      ["openai/*", "other/fallback"],
+      ["openai/atlas", "openai/beta", "other/fallback", "other/primary"],
+      0,
+      true,
+    ],
+  ] as const)(
+    "publishes listed models and the configured primary for %j",
+    async (allow, expected, hiddenCount, configuredPrimary, sessionKey?: string) => {
+      const catalog: ModelCatalogEntry[] = [
+        { provider: "openai", id: "atlas", name: "Atlas" },
+        { provider: "openai", id: "beta", name: "Beta" },
+        { provider: "other", id: "primary", name: "Primary" },
+        { provider: "other", id: "fallback", name: "Fallback" },
+      ];
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            subagents: { model: "other/fallback" },
+            model: {
+              ...(configuredPrimary ? { primary: "other/primary" } : {}),
+              fallbacks: ["other/fallback"],
+            },
+            modelPolicy: { allow: [...allow] },
+          },
+        },
+      };
+      const { entries: result, allowList } = await resolveLogicalVisibleModelCatalog({
+        cfg,
+        catalog,
+        defaultProvider: "other",
+        defaultModel: "primary",
+        agentId: "main",
+        sessionKey,
+        selectedModel: { provider: "other", model: "fallback" },
+        view: "configured",
+        routePolicy: openAIModelCatalogRoutePolicy,
+        evaluateEntry: evaluateAvailableEntry,
+      });
+      expect(result.map((entry) => `${entry.provider}/${entry.id}`)).toEqual(expected);
+      expect(allowList).toMatchObject({
+        hiddenCount,
+        settingsPath: "agents.defaults.modelPolicy.allow",
+      });
+      if (sessionKey) {
+        const subagent = sessionKey === "agent:main:subagent:worker";
+        expect(allowList?.selectedModelBlocked).toBe(!subagent);
+        expect(
+          resolveConfiguredModelEntries({ cfg, agentId: "main", sessionKey })
+            .byKey.get("other/fallback")
+            ?.tags.has("default"),
+        ).toBe(subagent);
+      }
+    },
+  );
+
   it.each(["default", "configured"] as const)(
     "hides deprecated and disabled rows from the %s picker view",
     async (view) => {
@@ -103,7 +167,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         { provider: "demo", id: "off", name: "Off", status: "disabled" },
       ];
 
-      const result = await resolveLogicalVisibleModelCatalog({
+      const { entries: result } = await resolveLogicalVisibleModelCatalog({
         cfg: {} as OpenClawConfig,
         catalog,
         defaultProvider: "demo",
@@ -122,7 +186,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       { provider: "demo", id: "off", name: "Off", status: "disabled" },
     ];
 
-    const result = await resolveLogicalVisibleModelCatalog({
+    const { entries: result } = await resolveLogicalVisibleModelCatalog({
       cfg: {} as OpenClawConfig,
       catalog,
       defaultProvider: "demo",
@@ -142,7 +206,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       { provider: "openai", id: "gpt-5.6-terra", name: "GPT-5.6 Terra", providerOrder: 1 },
     ];
 
-    const result = await resolveLogicalVisibleModelCatalog({
+    const { entries: result } = await resolveLogicalVisibleModelCatalog({
       cfg: {} as OpenClawConfig,
       catalog,
       defaultProvider: "openai",
@@ -177,6 +241,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       agents: {
         defaults: {
           model: { primary: "demo/primary" },
+          modelPolicy: { allow: ["demo/*"] },
           models: { "demo/alias-key": { alias: "legacy" } },
         },
       },
@@ -192,7 +257,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       allowPluginNormalization: false,
     });
 
-    const result = await resolveLogicalVisibleModelCatalog({
+    const { entries: result } = await resolveLogicalVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "demo",
@@ -213,7 +278,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         { ...platform, alias: "platform" },
         { ...chatGPT, alias: "selected" },
       ];
-      const result = await resolveLogicalVisibleModelCatalog({
+      const { entries: result } = await resolveLogicalVisibleModelCatalog({
         cfg: {} as OpenClawConfig,
         catalog,
         defaultProvider: "openai",
@@ -253,7 +318,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     const platformAvailable = { ...platform, status: "available" as const };
     const chatGPTSelected = { ...chatGPT, status };
     const catalog = [platformAvailable, chatGPTSelected];
-    const result = await resolveLogicalVisibleModelCatalog({
+    const { entries: result } = await resolveLogicalVisibleModelCatalog({
       cfg: {} as OpenClawConfig,
       catalog,
       routeVariants: catalog,
@@ -274,7 +339,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
   });
 
   it("omits physical capabilities while managed route selection is unresolved", async () => {
-    const result = await resolveLogicalVisibleModelCatalog({
+    const { entries: result } = await resolveLogicalVisibleModelCatalog({
       cfg: {} as OpenClawConfig,
       catalog: [platform],
       defaultProvider: "openai",
@@ -319,7 +384,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
           }),
       );
 
-      const result = await resolveLogicalVisibleModelCatalog({
+      const { entries: result } = await resolveLogicalVisibleModelCatalog({
         cfg: {} as OpenClawConfig,
         catalog: [platformNano],
         routeVariants,

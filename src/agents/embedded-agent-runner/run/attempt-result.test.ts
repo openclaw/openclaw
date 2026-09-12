@@ -85,6 +85,7 @@ function createResultFixture(params?: {
     getHeartbeatToolResponse: () => params?.heartbeatToolResponse,
     getItemLifecycle: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
+    getAssistantTranscriptEntryId: () => undefined,
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,

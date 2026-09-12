@@ -157,6 +157,10 @@ extension OpenClawChatComposer {
     private func cleanInlineModelPicker(compact: Bool) -> some View {
         let sections = self.viewModel.modelPickerSections
         return Menu {
+            if let notice = self.viewModel.modelAllowListNotice {
+                Text(notice)
+                    .font(OpenClawChatTypography.caption)
+            }
             if let target = self.viewModel.modelSelectionTargetDescription {
                 Text(target)
                     .font(OpenClawChatTypography.caption)
@@ -165,7 +169,7 @@ extension OpenClawChatComposer {
             }
             Group {
                 self.modelMenuOption(
-                    self.viewModel.defaultModelLabel,
+                    String(localized: "Reset session model"),
                     selectionID: OpenClawChatViewModel.defaultModelSelectionID)
                 if !sections.pinned.isEmpty {
                     Section("Pinned") {
@@ -264,8 +268,9 @@ extension OpenClawChatComposer {
     private func cleanInlineModelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
         ForEach(models) { model in
             let unavailable = self.viewModel.modelUnavailableDescription(model)
+            let defaultLabel = self.viewModel.isDefaultModel(model) ? String(localized: "Default") : nil
             self.modelMenuOption(
-                [model.displayLabel, model.capabilityDescription, unavailable].compactMap(\.self)
+                [model.displayLabel, defaultLabel, model.capabilityDescription, unavailable].compactMap(\.self)
                     .filter { !$0.isEmpty }.joined(separator: " — "),
                 selectionID: model.selectionID)
                 .disabled(unavailable != nil)

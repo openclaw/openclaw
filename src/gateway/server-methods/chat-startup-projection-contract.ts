@@ -1,4 +1,5 @@
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ManifestModelIdNormalizationSource } from "../../plugins/manifest-model-id-normalization.types.js";
 import type { ChatMetadataResult, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 
 export type ChatStartupProjectionReadParams = {
@@ -14,4 +15,6 @@ export type ChatStartupProjectionResult = {
   metadata?: ChatMetadataResult;
   sessionModelCatalog: ModelCatalogEntry[];
   defaultModelCatalog: ModelCatalogEntry[];
+  modelCatalogSnapshot?: ModelCatalogSnapshot;
+  manifestPlugins?: ManifestModelIdNormalizationSource;
 };

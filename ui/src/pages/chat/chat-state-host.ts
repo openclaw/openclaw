@@ -4,6 +4,7 @@ import type {
   AgentsListResult,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -76,6 +77,7 @@ export type ChatPageHost = ChatHost &
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
+    chatModelAllowList?: ModelCatalogResult["allowList"];
     chatModelCatalogError: string | null;
     chatModelCatalogRefreshFailed?: boolean;
     chatModelCatalogPendingProviders?: readonly string[];

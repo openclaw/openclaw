@@ -126,6 +126,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
+  assistantTranscriptEntryId?: string;
   assistantTranscriptIdempotencyKey?: string;
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -450,6 +451,9 @@ export function buildEmbeddedRunPayloads(params: {
             : {}),
           ...(item.media?.length ? { assistantTranscriptMediaUrls: [...item.media] } : {}),
           ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
+          ...(params.assistantTranscriptEntryId
+            ? { assistantTranscriptEntryId: params.assistantTranscriptEntryId }
+            : {}),
           ...(params.assistantTranscriptIdempotencyKey
             ? {
                 assistantTranscriptIdempotencyKey: params.assistantTranscriptIdempotencyKey,

@@ -4,10 +4,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
@@ -92,6 +93,8 @@ export function buildGatewaySessionRow(params: {
   key: string;
   entry?: InternalSessionEntry;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
+  modelCatalogSnapshot?: ModelCatalogSnapshot;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
@@ -150,6 +153,11 @@ export function buildGatewaySessionRow(params: {
   const sessionAgentId = params.agentId;
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const rowContext = params.rowContext;
+  // Keep selection and capabilities on the same captured agent catalog.
+  const preparedCatalog =
+    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
+  const rowModelCatalog =
+    params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
   const {
     subagentRun,
     subagentOwner,
@@ -162,6 +170,8 @@ export function buildGatewaySessionRow(params: {
     agentId: sessionAgentId,
     rowContext,
     allowPluginNormalization: !lightweight,
+    modelCatalogSnapshot: preparedCatalog ? preparedCatalog.snapshot : params.modelCatalogSnapshot,
+    manifestPlugins: preparedCatalog ? preparedCatalog.manifestPlugins : params.manifestPlugins,
   });
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const transcriptUsage = !skipTranscriptUsage
@@ -219,24 +229,32 @@ export function buildGatewaySessionRow(params: {
     rowContext: params.rowContext,
   });
   // Display aliases do not change the selected route's catalog or runtime policy.
-  const completedModel = readSessionFallbackModel({
-    selectedProvider: rowModelProvider,
-    selectedModel: rowModel,
-    sessionEntry: entry,
-    config: cfg,
-    sessionScope: { agentId: sessionAgentId, sessionKey: key, storePath },
-  });
-  const runtimeModels = resolveSelectedAndActiveModel({
-    selectedProvider: rowModelProvider,
-    selectedModel: rowModel,
-    sessionEntry: completedModel ?? entry,
-  });
-  const activeFallback = resolveActiveFallbackState({
-    selectedModelRef: runtimeModels.selected.label,
-    activeModelRef: runtimeModels.active.label,
-    config: cfg,
-    state: entry,
-  });
+  const completedModel =
+    rowModelProvider && rowModel
+      ? readSessionFallbackModel({
+          selectedProvider: rowModelProvider,
+          selectedModel: rowModel,
+          sessionEntry: entry,
+          config: cfg,
+          sessionScope: { agentId: sessionAgentId, sessionKey: key, storePath },
+        })
+      : undefined;
+  const runtimeModels =
+    rowModelProvider && rowModel
+      ? resolveSelectedAndActiveModel({
+          selectedProvider: rowModelProvider,
+          selectedModel: rowModel,
+          sessionEntry: completedModel ?? entry,
+        })
+      : undefined;
+  const activeFallback = runtimeModels
+    ? resolveActiveFallbackState({
+        selectedModelRef: runtimeModels.selected.label,
+        activeModelRef: runtimeModels.active.label,
+        config: cfg,
+        state: entry,
+      })
+    : undefined;
   const acpSessionKey = resolveStoredSessionKeyForAgentStore({
     cfg,
     agentId: sessionAgentId,
@@ -269,31 +287,26 @@ export function buildGatewaySessionRow(params: {
     }
   }
 
-  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
-  const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  // Entries and provider policy must stay bound to the same prepared agent owner;
-  // the Gateway startup registry can contain a different set of plugins.
-  const preparedCatalog =
-    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
-  const rowModelCatalog =
-    params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
   const thinkingModelCatalog = rowModelCatalog ?? (lightweight ? [] : undefined);
-  const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
-    cfg,
-    agentId: sessionAgentId,
-    provider: thinkingProvider,
-    model: thinkingModel,
-    sessionKey: acpSessionKey,
-    entry,
-    modelCatalog: thinkingModelCatalog,
-    rowContext,
-    providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
-  });
-  const catalogEntry =
-    rowModelCatalog && rowModelProvider && rowModel ? thinkingProjection.catalogEntry : undefined;
+  const thinkingProjection =
+    rowModelProvider && rowModel
+      ? resolveGatewaySessionThinkingProjectionInternal({
+          cfg,
+          agentId: sessionAgentId,
+          provider: rowModelProvider,
+          model: rowModel,
+          sessionKey: acpSessionKey,
+          entry,
+          modelCatalog: thinkingModelCatalog,
+          rowContext,
+          providerPolicySource:
+            preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
+        })
+      : undefined;
+  const catalogEntry = rowModelCatalog ? thinkingProjection?.catalogEntry : undefined;
   const contextWindowProfile = resolveModelContextWindowProfile({
     catalogEntry,
     selected: entry?.contextWindow,
@@ -325,22 +338,25 @@ export function buildGatewaySessionRow(params: {
     entry,
     provider: rowModelProvider,
     model: rowModel,
-    agentHarnessId: thinkingProjection.agentRuntime.id,
+    agentHarnessId: thinkingProjection?.agentRuntime.id,
     resolvedContextTokens: resolvedCurrentContextTokens,
     authoredContextTokens,
   });
-  const fastModeState = resolveFastModeState({
-    cfg,
-    provider: rowModelProvider,
-    model: rowModel,
-    agentId: sessionAgentId,
-    sessionEntry:
-      entry?.fastMode !== undefined
-        ? {
-            fastMode: entry.fastMode,
-          }
-        : undefined,
-  });
+  const fastModeState =
+    rowModelProvider && rowModel
+      ? resolveFastModeState({
+          cfg,
+          provider: rowModelProvider,
+          model: rowModel,
+          agentId: sessionAgentId,
+          sessionEntry:
+            entry?.fastMode !== undefined
+              ? {
+                  fastMode: entry.fastMode,
+                }
+              : undefined,
+        })
+      : undefined;
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
   const repositoryWorkspace = entry?.repositoryWorkspaceId
@@ -454,18 +470,18 @@ export function buildGatewaySessionRow(params: {
       ?.tombstone
       ? "tombstoned"
       : undefined,
-    thinkingLevel: thinkingProjection.thinkingLevel,
+    thinkingLevel: thinkingProjection?.thinkingLevel,
     contextWindow: contextWindowProfile.contextWindow,
     contextWindows: contextWindowProfile.contextWindows,
     contextWindowDefault: contextWindowProfile.contextWindowDefault,
-    thinkingLevels: thinkingProjection.thinkingLevels,
-    thinkingOptions: thinkingProjection.thinkingOptions,
-    thinkingDefault: thinkingProjection.thinkingDefault,
+    thinkingLevels: thinkingProjection?.thinkingLevels,
+    thinkingOptions: thinkingProjection?.thinkingOptions,
+    thinkingDefault: thinkingProjection?.thinkingDefault,
     fastMode: entry?.fastMode,
     toolOverrides: entry?.toolOverrides,
-    effectiveFastMode: fastModeState.mode,
-    effectiveFastModeSource: fastModeState.source,
-    fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+    effectiveFastMode: fastModeState?.mode,
+    effectiveFastModeSource: fastModeState?.source,
+    fastAutoOnSeconds: fastModeState?.fastAutoOnSeconds,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
@@ -498,14 +514,16 @@ export function buildGatewaySessionRow(params: {
     }).mode,
     modelProvider: rowModelIdentity.provider,
     model: rowModelIdentity.model,
-    activeModelProvider: activeFallback.active ? runtimeModels.active.provider : undefined,
-    activeModel: activeFallback.active ? runtimeModels.active.model : undefined,
+    activeModelProvider: activeFallback?.active ? runtimeModels?.active.provider : undefined,
+    activeModel: activeFallback?.active ? runtimeModels?.active.model : undefined,
     modelOverrideSource:
       selectedModel.storedOverrideSource === "parent"
         ? "inherited"
         : resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
-    agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+    agentRuntime: thinkingProjection
+      ? projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime)
+      : undefined,
     contextTokens,
     contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
       entry,

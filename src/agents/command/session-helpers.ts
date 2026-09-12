@@ -10,6 +10,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -18,7 +19,13 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
+import {
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
+  type AutoFallbackPrimaryProbe,
+} from "../agent-scope.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {
@@ -132,4 +139,41 @@ export function resolveInternalSessionEffectsSource(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   };
+}
+
+/** Clears a recovered fallback only while the persisted session still owns that probe. */
+export function settleAgentPrimaryProbe(params: {
+  probe?: AutoFallbackPrimaryProbe;
+  winner: { provider: string; model: string };
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath: string;
+  preserveSelection: boolean;
+}): Promise<SessionEntry | undefined> | undefined {
+  const { probe, sessionEntry, sessionStore, sessionKey } = params;
+  if (
+    !probe ||
+    params.preserveSelection ||
+    !sessionEntry ||
+    !sessionStore ||
+    !sessionKey ||
+    isModelSelectionLocked(sessionEntry) ||
+    !entryMatchesAutoFallbackPrimaryProbe(sessionEntry, probe) ||
+    params.winner.provider !== probe.provider ||
+    params.winner.model !== probe.model
+  ) {
+    return undefined;
+  }
+  const nextSessionEntry = { ...sessionEntry };
+  clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
+  return persistAgentSession({
+    sessionStore,
+    sessionKey,
+    storePath: params.storePath,
+    initialEntry: sessionEntry,
+    entry: nextSessionEntry,
+    shouldPersist: (current) =>
+      Boolean(current && entryMatchesAutoFallbackPrimaryProbe(current, probe)),
+  });
 }

@@ -47,6 +47,7 @@ export function resolveAllowedModelRefCore(
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
+    sessionKey?: string;
   } & ModelManifestNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
@@ -74,6 +75,7 @@ export function resolveAllowedModelRefCore(
         defaultProvider: params.defaultProvider,
         defaultModel: params.defaultModel,
         agentId: params.agentId,
+        sessionKey: params.sessionKey,
         manifestPlugins: params.manifestPlugins,
       }),
   });

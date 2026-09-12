@@ -2,6 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
+import { copyCliRunSettledWriter } from "../../agents/cli-runner/settled-writer.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
@@ -653,7 +654,7 @@ async function runCliAgentWithLifecycleInternal(
       });
       lifecycleTerminalEmitted = true;
     }
-    return resultWithReasoning;
+    return copyCliRunSettledWriter(rawResult, resultWithReasoning);
   } catch (err) {
     await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);

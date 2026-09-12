@@ -185,6 +185,7 @@ export function renderChatPaneComposerControls(params: {
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
+          modelAllowList: state.chatModelAllowList,
           modelCatalogState,
           modelOverrides: state.sessions.state.modelOverrides,
           thinkingSession,

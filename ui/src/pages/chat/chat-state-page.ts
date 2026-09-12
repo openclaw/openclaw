@@ -214,6 +214,7 @@ export function createPageState(
     chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
     chatModelCatalog: [],
+    chatModelAllowList: undefined,
     chatModelCatalogError: null,
     chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,

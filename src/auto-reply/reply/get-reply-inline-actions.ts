@@ -45,6 +45,7 @@ import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { attachModelPolicyCommandNotice } from "./model-policy-notice.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { getStandaloneSlashCommandName } from "./reply-inline.js";
 import type { ReplyModelLevelResolver } from "./reply-model-levels.js";
@@ -191,6 +192,9 @@ export async function handleInlineActions(params: {
   >["resolveDefaultThinkingLevel"];
   provider: string;
   model: string;
+  blockedModelOverrideRef?: string;
+  blockedModelOverrideUsesPrimary?: boolean;
+  missingConfiguredPrimary?: string;
   contextTokens: number;
   directiveAck?: ReplyPayload;
   abortedLastRun: boolean;
@@ -552,6 +556,19 @@ export async function handleInlineActions(params: {
     directives = { ...directives, hasStatusDirective: false };
   }
 
+  const finalizeCommandReply = (result: Awaited<ReturnType<typeof handleCommands>>) =>
+    attachModelPolicyCommandNotice({
+      reply: result.reply,
+      pinnedModel: params.blockedModelOverrideRef,
+      usesPrimary:
+        params.blockedModelOverrideUsesPrimary && result.sessionCompaction?.compacted === true,
+      provider,
+      model,
+      sessionEntry: sessionStore?.[sessionKey] ?? targetSessionEntry,
+      sessionKey,
+      storePath,
+    });
+
   const runCommands = async (commandInput: typeof command) => {
     const { handleCommands } = await commandsRuntimeLoader.load();
     return handleCommands({
@@ -593,6 +610,8 @@ export async function handleInlineActions(params: {
       model,
       contextTokens,
       isGroup,
+      blockedModelOverrideUsesPrimary: params.blockedModelOverrideUsesPrimary,
+      missingConfiguredPrimary: params.missingConfiguredPrimary,
       skillCommands,
       ...createSkillCommandLoaders(skillCommandsRuntimeLoader.load, {
         ...skillCommandContext,
@@ -615,7 +634,7 @@ export async function handleInlineActions(params: {
     if (inlineResult.reply) {
       if (!cleanedBody) {
         typing.cleanup();
-        return { kind: "reply", reply: markCommandReplyForDelivery(inlineResult.reply) };
+        return { kind: "reply", reply: finalizeCommandReply(inlineResult) };
       }
       await sendInlineReply(inlineResult.reply);
     }
@@ -669,7 +688,7 @@ export async function handleInlineActions(params: {
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
     typing.cleanup();
-    return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };
+    return { kind: "reply", reply: finalizeCommandReply(commandResult) };
   }
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;

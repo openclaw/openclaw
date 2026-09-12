@@ -26,6 +26,7 @@ const MODEL_OVERRIDE_RUNTIME_FIELDS = [
   "modelProvider",
   "model",
   "fallbackNotice",
+  "modelPolicyNotice",
   "contextTokens",
   "contextTokensSource",
   "contextBudgetStatus",

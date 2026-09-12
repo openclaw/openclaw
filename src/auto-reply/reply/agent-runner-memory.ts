@@ -244,7 +244,7 @@ type FollowupRuntimeParams = {
 
 function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string): boolean {
   const provider = params.followupRun.run.provider;
-  if (params.agentHarnessId) {
+  if (params.agentHarnessId && !params.followupRun.run.blockedModelOverrideUsesPrimary) {
     return isCliRuntimeAliasForProvider({
       provider,
       runtime: params.agentHarnessId,
@@ -254,16 +254,20 @@ function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string
   if (isCliProvider(provider, params.cfg)) {
     return true;
   }
-  return [resolvePersistedSessionRuntimeId(params.sessionEntry), runtimeId].some((runtime) =>
+  const sessionRuntime = params.followupRun.run.blockedModelOverrideUsesPrimary
+    ? undefined
+    : resolvePersistedSessionRuntimeId(params.sessionEntry);
+  return [sessionRuntime, runtimeId].some((runtime) =>
     isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }),
   );
 }
 
 function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
-  if (params.agentHarnessId) {
+  if (params.agentHarnessId && !params.followupRun.run.blockedModelOverrideUsesPrimary) {
     return params.agentHarnessId;
   }
   const matchingSessionEntry =
+    !params.followupRun.run.blockedModelOverrideUsesPrimary &&
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
       : undefined;
@@ -1660,6 +1664,7 @@ export async function runMemoryFlushIfNeeded(params: {
         requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
+        missingConfiguredPrimary: selection.missingConfiguredPrimary,
         userLockedAuthProfileId:
           params.followupRun.run.authProfileIdSource === "user"
             ? params.followupRun.run.authProfileId
@@ -1682,7 +1687,9 @@ export async function runMemoryFlushIfNeeded(params: {
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
             provider,
-            entry: activeSessionEntry,
+            entry: params.followupRun.run.blockedModelOverrideUsesPrimary
+              ? undefined
+              : activeSessionEntry,
             cfg: params.cfg,
           }),
       },
@@ -1692,7 +1699,9 @@ export async function runMemoryFlushIfNeeded(params: {
       runCandidate: async (provider, model, runOptions) => {
         const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
           provider,
-          entry: activeSessionEntry,
+          entry: params.followupRun.run.blockedModelOverrideUsesPrimary
+            ? undefined
+            : activeSessionEntry,
           cfg: params.cfg,
         });
         const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
@@ -1729,7 +1738,9 @@ export async function runMemoryFlushIfNeeded(params: {
           ...senderContext,
           ...runBaseParams,
           ...memorySession,
-          agentHarnessId: resolveSessionPinnedHarnessId(activeSessionEntry),
+          agentHarnessId: params.followupRun.run.blockedModelOverrideUsesPrimary
+            ? undefined
+            : resolveSessionPinnedHarnessId(activeSessionEntry),
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: sourcePolicySessionKey,
           allowGatewaySubagentBinding: true,

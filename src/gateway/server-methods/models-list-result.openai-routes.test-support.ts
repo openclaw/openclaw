@@ -5,6 +5,7 @@ import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
@@ -130,13 +131,11 @@ export async function listModels(params: ListModelsParams) {
             cfg: config,
             agentId,
             snapshot: { entries: params.catalog, routeVariants: params.catalog },
-            metadataSnapshot: {
-              index: { plugins: [] },
-              manifestRegistry: { plugins: [] },
+            metadataSnapshot: createPluginMetadataSnapshotFixture({
               plugins: [
                 { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
               ],
-            } as never,
+            }),
             preparedAuthStore: { version: 1, profiles: {} },
           }),
         }

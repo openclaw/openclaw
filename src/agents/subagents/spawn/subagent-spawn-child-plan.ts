@@ -54,6 +54,7 @@ function buildResolvedSubagentModelMetadata(resolvedModel?: string): {
 
 async function resolveSpawnModelError(params: {
   cfg: OpenClawConfig;
+  childSessionKey: string;
   targetAgentId: string;
   targetAgentDir: string;
   workspaceDir?: string;
@@ -65,7 +66,11 @@ async function resolveSpawnModelError(params: {
   if (!requestedModel && !params.request.outputSchema) {
     return undefined;
   }
-  const defaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
+  const defaults = resolveDefaultModelForAgent({
+    cfg,
+    agentId: targetAgentId,
+    sessionKey: params.childSessionKey,
+  });
   const selected = splitModelRef(params.resolvedModel);
   const provider = selected.provider ?? defaults.provider;
   let catalog: ModelCatalogEntry[];
@@ -89,6 +94,7 @@ async function resolveSpawnModelError(params: {
   }
   const selection = {
     cfg,
+    sessionKey: params.childSessionKey,
     catalog,
     defaultProvider: defaults.provider,
     defaultModel: defaults.model,
@@ -284,6 +290,7 @@ export async function resolveSubagentChildPlan(params: {
   const { resolvedModel } = modelPlan;
   const modelError = await resolveSpawnModelError({
     cfg: params.cfg,
+    childSessionKey,
     targetAgentId: params.targetAgentId,
     targetAgentDir,
     workspaceDir: spawnedWorkspaceDir,

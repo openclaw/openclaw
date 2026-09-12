@@ -38,11 +38,9 @@ import { resolveConfiguredModelHarnessRuntime } from "./harness-runtimes.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
-import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "./model-selection-config.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
+import { resolveSubagentConfiguredModelSelection } from "./model-selection-shared.js";
 import type {
   PreparedConfiguredRuntimeModel,
   PreparedRuntimeCapabilityModel,

@@ -83,8 +83,12 @@ extension OpenClawChatComposer {
         // Sections come from an O(n) recompute over the catalog; bind once per body eval.
         let sections = self.viewModel.modelPickerSections
         return Menu {
+            if let notice = self.viewModel.modelAllowListNotice {
+                Text(notice)
+                    .font(OpenClawChatTypography.caption)
+            }
             self.modelMenuOption(
-                self.viewModel.defaultModelLabel,
+                String(localized: "Reset session model"),
                 selectionID: OpenClawChatViewModel.defaultModelSelectionID)
             if !sections.pinned.isEmpty {
                 Section {

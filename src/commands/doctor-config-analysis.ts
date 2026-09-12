@@ -9,6 +9,7 @@ import { INCLUDE_KEY } from "../config/includes.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { isRecord } from "../utils.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {
@@ -286,5 +287,46 @@ export function noteMcpOriginWarning(cfg: OpenClawConfig): void {
       "  Set gateway.publicOrigin to the externally reachable Gateway origin so senders can complete MCP sign-in.",
     ].join("\n"),
     "Doctor warnings",
+  );
+}
+export function collectInvalidHookTransformsDirWarnings(
+  cfg: OpenClawConfig,
+  configPath: string,
+): string[] {
+  const transformsDir = cfg.hooks?.transformsDir?.trim();
+  if (!transformsDir) {
+    return [];
+  }
+  const configDir = path.dirname(configPath);
+  const transformsRoot = path.join(configDir, "hooks", "transforms");
+  const resolved = path.isAbsolute(transformsDir)
+    ? path.resolve(transformsDir)
+    : path.resolve(transformsRoot, transformsDir);
+  if (isPathInside(transformsRoot, resolved)) {
+    return [];
+  }
+  return [
+    `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
+  ];
+}
+
+export function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
+  const unsupportedKeysByEntry = Object.entries(cfg.hooks?.internal?.entries ?? {})
+    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map(([hookKey, entry]) => {
+      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+        Object.hasOwn(entry, key),
+      );
+      return { hookKey, unsupportedKeys };
+    })
+    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
+
+  if (unsupportedKeysByEntry.length === 0) {
+    return [];
+  }
+
+  return unsupportedKeysByEntry.map(
+    ({ hookKey, unsupportedKeys }) =>
+      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
   );
 }

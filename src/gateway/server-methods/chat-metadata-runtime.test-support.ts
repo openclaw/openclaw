@@ -62,6 +62,45 @@ export async function createPersonalChatMetadataFixture() {
   };
 }
 
+export function createSubagentChatMetadataHarness() {
+  const config: OpenClawConfig = {
+    agents: {
+      entries: { main: {} },
+      defaults: {
+        model: "fixture/primary",
+        subagents: { model: "fixture/worker" },
+        modelPolicy: { allow: ["fixture/listed"] },
+      },
+    },
+    models: {
+      providers: {
+        fixture: {
+          baseUrl: "https://example.invalid/v1",
+          api: "openai-completions",
+          apiKey: "test-fixture-key",
+          models: [],
+        },
+      },
+    },
+  };
+  const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
+  const owner = createChatMetadataOwner(config, "primary", {}, "fixture");
+  const entries = ["primary", "worker", "listed"].map((id) => ({
+    id,
+    name: id,
+    provider: "fixture",
+  }));
+  harness.setOwner({
+    ...owner,
+    modelCatalog: {
+      entries: entries.filter((entry) => entry.id !== "worker"),
+      staticEntries: entries.filter((entry) => entry.id === "worker"),
+      routeVariants: entries,
+    },
+  });
+  return harness;
+}
+
 export function createDraftChatMetadataScope(
   owner: string = randomUUID(),
   authProfileId = `personal:${owner}:${randomUUID()}`,

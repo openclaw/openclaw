@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AssistantTranscriptRewriteStart } from "../../config/sessions/transcript-assistant-rewrite.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
@@ -47,5 +48,6 @@ export type FinalizeReplyAgentRunInput = Pick<
   execution: SettledAgentTurn;
   runId: string;
   runStartedAt: number;
+  modelNoticeTranscriptStart?: AssistantTranscriptRewriteStart;
   typingSignals: TypingSignaler;
 };

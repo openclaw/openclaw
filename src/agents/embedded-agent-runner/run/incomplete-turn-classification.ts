@@ -107,6 +107,7 @@ export function countSettledTurnDeliveryPayloads(params: {
         (key) =>
           key !== "assistantMessageIndex" &&
           key !== "assistantTranscriptOwned" &&
+          key !== "assistantTranscriptEntryId" &&
           key !== "assistantTranscriptIdempotencyKey",
       );
     if (hasComposedVisibleAnswer || hasDeliveryMetadata) {

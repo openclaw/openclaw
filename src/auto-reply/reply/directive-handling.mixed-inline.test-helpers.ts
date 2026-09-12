@@ -23,6 +23,7 @@ export async function applyMixedDirectives(params: {
   channel?: string;
   provider?: string;
   model?: string;
+  blockedModelOverrideRef?: string;
   defaultProvider?: string;
   defaultModel?: string;
   allowedModels?: ModelCatalogEntry[];
@@ -65,10 +66,10 @@ export async function applyMixedDirectives(params: {
     allowedModelCatalog: allowedModels,
     policyAliasIndex: aliasIndex,
     resetModelOverride: false,
+    blockedModelOverrideRef: params.blockedModelOverrideRef,
     resolveThinkingCatalog: async () => allowedModels,
     resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel ?? (async () => "off"),
     resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
   };
   const typing = {
     onReplyStart: async () => {},

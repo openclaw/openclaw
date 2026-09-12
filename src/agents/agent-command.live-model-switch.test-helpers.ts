@@ -191,6 +191,7 @@ export function createTestModelVisibilityPolicy(params: ModelSelectionParams) {
     allowed.allowAny || isTestModelKeyAllowed(allowed.allowedKeys, key);
   return {
     ...allowed,
+    effectiveDefault: { ref: resolveTestDefaultModelForAgent({ cfg: params.cfg }) },
     exactModelRefs: [],
     providerWildcards: new Set<string>(),
     hasConfiguredEntries: !allowed.allowAny,

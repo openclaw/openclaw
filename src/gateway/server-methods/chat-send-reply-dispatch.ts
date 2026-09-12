@@ -3,16 +3,28 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   stripReplyMediaFailureFallback,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import {
+  deferModelPolicyNoticeAcknowledgment,
+  persistModelNoticeTranscript,
+  settleModelPolicyNoticePublication,
+  waitForModelPolicyNoticePublication,
+  type ModelNoticeTranscript,
+} from "../../auto-reply/reply/model-notice-publication.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
 import {
   recordAssistantManagedMediaUrls,
   type PrepareAssistantTranscriptMessage,
 } from "../../config/sessions/transcript-assistant-delivery.js";
+import {
+  publishAssistantTranscriptRewrite,
+  rewriteAssistantTranscriptMessageByTurnIdentity,
+} from "../../config/sessions/transcript-assistant-rewrite.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
@@ -44,9 +56,8 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
   appendAssistantTranscriptMessage,
   assistantTranscriptScope,
-  publishAssistantTranscriptRewrite,
+  buildAssistantDisplayRewrite,
   rewriteAssistantTranscriptMessageByIdempotencyKey,
-  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
 } from "./chat-transcript-persistence.js";
 import {
   buildTtsSupplementTranscriptMarker,
@@ -123,10 +134,16 @@ export function createChatSendReplyDispatch(params: {
   const { backingSessionId, cfg, clientRunId } = session;
   // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
   const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
-  let assistantTranscriptRewriteState = {
-    sessionId: undefined as string | undefined,
-    generation: null as string | null,
+  let assistantTranscriptRewriteState: {
+    sessionId: string | undefined;
+    generation: string | null;
+    afterSeq: number;
+    noticeTranscript: ModelNoticeTranscript | undefined;
+  } = {
+    sessionId: undefined,
+    generation: null,
     afterSeq: 0,
+    noticeTranscript: undefined,
   };
   const captureAgentTranscriptStart = () => {
     const current = loadSessionEntry(session.sessionKey, sessionLoadOptions);
@@ -143,6 +160,29 @@ export function createChatSendReplyDispatch(params: {
       sessionId,
       generation: watermark.generation,
       afterSeq: watermark.maxSeq ?? 0,
+      noticeTranscript:
+        current.entry && sessionId
+          ? {
+              scope: {
+                agentId: session.agentId,
+                sessionId,
+                sessionKey: session.sessionKey,
+                storePath: current.storePath,
+              },
+              start: {
+                sessionId,
+                generation: watermark.generation,
+                afterSeq: watermark.maxSeq ?? 0,
+              },
+              expectedSession: {
+                sessionId: current.entry.sessionId,
+                lifecycleRevision: current.entry.lifecycleRevision,
+                activeWriterRunId: current.entry.activeWriterRunId,
+                providerOverride: current.entry.providerOverride,
+                modelOverride: current.entry.modelOverride,
+              },
+            }
+          : undefined,
     };
     return true;
   };
@@ -170,11 +210,30 @@ export function createChatSendReplyDispatch(params: {
     );
     return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
   };
-  const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
-    isMediaBearingPayload(payload) ||
-    Boolean(getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length);
+  const ownsDispatchedRuntimeText = (payload: ReplyPayload): boolean => {
+    const run = params.getReplyDispatchRun?.();
+    return Boolean(
+      run &&
+      waitForModelPolicyNoticePublication(payload) !== undefined &&
+      !payload.isError &&
+      !payload.isReasoning &&
+      !isReplyPayloadStatusNotice(payload) &&
+      payload.text?.trim(),
+    );
+  };
+  const needsAgentTranscriptFinalization = (payload: ReplyPayload): boolean => {
+    const metadata = getReplyPayloadMetadata(payload);
+    return (
+      isMediaBearingPayload(payload) ||
+      Boolean(metadata?.assistantMediaFailures?.length) ||
+      ownsDispatchedRuntimeText(payload)
+    );
+  };
   const agentMediaTranscriptKey = (payload: ReplyPayload): string => {
     const metadata = getReplyPayloadMetadata(payload);
+    if (metadata?.assistantTranscriptEntryId) {
+      return `entry:${metadata.assistantTranscriptEntryId}`;
+    }
     const ownedIdempotencyKey =
       metadata?.assistantTranscriptOwned === true
         ? metadata.assistantTranscriptIdempotencyKey?.trim()
@@ -187,8 +246,8 @@ export function createChatSendReplyDispatch(params: {
     }
     return "unkeyed";
   };
-  const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-    if (!isAgentRunStarted() || !needsAgentMediaTranscriptFinalization(payload)) {
+  const finalizeWebchatAgentTranscriptIfNeeded = async (payload: ReplyPayload) => {
+    if (!isAgentRunStarted() || !needsAgentTranscriptFinalization(payload)) {
       return;
     }
     const finalizationKey = agentMediaTranscriptKey(payload);
@@ -200,7 +259,18 @@ export function createChatSendReplyDispatch(params: {
     }
     const replyDispatchRun = params.getReplyDispatchRun?.();
     const transcript = replyDispatchRun?.getResult().assistantTranscript;
-    if (replyDispatchRun && !transcript) {
+    const dispatchOwnsRuntimeText = ownsDispatchedRuntimeText(payload);
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    const payloadHasTranscriptIdentity =
+      payloadMetadata?.assistantTranscriptEntryId ||
+      (payloadMetadata?.assistantTranscriptOwned &&
+        payloadMetadata.assistantTranscriptIdempotencyKey);
+    if (
+      replyDispatchRun &&
+      !transcript &&
+      !payloadHasTranscriptIdentity &&
+      !dispatchOwnsRuntimeText
+    ) {
       logGateway.warn(
         "webchat runtime-owned media skipped: assistant transcript was not persisted",
       );
@@ -249,7 +319,9 @@ export function createChatSendReplyDispatch(params: {
     const mediaFailures = transcriptPayloadMetadata?.assistantMediaFailures ?? [];
     const mediaNormalizationFailed = mediaFailures.length > 0;
     const persistedContentForAppend =
-      hasAssistantDisplayMediaContent(persistedAssistantContent) || mediaNormalizationFailed
+      dispatchOwnsRuntimeText ||
+      hasAssistantDisplayMediaContent(persistedAssistantContent) ||
+      mediaNormalizationFailed
         ? persistedAssistantContent
         : undefined;
     if (!persistedContentForAppend?.length) {
@@ -259,7 +331,6 @@ export function createChatSendReplyDispatch(params: {
       mediaMessage?.transcriptText ??
       extractAssistantDisplayText(assistantContent) ??
       buildTranscriptReplyText([transcriptPayload]);
-    const payloadMetadata = getReplyPayloadMetadata(payload);
     const sourceMediaUrls = Array.from(
       new Set(
         payloadMetadata?.assistantTranscriptMediaUrls?.length
@@ -281,6 +352,55 @@ export function createChatSendReplyDispatch(params: {
       storePath: latestStorePath,
       agentId,
     });
+    if (
+      (dispatchOwnsRuntimeText || payloadHasTranscriptIdentity) &&
+      (assistantTranscriptRewriteState.sessionId !== sessionId ||
+        loadSessionEntry(sessionKey, { ...sessionLoadOptions, agentId }).entry?.sessionId !==
+          sessionId)
+    ) {
+      if (!dispatchOwnsRuntimeText) {
+        logGateway.warn("webchat runtime-owned media skipped: transcript session changed");
+        return;
+      }
+      throw new Error(
+        "Reply could not be published: its session transcript changed. Please send your message again.",
+      );
+    }
+    if (dispatchOwnsRuntimeText) {
+      if (!transcriptScope || !latestEntry) {
+        throw new Error(
+          "Reply could not be published: its recovery notice has no current session. Please send your message again.",
+        );
+      }
+      if (transcript?.messageId && !payloadMetadata?.assistantTranscriptEntryId) {
+        setReplyPayloadMetadata(payload, { assistantTranscriptEntryId: transcript.messageId });
+      }
+      const rewritten = await persistModelNoticeTranscript(payload, {
+        transcript: assistantTranscriptRewriteState.noticeTranscript,
+        rewriteMessage: (message) =>
+          buildAssistantDisplayRewrite({
+            message,
+            displayContent: persistedContentForAppend,
+            managedMediaUrls: sourceMediaUrls,
+          }),
+      });
+      if (!rewritten) {
+        throw new Error(
+          "Reply could not be published: its recovery notice has no current assistant transcript row. Please send your message again.",
+        );
+      }
+      assistantTranscriptRewriteState.generation = rewritten.generation;
+      appendedWebchatAgentMedia = true;
+      setReplyPayloadMetadata(payload, { assistantTranscriptOwned: true });
+      finalizedAgentMediaTranscriptKeys.add(finalizationKey);
+      if (assistantContent?.length) {
+        attachManagedOutgoingMediaToMessage({
+          messageId: rewritten.messageId,
+          blocks: assistantContent,
+        });
+      }
+      return;
+    }
     if (ownedTranscriptIdempotencyKey && transcriptScope) {
       // Receipt identity is not authority after asynchronous media preparation.
       if (
@@ -320,22 +440,33 @@ export function createChatSendReplyDispatch(params: {
       return;
     }
     const assistantMessageIndex = payloadMetadata?.assistantMessageIndex;
-    if (assistantMessageIndex !== undefined && transcriptScope) {
-      // Embedded runtimes identify their owned turn by message index, not a persisted key.
-      // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
+    const assistantEntryId = payloadMetadata?.assistantTranscriptEntryId;
+    const transcriptIdentity = assistantEntryId
+      ? { kind: "entry" as const, id: assistantEntryId }
+      : assistantMessageIndex !== undefined
+        ? { kind: "stream" as const, index: assistantMessageIndex }
+        : undefined;
+    if (transcriptScope && transcriptIdentity) {
       if (assistantTranscriptRewriteState.sessionId !== sessionId) {
         assistantTranscriptRewriteState = {
           sessionId,
           generation: null,
           afterSeq: 0,
+          noticeTranscript: undefined,
         };
       }
-      const rewritten = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+      const rewritten = await rewriteAssistantTranscriptMessageByTurnIdentity({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
-        assistantMessageIndex,
-        content: persistedContentForAppend,
+        identity: transcriptIdentity,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
+        rewriteMessage: (message) =>
+          buildAssistantDisplayRewrite({
+            message,
+            displayContent: persistedContentForAppend,
+            managedMediaUrls: sourceMediaUrls,
+            ...(sourceMediaUrls.length > 0 ? { retainOriginalText: true as const } : {}),
+          }),
         scope: transcriptScope,
       });
       if (rewritten) {
@@ -354,6 +485,10 @@ export function createChatSendReplyDispatch(params: {
         }
         return;
       }
+    }
+    if (assistantEntryId) {
+      logGateway.warn("webchat runtime-owned media skipped: transcript identity not found");
+      return;
     }
     const hasOnlyFailureDisplay =
       persistedContentForAppend.some((block) => block.type === "attachment_error") &&
@@ -429,6 +564,21 @@ export function createChatSendReplyDispatch(params: {
     deliver: async (payload, info) => {
       const payloadMetadata = getReplyPayloadMetadata(payload);
       if (
+        (payloadMetadata?.assistantTranscriptEntryId ||
+          (payloadMetadata?.assistantTranscriptOwned &&
+            payloadMetadata.assistantTranscriptIdempotencyKey)) &&
+        !payloadMetadata.sessionWriterDeliveryAuthority &&
+        assistantTranscriptRewriteState.sessionId
+      ) {
+        setReplyPayloadMetadata(payload, {
+          sessionWriterDeliveryAuthority: {
+            agentId: session.agentId,
+            sessionKey: session.sessionKey,
+            expectedSessionId: assistantTranscriptRewriteState.sessionId,
+          },
+        });
+      }
+      if (
         payloadMetadata?.beforeAgentRunBlocked === true ||
         payloadMetadata?.sourceReplyTranscriptMirror?.transcriptWriteBlocked === true
       ) {
@@ -437,6 +587,7 @@ export function createChatSendReplyDispatch(params: {
       switch (info.kind) {
         case "block":
         case "final":
+          deferModelPolicyNoticeAcknowledgment(payload);
           deliveredReplies.push({ payload, kind: info.kind });
           if (
             info.kind === "block" &&
@@ -468,23 +619,26 @@ export function createChatSendReplyDispatch(params: {
       }
     },
   };
-  const finalizeAgentMediaTranscript = async () => {
+  const finalizeAgentTranscript = async () => {
     const latestPayloadByKey = new Map<string, ReplyPayload>();
     for (const { payload } of deliveredReplies) {
-      if (!needsAgentMediaTranscriptFinalization(payload)) {
+      if (!needsAgentTranscriptFinalization(payload)) {
         continue;
       }
       latestPayloadByKey.set(agentMediaTranscriptKey(payload), payload);
     }
     for (const payload of latestPayloadByKey.values()) {
       try {
-        await appendWebchatAgentMediaTranscriptIfNeeded(payload);
+        await finalizeWebchatAgentTranscriptIfNeeded(payload);
       } catch (error) {
+        if (ownsDispatchedRuntimeText(payload)) {
+          throw error;
+        }
         logGateway.warn(`webchat media finalization failed: ${formatForLog(error)}`);
       }
     }
   };
-  const runAgentMediaTranscript = async <T>(
+  const runAgentTranscript = async <T>(
     admission: { run: (operation: () => Promise<T>) => Promise<T> },
     operation: () => Promise<T>,
   ): Promise<T> => {
@@ -496,7 +650,7 @@ export function createChatSendReplyDispatch(params: {
         preparingTranscript = false;
         // Stay inside the session admission after the runtime owner unwinds; callers chain
         // post-dispatch persistence from this Promise, and finalizer errors stay best-effort.
-        await finalizeAgentMediaTranscript();
+        await finalizeAgentTranscript();
       }
     });
   };
@@ -507,6 +661,11 @@ export function createChatSendReplyDispatch(params: {
     hasAppendedWebchatAgentMedia: () => appendedWebchatAgentMedia,
     onModelSelected,
     prepareAssistantTranscriptMessage,
-    runAgentMediaTranscript,
+    runAgentTranscript,
+    releasePendingPolicyNoticePublications: async () => {
+      for (const { payload } of deliveredReplies) {
+        await settleModelPolicyNoticePublication(payload, false);
+      }
+    },
   };
 }

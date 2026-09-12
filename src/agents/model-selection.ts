@@ -22,10 +22,7 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "./model-ref-shared.js";
-import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "./model-selection-config.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
 import {
@@ -38,6 +35,7 @@ import {
   resolveHooksGmailModel,
   resolveModelAliasFromPair,
   resolveModelRefFromString,
+  resolveSubagentConfiguredModelSelection,
   type ModelAliasIndex,
 } from "./model-selection-shared.js";
 export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-selection-resolve.js";

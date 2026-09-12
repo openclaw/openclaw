@@ -1,6 +1,7 @@
 /** Exercises text directive policy and prompt handling through the complete reply pipeline. */
 import { afterEach, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { buildMockOpenAiResponsesProvider } from "../../gateway/test-openai-responses-model.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -38,6 +39,14 @@ it.each([" ", "\n"])("runs a task after text exec policy separated by %j", async
       },
     },
     plugins: { enabled: false },
+    models: {
+      providers: {
+        "mock-openai": buildMockOpenAiResponsesProvider(
+          "https://example.invalid/v1",
+          "gpt-5.6-luna",
+        ).config,
+      },
+    },
     commands: { text: true },
   });
   await state.writeConfig(cfg);

@@ -10,8 +10,12 @@ import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runti
 import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
 import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import type { AgentHarnessV2 } from "../agents/harness/types.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  getPreparedModelRuntimeAuthMaterializations,
+} from "../agents/prepared-model-runtime-auth.js";
 import {
   advancePreparedModelRuntimeConfig,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -91,6 +95,10 @@ beforeEach(async () => {
     entries: [model],
     routeVariants: [model],
   });
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
+    entries: [model],
+    routeVariants: [model],
+  }));
   sidecars = [];
 });
 
@@ -102,7 +110,7 @@ function configureAuthFixture(
     return;
   }
   const apiKeyModel = { ...model, api: "openai-responses" as const };
-  mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+  const catalog: ModelCatalogSnapshot = {
     entries: [apiKeyModel],
     routeVariants: [apiKeyModel],
     ...(catalogAuthRejected
@@ -117,7 +125,9 @@ function configureAuthFixture(
           ],
         }
       : {}),
-  });
+  };
+  mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue(catalog);
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({ ...catalog }));
   mocks.authStorage.getAll.mockReturnValue({
     openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
   });
@@ -189,14 +199,21 @@ async function expectAvailable(
   if (!owner) {
     throw new Error("expected prepared model owner");
   }
+  const fullCatalog = owner.readFullModelCatalog?.();
+  const fullAuth = fullCatalog ? getPreparedModelFullCatalogAuth(fullCatalog) : undefined;
+  const snapshot = fullCatalog ?? owner.modelCatalog;
   const projector = createGatewayAgentModelCatalogProjector({
-    cfg: activeConfig,
+    cfg: owner.config,
     agentId: "main",
-    snapshot: owner.modelCatalog,
+    snapshot,
     metadataSnapshot: owner.metadataSnapshot,
-    preparedAuthStore: mocks.preparedAuthStore ?? { version: 1, profiles: {} },
-    preparedRuntimeAuthModes: owner.authModes,
+    preparedAuthStore: fullAuth?.authStore ??
+      mocks.preparedAuthStore ?? { version: 1, profiles: {} },
+    preparedRuntimeAuthModes: fullAuth?.authModes ?? owner.authModes,
     preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
+    pluginRegistry: owner.pluginRegistry,
+    isCurrent: owner.isCurrent,
+    observationConfig: owner.observationConfig,
   });
   const [metadata, modelsList] = await Promise.all([
     lifecycle.read({ agentId: "main" }),
@@ -206,8 +223,8 @@ async function expectAvailable(
       params: { view: "configured" },
       preloadedCatalog: {
         agentId: "main",
-        config: activeConfig,
-        snapshot: owner.modelCatalog,
+        config: owner.config,
+        snapshot,
       },
       preloadedOnly: true,
       catalogProjector: projector,
@@ -272,6 +289,10 @@ describe("gateway chat metadata lifecycle composition", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.preparedAuthStore = { version: 1, profiles: {} };
+      mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
+        entries: [],
+        routeVariants: [],
+      }));
       mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
         entries: rows,
         routeVariants: rows,
@@ -428,6 +449,10 @@ describe("gateway chat metadata lifecycle composition", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.preparedAuthStore = { version: 1, profiles: {} };
+      mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
+        entries: [],
+        routeVariants: [],
+      }));
       mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
         entries: [nativeModel],
         routeVariants: [nativeModel],
@@ -534,18 +559,17 @@ describe("gateway chat metadata lifecycle composition", () => {
             preparedModelCatalog: await loader({ agentId: "main", readOnly: true }),
           });
           expect(selection).toMatchObject({
+            provider: "openai",
             model: "codex-latest",
-            resetModelOverride: authoritative !== false,
-            resetModelOverrideRef: "openai/account-model-unavailable",
-            resetModelOverrideReason:
-              authoritative === false ? "temporarily-unavailable" : "disallowed",
+            resetModelOverride: false,
+            resetModelOverrideRef: undefined,
+            resetModelOverrideReason: undefined,
+            blockedModelOverrideRef: "openai/account-model-unavailable",
+            blockedModelOverrideUsesPrimary: true,
           });
-          expect(sessionEntry.modelOverride).toBe(
-            authoritative === false ? "account-model-unavailable" : undefined,
-          );
-          expect(sessionEntry.modelOverrideSource).toBe(
-            authoritative === false ? "user" : undefined,
-          );
+          expect(sessionEntry.providerOverride).toBe("openai");
+          expect(sessionEntry.modelOverride).toBe("account-model-unavailable");
+          expect(sessionEntry.modelOverrideSource).toBe("user");
         }
         expect(loadModelCatalog).not.toHaveBeenCalled();
         const builds = mocks.buildPreparedModelCatalogSnapshot.mock.calls.length;
@@ -587,6 +611,8 @@ describe("gateway chat metadata lifecycle composition", () => {
         ).resolves.toEqual({
           sessionModelCatalog: lockedStartup?.sessionModelCatalog,
           defaultModelCatalog: lockedStartup?.defaultModelCatalog,
+          modelCatalogSnapshot: lockedStartup?.modelCatalogSnapshot,
+          manifestPlugins: lockedStartup?.manifestPlugins,
         });
 
         if (invalidate === "generation") {

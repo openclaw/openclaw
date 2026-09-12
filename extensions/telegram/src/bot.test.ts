@@ -2685,6 +2685,17 @@ describe("createTelegramBot", () => {
   describe("model picker auth profile compatibility", () => {
     it.each([
       {
+        name: "registered Telegram callback resets to the captured effective default after an authored typo",
+        caseId: "effective-default",
+        defaultProvider: "openai",
+        defaultModel: "missing-primary",
+        effectiveDefault: { provider: "openai", model: "gpt-5" },
+        callbackData: "mdl_sel_openai/gpt-5",
+        outcomeText: "Compatible auth profile retained.",
+        expectedRuntime: "codex",
+        expectedProfile: "team:prod",
+      },
+      {
         name: "preserves a compatible auth profile on a same-provider picker switch",
         caseId: "same-switch",
         defaultProvider: "openai",
@@ -2726,6 +2737,7 @@ describe("createTelegramBot", () => {
         caseId,
         defaultProvider,
         defaultModel,
+        effectiveDefault,
         callbackData,
         expectedProfile,
         expectedRuntime,
@@ -2782,6 +2794,7 @@ describe("createTelegramBot", () => {
           ]),
           providers: ["anthropic", "openai"],
           resolvedDefault: { provider: defaultProvider, model: defaultModel },
+          ...(effectiveDefault ? { effectiveDefault } : {}),
           modelNames: new Map(),
           modelCatalog: [
             { provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false },

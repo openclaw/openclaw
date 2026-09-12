@@ -107,6 +107,10 @@ export async function prepareFullCatalogFacts(
   const providerOutcomes = catalogSource.providerOutcomes ?? [];
   const completeModelCatalog = {
     ...modelCatalog,
+    resolvedConfiguredModelRefs: configuredRuntimeModels.map(({ provider, modelId }) => ({
+      provider,
+      model: modelId,
+    })),
     staticEntries:
       input.config.models?.mode === "replace"
         ? []

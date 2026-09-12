@@ -11,7 +11,7 @@ import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import type { SessionsListResult } from "./session-utils.types.js";
-import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
@@ -31,6 +31,10 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     agentsConfig: testState.agentsConfig,
     sessionConfig: testState.sessionConfig,
     sessionStorePath: testState.sessionStorePath,
+  };
+  const previousDiscovery = {
+    enabled: agentDiscoveryMock.enabled,
+    models: agentDiscoveryMock.models,
   };
   const configPaths = new Set([config.CONFIG_PATH]);
   if (process.env.OPENCLAW_CONFIG_PATH) {
@@ -52,6 +56,7 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   }
   onTestFinished(async () => {
     Object.assign(testState, previous);
+    Object.assign(agentDiscoveryMock, previousDiscovery);
     // The connected fixture publishes both config paths as well as its runtime snapshot.
     for (const [configPath, contents] of files) {
       if (contents === undefined) {
@@ -86,6 +91,11 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     storePath: workStorePath,
     messages: [{ role: "user", content: "Work global conversation" }],
   });
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { provider: "openai", id: "gpt-5.4", name: "Main model" },
+    { provider: "openai", id: "gpt-5.5", name: "Work model" },
+  ];
   const { ws } = await openClient();
   try {
     for (const search of [undefined, "gpt-5.5"]) {

@@ -3,12 +3,11 @@
  * combines explicit policy, configured models, defaults, and runtime
  * auth-backed availability.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelAllowList } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import type {
-  ModelAuthAvailabilityEvaluation,
-  ModelAuthAvailabilityRef,
-} from "./model-auth-availability.js";
+import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import {
   type ModelCatalogRoutePolicy,
@@ -17,7 +16,6 @@ import {
   createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
-import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
 import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
@@ -26,21 +24,47 @@ import {
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
-export type ModelCatalogAuthChecker = (
-  provider: string,
-  ref?: ModelAuthAvailabilityRef,
-) => boolean | Promise<boolean>;
+export type VisibleModelCatalog = { entries: ModelCatalogEntry[]; allowList?: ModelAllowList };
+
+/** Apply selection policy after provider eligibility and route projection, never before counting. */
+function applyModelCatalogAllowList(params: {
+  policy: ModelVisibilityPolicy;
+  catalog: ModelCatalogEntry[];
+  agentId?: string;
+  selectedModel?: { provider: string; model: string };
+}): VisibleModelCatalog {
+  if (params.policy.allowAny) {
+    return { entries: params.catalog };
+  }
+  const entries = params.catalog.filter((entry) =>
+    params.policy.allows({ provider: entry.provider, model: entry.id }),
+  );
+  return {
+    entries,
+    allowList: {
+      hiddenCount: params.catalog.length - entries.length,
+      settingsPath: params.policy.allowRepairConfigPath.replace(
+        "entries.*",
+        `entries.${params.agentId}`,
+      ),
+      ...(params.selectedModel
+        ? { selectedModelBlocked: !params.policy.allows(params.selectedModel) }
+        : {}),
+    },
+  };
+}
 
 type LogicalModelCatalogEntryState = {
   authBacked: boolean;
+  authAuthoritative: boolean;
   compatible: boolean;
-  routeManaged: boolean;
   routeProjection: ModelCatalogRouteProjection;
 };
 
 /** Maps one shared auth evaluation into logical catalog selection state. */
 export function resolveLogicalModelCatalogEntryState(params: {
   evaluation: ModelAuthAvailabilityEvaluation;
+  provider?: string;
   authBacked?: boolean;
   routePolicy: ModelCatalogRoutePolicy;
 }): LogicalModelCatalogEntryState {
@@ -52,9 +76,17 @@ export function resolveLogicalModelCatalogEntryState(params: {
       ? { kind: "selected", route: selectedRoute, policy: params.routePolicy }
       : { kind: "unresolved", policy: params.routePolicy };
   return {
-    authBacked: params.authBacked ?? params.evaluation.availability === true,
+    authAuthoritative: params.evaluation.availabilityAuthoritative === true,
+    authBacked:
+      params.authBacked ??
+      (params.evaluation.availability === true ||
+        (!routeManaged &&
+          params.evaluation.availabilityAuthoritative !== true &&
+          params.provider !== undefined &&
+          normalizeProviderId(params.provider) !== "openai" &&
+          params.evaluation.availability === undefined &&
+          params.evaluation.evidence === "synthetic")),
     compatible: params.evaluation.routeResolution?.kind !== "incompatible",
-    routeManaged,
     routeProjection,
   };
 }
@@ -82,10 +114,13 @@ type LogicalModelCatalogParams = {
   defaultModel?: string;
   agentId?: string;
   workspaceDir?: string;
+  sessionKey?: string;
   view?: ModelCatalogVisibilityView;
+  includeProvider?: (provider: string) => boolean;
   policy?: ModelVisibilityPolicy;
   routePolicy: ModelCatalogRoutePolicy;
   routeVariants?: readonly ModelCatalogEntry[];
+  selectedModel?: { provider: string; model: string };
 };
 
 /** Resolves logical rows while keeping provider-owned physical route precedence. */
@@ -96,7 +131,7 @@ export async function resolveLogicalVisibleModelCatalog(
       routeVariants: readonly ModelCatalogEntry[],
     ): Promise<LogicalModelCatalogEntryState>;
   },
-): Promise<ModelCatalogEntry[]> {
+): Promise<VisibleModelCatalog> {
   const read = await prepareLogicalVisibleModelCatalog({
     ...params,
     prepareEntry: async (entry, variants) => {
@@ -115,7 +150,7 @@ export async function prepareLogicalVisibleModelCatalog(
       routeVariants: readonly ModelCatalogEntry[],
     ): Promise<() => LogicalModelCatalogEntryState>;
   },
-): Promise<() => ModelCatalogEntry[]> {
+): Promise<() => VisibleModelCatalog> {
   const policy =
     params.policy ??
     createModelVisibilityPolicy({
@@ -124,9 +159,11 @@ export async function prepareLogicalVisibleModelCatalog(
       defaultProvider: params.defaultProvider,
       defaultModel: params.defaultModel,
       agentId: params.agentId,
+      sessionKey: params.sessionKey,
       ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     });
   const keyOf = resolveModelCatalogIdentityKey;
+  const catalog = [...params.catalog, ...policy.configuredCatalog];
   const projectionCatalog = params.routeVariants?.length ? params.routeVariants : params.catalog;
   const routeVariantsByKey = new Map<string, ModelCatalogEntry[]>();
   for (const entry of projectionCatalog) {
@@ -137,27 +174,14 @@ export async function prepareLogicalVisibleModelCatalog(
   }
   const variantsOf = (entry: ModelCatalogEntry) => routeVariantsByKey.get(keyOf(entry)) ?? [entry];
   const { configuredKeys, retainedKeys } = policy;
-  const retained = params.catalog.filter((entry) => retainedKeys.has(keyOf(entry)));
-  const wildcard = policy.allowAny || policy.hasProviderWildcards;
-  const configuredCatalog = wildcard ? sortModelCatalogEntries([...policy.configuredCatalog]) : [];
-  const candidates =
-    params.view === "all"
-      ? params.catalog
-      : [
-          ...(wildcard ? params.catalog : []),
-          ...configuredCatalog,
-          ...policy.allowedCatalog,
-          ...retained,
-        ];
   const readers = new Map<string, () => LogicalModelCatalogEntryState>();
-  for (const entry of candidates) {
+  for (const entry of catalog) {
     const key = keyOf(entry);
     if (!readers.has(key)) {
       const variants = variantsOf(entry);
       readers.set(key, await params.prepareEntry(variants[0] ?? entry, variants));
     }
   }
-  const catalogKeys = new Set(params.catalog.map(keyOf));
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg: params.cfg,
     policy: params.routePolicy,
@@ -210,64 +234,40 @@ export async function prepareLogicalVisibleModelCatalog(
       return sortModelCatalogEntries(dedupeByKey(projected, resolveModelCatalogIdentityKey));
     };
     if (params.view === "all") {
-      return projectEntries(params.catalog);
+      return {
+        entries: projectEntries(params.catalog).filter(
+          (entry) => !params.includeProvider || params.includeProvider(entry.provider),
+        ),
+      };
     }
-    const defaultVisibleCatalog = wildcard
-      ? sortModelCatalogEntries(
-          dedupeModelCatalogEntries([
-            ...configuredCatalog,
-            ...params.catalog.filter((entry) => getEntryState(entry).authBacked),
-          ]),
-        )
-      : [];
-    const visible = sortModelCatalogEntries(
-      dedupeModelCatalogEntries(
-        policy.visibleCatalog({
-          catalog: params.catalog,
-          defaultVisibleCatalog,
-          view: params.view,
-        }),
-      ),
-    ).filter((entry) => catalogKeys.has(keyOf(entry)) || configuredKeys.has(keyOf(entry)));
-    const preferredKeys = new Set([...visible, ...retained].map(keyOf));
     const preferred: ModelCatalogEntry[] = [];
-    const routeBacked = new Set<ModelCatalogEntry>();
-    for (const entry of params.catalog) {
+    const eligible: ModelCatalogEntry[] = [];
+    for (const entry of catalog) {
       const key = keyOf(entry);
-      const preferredKey = preferredKeys.has(key);
-      const wildcardRoute =
-        policy.allowAny ||
-        (policy.hasProviderWildcards &&
-          policy.allowsByWildcard({ provider: entry.provider, model: entry.id }));
-      if (!preferredKey && !wildcardRoute) {
-        continue;
-      }
       const state = getEntryState(entry);
-      if (!state.compatible && !configuredKeys.has(key)) {
+      const configured =
+        retainedKeys.has(key) || (configuredKeys.has(key) && !state.authAuthoritative);
+      if ((!state.compatible && !configured) || (!state.authBacked && !configured)) {
         continue;
       }
+      eligible.push(entry);
       if (
-        preferredKey &&
         state.routeProjection.kind === "selected" &&
         params.routePolicy.matchesRoute(entry, state.routeProjection.route)
       ) {
         preferred.push(entry);
       }
-      if (wildcardRoute && state.routeManaged && state.authBacked) {
-        routeBacked.add(entry);
-      }
     }
-    const kept = visible.filter((entry) => {
-      const state = getEntryState(entry);
-      const configured = configuredKeys.has(keyOf(entry));
-      return (
-        (state.compatible || configured) &&
-        (!state.routeManaged || configured || routeBacked.has(entry))
-      );
-    });
     // Selected physical routes must lead dedupe so sibling metadata cannot win.
-    return projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter((entry) =>
-      isPickerVisibleCatalogEntry(entry, configuredKeys),
-    );
+    return applyModelCatalogAllowList({
+      policy,
+      catalog: projectEntries([...preferred, ...eligible]).filter(
+        (entry) =>
+          isPickerVisibleCatalogEntry(entry, configuredKeys) &&
+          (!params.includeProvider || params.includeProvider(entry.provider)),
+      ),
+      agentId: params.agentId,
+      selectedModel: params.selectedModel,
+    });
   };
 }

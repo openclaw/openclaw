@@ -75,7 +75,7 @@ function readModelCatalogRevision(modelCatalog: object | undefined): number {
 
 /**
  * Serializes the per-agent catalog revision set so the cache fence advances
- * when any row owner's entries or provider policy changes. A new read wrapper
+ * when any row owner's selection facts or provider policy changes. A new read wrapper
  * alone does not invalidate the cache; the prepared facts retain stable identity.
  */
 function readSessionListModelCatalogFence(
@@ -86,9 +86,18 @@ function readSessionListModelCatalogFence(
   }
   return [...modelCatalog.entries()]
     .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(
-      ([agentId, catalog]) =>
-        `${agentId}:${readModelCatalogRevision(catalog?.entries)}:${readModelCatalogRevision(catalog?.pluginRegistry)}`,
+    .map(([agentId, catalog]) =>
+      [
+        agentId,
+        readModelCatalogRevision(catalog?.entries),
+        readModelCatalogRevision(catalog?.pluginRegistry),
+        readModelCatalogRevision(catalog?.manifestPlugins),
+        Boolean(catalog?.snapshot),
+        catalog?.snapshot?.authoritative !== false,
+        catalog?.snapshot?.refreshFailed === true,
+        readModelCatalogRevision(catalog?.snapshot?.resolvedConfiguredModelRefs),
+        readModelCatalogRevision(catalog?.snapshot?.routeVariants),
+      ].join(":"),
     )
     .join(",");
 }

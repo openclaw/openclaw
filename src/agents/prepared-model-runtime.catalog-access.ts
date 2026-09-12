@@ -148,6 +148,7 @@ export function createFullModelCatalogAccess(params: {
       params.agentFacts.runtimeCapabilityModels,
       current.staticEntries,
     );
+    projected.resolvedConfiguredModelRefs = current.resolvedConfiguredModelRefs;
     projected.entries = dedupeByKey(
       [...projected.entries, ...current.entries],
       resolveModelCatalogIdentityKey,

@@ -356,6 +356,32 @@ describe("agent-runner-utils", () => {
     expect(resolved.modelSelectionLocked).toBe(true);
   });
 
+  it("keeps blocked-pin primary execution out of the configured fallback ladder", async () => {
+    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({
+      kind: "none_configured",
+      source: "explicit",
+    });
+    const run = makeRun({
+      blockedModelOverrideRef: "openai/blocked",
+      blockedModelOverrideUsesPrimary: true,
+      config: {
+        agents: { defaults: { model: { primary: "openai/gpt-4.1", fallbacks: ["openai/other"] } } },
+      },
+    });
+    expect(resolveModelFallbackOptions(run).fallbacksOverride).toEqual([]);
+    const embedded = await buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "blocked-pin-primary",
+      authProfile: {},
+    });
+    expect(embedded.modelFallbacksOverride).toEqual([]);
+    expect(hoisted.resolveModelFallbackAvailabilityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ modelFallbacksOverride: [] }),
+    );
+  });
+
   it("does not force final-tag enforcement for minimax providers", async () => {
     const run = makeRun({ enforceFinalTag: false });
     const authProfile = resolveProviderScopedAuthProfile({

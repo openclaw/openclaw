@@ -449,6 +449,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getCurrentAttemptAssistant,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
+    getAssistantTranscriptEntryId: () => state.assistantTranscriptEntryId,
     toolMetas,
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
     getLatestMcpAppChannelView: () =>

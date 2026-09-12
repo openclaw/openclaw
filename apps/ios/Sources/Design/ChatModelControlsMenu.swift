@@ -293,10 +293,18 @@ struct ChatModelControlsMenuItems: View {
             ChatActionMenuSectionHeader(
                 title: "Model",
                 detail: self.viewModel.modelSelectionTargetDescription)
-            self.modelOption(
-                title: self.defaultModelLabel,
-                providerID: self.defaultProviderID,
-                selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            if let notice = self.viewModel.modelAllowListNotice {
+                Text(notice)
+                    .font(OpenClawType.caption)
+                    .padding(.horizontal, ChatActionMenuMetric.horizontalPadding)
+            }
+            self.settingsOption(
+                title: String(localized: "Reset session model"),
+                systemImage: "arrow.uturn.backward",
+                selectionID: OpenClawChatViewModel.defaultModelSelectionID,
+                selectedID: self.viewModel.modelSelectionID,
+                select: self.viewModel.selectModel)
+                .accessibilityHint(self.defaultModelLabel)
             if !sections.pinned.isEmpty {
                 ChatActionMenuSectionHeader(title: "Pinned")
                 self.modelOptions(sections.pinned)

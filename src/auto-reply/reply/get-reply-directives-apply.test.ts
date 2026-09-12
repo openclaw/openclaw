@@ -45,6 +45,61 @@ beforeEach(() => {
 });
 
 describe("applyInlineDirectiveOverrides", () => {
+  it.each(["hello", "/model openai/gpt-4o"])("keeps a blocked pin repairable: %s", async (body) => {
+    mocks.applyModelSelection.mockResolvedValue({ status: "applied" });
+    const { result, typing } = await applyMixedDirectives({
+      body,
+      cfg: { agents: { defaults: { modelPolicy: { allow: ["openai/gpt-4o"] } } } },
+      provider: "openai",
+      model: "gpt-4o-mini",
+      defaultModel: "gpt-4o",
+      blockedModelOverrideRef: "openai/gpt-4o-mini",
+      allowedModels: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+    });
+    expect(result.kind).toBe("reply");
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+    if (body === "hello") {
+      expect(result).toMatchObject({
+        reply: { text: expect.stringContaining("no usable default is available") },
+        preRunRejection: "model-selection-rejected",
+      });
+      expect(mocks.applyModelSelection).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.applyModelSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ provider: "openai", model: "gpt-4o" }),
+        }),
+      );
+    }
+  });
+
+  it("continues on the configured primary without changing the blocked pin", async () => {
+    const sessionEntry = {
+      sessionId: "blocked-pin",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+    };
+    const { result, typing } = await applyMixedDirectives({
+      body: "hello",
+      cfg: {
+        agents: {
+          defaults: { model: "openai/gpt-4o", modelPolicy: { allow: ["openai/gpt-4.1"] } },
+        },
+      },
+      sessionEntry,
+      provider: "openai",
+      model: "gpt-4o",
+      blockedModelOverrideRef: "openai/gpt-4o-mini",
+      allowedModels: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+    });
+    expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-4o" });
+    expect(sessionEntry.modelOverride).toBe("gpt-4o-mini");
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(typing.cleanup).not.toHaveBeenCalled();
+    expect(mocks.applyModelSelection).not.toHaveBeenCalled();
+  });
+
   it("returns the elevated denial for a prepared global owner", async () => {
     const ctx = buildTestCtx({
       Body: "/elevated on",

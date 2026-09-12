@@ -7,7 +7,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Resolve default provider/model plus alias index for directive parsing. */
-export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: string }): {
+export function resolveDefaultModel(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
@@ -15,6 +19,7 @@ export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: str
   const mainModel = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    sessionKey: params.sessionKey,
     // Default-model lookup is on every reply; plugin runtime normalization can
     // cold-load plugins, so keep this to static/configured model aliases here.
     allowPluginNormalization: false,

@@ -36,6 +36,7 @@ import { SessionManager } from "../sessions/index.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
+import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -44,6 +45,7 @@ import {
   acceptCompactionSuccessor,
   type AcceptedCompactionSuccessor,
 } from "./compaction-successor.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -104,6 +106,37 @@ export function projectQueuedCompactionSessionTarget(
     ...(params.sessionTarget?.threadId !== undefined
       ? { threadId: params.sessionTarget.threadId }
       : {}),
+  };
+}
+
+export function buildCompactionContextEngineRuntimeContext(params: {
+  params: CompactEmbeddedAgentSessionParams;
+  agentDir: string;
+  contextEngineSessionKey?: string;
+  harnessRuntime?: string;
+  contextEnginePluginId?: string;
+  contextTokenBudget?: number;
+}): ContextEngineRuntimeContext {
+  const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = params.params;
+  return {
+    ...runtimeParams,
+    sessionTarget: projectQueuedCompactionSessionTarget(params.params),
+    ...buildEmbeddedCompactionRuntimeContext({
+      ...params.params,
+      agentDir: params.agentDir,
+      modelId: params.params.model,
+      harnessRuntime: params.harnessRuntime,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.params.config,
+      sessionKey: params.contextEngineSessionKey ?? params.params.sessionKey,
+      explicitAgentId: contextEngineAgentId,
+      authProfileId: params.params.authProfileId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: "context-engine.compaction",
+    }),
+    tokenBudget: params.contextTokenBudget,
+    currentTokenCount: params.params.currentTokenCount,
   };
 }
 

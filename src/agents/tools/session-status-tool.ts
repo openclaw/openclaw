@@ -469,6 +469,7 @@ function formatSessionTaskLine(params: {
 async function resolveModelOverride(params: {
   cfg: OpenClawConfig;
   raw: string;
+  sessionKey: string;
   sessionEntry?: SessionEntry;
   agentId: string;
   agentDir: string;
@@ -491,6 +492,7 @@ async function resolveModelOverride(params: {
   const configDefault = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    sessionKey: params.sessionKey,
   });
   const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
   const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
@@ -530,6 +532,7 @@ async function resolveModelOverride(params: {
   };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
+    sessionKey: params.sessionKey,
     catalog,
     defaultProvider: currentProvider,
     defaultModel: currentModel,
@@ -965,7 +968,11 @@ export function createSessionStatusTool(opts?: {
         expectedSessionId: access.expectedSessionId,
         targetSessionKey: scopedResolved.key,
         run: async () => {
-          const configured = resolveDefaultModelForAgent({ cfg, agentId });
+          const configured = resolveDefaultModelForAgent({
+            cfg,
+            agentId,
+            sessionKey: scopedResolved.key,
+          });
           const selectedAgentDir = resolveAgentDir(cfg, agentId);
           const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
           const modelRaw = readToolStringParam(params, "model");
@@ -974,6 +981,7 @@ export function createSessionStatusTool(opts?: {
             const selection = await resolveModelOverride({
               cfg,
               raw: modelRaw,
+              sessionKey: scopedResolved.key,
               sessionEntry: scopedResolved.entry,
               agentId,
               agentDir: selectedAgentDir,

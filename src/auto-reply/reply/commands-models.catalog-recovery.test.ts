@@ -157,7 +157,7 @@ describe("/models browse catalog recovery", () => {
         routeVariants: [],
       });
       const next = await buildPreparedModelsProviderData(replacementCfg, undefined, { view });
-      expect(next.modelNames.get("openai/gpt-5.6-luna")).toBe("Current model");
+      expect(next.modelNames.get("openai/gpt-5.6-luna")).toBe("Current model (Default)");
       expect(next.modelNames.has("anthropic/claude-opus-4-5")).toBe(false);
     },
   );

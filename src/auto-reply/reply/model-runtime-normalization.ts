@@ -154,21 +154,3 @@ export async function prepareModelSelectionRuntime(params: {
       : [...params.catalog],
   };
 }
-
-export function mergePreparedConfiguredCatalog(params: {
-  configured: ModelCatalogEntry[];
-  prepared?: readonly ModelCatalogEntry[];
-}): ModelCatalogEntry[] {
-  if (!params.prepared?.length) {
-    return params.configured;
-  }
-  const preparedByKey = new Map(
-    params.prepared.map((entry) => [modelKey(entry.provider, entry.id), entry]),
-  );
-  return params.configured.map((entry) => {
-    const prepared = preparedByKey.get(modelKey(entry.provider, entry.id));
-    // The prepared row owns runtime capabilities; the configured row limits
-    // visibility and retains any authored metadata absent from that snapshot.
-    return prepared ? { ...entry, ...prepared } : entry;
-  });
-}

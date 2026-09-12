@@ -70,10 +70,18 @@ export function resolveModelSelectionFromDirective(params: {
 
   const raw = params.directives.rawModelDirective.trim();
   if (/^default$/i.test(raw)) {
+    if (params.modelPolicy?.effectiveDefault.ref === null) {
+      return {
+        errorText: "No allowed default model is available. Update your primary model in settings.",
+      };
+    }
+    const ref = params.modelPolicy?.effectiveDefault.ref ?? {
+      provider: params.defaultProvider,
+      model: params.defaultModel,
+    };
     return {
       modelSelection: {
-        provider: params.defaultProvider,
-        model: params.defaultModel,
+        ...ref,
         isDefault: true,
       },
     };

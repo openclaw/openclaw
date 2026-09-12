@@ -4,6 +4,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
+import { createModelsTestOwner } from "../auto-reply/reply/commands-models.test-support.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
@@ -36,6 +38,21 @@ const prepareTailscaleConfigMigrationMock = vi.hoisted(() =>
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
 );
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  withPreparedModelCatalogOwner: async <T>(
+    { config }: { config: OpenClawConfig },
+    read: (owner: PreparedModelRuntimeSnapshot) => Promise<T>,
+  ) =>
+    read(
+      createModelsTestOwner(
+        config,
+        Object.entries(config.models?.providers ?? {}).flatMap(([provider, value]) =>
+          value.models.map((model) => ({ provider, id: model.id, name: model.name })),
+        ),
+        {},
+      ),
+    ),
+}));
 const noteImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => void>((cfg) => {
     const warnings = collectImplicitFallbackClobberWarningsMock(cfg);
@@ -1386,7 +1403,9 @@ vi.mock("./doctor-config-preflight.js", async () => {
   };
 });
 
-vi.mock("./doctor-config-analysis.js", () => {
+vi.mock("./doctor-config-analysis.js", async (importOriginal) => {
+  const { collectInvalidHookTransformsDirWarnings, collectUnsupportedInternalHookEntryWarnings } =
+    await importOriginal<typeof import("./doctor-config-analysis.js")>();
   function formatConfigKeyPath(parts: Array<string | number>): string {
     if (parts.length === 0) {
       return "<root>";
@@ -1424,6 +1443,8 @@ vi.mock("./doctor-config-analysis.js", () => {
     collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
     formatConfigKeyPath,
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
+    collectInvalidHookTransformsDirWarnings,
+    collectUnsupportedInternalHookEntryWarnings,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
     noteMcpOriginWarning: vi.fn(),

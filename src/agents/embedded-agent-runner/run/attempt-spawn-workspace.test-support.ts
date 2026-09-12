@@ -142,6 +142,7 @@ function createSubscriptionMock(): SubscriptionMock {
     assistantTexts: [] as string[],
     getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
+    getAssistantTranscriptEntryId: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as SubscriptionMock["toolMetas"],

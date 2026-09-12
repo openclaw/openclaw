@@ -109,6 +109,7 @@ type RunWithModelFallbackParams<T> = {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  missingConfiguredPrimary?: string;
   requestedRouteResolution?: ModelFallbackRouteResolution;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
@@ -168,6 +169,7 @@ async function runWithModelFallbackInternal<T>(
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
+    missingConfiguredPrimary: params.missingConfiguredPrimary,
     requestedRouteResolution: params.requestedRouteResolution,
     manifestPlugins: params.manifestPlugins,
   });

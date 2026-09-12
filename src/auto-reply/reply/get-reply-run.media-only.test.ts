@@ -2502,6 +2502,43 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(runReplyAgent).not.toHaveBeenCalled();
   });
+
+  it("keeps a blocked pin and returns its repair notice when primary auth is unavailable", async () => {
+    const { resolveSessionAuthSelection } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const params = baseParams({ sessionId: "blocked-primary-auth", isNewSession: false });
+    const sessionEntry: SessionEntry = {
+      sessionId: "blocked-primary-auth",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "blocked-model",
+      authProfileOverride: "pinned-account",
+      authProfileOverrideSource: "user",
+    };
+    params.sessionEntry = sessionEntry;
+    params.modelState = {
+      ...params.modelState,
+      blockedModelOverrideRef: "anthropic/blocked-model",
+      blockedModelOverrideUsesPrimary: true,
+    };
+    vi.mocked(resolveSessionAuthSelection).mockRejectedValueOnce(
+      new Error('No API key found for provider "anthropic".'),
+    );
+    const result = await runPreparedReply(params);
+    const payload = expectDefined(Array.isArray(result) ? result[0] : result, "failure reply");
+    expect(payload.isError).toBe(true);
+    expect(payload.text).toContain(
+      "Pinned model anthropic/blocked-model is not in your allow list",
+    );
+    expect(payload.text).toContain("configured default could not answer");
+    expect(payload.text).toContain("/model");
+    expect(sessionEntry).toMatchObject({
+      modelOverride: "blocked-model",
+      authProfileOverride: "pinned-account",
+    });
+    expect(sessionEntry.modelPolicyNotice).toBeUndefined();
+    expect(runReplyAgent).not.toHaveBeenCalled();
+  });
   it("waits for the previous active run to clear before registering a new reply operation", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });

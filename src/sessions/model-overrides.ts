@@ -195,6 +195,10 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  if (selectionUpdated) {
+    delete entry.modelPolicyNotice;
+  }
+
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
     if ((selectionUpdated || profileUpdated) && params.markLiveSwitchPending) {
@@ -208,6 +212,19 @@ export function applyModelOverrideToSessionEntry(params: {
   }
 
   return { updated };
+}
+
+export function createConfiguredPrimarySessionEntry(
+  entry: SessionEntry,
+  primary: { provider: string; model: string },
+): SessionEntry {
+  const attemptEntry = { ...entry };
+  applyModelOverrideToSessionEntry({
+    entry: attemptEntry,
+    selection: { ...primary, isDefault: true },
+  });
+  delete attemptEntry.agentRuntimeOverride;
+  return attemptEntry;
 }
 
 function wrappedOverrideModel(provider: string, model: string): string {

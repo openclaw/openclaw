@@ -89,6 +89,14 @@ construction shape and `buildModelsProviderData` return signature published in
 `v2026.7.1-2`, including typed adapters that return that shape. These contracts
 remain supported until an explicitly approved SDK-breaking boundary.
 
+Current producers also capture `effectiveDefault` from the model visibility policy.
+A model reference identifies the default used by replies; `null` means no usable
+default is available. Labels, reset actions, and selection must use this fact when
+present, including `null`. The legacy required `resolvedDefault` field remains for
+older SDK construction contracts and authored-default diagnostics. Only results
+that omit `effectiveDefault` may use `resolvedDefault` as the legacy default.
+Do not replace an explicit `null` with the authored primary or a model-list entry.
+
 Call `buildPreparedModelsProviderData` when forwarding model selections. Its
 result includes the required `modelCatalog` with
 the selected physical-route metadata. Both builders use one metadata producer;

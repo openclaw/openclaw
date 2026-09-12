@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
-import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
@@ -20,11 +19,12 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import {
+  collectInvalidHookTransformsDirWarnings,
+  collectUnsupportedInternalHookEntryWarnings,
   noteImplicitFallbackClobberWarnings,
   noteMcpOriginWarning,
   noteOpencodeProviderOverrides,
@@ -53,48 +53,6 @@ import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-chann
 import { containsAuthoredInclude } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-
-function collectInvalidHookTransformsDirWarnings(
-  cfg: OpenClawConfig,
-  configPath: string,
-): string[] {
-  const transformsDir = cfg.hooks?.transformsDir?.trim();
-  if (!transformsDir) {
-    return [];
-  }
-  const configDir = path.dirname(configPath);
-  const transformsRoot = path.join(configDir, "hooks", "transforms");
-  const resolved = path.isAbsolute(transformsDir)
-    ? path.resolve(transformsDir)
-    : path.resolve(transformsRoot, transformsDir);
-  if (isPathInside(transformsRoot, resolved)) {
-    return [];
-  }
-  return [
-    `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
-  ];
-}
-
-function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
-  const unsupportedKeysByEntry = Object.entries(cfg.hooks?.internal?.entries ?? {})
-    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
-    .map(([hookKey, entry]) => {
-      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
-        Object.hasOwn(entry, key),
-      );
-      return { hookKey, unsupportedKeys };
-    })
-    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
-
-  if (unsupportedKeysByEntry.length === 0) {
-    return [];
-  }
-
-  return unsupportedKeysByEntry.map(
-    ({ hookKey, unsupportedKeys }) =>
-      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
-  );
-}
 
 // Repair-mode "Doctor changes" panels queue until the final candidate passes the
 // same validation the atomic writer enforces: printing "Doctor changes" and then
@@ -619,6 +577,34 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       infoNotes: previewNotes.infoNotes,
       warningNotes: previewNotes.warningNotes,
     });
+  }
+
+  const { prepareDoctorModelPolicyAllowlist } =
+    await import("./doctor/shared/model-policy-allowlist-repair.js");
+  const allowListOffer = await runWithCurrentPluginMetadata(state.candidate, () =>
+    prepareDoctorModelPolicyAllowlist({
+      config: state.candidate,
+      sourceConfig: snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
+    }),
+  );
+  emitDoctorNotes({ note, warningNotes: allowListOffer.warnings });
+  if (allowListOffer.changes.length > 0) {
+    note(sanitizeDoctorNote(allowListOffer.changes.join("\n")), "Model allow-list offer");
+    const prompter = params.prompter;
+    if (
+      prompter?.repairMode.canPrompt &&
+      !prompter.repairMode.updateInProgress &&
+      (await prompter.confirmRuntimeRepair({
+        message: "Include this allow-list change in the config repairs?",
+        initialValue: false,
+        requiresInteractiveConfirmation: true,
+      }))
+    ) {
+      applyConfigMutation(allowListOffer, {
+        fixHint: "Run openclaw doctor in an interactive terminal to review the allow-list offer.",
+        sanitize: true,
+      });
+    }
   }
 
   const mutableAllowlistWarnings = collectMutableAllowlistWarnings

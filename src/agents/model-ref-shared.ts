@@ -12,10 +12,8 @@ import {
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveManifestModelIdNormalizationPolicies,
-  type ManifestModelIdNormalizationSource,
-} from "../plugins/manifest-model-id-normalization.js";
+import { resolveManifestModelIdNormalizationPolicies } from "../plugins/manifest-model-id-normalization.js";
+import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.types.js";
 import { modelKey } from "../shared/model-key.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 export {

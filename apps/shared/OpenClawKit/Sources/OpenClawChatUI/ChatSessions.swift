@@ -174,6 +174,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let thinkingDefault: String?
     public let input: [String]?
     public let agentRuntime: OpenClawChatAgentRuntime?
+    public let tags: [String]?
 
     public init(
         modelID: String,
@@ -189,7 +190,8 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingDefault: String? = nil,
         input: [String]? = nil,
-        agentRuntime: OpenClawChatAgentRuntime? = nil)
+        agentRuntime: OpenClawChatAgentRuntime? = nil,
+        tags: [String]? = nil)
     {
         self.modelID = modelID
         self.name = name
@@ -205,6 +207,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         self.thinkingDefault = thinkingDefault
         self.input = input
         self.agentRuntime = agentRuntime
+        self.tags = tags
     }
 
     /// Provider-qualified model ref used for picker identity and selection tags.

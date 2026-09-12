@@ -209,6 +209,7 @@ export function completeEmbeddedAttemptResult(
   const { bootstrapPromptWarning } = bootstrap;
   const hookAgentId = input.setup.sessionAgentId;
   // Output hooks can reenter the runtime; project only the state settled before they run.
+  const assistantTranscriptEntryId = subscription.getAssistantTranscriptEntryId();
   const state = {
     terminal: input.state.terminal,
     preflightRecovery: prompt.preflightRecovery,
@@ -369,6 +370,8 @@ export function completeEmbeddedAttemptResult(
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
     latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
+    assistantTranscriptOwned: state.currentAttemptCompletedAssistant !== undefined,
+    assistantTranscriptEntryId,
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,
     lastToolError,

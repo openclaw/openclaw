@@ -72,10 +72,13 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
     entries: [],
     routeVariants: [],
+    authoritative: false,
   })),
 }));
 
-vi.mock("../agents/model-selection.js", () => {
+vi.mock("../agents/model-selection.js", async () => {
+  const { normalizeModelRef } = await import("../agents/model-ref-shared.js");
+  const { resolveModelAliasFromPair } = await import("../agents/model-selection-shared.js");
   type ConfigWithModels = {
     meta?: { migrations?: { modelPolicyAllowlist?: boolean } };
     agents?: {
@@ -106,10 +109,6 @@ vi.mock("../agents/model-selection.js", () => {
   };
   const parseModelRef = vi.fn(parseModelRefImpl);
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
-  const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: normalizeProviderId(provider),
-    model: model.trim(),
-  });
   const modelKey = (provider: string, model: string) =>
     `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
@@ -200,6 +199,7 @@ vi.mock("../agents/model-selection.js", () => {
         );
         const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
         return {
+          effectiveDefault: { ref: primary },
           allowAny,
           allowedKeys: refs,
           allowedCatalog: catalog,
@@ -231,6 +231,7 @@ vi.mock("../agents/model-selection.js", () => {
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    resolveModelAliasFromPair,
     normalizeProviderId,
     normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,

@@ -73,6 +73,7 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
+import { bindCliRunSettledWriter } from "./cli-runner/settled-writer.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -248,7 +249,8 @@ export async function runPreparedCliAgent(
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   const run = () => runPreparedCliAgentOwned(context, diagnosticLifecycle);
-  return await runWithCliHistoryWriter(context.cliHistoryWriter, run);
+  const result = await runWithCliHistoryWriter(context.cliHistoryWriter, run);
+  return bindCliRunSettledWriter(result, context.cliHistoryWriter);
 }
 
 async function runPreparedCliAgentOwned(

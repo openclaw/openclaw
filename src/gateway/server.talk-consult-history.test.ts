@@ -10,7 +10,7 @@ import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
@@ -92,6 +92,29 @@ beforeEach(async () => {
   // Voice transcripts use the canonical agent store, not a custom chat-store locator.
   storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   testState.sessionStorePath = storePath;
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    models: {
+      mode: "replace",
+      providers: {
+        anthropic: {
+          api: "anthropic-messages",
+          baseUrl: "https://fixture.invalid/v1",
+          models: [
+            {
+              id: "claude-opus-4-6",
+              name: "Talk fixture model",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        },
+      },
+    },
+  });
   await writeSessionStore({
     entries: { main: { sessionId, updatedAt: Date.now(), status: "done" } },
   });

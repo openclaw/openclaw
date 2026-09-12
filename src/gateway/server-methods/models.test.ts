@@ -263,6 +263,24 @@ function createDemoOAuthStore(params: { access: string; expires: number }) {
   };
 }
 
+async function withClaudeCliBackend(run: () => Promise<void>): Promise<void> {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ],
+  });
+  try {
+    await run();
+  } finally {
+    cliBackendsTesting.resetDepsForTest();
+  }
+}
+
 function requestModelsList(params: {
   view: "default" | "configured" | "provider-config" | "all";
   agentId?: string;
@@ -614,120 +632,150 @@ describe("models.list", () => {
     });
   });
 
-  it("preserves mandatory Claude CLI thinking despite a configured reasoning opt-out", async () => {
-    const modelId = "claude-fable-5";
-    const runtimeConfig = {
-      agents: {
-        defaults: {
-          models: {
-            [`anthropic/${modelId}`]: { agentRuntime: { id: "claude-cli" } },
+  it("preserves mandatory Claude CLI thinking despite a configured reasoning opt-out", () =>
+    withClaudeCliBackend(async () => {
+      const modelId = "claude-fable-5";
+      const runtimeConfig: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              [`anthropic/${modelId}`]: { agentRuntime: { id: "claude-cli" } },
+            },
           },
         },
-      },
-      models: {
-        providers: {
-          anthropic: {
-            models: [{ id: modelId, name: modelId, reasoning: false }],
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: modelId,
+                  name: modelId,
+                  reasoning: false,
+                  input: ["text"],
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
           },
         },
-      },
-    } as unknown as OpenClawConfig;
-    const materializedCatalog = materializePreparedModelCatalog(
-      {
-        entries: [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
-        routeVariants: [],
-      },
-      [
+      };
+      const materializedCatalog = materializePreparedModelCatalog(
         {
-          provider: "anthropic",
-          modelId,
-          model: {
-            id: modelId,
-            name: `${modelId} (Claude CLI)`,
-            provider: "claude-cli",
-            reasoning: true,
-          } as never,
+          entries: [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
+          routeVariants: [],
         },
-      ],
-    ).entries;
-    const { request, respond } = requestModelsList({
-      view: "configured",
-      runtimeConfig,
-      loadGatewayModelCatalog: vi.fn(async () => materializedCatalog),
-    });
+        [
+          {
+            provider: "anthropic",
+            modelId,
+            model: {
+              id: modelId,
+              name: `${modelId} (Claude CLI)`,
+              provider: "claude-cli",
+              reasoning: true,
+              api: "openai-responses",
+              baseUrl: "https://api.anthropic.com",
+              input: ["text"],
+              contextWindow: 200_000,
+              maxTokens: 8192,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        ],
+      ).entries;
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        preparedAuthModes: { "claude-cli": "api_key" },
+        runtimeConfig,
+        loadGatewayModelCatalog: vi.fn(async () => materializedCatalog),
+      });
 
-    await request;
+      await request;
 
-    const payload = respond.mock.calls[0]?.[1] as
-      | { models: Array<Record<string, unknown>> }
-      | undefined;
-    expect(
-      payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
-    ).toMatchObject({
-      reasoning: false,
-      agentRuntime: { id: "claude-cli" },
-      thinkingLevels: [
-        { id: "minimal", label: "minimal" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "adaptive", label: "adaptive" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "max" },
-      ],
-      thinkingDefault: "high",
-    });
-  });
-
-  it("publishes a materialized Claude CLI logical row with its configured thinking default", async () => {
-    const modelIds = ["claude-opus-5", "claude-sonnet-5"];
-    const runtimeConfig = {
-      agents: {
-        defaults: {
-          model: { primary: `anthropic/${modelIds[0]}` },
-          models: Object.fromEntries(
-            modelIds.map((modelId) => [
-              `anthropic/${modelId}`,
-              { agentRuntime: { id: "claude-cli" }, params: { thinking: "medium" } },
-            ]),
-          ),
-        },
-      },
-      models: {
-        providers: {
-          anthropic: { models: modelIds.map((id) => ({ id, name: id })) },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const { request, respond } = requestModelsList({
-      view: "configured",
-      runtimeConfig,
-      // Prepared catalog shape: runtime-only rows are deliberately absent.
-      loadGatewayModelCatalog: vi.fn(async () =>
-        modelIds.map((id) => ({ id, name: id, provider: "anthropic", reasoning: true })),
-      ),
-    });
-
-    await request;
-
-    const payload = respond.mock.calls[0]?.[1] as
-      | { models: Array<Record<string, unknown>> }
-      | undefined;
-    for (const modelId of modelIds) {
+      const payload = respond.mock.calls[0]?.[1] as
+        | { models: Array<Record<string, unknown>> }
+        | undefined;
       expect(
         payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
       ).toMatchObject({
-        reasoning: true,
+        reasoning: false,
         agentRuntime: { id: "claude-cli" },
-        thinkingDefault: "medium",
-        thinkingLevels: expect.arrayContaining([
-          { id: "off", label: "off" },
+        thinkingLevels: [
+          { id: "minimal", label: "minimal" },
+          { id: "low", label: "low" },
           { id: "medium", label: "medium" },
+          { id: "adaptive", label: "adaptive" },
           { id: "high", label: "high" },
-        ]),
+          { id: "xhigh", label: "xhigh" },
+          { id: "max", label: "max" },
+        ],
+        thinkingDefault: "high",
       });
-    }
-  });
+    }));
+
+  it("publishes a materialized Claude CLI logical row with its configured thinking default", () =>
+    withClaudeCliBackend(async () => {
+      const modelIds = ["claude-opus-5", "claude-sonnet-5"];
+      const runtimeConfig: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: `anthropic/${modelIds[0]}` },
+            models: Object.fromEntries(
+              modelIds.map((modelId) => [
+                `anthropic/${modelId}`,
+                { agentRuntime: { id: "claude-cli" }, params: { thinking: "medium" } },
+              ]),
+            ),
+          },
+        },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: modelIds.map((id) => ({
+                id,
+                name: id,
+                reasoning: true,
+                input: ["text"],
+                maxTokens: 8192,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              })),
+            },
+          },
+        },
+      };
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        preparedAuthModes: { "claude-cli": "api_key" },
+        runtimeConfig,
+        // Prepared catalog shape: runtime-only rows are deliberately absent.
+        loadGatewayModelCatalog: vi.fn(async () =>
+          modelIds.map((id) => ({ id, name: id, provider: "anthropic", reasoning: true })),
+        ),
+      });
+
+      await request;
+
+      const payload = respond.mock.calls[0]?.[1] as
+        | { models: Array<Record<string, unknown>> }
+        | undefined;
+      for (const modelId of modelIds) {
+        expect(
+          payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
+        ).toMatchObject({
+          reasoning: true,
+          agentRuntime: { id: "claude-cli" },
+          thinkingDefault: "medium",
+          thinkingLevels: expect.arrayContaining([
+            { id: "off", label: "off" },
+            { id: "medium", label: "medium" },
+            { id: "high", label: "high" },
+          ]),
+        });
+      }
+    }));
 
   it("publishes the concrete Claude CLI thinking policy for a configured logical model", async () => {
     const modelId = "claude-mythos-5";
@@ -1347,6 +1395,47 @@ describe("models.list", () => {
     );
   });
 
+  it("publishes the same allowed rows and hidden count for picker views", async () => {
+    const catalog = [
+      { id: "atlas", name: "Atlas", provider: "vllm" },
+      { id: "beta", name: "Beta", provider: "vllm" },
+      { id: "primary", name: "Primary", provider: "other" },
+      { id: "hidden", name: "Hidden", provider: "third" },
+    ];
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: "other/primary", modelPolicy: { allow: ["vllm/*"] } } },
+      models: {
+        providers: {
+          vllm: { apiKey: "test-key", baseUrl: "http://localhost:8000/v1", models: [] },
+          third: { apiKey: "test-key", baseUrl: "http://localhost:8001/v1", models: [] },
+        },
+      },
+    };
+    for (const view of ["default", "configured"] as const) {
+      const { request, respond } = requestModelsList({
+        view,
+        runtimeConfig: cfg,
+        loadGatewayModelCatalog: async () => catalog,
+      });
+      await request;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: [
+            expect.objectContaining({ provider: "other", id: "primary", tags: ["default"] }),
+            expect.objectContaining({ provider: "vllm", id: "atlas" }),
+            expect.objectContaining({ provider: "vllm", id: "beta" }),
+          ],
+          allowList: {
+            hiddenCount: 1,
+            settingsPath: "agents.defaults.modelPolicy.allow",
+          },
+        }),
+        undefined,
+      );
+    }
+  });
+
   it("filters provider-scoped configured views from the published catalog", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = [
@@ -1389,6 +1478,10 @@ describe("models.list", () => {
       expect(configuredRespond).toHaveBeenCalledWith(
         true,
         {
+          allowList: {
+            hiddenCount: 0,
+            settingsPath: "agents.defaults.modelPolicy.allow",
+          },
           models: [
             {
               id: "gpt-5.4",
@@ -1540,7 +1633,17 @@ describe("models.list", () => {
               reqId: `req-models-list-local-wildcard-${view}`,
             });
             await request;
-            expect(respond).toHaveBeenCalledWith(true, expected, undefined);
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              {
+                ...expected,
+                allowList: {
+                  hiddenCount: 0,
+                  settingsPath: "agents.defaults.modelPolicy.allow",
+                },
+              },
+              undefined,
+            );
           }
         },
       );
@@ -1675,7 +1778,7 @@ describe("models.list", () => {
                         source: "model",
                       },
                       available,
-                      tags: ["configured"],
+                      tags: ["default", "configured"],
                       ...(!authenticated && catalogComplete
                         ? { unavailableReason: "missing-auth" }
                         : {}),
@@ -1736,7 +1839,15 @@ describe("models.list", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       {
-        models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm", available: false }],
+        models: [
+          {
+            id: "llama-secure",
+            name: "Llama Secure",
+            provider: "vllm",
+            available: false,
+            tags: ["default"],
+          },
+        ],
       },
       undefined,
     );
@@ -1773,7 +1884,13 @@ describe("models.list", () => {
       true,
       {
         models: [
-          { id: "llama-managed", name: "Llama Managed", provider: "vllm", available: false },
+          {
+            id: "llama-managed",
+            name: "Llama Managed",
+            provider: "vllm",
+            available: false,
+            tags: ["default"],
+          },
         ],
       },
       undefined,
@@ -2335,6 +2452,7 @@ describe("models.list", () => {
                 name: "Llama Secure",
                 provider: "vllm",
                 available: fixture.available,
+                tags: ["default"],
                 ...(fixture.unavailableReason
                   ? { unavailableReason: fixture.unavailableReason }
                   : {}),

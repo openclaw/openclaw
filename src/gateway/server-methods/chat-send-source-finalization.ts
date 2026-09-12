@@ -4,6 +4,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
+import { publishAssistantTranscriptRewrite } from "../../config/sessions/transcript-assistant-rewrite.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   appendLocalMediaParentRoots,
@@ -34,7 +35,6 @@ import { buildTranscriptReplyText } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
   assistantTranscriptScope,
-  publishAssistantTranscriptRewrite,
   rewriteSourceReplyTranscriptMirrors,
   type SourceReplyContentState,
   type SourceReplyTranscriptMirrorMetadata,
@@ -54,7 +54,7 @@ function selectChatSendAgentReplyPayloads(params: {
   return params.deliveredReplies
     .filter((entry) => {
       const { payload } = entry;
-      return getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority ||
+      return getReplyPayloadMetadata(payload)?.hostFinalReply ||
         isSourceReplyTranscriptMirrorPayload(payload)
         ? entry.kind === "final" && payload.isError !== true
         : !params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload);

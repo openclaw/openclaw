@@ -3,6 +3,7 @@ import type { ChatAccountSelection } from "../../../../../packages/gateway-proto
 import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -54,6 +55,7 @@ type ChatModelControlsProps = {
   gatewayAvailable: boolean;
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
+  modelAllowList?: ModelCatalogResult["allowList"];
   modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
@@ -357,6 +359,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const currentCatalogEntry = catalog.entry(currentOverride);
   if (
     currentOverride &&
+    !props.modelAllowList?.selectedModelBlocked &&
     modelOptions.length > 0 &&
     !modelOptions.some((option) => option.value === currentOverride)
   ) {
@@ -494,6 +497,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: managedCatalog,
+        modelAllowList: props.modelAllowList,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
         selectionScopeDescription: resolveModelSelectionScopeDescription(

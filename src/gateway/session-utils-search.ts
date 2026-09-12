@@ -4,6 +4,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
@@ -48,7 +50,7 @@ import {
   loadGatewaySessionEntryReadOnly,
   parseGroupKey,
 } from "./session-utils-store.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 
 function resolveSessionListSearchDisplayName(
   key: string,
@@ -114,13 +116,12 @@ function resolveSessionListSearchModelFields(params: {
   const subagentRun = params.rowContext
     ? params.rowContext.subagentRuns.getDisplaySubagentRun(params.key)
     : getSessionDisplaySubagentRunByChildSessionKey(params.key);
-  const resolvedModel = resolveSessionModelIdentityRef(
-    params.cfg,
-    params.entry,
-    agentId,
-    subagentRun?.model,
-    { allowPluginNormalization: false },
-  );
+  const resolvedModel =
+    params.entry?.model || subagentRun?.model
+      ? resolveSessionModelIdentityRef(params.cfg, params.entry, agentId, subagentRun?.model, {
+          allowPluginNormalization: false,
+        })
+      : selectedModel;
   const displayModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg: params.cfg,
     provider: selectedModel.provider,
@@ -144,6 +145,7 @@ export function createSessionListSearchMatcher(params: {
   targetsBySessionKey: GatewayStoredSessionTargets;
   now: number;
   visibleEntries: readonly SessionEntryPair[];
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   getRowContext?: SessionListRowContextProvider;
   projectActiveRun?: SessionListActiveRunProjector;
 }) {
@@ -204,6 +206,8 @@ export function createSessionListSearchMatcher(params: {
     if (matchesSessionListSearch([identityNames.get(agentId)], search)) {
       return true;
     }
+    const preparedCatalog =
+      params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined;
     const selected = resolveSessionSelectedModelRef({
       cfg,
       sessionKey: storeKey,
@@ -211,6 +215,8 @@ export function createSessionListSearchMatcher(params: {
       agentId,
       rowContext: context(),
       allowPluginNormalization: false,
+      modelCatalogSnapshot: preparedCatalog?.snapshot,
+      manifestPlugins: preparedCatalog?.manifestPlugins,
     });
     if (
       shouldResolveDerivedSessionModelSearchFields(search) &&
@@ -227,6 +233,9 @@ export function createSessionListSearchMatcher(params: {
       )
     ) {
       return true;
+    }
+    if (!selected.provider || !selected.model) {
+      return false;
     }
     if (!acpPrepared) {
       populateSessionListAcpMetadata({
@@ -327,6 +336,8 @@ export function buildGatewaySessionInfo(params: {
   agentId: string;
   now?: number;
   modelCatalog?: ModelCatalogEntry[];
+  modelCatalogSnapshot?: ModelCatalogSnapshot;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): GatewaySessionRow {
   return buildGatewaySessionRow({
     cfg: params.cfg,
@@ -337,6 +348,8 @@ export function buildGatewaySessionInfo(params: {
     entry: params.entry,
     agentId: params.agentId,
     modelCatalog: params.modelCatalog,
+    modelCatalogSnapshot: params.modelCatalogSnapshot,
+    manifestPlugins: params.manifestPlugins,
     now: params.now,
     skipTranscriptUsageFallback: true,
     lightweightListRow: true,

@@ -12,6 +12,38 @@ function modelConfig(primary: string, models?: Record<string, object>): OpenClaw
 }
 
 describe("resolveSessionModelRef", () => {
+  test.each([
+    ["agent:main:main", undefined, "primary"],
+    ["agent:main:subagent:worker", undefined, "worker"],
+    ["agent:main:subagent:worker", "pinned", "pinned"],
+  ])(
+    "resolves inheritance for %s without replacing an explicit pin %s",
+    (sessionKey, pin, model) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            model: "fixture/primary",
+            subagents: { model: "worker-alias" },
+            models: { "fixture/worker": { alias: "worker-alias" } },
+          },
+        },
+      };
+      expect(
+        resolveSessionModelRef(
+          cfg,
+          {
+            modelProvider: "fixture",
+            model: "stale",
+            ...(pin ? { providerOverride: "fixture", modelOverride: pin } : {}),
+          },
+          "main",
+          { sessionKey, allowPluginNormalization: false },
+        ),
+      ).toEqual({ provider: "fixture", model });
+    },
+  );
+
   test("prefers a complete explicit override over runtime identity and current defaults", () => {
     const resolved = resolveSessionModelRef(
       modelConfig("anthropic/claude-opus-4-6"),

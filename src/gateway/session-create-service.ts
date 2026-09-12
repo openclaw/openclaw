@@ -28,10 +28,7 @@ import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "../agents/model-selection.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParentWithDecision,
@@ -69,7 +66,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   isIncognitoSessionKey,
-  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -130,6 +126,7 @@ const loadSessionAuthRuntime = createLazyRuntimeModule(
 
 async function existingSessionSelectionWouldChange(params: {
   agentId: string;
+  sessionKey: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
   defaultModel: string;
@@ -140,7 +137,6 @@ async function existingSessionSelectionWouldChange(params: {
   requestedContextWindow?: string;
   requestedFastMode?: FastMode;
   requestedThinkingLevel?: string;
-  subagentModelHint?: string;
 }): Promise<boolean> {
   if (params.catalogModel) {
     // Public catalog creates cannot include a key, and the service rejects
@@ -186,34 +182,17 @@ async function existingSessionSelectionWouldChange(params: {
     raw: requestedModel,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
-    subagentModelHint: params.subagentModelHint,
+    sessionKey: params.sessionKey,
   });
   if (!resolved.ok) {
     // Admin callers still receive the precise model error from sessions.patch.
     // Non-admin existing-row creates fail closed before that mutation path.
     return true;
   }
-  let existingProvider =
+  const existingProvider =
     normalizeOptionalString(params.existingEntry.providerOverride) ?? params.defaultProvider;
-  let existingModel =
+  const existingModel =
     normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
-  if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
-    const resolvedSubagentDefault = resolveSessionPatchModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      catalog,
-      raw: params.subagentModelHint,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
-    });
-    if (!resolvedSubagentDefault.ok) {
-      return true;
-    }
-    if (!normalizeOptionalString(params.existingEntry.providerOverride)) {
-      existingProvider = resolvedSubagentDefault.provider;
-    }
-    existingModel = resolvedSubagentDefault.model;
-  }
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   const requestedProfile = normalizeOptionalString(resolved.profile);
   const profileWouldChange =
@@ -1142,9 +1121,11 @@ export async function createGatewaySession(params: {
           const gateDefaultModel = resolveDefaultModelForAgent({
             cfg: params.cfg,
             agentId: target.agentId,
+            sessionKey: target.canonicalKey,
           });
           const sessionSelectionWouldChange = await existingSessionSelectionWouldChange({
             agentId: target.agentId,
+            sessionKey: target.canonicalKey,
             cfg: params.cfg,
             catalogModel,
             defaultModel: gateDefaultModel.model,
@@ -1155,12 +1136,6 @@ export async function createGatewaySession(params: {
             requestedContextWindow,
             requestedFastMode,
             requestedThinkingLevel,
-            subagentModelHint: isSubagentSessionKey(target.canonicalKey)
-              ? resolveSubagentConfiguredModelSelection({
-                  cfg: params.cfg,
-                  agentId: target.agentId,
-                })
-              : undefined,
           });
           if (sessionSelectionWouldChange) {
             return {
@@ -1251,7 +1226,9 @@ export async function createGatewaySession(params: {
           };
         }
         const catalogResolvedModel = params.catalogTarget
-          ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
+          ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId, {
+              sessionKey: target.canonicalKey,
+            })
           : undefined;
         const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
@@ -1387,7 +1364,9 @@ export async function createGatewaySession(params: {
           if (createdNewEntry && !entry.authProfileOverride && personalAccountDefaults) {
             const { resolveUserLinkedAuthProfile } = await loadSessionAuthRuntime();
             commitGuard?.();
-            const model = resolveSessionModelRef(params.cfg, entry, target.agentId);
+            const model = resolveSessionModelRef(params.cfg, entry, target.agentId, {
+              sessionKey: target.canonicalKey,
+            });
             const linked = resolveUserLinkedAuthProfile({
               cfg: resolveModelProviderAuthConfig({
                 config: params.cfg,
@@ -1416,7 +1395,9 @@ export async function createGatewaySession(params: {
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to resolve parent session for fork"),
           };
         }
-        const childModel = resolveSessionModelRef(params.cfg, entry, target.agentId);
+        const childModel = resolveSessionModelRef(params.cfg, entry, target.agentId, {
+          sessionKey: target.canonicalKey,
+        });
         const childCatalog = params.loadGatewayModelCatalog
           ? await params.loadGatewayModelCatalog()
           : [];
@@ -1557,7 +1538,9 @@ export async function createGatewaySession(params: {
       });
     }
 
-    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId);
+    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId, {
+      sessionKey: target.canonicalKey,
+    });
 
     return {
       ok: true,

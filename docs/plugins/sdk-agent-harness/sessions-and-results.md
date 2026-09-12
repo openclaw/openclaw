@@ -177,6 +177,19 @@ diagnostic trace. Tool, delivery, media, spawn, lifecycle, replay, session, and
 fallback state cannot cross this result boundary. Unknown fields and assistant
 tool calls fail closed.
 
+Transcript ownership and physical row identity are separate facts:
+
+- `assistantTranscriptOwned: true` means the harness owns assistant persistence.
+  Keep it true when the harness intentionally suppresses the write, so core does
+  not append a replacement message.
+- `assistantTranscriptEntryId` is the physical ID of the persisted assistant
+  row, when available. It is not `assistantMessageIndex`, which identifies an
+  assistant stream generation. Omit the entry ID when no row was written; never
+  reuse an earlier assistant's ID.
+- An absent entry ID does not transfer persistence ownership to core or prove
+  that a row exists. Return the final answer's identity with its result, including
+  absence, before output hooks or later attempts can replace live state.
+
 A harness that internally reuses its full attempt engine can call
 `projectSettledTurnFinalizationAttemptResult(...)` before returning. The helper
 rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then

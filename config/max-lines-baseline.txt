@@ -405,7 +405,6 @@ src/auto-reply/reply/agent-runner-payloads.test.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
-src/auto-reply/reply/commands-models.ts
 src/auto-reply/reply/commands-status.test.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts

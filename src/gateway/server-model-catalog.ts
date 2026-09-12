@@ -201,8 +201,11 @@ export async function readPreparedGatewayModelCatalog(
   if (!owner) {
     return undefined;
   }
+  const snapshot = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
   return {
-    entries: (owner.readFullModelCatalog?.() ?? owner.modelCatalog).entries,
+    entries: snapshot.entries,
+    snapshot,
+    manifestPlugins: owner.metadataSnapshot,
     pluginRegistry: owner.pluginRegistry,
   };
 }

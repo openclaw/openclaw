@@ -110,6 +110,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   authProfileId?: string | null;
   harnessRuntime?: string | null;
   modelSelectionLocked?: boolean;
+  useSelectedModel?: boolean;
   defaultProvider?: string;
   defaultModel?: string;
   allowPluginNormalization?: boolean;
@@ -126,9 +127,10 @@ export function resolveEmbeddedCompactionTarget(params: {
   const model = params.modelId?.trim() || params.defaultModel;
   // A locked session's creating model owns every transcript read, including
   // summaries. Compaction-specific model overrides would cross that boundary.
-  const override = params.modelSelectionLocked
-    ? undefined
-    : params.config?.agents?.defaults?.compaction?.model?.trim();
+  const override =
+    params.modelSelectionLocked || params.useSelectedModel
+      ? undefined
+      : params.config?.agents?.defaults?.compaction?.model?.trim();
   const assembleTarget = (targetProvider: string | undefined, targetModel: string | undefined) => {
     // A provider switch cannot inherit credentials selected for the session's
     // original provider; all target paths share that boundary.
@@ -318,6 +320,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     authProfileId: params.authProfileId,
     harnessRuntime: params.harnessRuntime,
     modelSelectionLocked: params.modelSelectionLocked,
+    useSelectedModel: params.useSelectedModel,
   });
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const runtimeAuthPlan =
@@ -372,6 +375,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
     modelFallbacksOverride: params.modelFallbacksOverride,
+    useSelectedModel: params.useSelectedModel,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
     execOverrides: params.execOverrides,

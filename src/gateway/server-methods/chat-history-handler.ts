@@ -386,6 +386,13 @@ async function handleChatHistoryRequest({
   });
   const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
   const startupProjection = await (startupProjectionPromise ?? readStartupProjection());
+  const preparedCatalog = startupProjection?.modelCatalogSnapshot
+    ? undefined
+    : await context.readPreparedGatewayModelCatalog?.({ agentId: sessionAgentId });
+  const modelCatalogSnapshot = startupProjection?.modelCatalogSnapshot ?? preparedCatalog?.snapshot;
+  const manifestPlugins = startupProjection?.modelCatalogSnapshot
+    ? startupProjection.manifestPlugins
+    : preparedCatalog?.manifestPlugins;
   const startupMetadata = method === "chat.startup" ? startupProjection?.metadata : undefined;
   const sessionModelCatalog = startupProjection?.sessionModelCatalog;
   const defaultModelCatalog = startupProjection?.defaultModelCatalog;
@@ -456,6 +463,8 @@ async function handleChatHistoryRequest({
         entry,
         agentId: sessionAgentId,
         modelCatalog: sessionModelCatalog,
+        modelCatalogSnapshot,
+        manifestPlugins,
       }),
     {
       config: cfg,
@@ -513,6 +522,8 @@ async function handleChatHistoryRequest({
             agentId: sessionAgentId,
             allowPluginNormalization: false,
             providerPolicySource: "active",
+            modelCatalogSnapshot,
+            manifestPlugins,
           }),
           modelSelectionTarget: resolveGatewayModelSelectionPolicy({
             callerScopes: client?.connect?.scopes ?? [],

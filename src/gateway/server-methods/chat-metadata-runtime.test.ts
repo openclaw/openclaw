@@ -15,6 +15,7 @@ import {
   createChatMetadataOwner,
   createDraftChatMetadataScope,
   createOpenAIChatMetadataConfig,
+  createSubagentChatMetadataHarness,
 } from "./chat-metadata-runtime.test-support.js";
 
 describe("gateway chat metadata runtime", () => {
@@ -270,6 +271,44 @@ describe("gateway chat metadata runtime", () => {
         pinnedProfileId: "test:session",
       }),
     );
+  });
+
+  test("keeps subagent primary catalogs separate from main-session metadata", async () => {
+    const harness = createSubagentChatMetadataHarness();
+    try {
+      await harness.runtime.refresh();
+      const scope = { agentId: "main", sessionKey: "agent:main:subagent:worker" };
+      await expect(
+        harness.runtime.readStartup({ ...scope, readPolicy: "ready" }),
+      ).resolves.toBeUndefined();
+      const startup = await harness.runtime.readStartup(scope);
+      expect(startup?.metadata?.models?.map((model) => model.id)).toEqual(["listed", "worker"]);
+      expect(startup?.metadata?.models?.find((model) => model.id === "worker")?.tags).toContain(
+        "default",
+      );
+      expect(startup?.metadata?.allowList).toMatchObject({
+        hiddenCount: 1,
+        selectedModelBlocked: false,
+      });
+      const sibling = await harness.runtime.read({
+        ...scope,
+        sessionKey: "agent:main:subagent:sibling",
+      });
+      expect(sibling.models).toEqual(startup?.metadata?.models);
+      const main = await harness.runtime.read({ agentId: "main", sessionKey: "agent:main:main" });
+      expect(main.models?.map((model) => model.id)).toEqual(["listed", "primary"]);
+      expect(main.models?.find((model) => model.id === "primary")?.tags).toContain("default");
+      const pinned = await harness.runtime.read({
+        ...scope,
+        sessionEntry: {
+          providerOverride: "fixture",
+          modelOverride: "primary",
+        },
+      });
+      expect(pinned.allowList?.selectedModelBlocked).toBe(true);
+    } finally {
+      await harness.runtime.stop();
+    }
   });
 
   test("ready reads never prepare or await a cold or pending exact profile", async () => {

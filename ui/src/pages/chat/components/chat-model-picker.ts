@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import type { ModelCatalogResult } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -48,6 +49,7 @@ type ChatModelPickerParams = {
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
+  modelAllowList?: ModelCatalogResult["allowList"];
   modelSelectionLocked: boolean;
   selectionScopeDescription?: string;
   modelOptions: ChatModelPickerOption[];
@@ -272,6 +274,55 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           class="chat-controls__inline-select-menu chat-controls__model-menu"
           aria-label=${t("chat.selectors.model")}
         >
+          ${
+            params.modelAllowList &&
+            (params.modelAllowList.hiddenCount > 0 ||
+              params.modelAllowList.selectedModelBlocked ||
+              params.modelOptions.length === 0)
+              ? html`
+                  <div
+                    class="chat-controls__model-catalog-state chat-controls__model-catalog-state--empty"
+                    data-chat-model-allow-list
+                    aria-live="polite"
+                  >
+                    ${
+                      params.modelAllowList.hiddenCount > 0
+                        ? html`<span
+                            >${t("chat.modelControls.allowListHidden", { count: String(params.modelAllowList.hiddenCount) })}</span
+                          >`
+                        : nothing
+                    }
+                    ${
+                      params.modelOptions.length === 0
+                        ? html`<span>${t("chat.modelControls.allowListEmpty")}</span>`
+                        : nothing
+                    }
+                    ${
+                      params.modelAllowList.selectedModelBlocked
+                        ? html`<span>${t("chat.modelControls.allowListBlocked")}</span>`
+                        : nothing
+                    }
+                    <span
+                      >${t("chat.modelControls.allowListFix", { path: params.modelAllowList.settingsPath })}</span
+                    >
+                    ${
+                      params.onModelSetup
+                        ? html`<button
+                            class="chat-controls__model-catalog-action"
+                            type="button"
+                            @click=${(event: MouseEvent) => {
+                              event.stopPropagation();
+                              params.onModelSetup?.();
+                            }}
+                          >
+                            ${t("chat.modelControls.configureModels")}
+                          </button>`
+                        : nothing
+                    }
+                  </div>
+                `
+              : nothing
+          }
           ${
             params.modelSelectionLocked
               ? html`

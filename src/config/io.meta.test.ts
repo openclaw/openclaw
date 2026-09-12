@@ -42,7 +42,7 @@ describe("config write metadata stamping", () => {
   });
 
   const cases: Array<
-    [string, OpenClawConfig | null, OpenClawConfig, AgentModelPolicyConfig | undefined]
+    [string, OpenClawConfig | null, OpenClawConfig, AgentModelPolicyConfig | undefined, boolean?]
   > = [
     [
       "preserves a legacy restriction across version updates",
@@ -95,14 +95,23 @@ describe("config write metadata stamping", () => {
     ["does not restrict a newly created map", null, legacy, undefined],
     ["does not restore removed marked policy", { ...restricted, meta: marker }, legacy, undefined],
     ["does not restore removed pre-marker policy", restricted, legacy, undefined],
-    ...[{}, { allow: [] }].map((policy): (typeof cases)[number] => [
-      `honors explicit allow-any ${JSON.stringify(policy)}`,
+    ["honors explicit allow-any policy", legacy, withModels(models, {}), {}, true],
+    [
+      "keeps explicit empty allow lists unmarked",
       legacy,
-      withModels(models, policy),
-      policy,
-    ]),
+      withModels(models, { allow: [] }),
+      { allow: [] },
+      false,
+    ],
+    [
+      "keeps hand-written exact lists unmarked",
+      restricted,
+      restricted,
+      { allow: Object.keys(models) },
+      false,
+    ],
   ];
-  it.each(cases)("%s", (_name, previous, next, policy) => {
+  it.each(cases)("%s", (_name, previous, next, policy, generated = true) => {
     const original = structuredClone({ previous, next });
     const stamped = stampConfigWriteMetadata(
       next,
@@ -112,7 +121,7 @@ describe("config write metadata stamping", () => {
     );
     expect(stamped.agents?.defaults?.modelPolicy).toEqual(policy);
     expect(stamped.agents?.list).toEqual(next.agents?.list);
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(generated ? true : undefined);
     expect(stamped.meta?.lastTouchedVersion).toBe("2026.7.2");
     expect({ previous, next }).toEqual(original);
   });

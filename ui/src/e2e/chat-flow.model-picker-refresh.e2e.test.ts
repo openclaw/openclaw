@@ -26,6 +26,84 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it.each([
+    { name: "hidden models", empty: false, blocked: false },
+    { name: "no matching models", empty: true, blocked: false },
+    { name: "a blocked session pin", empty: false, blocked: true },
+  ])(
+    "localizes allow list facts for $name without changing the session",
+    async ({ empty, blocked }) => {
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const models = empty ? [] : [{ id: "atlas", name: "Atlas", provider: "openai" }];
+      const session = {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        sessionId: "allow-list-proof",
+        model: blocked ? "outside" : "atlas",
+        modelProvider: blocked ? "other" : "openai",
+        modelOverrideSource: "user",
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey: session.key,
+        sessionInfo: session,
+        agentModel: "openai/atlas",
+        models,
+        methodResponses: {
+          "models.list": {
+            models,
+            allowList: {
+              hiddenCount: 2,
+              settingsPath: "agents.defaults.modelPolicy.allow",
+              selectedModelBlocked: blocked,
+            },
+          },
+          "sessions.list": {
+            ts: 1,
+            path: "",
+            count: 1,
+            sessions: [session],
+            defaults: { model: "atlas", modelProvider: "openai", contextTokens: null },
+          },
+        },
+      });
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const picker = page.locator(
+          'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+        );
+        await picker.locator('[data-chat-model-select="true"]').click();
+        const notice = picker.locator("[data-chat-model-allow-list]");
+        await notice.getByText("Models hidden by your allow list: 2", { exact: true }).waitFor();
+        expect(await notice.textContent()).toContain("agents.defaults.modelPolicy.allow");
+        await expect
+          .poll(() => picker.locator("[data-chat-model-option]").count())
+          .toBe(models.length);
+        if (empty) {
+          expect(await notice.textContent()).toContain("No models match your allow list");
+        }
+        if (blocked) {
+          expect(await notice.textContent()).toContain("Pinned model is not in your allow list");
+        }
+        expect(
+          await picker
+            .locator('[data-chat-model-select="true"]')
+            .getAttribute("data-chat-select-value"),
+        ).toBe(`${session.modelProvider}/${session.model}`);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await screenshot(
+          page,
+          `allow-list-${empty ? "empty" : blocked ? "blocked" : "hidden"}.png`,
+        );
+        await notice.getByRole("button", { name: "Configure models", exact: true }).click();
+        await expect.poll(() => page.url()).toContain("model-setup");
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("preserves the Gateway-resolved target without exposing it in the picker", async () => {
     const context = await suite.newBrowserContext({
       hasTouch: true,

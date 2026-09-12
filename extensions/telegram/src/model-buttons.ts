@@ -11,6 +11,7 @@
  * - mdl_back              - back to providers list
  */
 import { createHash } from "node:crypto";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fitsTelegramCallbackData } from "./approval-callback-data.js";
@@ -306,4 +307,20 @@ export function getModelsPageSize(): number {
 export function calculateTotalPages(totalModels: number, pageSize?: number): number {
   const size = pageSize ?? MODELS_PAGE_SIZE;
   return size > 0 ? Math.ceil(totalModels / size) : 1;
+}
+
+export function appendModelAllowListNotice(
+  text: string,
+  facts: ModelsProviderData["allowList"],
+  hasModels: boolean,
+): string {
+  if (!facts) {
+    return text;
+  }
+  const lines = [
+    ...(facts.hiddenCount > 0 ? [`Models hidden by your allow list: ${facts.hiddenCount}`] : []),
+    ...(!hasModels ? ["No models match your allow list."] : []),
+    ...(facts.selectedModelBlocked ? ["The pinned model is not in your allow list."] : []),
+  ];
+  return lines.length ? [text, "", ...lines, `Settings: ${facts.settingsPath}`].join("\n") : text;
 }

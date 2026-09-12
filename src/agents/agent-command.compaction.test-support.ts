@@ -23,6 +23,7 @@ import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
 import { acceptCompactionSuccessor } from "./embedded-agent-runner/compaction-successor.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
@@ -44,6 +45,11 @@ const compactionTestState = vi.hoisted(() => ({
   agentDir: undefined as string | undefined,
   runAgentAttemptMock: vi.fn<RunAgentAttempt>(),
   loadManifestModelCatalogMock: vi.fn((_params: LoadManifestModelCatalogParams) => []),
+  createUnacquiredCatalogSnapshot: (): ModelCatalogSnapshot => ({
+    entries: [],
+    routeVariants: [],
+    authoritative: false,
+  }),
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
@@ -114,14 +120,19 @@ vi.mock("./agent-scope.js", async () => {
 vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: (params: LoadManifestModelCatalogParams) =>
     compactionTestState.loadManifestModelCatalogMock(params),
+  buildPreparedModelCatalogSnapshot: async (
+    ..._params: Parameters<typeof import("./model-catalog.js").buildPreparedModelCatalogSnapshot>
+  ) => compactionTestState.createUnacquiredCatalogSnapshot(),
 }));
 
 vi.mock("./model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
-    entries: [],
-    routeVariants: [],
-  })),
+}));
+
+vi.mock("./prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(async () =>
+    compactionTestState.createUnacquiredCatalogSnapshot(),
+  ),
 }));
 
 vi.mock("./provider-model-normalization.runtime.js", () => ({

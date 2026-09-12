@@ -459,23 +459,36 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
   });
 
-  it("ignores compaction model overrides for model-locked sessions", () => {
-    expect(
-      resolveEmbeddedCompactionTarget({
-        config: {
-          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
-        } as unknown as OpenClawConfig,
+  it.each([{ modelSelectionLocked: true }, { useSelectedModel: true }])(
+    "keeps the selected model for compaction (%j)",
+    (selection) => {
+      expect(
+        resolveEmbeddedCompactionTarget({
+          config: {
+            agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+          },
+          provider: "openai",
+          modelId: "gpt-5.5",
+          authProfileId: "openai:default",
+          ...selection,
+        }),
+      ).toEqual({
         provider: "openai",
-        modelId: "gpt-5.5",
+        model: "gpt-5.5",
         authProfileId: "openai:default",
-        modelSelectionLocked: true,
-      }),
-    ).toEqual({
-      provider: "openai",
-      model: "gpt-5.5",
-      authProfileId: "openai:default",
-    });
-  });
+      });
+      expect(
+        buildEmbeddedCompactionRuntimeContext({
+          workspaceDir: "/tmp/workspace",
+          config: { agents: { defaults: { compaction: { model: "anthropic/other" } } } },
+          provider: "openai",
+          modelId: "gpt-5.5",
+          modelFallbacksOverride: [],
+          ...selection,
+        }),
+      ).toMatchObject({ provider: "openai", model: "gpt-5.5", modelFallbacksOverride: [] });
+    },
+  );
 
   it("keeps configured OpenAI provider with legacy Codex auth profiles (#86373)", () => {
     const result = resolveEmbeddedCompactionTarget({

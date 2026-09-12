@@ -1145,6 +1145,19 @@ describe("model-selection", () => {
   });
 
   describe("buildAllowedModelSet", () => {
+    it("does not authorize a foreign session with the same bare primary name", () => {
+      const policy = createModelVisibilityPolicy({
+        cfg: {
+          agents: { defaults: { model: "shared", modelPolicy: { allow: ["openai/allowed"] } } },
+        },
+        catalog: [],
+        defaultProvider: "other",
+        defaultModel: "shared",
+      });
+      expect(policy.allows({ provider: "openai", model: "shared" })).toBe(true);
+      expect(policy.allowsByList({ provider: "openai", model: "shared" })).toBe(false);
+      expect(policy.allows({ provider: "other", model: "shared" })).toBe(false);
+    });
     it.each([
       ["absent", false],
       ["absent", true],
@@ -1196,7 +1209,7 @@ describe("model-selection", () => {
 
         expect(policy.allowAny).toBe(false);
         expect([...policy.allowedKeys]).toEqual(["custom/model"]);
-        expect(policy.visibleCatalog({ catalog: [], defaultVisibleCatalog: [] })).toEqual(
+        expect(policy.allowedCatalog).toEqual(
           catalogOrder === "absent" && reversePolicy ? rows.toReversed() : catalogRows,
         );
       },
@@ -1230,7 +1243,7 @@ describe("model-selection", () => {
           defaultProvider: "custom",
         });
 
-        expect(policy.visibleCatalog({ catalog: [], defaultVisibleCatalog: [] })).toEqual([
+        expect(policy.allowedCatalog).toEqual([
           ...catalog,
           ...(expectSynthetic ? [{ provider: "custom", id: missing, name: missing }] : []),
         ]);
@@ -1278,9 +1291,7 @@ describe("model-selection", () => {
           defaultProvider: "arcee",
         });
 
-        expect(policy.visibleCatalog({ catalog, defaultVisibleCatalog: catalog })).toEqual(
-          supplied ? [wire] : [direct, wire],
-        );
+        expect(policy.allowedCatalog).toEqual(supplied ? [wire] : [direct, wire]);
       },
     );
 
@@ -1334,7 +1345,7 @@ describe("model-selection", () => {
       ]);
     });
 
-    it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
+    it("keeps explicitly listed models and the configured primary", () => {
       const result = buildAllowedModelSet({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,
         catalog: BUNDLED_ALLOWLIST_CATALOG,
@@ -1350,6 +1361,7 @@ describe("model-selection", () => {
           name: "Claude Sonnet 4.5",
           alias: "sonnet",
         },
+        { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
       ]);
     });
 
@@ -1690,48 +1702,6 @@ describe("model-selection", () => {
       expect(policy.hasProviderWildcards).toBe(true);
       expect(policy.allows({ provider: "openai", model: "future-model" })).toBe(true);
       expect(policy.allows({ provider: "vllm", model: "qwen-local" })).toBe(false);
-      expect(
-        policy.visibleCatalog({
-          catalog: [],
-          defaultVisibleCatalog: [
-            { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
-            { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
-          ],
-        }),
-      ).toEqual([
-        { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-      ]);
-    });
-
-    it("keeps literal wildcard rows and exact entries with the first duplicate's metadata", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
-              "vllm/manual": {},
-            },
-            modelPolicy: { allow: ["vllm/*", "vllm/manual"] },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      const nested = { provider: "vllm", id: "vllm/qwen-local", name: "Namespaced Qwen" };
-      const catalog = [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }, nested];
-
-      const policy = createModelVisibilityPolicy({
-        cfg,
-        catalog,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-      });
-
-      expect(
-        policy.visibleCatalog({
-          catalog: [],
-          defaultVisibleCatalog: [...catalog, { ...nested, name: "Duplicate row" }],
-        }),
-      ).toEqual([...catalog, { provider: "vllm", id: "manual", name: "manual" }]);
     });
 
     it("does not re-add a default outside mixed wildcard and exact filters", () => {

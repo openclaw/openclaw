@@ -132,7 +132,10 @@ const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   },
 ];
 
-const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] => [
+const expectedSortedCatalog = (
+  gptTestZTags?: string[],
+  claudeTestBTags?: string[],
+): ModelCatalogRpcEntry[] => [
   {
     id: "claude-test-a",
     name: "A-Model",
@@ -146,6 +149,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
     provider: "anthropic",
     available: false,
     contextWindow: 1000,
+    ...(claudeTestBTags ? { tags: claudeTestBTags } : {}),
   },
   {
     id: "gpt-test-a",
@@ -522,7 +526,7 @@ describe("gateway server models + voicewake", () => {
       expect(res2.ok).toBe(true);
 
       const models = res1.payload?.models ?? [];
-      expect(models).toEqual(expectedSortedCatalog());
+      expect(models).toEqual(expectedSortedCatalog(undefined, ["default"]));
 
       expect(agentDiscoveryMock.discoverCalls).toBe(0);
     });
@@ -531,6 +535,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list default view uses configured providers instead of the full catalog", async () => {
     await withModelsConfig(
       {
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7-highspeed" } } },
         models: {
           providers: {
             minimax: minimaxProviderConfig(),
@@ -550,7 +555,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view reuses the prepared generation", async () => {
+  test("models.list configured view reuses prepared primary diagnostics", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -558,14 +563,41 @@ describe("gateway server models + voicewake", () => {
         OPENAI_API_KEY: "test-openai-key",
       },
       async () => {
-        await withModelsConfig({}, async () => {
-          await seedAgentModelCatalog();
-          const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
-          const res = await listModels({ view: "configured" });
-          expect(res.ok).toBe(true);
-          expect(res.payload?.models).toStrictEqual([]);
-          expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
-        });
+        await withModelsConfig(
+          {
+            agents: { defaults: { model: { primary: "anthropic/claude-test-a" } } },
+            models: {
+              providers: {
+                anthropic: {
+                  api: "anthropic-messages",
+                  baseUrl: "https://api.anthropic.com",
+                  models: [{ id: "claude-test-a", name: "A-Model", contextWindow: 200_000 }],
+                },
+              },
+            },
+          },
+          async () => {
+            await seedAgentModelCatalog();
+            const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
+            const res = await listModels({ view: "configured" });
+            expect(res.ok).toBe(true);
+            expect(res.payload?.models).toStrictEqual([
+              {
+                id: "claude-test-a",
+                name: "A-Model",
+                provider: "anthropic",
+                contextWindow: 200_000,
+                reasoning: false,
+                thinkingDefault: "off",
+                thinkingLevels: [{ id: "off", label: "off" }],
+                available: false,
+                unavailableReason: "missing-auth",
+                tags: ["default"],
+              },
+            ]);
+            expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
+          },
+        );
       },
     );
   });
@@ -766,6 +798,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list configured view uses models.providers when no allowlist is configured", async () => {
     await withModelsConfig(
       {
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7-highspeed" } } },
         models: {
           providers: {
             zhipu: {
@@ -793,7 +826,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view prefers the explicit model policy", async () => {
+  test("models.list configured view narrows enabled providers by the explicit model policy", async () => {
     await withModelsConfig(
       {
         agents: {
@@ -807,6 +840,7 @@ describe("gateway server models + voicewake", () => {
         },
         models: {
           providers: {
+            ...fullCatalogProviderConfig().models.providers,
             minimax: minimaxProviderConfig(),
           },
         },
@@ -894,30 +928,27 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("models.list includes synthetic entries for allowlist models absent from catalog", async () => {
-    await expectAllowlistedModels({
-      primary: "openai/not-in-catalog",
-      models: {
-        "openai/not-in-catalog": {},
-      },
-      expected: [
-        {
-          id: "not-in-catalog",
-          name: "not-in-catalog",
-          provider: "openai",
-          agentRuntime: {
-            id: "openclaw",
-            cloudPlacementSupported: true,
-            cloudPlacementExecutionMode: "worker-turn",
-            devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
-            devicePlacementSupported: true,
-            source: "implicit",
+  test("models.list hides non-primary allowlist entries absent from the catalog", async () => {
+    await withModelsConfig(
+      {
+        ...fullCatalogProviderConfig(),
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: { "openai/not-in-catalog": {} },
+            modelPolicy: { allow: ["openai/not-in-catalog"] },
           },
-          available: false,
-          tags: ["default", "configured"],
         },
-      ],
-    });
+      },
+      async () => {
+        await seedAgentModelCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models.map(({ provider, id }) => ({ provider, id }))).toEqual([
+          { provider: "openai", id: "gpt-test-z" },
+        ]);
+      },
+    );
   });
 
   test.each([

@@ -70,7 +70,11 @@ describe("model-selection plugin runtime normalization", () => {
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot);
     loadPreparedModelCatalogSnapshotMock.mockReset();
-    loadPreparedModelCatalogSnapshotMock.mockResolvedValue({ entries: [], authoritative: true });
+    loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+      authoritative: false,
+    });
   });
 
   it("delegates provider-owned model id normalization to plugin runtime hooks", async () => {

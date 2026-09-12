@@ -4,6 +4,8 @@ import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { resolveConfiguredModelPrimaryValue } from "../../agents/model-selection-shared.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -416,7 +418,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: context.runtimePolicySessionKey,
       });
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime && !params.configuredProfileId) {
+    if (
+      useFastReplyRuntime &&
+      !params.configuredProfileId &&
+      !modelState.blockedModelOverrideUsesPrimary
+    ) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -425,7 +431,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       };
     }
     const shouldUseEphemeralSession =
-      params.autoFallbackPrimaryProbe !== undefined || params.configuredProfileId !== undefined;
+      params.autoFallbackPrimaryProbe !== undefined ||
+      params.configuredProfileId !== undefined ||
+      modelState.blockedModelOverrideUsesPrimary === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry =
       shouldUseEphemeralSession && preparedSessionState.sessionEntry
@@ -433,6 +441,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         : preparedSessionState.sessionEntry;
     if (params.autoFallbackPrimaryProbe && authSessionEntry) {
       clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
+    }
+    if (modelState.blockedModelOverrideUsesPrimary && authSessionEntry) {
+      delete authSessionEntry.authProfileOverride;
+      delete authSessionEntry.authProfileOverrideSource;
+      delete authSessionEntry.authProfileOverrideCompactionCount;
     }
     const authSessionStore =
       shouldUseEphemeralSession && authSessionEntry
@@ -443,7 +456,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       provider,
       modelId: model,
       agentId,
-      configuredProfileId: params.configuredProfileId,
+      configuredProfileId:
+        params.configuredProfileId ??
+        (modelState.blockedModelOverrideUsesPrimary && !modelState.missingConfiguredPrimary
+          ? splitTrailingAuthProfile(
+              resolveConfiguredModelPrimaryValue({ cfg, agentId, sessionKey }) ?? "",
+            ).profile
+          : undefined),
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,

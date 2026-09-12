@@ -22,6 +22,7 @@ const expectations: Record<
   { providers: string[]; model?: string; sourceConfig?: OpenClawConfig }
 > = {
   "agent-override.json": { providers: ["openai", "fixture-provider"] },
+  "allow-list-primary-omitted.json": { providers: ["openai"], model: "fixture-primary" },
   "api-key-no-models.json": { providers: ["openai"] },
   "coach-lassi.json": {
     providers: ["openai"],

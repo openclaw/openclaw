@@ -1,4 +1,7 @@
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  CompactionAccountingTarget,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
@@ -48,6 +51,7 @@ export type AgentTurnInternalResult =
       kind: "completed";
       maintenanceAuthProfile?: CompletedAgentAuthSelection;
       compactionRequestBudget?: CompactionRequestBudget;
+      settledWriter?: CompactionAccountingTarget;
       result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
@@ -74,6 +78,8 @@ type SettledAgentTurnBase = {
   kind: "settled";
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
+  /** Runtime-issued writer custody, independent of whether any compaction occurred. */
+  settledWriter?: CompactionAccountingTarget;
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };

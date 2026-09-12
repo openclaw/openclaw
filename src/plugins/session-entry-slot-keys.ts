@@ -153,6 +153,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "modelSelectionLocked",
   "agentHarnessId",
   "fallbackNotice",
+  "modelPolicyNotice",
   "contextTokens",
   "contextTokensSource",
   "contextBudgetStatus",

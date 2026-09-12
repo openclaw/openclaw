@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatThinkingLevelOption
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -28,6 +29,7 @@ data class GatewayModelSummary(
   val supportsTools: Boolean? = null,
   val agentRuntime: JsonObject? = null,
   val unavailableUntil: Long? = null,
+  val tags: List<String> = emptyList(),
 ) {
   val runtimeName: String?
     get() =
@@ -50,15 +52,30 @@ enum class GatewayModelUnavailableReason {
   Cooldown,
 }
 
+data class GatewayModelAllowList(
+  val hiddenCount: Int,
+  val settingsPath: String,
+  val selectedModelBlocked: Boolean?,
+)
+
 internal data class GatewayModelCatalogResult(
   val models: List<GatewayModelSummary>,
   val refreshFailed: Boolean,
+  val allowList: GatewayModelAllowList?,
 )
 
 internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogResult =
   GatewayModelCatalogResult(
     models = parseGatewayModels(root?.get("models") as? JsonArray),
     refreshFailed = root?.get("refreshFailed")?.jsonPrimitive?.booleanOrNull == true,
+    allowList =
+      root?.get("allowList")?.jsonObject?.let { notice ->
+        GatewayModelAllowList(
+          hiddenCount = notice.getValue("hiddenCount").jsonPrimitive.int,
+          settingsPath = notice.getValue("settingsPath").jsonPrimitive.content,
+          selectedModelBlocked = notice["selectedModelBlocked"]?.jsonPrimitive?.booleanOrNull,
+        )
+      },
   )
 
 internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
@@ -70,6 +87,7 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
       name = row.getValue("name").jsonPrimitive.content,
       provider = row.getValue("provider").jsonPrimitive.content,
       available = row["available"]?.jsonPrimitive?.booleanOrNull,
+      tags = (row["tags"] as? JsonArray).orEmpty().map { it.jsonPrimitive.content },
       unavailableReason =
         when (row["unavailableReason"]?.jsonPrimitive?.content) {
           "missing-auth" -> GatewayModelUnavailableReason.MissingAuth

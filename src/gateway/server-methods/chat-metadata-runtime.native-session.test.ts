@@ -41,12 +41,13 @@ describe("gateway chat metadata native session ownership", () => {
         },
       });
       const owner = createChatMetadataOwner(config, "fixture-model", {}, "github-copilot");
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "github-copilot", providers: ["github-copilot"] }, { id: "copilot" }],
+      });
       harness.setOwner({
         ...owner,
         pluginRegistry: registry,
-        metadataSnapshot: createPluginMetadataSnapshotFixture({
-          plugins: [{ id: "github-copilot", providers: ["github-copilot"] }, { id: "copilot" }],
-        }),
+        metadataSnapshot,
       });
       harness.setAuthStore({
         version: 1,
@@ -95,6 +96,8 @@ describe("gateway chat metadata native session ownership", () => {
         ).resolves.toEqual({
           sessionModelCatalog: nativeStartup?.sessionModelCatalog,
           defaultModelCatalog: nativeStartup?.defaultModelCatalog,
+          modelCatalogSnapshot: owner.modelCatalog,
+          manifestPlugins: metadataSnapshot,
         });
         expect(
           (await harness.runtime.read({ agentId: "main", sessionEntry: native })).models?.[0]

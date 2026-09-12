@@ -13,10 +13,14 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
+import {
+  createNativeSlashFastReplyParams,
+  createNativeSlashModelCatalogSnapshot,
+  markCompleteReplyConfig,
+} from "./get-reply-fast-path.test-support.js";
 import * as sessionPersistence from "./session-entry-persistence.js";
 import { buildTestCtx } from "./test-ctx.js";
-import type { TypingController } from "./typing.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const { handleCommandsMock, buildStatusReplyMock } = vi.hoisted(() => ({
   handleCommandsMock: vi.fn(),
@@ -45,43 +49,10 @@ const { maybeResolveNativeSlashCommandFastReply } =
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
-const createTypingController = (): TypingController => ({
-  onReplyStart: async () => {},
-  startTypingLoop: async () => {},
-  startTypingOnText: async () => {},
-  refreshTypingTtl: () => {},
-  isActive: () => false,
-  markRunComplete: () => {},
-  markDispatchIdle: () => {},
-  cleanup: vi.fn(),
-});
-
-type NativeSlashFastReplyParams = Parameters<typeof maybeResolveNativeSlashCommandFastReply>[0];
-type NativeSlashFastReplyDefaultKey =
-  | "agentDir"
-  | "agentCfg"
-  | "defaultProvider"
-  | "defaultModel"
-  | "aliasIndex"
-  | "provider"
-  | "model"
-  | "workspaceDir";
-
 function runTestNativeSlashFastReply(
-  overrides: Omit<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey> &
-    Partial<Pick<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey>>,
+  overrides: Parameters<typeof createNativeSlashFastReplyParams>[0],
 ) {
-  return maybeResolveNativeSlashCommandFastReply({
-    agentDir: "/tmp/agent",
-    agentCfg: undefined,
-    defaultProvider: "openai",
-    defaultModel: "gpt-5.5",
-    aliasIndex: { byKey: new Map(), byAlias: new Map() },
-    provider: "openai",
-    model: "gpt-5.5",
-    workspaceDir: "/tmp/workspace",
-    ...overrides,
-  });
+  return maybeResolveNativeSlashCommandFastReply(createNativeSlashFastReplyParams(overrides));
 }
 
 describe("maybeResolveNativeSlashCommandFastReply", () => {
@@ -95,25 +66,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       },
     });
     // Keep scoped thinking reads on the same catalog fixture as model selection.
-    const catalogSnapshot: ModelCatalogSnapshot = {
-      entries: [
-        {
-          id: "gpt-5.5",
-          name: "GPT",
-          provider: "openai",
-          contextWindow: 400_000,
-          reasoning: false,
-        },
-        {
-          id: "claude-fable-5",
-          name: "Fable",
-          provider: "anthropic",
-          contextWindow: 1_000_000,
-          reasoning: false,
-        },
-      ],
-      routeVariants: [],
-    };
+    const catalogSnapshot = createNativeSlashModelCatalogSnapshot();
     vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue(
       catalogSnapshot,
     );
@@ -133,7 +86,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   ) {
     handleCommandsMock.mockResolvedValue(response);
     const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const resolvedConfig =
       config ??
       ({
@@ -353,7 +306,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       },
     );
 
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const result = await runTestNativeSlashFastReply({
       ctx: buildTestCtx({
         Body: "/compact",
@@ -434,6 +387,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       source: "user" as const,
       locked: false,
       allowed: ["openai/*"],
+      blocked: true,
       expectedProvider: "openai",
     },
     {
@@ -453,6 +407,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       locked: false,
       allowed: ["anthropic/*"],
       agentAllowed: ["openai/*"],
+      blocked: true,
       expectedProvider: "openai",
     },
     {
@@ -462,7 +417,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       overrideProvider: "openai",
       overrideModel: "gpt-5.5",
       expectedProvider: "openai",
-      expectedContextTokens: 200_000,
+      expectedContextTokens: 400_000,
     },
     {
       source: "user" as const,
@@ -474,7 +429,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       overrideProvider: "openai",
       overrideModel: "gpt-5.5",
       expectedProvider: "openai",
-      expectedContextTokens: 200_000,
+      expectedContextTokens: 400_000,
     },
   ])(
     "uses only user-selected or locked session overrides ($source, locked=$locked)",
@@ -484,6 +439,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         ("transportAuthorized" in testCase ? testCase.transportAuthorized : undefined) ?? true;
       handleCommandsMock.mockResolvedValueOnce({
         shouldContinue: false,
+        sessionCompaction: { compacted: true },
         reply: { text: "compacted" },
       });
       const targetAgentId =
@@ -522,89 +478,125 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       );
 
-      const result = await runTestNativeSlashFastReply({
-        ctx: buildTestCtx({
-          Body: "/compact",
-          CommandBody: "/compact",
-          CommandSource: "native",
-          CommandAuthorized: transportAuthorized,
-          Provider: "telegram",
-          Surface: "telegram",
-          From: "telegram:approved-sender",
-          SenderId: "approved-sender",
-          SessionKey: "telegram:slash:123",
-          CommandTargetSessionKey: targetSessionKey,
-          CommandTurn: {
-            kind: "native",
-            source: "native",
-            authorized: transportAuthorized,
-            commandName: "compact",
-            body: "/compact",
-          },
-        }),
-        cfg: markCompleteReplyConfig(
-          {
-            session: { store: storePath },
-            ...("approvedByPolicy" in testCase
-              ? { commands: { allowFrom: { "*": ["approved-sender"] } } }
-              : {}),
-            ...("allowed" in testCase
-              ? {
-                  agents: {
-                    defaults: {
-                      model: { primary: "openai/gpt-5.5" },
-                      modelPolicy: { allow: testCase.allowed },
-                    },
-                    ...("agentAllowed" in testCase
-                      ? {
-                          list: [
-                            {
-                              id: targetAgentId,
-                              modelPolicy: { allow: testCase.agentAllowed },
-                              ...("agentCap" in testCase
-                                ? { contextTokens: testCase.agentCap }
-                                : {}),
-                              ...(resolvedModel !== undefined
-                                ? {
-                                    models: {
-                                      [`anthropic/${resolvedModel}`]: {
-                                        alias: "legacy-fast-model",
+      const runCompact = () =>
+        runTestNativeSlashFastReply({
+          ctx: buildTestCtx({
+            Body: "/compact",
+            CommandBody: "/compact",
+            CommandSource: "native",
+            CommandAuthorized: transportAuthorized,
+            Provider: "telegram",
+            Surface: "telegram",
+            From: "telegram:approved-sender",
+            SenderId: "approved-sender",
+            SessionKey: "telegram:slash:123",
+            CommandTargetSessionKey: targetSessionKey,
+            CommandTurn: {
+              kind: "native",
+              source: "native",
+              authorized: transportAuthorized,
+              commandName: "compact",
+              body: "/compact",
+            },
+          }),
+          cfg: markCompleteReplyConfig(
+            {
+              session: { store: storePath },
+              ...("approvedByPolicy" in testCase
+                ? { commands: { allowFrom: { "*": ["approved-sender"] } } }
+                : {}),
+              ...("allowed" in testCase
+                ? {
+                    agents: {
+                      defaults: {
+                        model: { primary: "openai/gpt-5.5" },
+                        modelPolicy: { allow: testCase.allowed },
+                      },
+                      ...("agentAllowed" in testCase
+                        ? {
+                            list: [
+                              {
+                                id: targetAgentId,
+                                modelPolicy: { allow: testCase.agentAllowed },
+                                ...("agentCap" in testCase
+                                  ? { contextTokens: testCase.agentCap }
+                                  : {}),
+                                ...(resolvedModel !== undefined
+                                  ? {
+                                      models: {
+                                        [`anthropic/${resolvedModel}`]: {
+                                          alias: "legacy-fast-model",
+                                        },
                                       },
-                                    },
-                                  }
-                                : {}),
-                            },
-                          ],
-                        }
-                      : {}),
-                  },
-                }
-              : {}),
-          } as OpenClawConfig,
-          { runtimeMode: "full" },
-        ),
-        agentId: targetAgentId,
-        commandAuthorized: transportAuthorized,
-        aliasIndex: {
-          byKey: new Map(),
-          byAlias: new Map(
-            resolvedModel !== undefined
-              ? [
-                  [
-                    "legacy-fast-model",
-                    {
-                      alias: "legacy-fast-model",
-                      ref: { provider: "anthropic", model: resolvedModel },
+                                    }
+                                  : {}),
+                              },
+                            ],
+                          }
+                        : {}),
                     },
-                  ],
-                ]
-              : [],
+                  }
+                : {}),
+            } as OpenClawConfig,
+            { runtimeMode: "full" },
           ),
-        },
-        typing: createTypingController(),
-      });
+          agentId: targetAgentId,
+          commandAuthorized: transportAuthorized,
+          aliasIndex: {
+            byKey: new Map(),
+            byAlias: new Map(
+              resolvedModel !== undefined
+                ? [
+                    [
+                      "legacy-fast-model",
+                      {
+                        alias: "legacy-fast-model",
+                        ref: { provider: "anthropic", model: resolvedModel },
+                      },
+                    ],
+                  ]
+                : [],
+            ),
+          },
+          typing: createMockTypingController(),
+        });
 
+      const result = await runCompact();
       expect(result.handled).toBe(true);
+      if ("blocked" in testCase) {
+        expect(result).toMatchObject({
+          reply: { text: expect.stringContaining("This reply used the default (openai/gpt-5.5)") },
+        });
+        expect(handleCommandsMock.mock.calls[0]?.[0]).toMatchObject({
+          provider: "openai",
+          model: "gpt-5.5",
+          blockedModelOverrideUsesPrimary: true,
+        });
+        expect(
+          loadExactSessionEntry({ sessionKey: targetSessionKey, storePath })?.entry,
+        ).toMatchObject({ providerOverride: "anthropic", modelOverride: "claude-fable-5" });
+        if (result.handled && result.reply && !Array.isArray(result.reply)) {
+          await getReplyPayloadMetadata(result.reply)?.onFinalDeliverySuccess?.();
+        }
+        expect(
+          loadExactSessionEntry({ sessionKey: targetSessionKey, storePath })?.entry
+            ?.modelPolicyNotice,
+        ).toBeUndefined();
+        handleCommandsMock.mockResolvedValueOnce({
+          shouldContinue: false,
+          sessionCompaction: { compacted: true },
+          reply: { text: "compacted again" },
+        });
+        expect(await runCompact()).toMatchObject({
+          handled: true,
+          reply: {
+            text: "Pinned model anthropic/claude-fable-5 is not in your allow list. This reply used the default (openai/gpt-5.5). Use /model to change it.\n\ncompacted again",
+          },
+        });
+        expect(
+          loadExactSessionEntry({ sessionKey: targetSessionKey, storePath })?.entry,
+        ).toMatchObject({ providerOverride: "anthropic", modelOverride: "claude-fable-5" });
+      }
       expect(handleCommandsMock.mock.calls[0]?.[0]).toMatchObject({
         provider: expectedProvider,
         model:
@@ -618,7 +610,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
             ? testCase.expectedContextTokens
             : expectedProvider === "anthropic"
               ? 1_000_000
-              : 200_000,
+              : 400_000,
       });
     },
   );
@@ -686,7 +678,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       } as OpenClawConfig),
       agentId: "main",
       commandAuthorized: true,
-      typing: createTypingController(),
+      typing: createMockTypingController(),
     });
 
     const statusCall = buildStatusReplyMock.mock.calls[0]?.[0];
@@ -744,7 +736,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       reply: { text: "Trajectory exports can include prompts." },
     });
 
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const ctx = buildTestCtx({
       Body: "/export-trajectory bundle",
       BodyForCommands: "/export-trajectory bundle",
@@ -792,7 +784,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   });
 
   it("leaves external text slash commands on the canonical session path", async () => {
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const ctx = buildTestCtx({
       Body: "/export-trajectory bundle",
       BodyForCommands: "/export-trajectory bundle",
@@ -872,7 +864,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       } as OpenClawConfig),
       agentId: "main",
       commandAuthorized: authorized,
-      typing: createTypingController(),
+      typing: createMockTypingController(),
     });
 
     expect(result).toEqual({
@@ -948,7 +940,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
       agentId: "main",
       commandAuthorized: true,
-      typing: createTypingController(),
+      typing: createMockTypingController(),
     });
 
     expect(result).toEqual({
@@ -990,7 +982,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
       agentId: "main",
       commandAuthorized: true,
-      typing: createTypingController(),
+      typing: createMockTypingController(),
     });
 
     expect(result).toEqual({
@@ -1045,7 +1037,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
         agentId: "main",
         commandAuthorized: true,
-        typing: createTypingController(),
+        typing: createMockTypingController(),
       });
     } finally {
       nowSpy.mockRestore();

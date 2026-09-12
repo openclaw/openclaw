@@ -1,6 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { buildMockOpenAiResponsesProvider } from "../../gateway/test-openai-responses-model.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -55,6 +56,12 @@ it.each([
         },
       },
       plugins: { enabled: false },
+      models: {
+        providers: {
+          "mock-openai": buildMockOpenAiResponsesProvider("https://example.invalid/v1", "gpt-4o")
+            .config,
+        },
+      },
     });
     await state.writeConfig(cfg);
     const reply = await getReplyFromConfig(

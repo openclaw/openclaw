@@ -88,7 +88,13 @@ public enum OpenClawChatGatewayPayloadCodec {
         return try OpenClawChatModelCatalogSnapshot(
             choices: decoded.models.map(self.modelChoice),
             availabilityIsSessionScoped: true,
-            refreshFailed: decoded.refreshfailed == true)
+            refreshFailed: decoded.refreshfailed == true,
+            allowList: decoded.allowlist.map {
+                OpenClawChatModelAllowList(
+                    hiddenCount: $0.hiddencount,
+                    settingsPath: $0.settingspath,
+                    selectedModelBlocked: $0.selectedmodelblocked)
+            })
     }
 
     public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
@@ -117,7 +123,8 @@ public enum OpenClawChatGatewayPayloadCodec {
             thinkingLevels: model.thinkinglevels.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
             thinkingDefault: model.thinkingdefault,
             input: model.input.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
-            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) })
+            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
+            tags: model.tags)
     }
 
     public static func commandChoice(_ entry: CommandEntry) -> OpenClawChatCommandChoice {

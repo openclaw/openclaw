@@ -122,14 +122,39 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("unsupported result field: futureCapabilityEvidence");
   });
 
-  it("projects a successful full attempt into the narrow result", () => {
-    const attempt = successfulAttempt({ lastAssistantTextMessageIndex: 2 });
+  it.each([
+    {
+      label: "a legacy stream index",
+      transcript: {},
+      expectedTranscript: { assistantMessageIndex: 2 },
+    },
+    {
+      label: "an owned physical entry",
+      transcript: {
+        assistantTranscriptOwned: true,
+        assistantTranscriptEntryId: "final-assistant-entry",
+      },
+      expectedTranscript: {
+        assistantTranscriptOwned: true,
+        assistantTranscriptEntryId: "final-assistant-entry",
+      },
+    },
+    {
+      label: "owned persistence without a physical entry",
+      transcript: { assistantTranscriptOwned: true },
+      expectedTranscript: { assistantTranscriptOwned: true },
+    },
+  ])(
+    "projects a successful full attempt with $label into the narrow result",
+    ({ transcript, expectedTranscript }) => {
+      const attempt = successfulAttempt({ lastAssistantTextMessageIndex: 2, ...transcript });
 
-    expect(projectSettledTurnFinalizationAttemptResult(attempt)).toEqual({
-      assistant: attempt.currentAttemptCompletedAssistant,
-      assistantMessageIndex: 2,
-    });
-  });
+      expect(projectSettledTurnFinalizationAttemptResult(attempt)).toEqual({
+        assistant: attempt.currentAttemptCompletedAssistant,
+        ...expectedTranscript,
+      });
+    },
+  );
 
   it("rejects a failed full attempt even when it contains visible assistant text", () => {
     expect(() =>

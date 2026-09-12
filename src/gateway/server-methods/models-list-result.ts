@@ -1,5 +1,4 @@
 // Resolves public model catalogs without exposing runtime-only provider params.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type {
   ModelChoice,
   ModelsListParams,
@@ -48,6 +47,7 @@ import {
 } from "../../agents/prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveAutomaticUtilityModelRef } from "../../agents/utility-model.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
@@ -76,7 +76,9 @@ type ApiKeyProviderCapabilities = {
   resolveProvider(provider: string): string;
 };
 type PreparedModelsListResult = {
-  read: () => ModelsListResult;
+  read: (
+    selection?: Pick<ChatMetadataReadParams, "sessionEntry" | "sessionKey">,
+  ) => ModelsListResult;
   isCurrent: () => boolean;
 };
 
@@ -291,7 +293,12 @@ export async function prepareModelsListResult(
   const requestConfig = currentConfig();
   const initialConfig = publishedOwner?.config ?? requestConfig;
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
-  const profiles = resolveSessionCatalogProfiles(sessionEntry, initialConfig, initialAgentId);
+  const profiles = resolveSessionCatalogProfiles(
+    sessionEntry,
+    initialConfig,
+    initialAgentId,
+    scope?.sessionKey,
+  );
   const view = resolveModelsListView(params.params);
   const refresh = params.params.refresh === true;
   const preloadedCatalog =
@@ -352,6 +359,7 @@ export async function prepareModelsListResult(
     kind: "prepared",
     cfg,
     agentId,
+    sessionKey: scope?.sessionKey,
     agentDir: sourceOwner?.agentDir,
     workspaceDir,
     snapshot,
@@ -439,9 +447,11 @@ export async function prepareModelsListResult(
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
+    modelCatalog: preparedCatalog.snapshot,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel,
     agentId,
+    sessionKey: scope?.sessionKey,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: metadataSnapshot,
   });
@@ -493,7 +503,9 @@ export async function prepareModelsListResult(
   const configuredEntriesByKey = resolveConfiguredModelEntries({
     cfg,
     agentId,
+    sessionKey: scope?.sessionKey,
     defaultModel,
+    effectiveDefaultRef: preparedCatalog.effectiveDefault.ref,
     canonicalizeRef: (ref) => ({
       ...ref,
       model:
@@ -565,8 +577,18 @@ export async function prepareModelsListResult(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel,
     agentId,
+    selectedModel: scope
+      ? resolveSessionModelRef(cfg, sessionEntry, agentId, {
+          ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+          manifestPlugins: metadataSnapshot,
+          sessionKey: scope.sessionKey,
+        })
+      : undefined,
     workspaceDir,
     view,
+    ...(providerFilter
+      ? { includeProvider: (provider: string) => normalizeProvider(provider) === providerFilter }
+      : {}),
     policy: visibilityPolicy,
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants,
@@ -575,15 +597,9 @@ export async function prepareModelsListResult(
       return () => {
         const evaluation = evaluateNative(entry, host);
         evaluations.set(resolveModelCatalogIdentityKey(entry), evaluation);
-        const routeManaged = evaluation.routeResolution !== null;
-        const syntheticLocal =
-          !routeManaged &&
-          normalizeProviderId(entry.provider) !== "openai" &&
-          evaluation.availability === undefined &&
-          evaluation.evidence === "synthetic";
         return resolveLogicalModelCatalogEntryState({
           evaluation,
-          authBacked: evaluation.availability === true || syntheticLocal,
+          provider: entry.provider,
           routePolicy: openAIModelCatalogRoutePolicy,
         });
       };
@@ -608,17 +624,28 @@ export async function prepareModelsListResult(
   });
   return {
     isCurrent: () => isCurrent() && projector.isCurrent(),
-    read: () => ({
-      models: readCatalog()
-        .filter(matchesProvider)
-        .map((entry) => {
+    read: (selection) => {
+      const { entries, allowList } = readCatalog();
+      if (allowList && selection) {
+        allowList.selectedModelBlocked = !visibilityPolicy.allows(
+          resolveSessionModelRef(cfg, selection.sessionEntry, agentId, {
+            ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+            manifestPlugins: metadataSnapshot,
+            sessionKey: selection.sessionKey,
+          }),
+        );
+      }
+      return {
+        models: entries.map((entry) => {
           const evaluation = evaluations.get(resolveModelCatalogIdentityKey(entry));
           if (!evaluation) {
             throw new Error("Model catalog publication omitted prepared auth evaluation");
           }
           return projectPublic(entry, evaluation);
         }),
-      ...outcomeProjection,
-    }),
+        ...outcomeProjection,
+        ...(allowList ? { allowList } : {}),
+      };
+    },
   };
 }

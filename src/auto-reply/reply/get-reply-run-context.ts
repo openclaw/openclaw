@@ -159,7 +159,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     modelId: model,
     agentId,
     sessionKey: runtimePolicySessionKey,
-    sessionEntry,
+    sessionEntry: params.modelState.blockedModelOverrideUsesPrimary ? undefined : sessionEntry,
   });
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {

@@ -23,7 +23,7 @@ type DiscordModelPickerSelectionCommand = {
 
 type DiscordModelPickerApplyResult =
   | { status: "success"; effectiveModelRef: string; noticeMessage: string }
-  | { status: "mismatch"; effectiveModelRef: string; noticeMessage: string }
+  | { status: "mismatch"; effectiveModelRef: string | undefined; noticeMessage: string }
   | { status: "rejected"; noticeMessage: string }
   | { status: "timeout"; noticeMessage: string }
   | { status: "failed"; noticeMessage: string };
@@ -52,7 +52,7 @@ export async function applyDiscordModelPickerSelection(params: {
   selectedRuntime?: string;
   preferenceScope: DiscordModelPickerPreferenceScope;
   settleMs: number;
-  resolveCurrentModel: (route: ResolvedAgentRoute) => string;
+  resolveCurrentModel: (route: ResolvedAgentRoute) => string | undefined;
   resolveCurrentRuntime: (route: ResolvedAgentRoute) => string;
 }): Promise<DiscordModelPickerApplyResult> {
   try {
@@ -91,7 +91,9 @@ export async function applyDiscordModelPickerSelection(params: {
 
     const effectiveModelRef = params.resolveCurrentModel(effectiveRoute);
     const effectiveRuntime = params.resolveCurrentRuntime(effectiveRoute);
-    const currentSelection = `Current selection: ${effectiveModelRef} with runtime ${effectiveRuntime}.`;
+    const currentSelection = effectiveModelRef
+      ? `Current selection: ${effectiveModelRef} with runtime ${effectiveRuntime}.`
+      : "No model is currently selected.";
     if (hiddenFinalReply?.isError) {
       return {
         status: "rejected",
@@ -113,14 +115,14 @@ export async function applyDiscordModelPickerSelection(params: {
     return verified
       ? {
           status: "success",
-          effectiveModelRef,
+          effectiveModelRef: params.resolvedModelRef,
           noticeMessage:
             hiddenFinalReply?.text?.trim() || `✅ Model set to ${params.resolvedModelRef}.`,
         }
       : {
           status: "mismatch",
           effectiveModelRef,
-          noticeMessage: `⚠️ Tried to set ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""}, but current selection is ${effectiveModelRef} with runtime ${effectiveRuntime}.`,
+          noticeMessage: `⚠️ Tried to set ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""}, but ${effectiveModelRef ? `current selection is ${effectiveModelRef} with runtime ${effectiveRuntime}` : "no model is currently selected"}.`,
         };
   } catch (error) {
     if (error instanceof Error && error.message === "timeout") {

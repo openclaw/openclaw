@@ -5,7 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
@@ -78,6 +78,29 @@ afterAll(async () => {
 beforeEach(async () => {
   storePath = path.join(temporaryDirs.make("openclaw-goal-chat-"), "sessions.json");
   testState.sessionStorePath = storePath;
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    models: {
+      mode: "replace",
+      providers: {
+        anthropic: {
+          api: "anthropic-messages",
+          baseUrl: "https://fixture.invalid/v1",
+          models: [
+            {
+              id: "claude-opus-4-6",
+              name: "Goal fixture model",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        },
+      },
+    },
+  });
   await writeSessionStore({
     entries: { main: { sessionId, updatedAt: Date.now(), status: "done" } },
   });

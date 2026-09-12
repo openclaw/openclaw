@@ -689,10 +689,17 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     }
 }
 
+public struct OpenClawChatModelAllowList: Decodable, Sendable, Equatable {
+    public let hiddenCount: Int
+    public let settingsPath: String
+    public let selectedModelBlocked: Bool?
+}
+
 public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
     public let choices: [OpenClawChatModelChoice]
     public let availabilityIsSessionScoped: Bool
     public let refreshFailed: Bool
+    public let allowList: OpenClawChatModelAllowList?
 
     public var message: String? {
         if !self.availabilityIsSessionScoped {
@@ -705,11 +712,13 @@ public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
     public init(
         choices: [OpenClawChatModelChoice],
         availabilityIsSessionScoped: Bool,
-        refreshFailed: Bool = false)
+        refreshFailed: Bool = false,
+        allowList: OpenClawChatModelAllowList? = nil)
     {
         self.choices = choices
         self.availabilityIsSessionScoped = availabilityIsSessionScoped
         self.refreshFailed = refreshFailed
+        self.allowList = allowList
     }
 }
 

@@ -1,0 +1,26 @@
+{
+  "gateway": { "mode": "local", "auth": { "mode": "token", "token": "FAKE_CONFIG_CORPUS_CREDENTIAL" } },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "openai/fixture-primary", "fallbacks": ["openai/fixture-alternative"] },
+      "modelPolicy": { "allow": ["openai/fixture-alternative"] }
+    },
+    "entries": { "main": {} }
+  },
+  "plugins": { "allow": ["openai"], "entries": { "openai": { "enabled": true } } },
+  "models": {
+    "mode": "replace",
+    "providers": {
+      "openai": {
+        "api": "openai-completions",
+        "baseUrl": "http://127.0.0.1:9/v1",
+        "apiKey": "FAKE_CONFIG_CORPUS_CREDENTIAL",
+        "models": [
+          { "id": "fixture-primary", "name": "Configured primary", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 128000, "maxTokens": 4096 },
+          { "id": "fixture-alternative", "name": "Allowed alternative", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 128000, "maxTokens": 4096 },
+          { "id": "fixture-blocked", "name": "Previous session pin", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 128000, "maxTokens": 4096 }
+        ]
+      }
+    }
+  }
+}

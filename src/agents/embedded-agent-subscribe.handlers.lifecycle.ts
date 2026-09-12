@@ -37,6 +37,7 @@ export {
 } from "./embedded-agent-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
+  ctx.state.assistantTranscriptEntryId = undefined;
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   const data = { phase: "start", startedAt: Date.now() };
   emitAgentEvent({
@@ -65,6 +66,7 @@ export function handleAgentEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
 ): void | Promise<void> {
+  ctx.state.assistantTranscriptEntryId = evt?.assistantEntryId;
   ctx.state.liveEditDiffStateById.clear();
   type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
   const lastAssistant = ctx.state.lastAssistant;

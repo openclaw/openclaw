@@ -210,9 +210,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   });
   recordReplyUsageState(runId, replyUsageState);
   const verboseEnabled = resolvedVerboseLevel !== "off";
-  const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
-    followupRun.run.inputProvenance,
-  );
+  const preserveUserFacingSessionState =
+    followupRun.run.blockedModelOverrideUsesPrimary === true ||
+    shouldPreserveUserFacingSessionStateForInputProvenance(followupRun.run.inputProvenance);
   const fallbackStateEntry =
     activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
   const configuredFallbackModel = resolveFallbackOriginModel({

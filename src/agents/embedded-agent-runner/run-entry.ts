@@ -113,6 +113,7 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     model: string;
     requestedRouteResolution?: ModelFallbackRouteResolution;
     fallbacksOverride?: string[];
+    missingConfiguredPrimary?: string;
     agentDir?: string;
     userLockedAuthProfileId?: string;
   } & ModelManifestNormalizationContext;

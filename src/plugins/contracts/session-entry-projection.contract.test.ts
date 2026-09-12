@@ -334,6 +334,11 @@ describe("plugin session extension SessionEntry projection", () => {
           description: "retired pending-final field",
           sessionEntrySlotKey: "pendingFinalDeliveryText",
         });
+        api.registerSessionExtension({
+          namespace: "model-policy-notice",
+          description: "reserved core model policy delivery receipt",
+          sessionEntrySlotKey: "modelPolicyNotice",
+        });
         for (const field of ["execSecurity", "execAsk"]) {
           api.registerSessionExtension({
             namespace: `retired-${field.toLowerCase()}`,
@@ -383,6 +388,10 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: pendingFinalDeliveryText",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: modelPolicyNotice",
       },
       {
         pluginId: "slot-collision",

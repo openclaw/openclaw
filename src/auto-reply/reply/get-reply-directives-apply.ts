@@ -26,6 +26,7 @@ import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import { getStandaloneSlashCommandName } from "./reply-inline.js";
 import type { ReplyPreRunRejectionCode } from "./reply-operation-run-state.js";
 import type { TypingController } from "./typing.js";
 
@@ -331,7 +332,12 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasQueueDirective ||
     directives.hasStatusDirective;
 
-  if (!hasAnyDirective && !modelState.resetModelOverride && !modelState.resetModelOverrideReason) {
+  if (
+    !hasAnyDirective &&
+    !modelState.resetModelOverride &&
+    !modelState.resetModelOverrideReason &&
+    !modelState.blockedModelOverrideRef
+  ) {
     return {
       kind: "continue",
       directives,
@@ -569,6 +575,44 @@ export async function applyInlineDirectiveOverrides(params: {
     }
     ({ provider, model } = persistenceState.outcome);
     selectionCatalog = persistenceState.outcome.modelCatalog ?? selectionCatalog;
+    if (
+      persistenceState.outcome.kind === "applied" &&
+      directives.hasModelDirective &&
+      effectiveModelDirective
+    ) {
+      modelState.blockedModelOverrideRef = undefined;
+      modelState.blockedModelOverrideUsesPrimary = undefined;
+      modelState.missingConfiguredPrimary = undefined;
+    }
+  }
+
+  const recoveryCommand =
+    allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true
+      ? getStandaloneSlashCommandName(command.commandBodyNormalized)
+      : null;
+  if (
+    modelState.missingConfiguredPrimary &&
+    modelState.modelPolicy.effectiveDefault.ref === null &&
+    recoveryCommand !== "model" &&
+    recoveryCommand !== "models"
+  ) {
+    typing.cleanup();
+    return directiveRejection(
+      "model-selection-rejected",
+      `Configured primary ${modelState.missingConfiguredPrimary} is not in the model catalog, and no allowed default is available. Use /model to choose an available model or update your primary model in settings.`,
+    );
+  }
+  if (
+    modelState.blockedModelOverrideRef &&
+    !modelState.modelPolicy.allows({ provider, model }) &&
+    recoveryCommand !== "model" &&
+    recoveryCommand !== "models"
+  ) {
+    typing.cleanup();
+    return directiveRejection(
+      "model-selection-rejected",
+      `Your pinned model ${modelState.blockedModelOverrideRef} is not in your allow list, and no usable default is available. Add it to ${modelState.modelPolicy.allowRepairConfigPath.replace("entries.*", `entries.${agentId}`)} or choose an allowed model with /model list. Your session pin is unchanged.`,
+    );
   }
 
   const selectedCatalogEntry = selectionCatalog.find(

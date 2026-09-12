@@ -9,6 +9,7 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { buildMockOpenAiResponsesProvider } from "../../gateway/test-openai-responses-model.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
@@ -55,6 +56,14 @@ async function createExplicitOwnerConfig() {
       },
     },
     plugins: { enabled: false },
+    models: {
+      providers: {
+        "mock-openai": buildMockOpenAiResponsesProvider(
+          "https://example.invalid/v1",
+          "gpt-5.6-luna",
+        ).config,
+      },
+    },
     session: { scope: "global" },
   });
   await state.writeConfig(cfg);

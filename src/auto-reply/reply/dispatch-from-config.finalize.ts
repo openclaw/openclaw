@@ -25,6 +25,7 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
+import { waitForModelPolicyNoticePublication } from "./model-notice-publication.js";
 
 type ExecuteDispatchReadyState = Extract<
   Awaited<ReturnType<typeof executeDispatch>>,
@@ -222,13 +223,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       const onFinalDeliverySuccess = getReplyPayloadMetadata(reply)?.onFinalDeliverySuccess;
       if (onFinalDeliverySuccess) {
         if (finalReply.dispatcherOutcome) {
-          registerReplyDispatcherSettledTask(dispatcher, async () => {
-            if ((await finalReply.dispatcherOutcome) === "delivered") {
-              onFinalDeliverySuccess();
+          const acknowledgment = finalReply.dispatcherOutcome.then(async (outcome) => {
+            if (outcome === "delivered") {
+              await onFinalDeliverySuccess();
             }
           });
+          state.trackDispatchLifecycleWork(
+            acknowledgment.then(() => waitForModelPolicyNoticePublication(reply)),
+            "delivery",
+          );
+          registerReplyDispatcherSettledTask(dispatcher, () => acknowledgment);
         } else if (finalReply.routedFinalCount > 0) {
-          onFinalDeliverySuccess();
+          await onFinalDeliverySuccess();
         }
       }
       // Metadata survives usage, threading, and transcript decoration; object identity does not.

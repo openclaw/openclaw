@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { buildMockOpenAiResponsesProvider } from "../../gateway/test-openai-responses-model.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -51,6 +52,14 @@ it.each([
         },
       },
       plugins: { enabled: false },
+      models: {
+        providers: {
+          "mock-openai": buildMockOpenAiResponsesProvider(
+            "https://example.invalid/v1",
+            "gpt-5.6-luna",
+          ).config,
+        },
+      },
       commands: { text: true },
     });
     await state.writeConfig(cfg);

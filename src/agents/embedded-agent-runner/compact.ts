@@ -9,6 +9,7 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { createConfiguredPrimarySessionEntry } from "../../sessions/model-overrides.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
@@ -194,13 +195,15 @@ export async function compactNativeCliSession(params: {
 }
 
 function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): boolean {
-  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
+  return (
+    !params.useSelectedModel && Boolean(params.config?.agents?.defaults?.compaction?.model?.trim())
+  );
 }
 
 function resolveCompactionFallbacksOverride(
   params: CompactEmbeddedAgentSessionParams,
 ): string[] | undefined {
-  if (params.modelSelectionLocked) {
+  if (params.modelSelectionLocked || params.useSelectedModel) {
     return [];
   }
   return (
@@ -265,7 +268,18 @@ export async function compactEmbeddedAgentSessionDirect(
       ...paramsBase,
       missingSessionKey: "resolve-existing",
     }));
-  const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
+  const storedEntry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
+  const entry =
+    paramsBase.useSelectedModel &&
+    storedEntry &&
+    !storedEntry.modelSelectionLocked &&
+    paramsBase.provider &&
+    paramsBase.model
+      ? createConfiguredPrimarySessionEntry(storedEntry, {
+          provider: paramsBase.provider,
+          model: paramsBase.model,
+        })
+      : storedEntry;
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
     paramsBase,
@@ -473,6 +487,7 @@ export async function compactEmbeddedAgentSessionDirect(
           modelId: params.model,
           authProfileId: params.authProfileId,
           modelSelectionLocked: params.modelSelectionLocked,
+          useSelectedModel: params.useSelectedModel,
           defaultProvider: DEFAULT_PROVIDER,
           defaultModel: DEFAULT_MODEL,
         });

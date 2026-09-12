@@ -3145,6 +3145,7 @@ class NodeRuntime private constructor(
   val chatThinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> = chat.thinkingLevelSelection
   val chatSelectedModelRef: StateFlow<String?> = chat.selectedModelRef
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
+  val chatModelAllowList: StateFlow<GatewayModelAllowList?> = chat.modelAllowList
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> = chat.pendingSessionSettingsKeys
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls

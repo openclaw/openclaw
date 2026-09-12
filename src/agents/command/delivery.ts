@@ -6,7 +6,16 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import type { ModelNoticeTranscript } from "../../auto-reply/reply/model-notice-publication.js";
+import {
+  attachMissingConfiguredPrimaryNotice,
+  attachModelPolicyNotice,
+} from "../../auto-reply/reply/model-policy-notice.js";
 import {
   normalizeReplyPayloadOutcome,
   type NormalizeReplyOutcome,
@@ -142,6 +151,10 @@ type DeliverAgentCommandResultParams = {
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
   payloads: ReplyPayload[] | undefined;
+  allowListPolicyFallback?: { pinnedModel: string; primaryModel: string };
+  missingPrimaryFallback?: { missingPrimary: string; primaryModel: string };
+  modelNoticeTranscript?: ModelNoticeTranscript;
+  storePath?: string;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: () => void;
@@ -881,7 +894,43 @@ export async function deliverAgentCommandResult(
     mediaNormalization.normalizeMediaPaths,
   );
   params.assertDeliveryCurrent?.();
-  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
+  let policyPayloads = params.allowListPolicyFallback
+    ? attachModelPolicyNotice({
+        payloads: mediaNormalizedReplyPayloads,
+        ...params.allowListPolicyFallback,
+        transcript: params.modelNoticeTranscript,
+        sessionEntry,
+        sessionKey: effectiveSessionKey,
+        storePath: params.storePath,
+      })
+    : mediaNormalizedReplyPayloads;
+  if (params.missingPrimaryFallback) {
+    policyPayloads = attachMissingConfiguredPrimaryNotice({
+      payloads: policyPayloads,
+      ...params.missingPrimaryFallback,
+      transcript: params.modelNoticeTranscript,
+    });
+  }
+  const outboundPayloadPlan = createOutboundPayloadPlan(policyPayloads);
+  const deliveryAcknowledgments = outboundPayloadPlan.flatMap((entry) =>
+    projectOutboundPayloadPlanForOutbound([entry]).map(
+      () => getReplyPayloadMetadata(entry.payload)?.onFinalDeliverySuccess,
+    ),
+  );
+  const acknowledgePolicyNotice = async (send?: DurableSendResult) => {
+    for (const [index, acknowledge] of deliveryAcknowledgments.entries()) {
+      const delivered =
+        !send ||
+        (send.payloadOutcomes
+          ? send.payloadOutcomes.some(
+              (outcome) => outcome.index === index && outcome.status === "sent",
+            )
+          : send.status === "sent");
+      if (delivered) {
+        await acknowledge?.();
+      }
+    }
+  };
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   const captureDeliveryResult = (
     deliveryResult: AgentCommandDeliveryResult,
@@ -954,6 +1003,7 @@ export async function deliverAgentCommandResult(
       logPayload(payload);
     }
     emitJsonEnvelope();
+    await acknowledgePolicyNotice();
     return captureDeliveryResult(
       buildDeliveryResult({ payloads: normalizedPayloads, meta: result.meta, result }),
     );
@@ -1002,6 +1052,7 @@ export async function deliverAgentCommandResult(
         throw restartAbort.signal.reason;
       }
       deliveryStatus = deliveryStatusFromDurableSend(send);
+      await acknowledgePolicyNotice(send);
       if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
         emitJsonEnvelope(deliveryStatus);
         captureDeliveryResult(

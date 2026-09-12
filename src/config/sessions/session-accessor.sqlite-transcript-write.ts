@@ -207,6 +207,7 @@ export async function rewriteTranscriptEventRowsExact(
   params: {
     allowInitialGenerationMaterialization?: boolean;
     expectedGeneration: string | null;
+    canCommit?: (current: InternalSessionEntry | undefined) => boolean;
     rows: readonly { event: TranscriptEvent; expectedEventJson: string; seq: number }[];
   },
 ): Promise<{ generation: string } | null> {
@@ -221,6 +222,12 @@ export async function rewriteTranscriptEventRowsExact(
     async () => {
       let result: { generation: string } | null = null;
       runOpenClawAgentWriteTransaction((database) => {
+        if (
+          params.canCommit &&
+          !params.canCommit(readSessionEntryRow(database, resolved.sessionKey)?.entry)
+        ) {
+          return;
+        }
         const currentGeneration =
           readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null;
         const initialGenerationMaterialized =

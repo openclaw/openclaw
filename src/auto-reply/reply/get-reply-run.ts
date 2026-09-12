@@ -2,16 +2,47 @@
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
+import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import { executePreparedReplyRun } from "./get-reply-run-execute.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
+import { attachModelPolicyNotice } from "./model-policy-notice.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 
 async function executePreparedReplyContext(
   context: Exclude<Awaited<ReturnType<typeof prepareReplyRunContext>>, { kind: "reply" }>,
 ) {
-  const admission = await prepareReplyRunAdmission(context);
+  let admission: Awaited<ReturnType<typeof prepareReplyRunAdmission>>;
+  try {
+    admission = await prepareReplyRunAdmission(context);
+  } catch (error) {
+    const { params } = context;
+    if (
+      !params.modelState.blockedModelOverrideUsesPrimary ||
+      !params.modelState.blockedModelOverrideRef
+    ) {
+      throw error;
+    }
+    const failure = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx: params.sessionCtx,
+      resolvedVerboseLevel: params.resolvedVerboseLevel,
+      cfg: params.cfg,
+    });
+    if (!failure) {
+      throw error;
+    }
+    params.typing.cleanup();
+    return attachModelPolicyNotice({
+      payloads: [failure],
+      pinnedModel: params.modelState.blockedModelOverrideRef,
+      primaryModel: `${params.provider}/${params.model}`,
+      sessionEntry: params.sessionEntry,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+  }
   if (admission.kind === "reply") {
     return admission.reply;
   }

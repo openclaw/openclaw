@@ -61,9 +61,27 @@ struct ChatCatalogProjectionTests {
         model.modelAvailabilityIsSessionScoped = true
         let choice = try #require(model.modelChoices.first)
         #expect(choice.available == nil)
+        #expect(model.isDefaultModel(choice))
         #expect(model.canSelectModel(choice.selectionID))
         #expect(model.modelUnavailableDescription(choice) == nil)
         #expect(model.selectedModelUnavailableReason == nil)
+    }
+
+    @Test func `published subagent default overrides parent session defaults`() throws {
+        let model = OpenClawChatViewModel(
+            sessionKey: "agent:main:subagent:child", transport: CatalogProjectionTransport())
+        model.modelChoices = try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(Data(
+            #"{"models":[{"id":"parent","name":"Parent","provider":"parent"},{"id":"child","name":"Child","provider":"worker","tags":["default"]}]}"#.utf8)).choices
+        model.sessionDefaults = .init(modelProvider: "parent", model: "parent", contextTokens: nil)
+        let parent = try #require(model.modelChoices.first)
+        let child = try #require(model.modelChoices.last)
+        #expect(child.tags == ["default"])
+        #expect(model.isDefaultModel(child))
+        #expect(!model.isDefaultModel(parent))
+        #expect(model.defaultModelLabel == "Default: worker/child")
+        #expect(model.composerInlineModelLabel == "child")
+        #expect(model.modelPickerSections.providers.first?.id == "worker")
+        #expect(model.modelPickerSections.providers.first?.isDefaultProvider == true)
     }
 
     @Test func `saved Fast override wins over catalog default and remains clearable without applicability`() throws {
@@ -106,11 +124,13 @@ struct ChatCatalogProjectionTests {
     @Test func `input and route badges preserve published metadata`() throws {
         let model = try self
             .viewModel(
-                #"{"id":"choice","name":"Choice","provider":"fixture","input":["text","image","document"],"agentRuntime":{"id":"remote","source":"model"}}"#)
+                #"{"id":"choice","name":"Choice","provider":"fixture","tags":["configured"],"input":["text","image","document"],"agentRuntime":{"id":"remote","source":"model"}}"#)
         let choice = try #require(model.modelChoices.first)
         #expect(choice.input == ["text", "image", "document"])
         #expect(choice.agentRuntime?.id == "remote")
         #expect(choice.capabilityDescription == "Images · Documents · remote")
+        #expect(!model.isDefaultModel(choice))
+        #expect(model.defaultModelLabel == "Default")
     }
 
     @Test func `direct catalog request carries session identity and configured details`() {

@@ -187,19 +187,6 @@ function generationFactsMatch(
   });
 }
 
-async function defaultBuildCommands(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<{ commands?: unknown[] }> {
-  const { buildCommandsListResult } = await import("./commands-list-result.js");
-  return buildCommandsListResult({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    includeArgs: true,
-    scope: "text",
-  });
-}
-
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayRequestContext;
@@ -228,7 +215,10 @@ export function createGatewayChatMetadataRuntime(params: {
     getAuthStoreRevision: getRuntimeAuthProfileStoreSnapshotRevision,
     getSkillsVersion: getSkillsSnapshotVersion,
     getPluginRegistryVersion: getActivePluginRegistryVersion,
-    buildCommands: defaultBuildCommands,
+    buildCommands: async (commandParams) => {
+      const { buildCommandsListResult } = await import("./commands-list-result.js");
+      return buildCommandsListResult({ ...commandParams, includeArgs: true, scope: "text" });
+    },
     buildProjection: prepareChatMetadataModelProjection,
     ...params.deps,
   };
@@ -266,10 +256,16 @@ export function createGatewayChatMetadataRuntime(params: {
     requesterProfileId?: string,
     assertCurrent?: () => void,
     useRequesterDefaults = false,
+    sessionKey?: string,
   ): Promise<PreparedAgentProjection> => {
     assertOpen();
     assertCurrent?.();
-    const profiles = resolveSessionCatalogProfiles(sessionEntry, agent.owner.config, agent.agentId);
+    const profiles = resolveSessionCatalogProfiles(
+      sessionEntry,
+      agent.owner.config,
+      agent.agentId,
+      sessionKey,
+    );
     const neutral = !hasSessionCatalogContext(profiles);
     // Read links on every draft request so connecting an account takes effect immediately;
     // viewers without personal defaults can reuse the already-published neutral projection.
@@ -307,6 +303,7 @@ export function createGatewayChatMetadataRuntime(params: {
         requesterProfileId,
         assertCurrent,
         useRequesterDefaults,
+        sessionKey,
       );
     }
     const projection = deps
@@ -321,11 +318,11 @@ export function createGatewayChatMetadataRuntime(params: {
         assertCurrent?.();
         const preparedProjection: PreparedAgentProjection = {
           ...prepared,
-          read: () => {
+          read: (selection) => {
             // Revocation is terminal, not a stale projection for readCurrent to retry forever.
             assertCurrent?.();
             return {
-              ...prepared.read(),
+              ...prepared.read(selection),
               ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
               swarmEnabled: agent.swarmEnabled,
               accountSelection: resolveChatAccountSelection({
@@ -596,10 +593,12 @@ export function createGatewayChatMetadataRuntime(params: {
         draft?.assertCurrent,
         // Existing sessions use their saved selection, never a viewer's newer default.
         !readParams.sessionKey && !readParams.sessionEntry,
+        readParams.sessionKey,
       );
       return {
         isCurrent: projection.isCurrent,
-        read: () => projectChatSessionMetadata(readParams, projection.read(), deps.getConfig()),
+        read: () =>
+          projectChatSessionMetadata(readParams, projection.read(readParams), deps.getConfig()),
       };
     });
   };
@@ -612,6 +611,7 @@ export function createGatewayChatMetadataRuntime(params: {
       readParams.sessionEntry,
       deps.getConfig(),
       readParams.agentId,
+      readParams.sessionKey,
     );
     const hasSessionContext = hasSessionCatalogContext(profiles);
     const assemble = (
@@ -621,9 +621,17 @@ export function createGatewayChatMetadataRuntime(params: {
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
         ? {}
-        : { metadata: projectChatSessionMetadata(readParams, session.read(), deps.getConfig()) }),
+        : {
+            metadata: projectChatSessionMetadata(
+              readParams,
+              session.read(readParams),
+              deps.getConfig(),
+            ),
+          }),
       sessionModelCatalog: session.modelCatalog,
       defaultModelCatalog: neutral.modelCatalog,
+      modelCatalogSnapshot: neutral.modelCatalogSnapshot,
+      manifestPlugins: neutral.manifestPlugins,
     });
     const projectStartup = async (
       generation: PreparedMetadataGeneration,
@@ -642,6 +650,9 @@ export function createGatewayChatMetadataRuntime(params: {
             agent,
             readParams.sessionEntry,
             readParams.requesterProfileId,
+            undefined,
+            false,
+            readParams.sessionKey,
           )
         : readNeutral;
       return {

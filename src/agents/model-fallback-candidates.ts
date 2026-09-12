@@ -57,6 +57,8 @@ type ModelCandidateChainParams = ModelManifestNormalizationContext & {
   model: string;
   /** An explicit list, including empty, replaces the configured model fallbacks. */
   fallbacksOverride?: string[];
+  /** Canonical primary ref confirmed absent for this run, excluded after alias resolution. */
+  missingConfiguredPrimary?: string;
   requestedRouteResolution?: ModelFallbackRouteResolution;
   /** Pure admission planning may use manifest policy without entering provider runtime hooks. */
   allowPluginNormalization?: boolean;
@@ -221,6 +223,7 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     requestedRouteResolution: params.requestedRouteResolution,
     allowPluginNormalization: params.allowPluginNormalization,
     fallbacksOverride: params.fallbacksOverride,
+    missingConfiguredPrimary: params.missingConfiguredPrimary,
     agentsDefaultsModel: params.cfg?.agents?.defaults?.model,
     agentsDefaultsModels: params.cfg?.agents?.defaults?.models,
     modelProviders: resolveFallbackCandidateModelProviderCacheParts(params.cfg),
@@ -374,5 +377,10 @@ function resolveFallbackCandidatesUncached(
     }
     addCandidate({ ...primary, model }, "configured-primary", "resolved");
   }
-  return candidates;
+  return params.missingConfiguredPrimary
+    ? candidates.filter(
+        (candidate) =>
+          modelKey(candidate.provider, candidate.model) !== params.missingConfiguredPrimary,
+      )
+    : candidates;
 }

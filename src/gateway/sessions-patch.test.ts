@@ -2093,23 +2093,26 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverrideSource).toBe("user");
   });
 
-  test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {
-    const cfg = makeKimiSubagentCfg({
-      agentPrimaryModel: ANTHROPIC_SONNET_MODEL,
-      agentSubagentModel: SUBAGENT_MODEL,
-    });
-
-    const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
-  });
-
-  test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
-    const cfg = makeKimiSubagentCfg({
-      defaultsSubagentModel: SUBAGENT_MODEL,
-    });
-
-    const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
+  test.each([
+    { agentPrimaryModel: ANTHROPIC_SONNET_MODEL, agentSubagentModel: SUBAGENT_MODEL },
+    { defaultsSubagentModel: SUBAGENT_MODEL },
+  ])("limits configured subagent primary exemption to subagent sessions: %j", async (models) => {
+    const cfg = makeKimiSubagentCfg(models);
+    expectModelSelection(
+      await applySubagentModelPatch(cfg),
+      "synthetic",
+      "hf:moonshotai/Kimi-K2.7-Code",
+    );
+    const key = "agent:kimi:main";
+    expectPatchError(
+      await runPatch({
+        cfg,
+        storeKey: key,
+        patch: { key, model: SUBAGENT_MODEL },
+        loadGatewayModelCatalog: loadCatalog(SUBAGENT_MODEL),
+      }),
+      "model not allowed",
+    );
   });
 
   test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {

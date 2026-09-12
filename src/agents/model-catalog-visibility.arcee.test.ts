@@ -52,7 +52,7 @@ describe("provider-owned catalog identity", () => {
   };
 
   async function project(catalog: ModelCatalogEntry[]) {
-    return resolveLogicalVisibleModelCatalog({
+    const { entries } = await resolveLogicalVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "arcee",
@@ -65,6 +65,7 @@ describe("provider-owned catalog identity", () => {
           routePolicy: openAIModelCatalogRoutePolicy,
         }),
     });
+    return entries;
   }
 
   it("keeps logical identity in both public and runtime unmanaged rows", () => {

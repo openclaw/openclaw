@@ -608,34 +608,40 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it("rejects an explicit non-allowlisted model before creating child state", async () => {
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
-          modelPolicy: { allow: ["openai/gpt-5.4"] },
+  it.each([false, true])(
+    "admits an explicit model outside the list only as configured subagent primary: %s",
+    async (configured) => {
+      hoisted.configOverride = createConfigOverride({
+        agents: {
+          defaults: {
+            workspace: os.tmpdir(),
+            modelPolicy: { allow: ["openai/gpt-5.4"] },
+            ...(configured ? { subagents: { model: "anthropic/claude-sonnet-4-6" } } : {}),
+          },
+          list: [{ id: "main", workspace: "/tmp/workspace-main" }],
         },
-        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
-      },
-    });
-    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
-      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-      },
-    ]);
+      });
+      hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
+        { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+        },
+      ]);
 
-    const result = await spawnSubagentDirect(
-      { task: "must honor model policy", model: "anthropic/claude-sonnet-4-6" },
-      { agentSessionKey: "agent:main:main" },
-    );
+      const result = await spawnSubagentDirect(
+        { task: "must honor model policy", model: "anthropic/claude-sonnet-4-6" },
+        { agentSessionKey: "agent:main:main" },
+      );
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("model not allowed: anthropic/claude-sonnet-4-6");
-    expectNoChildSpawnSideEffects();
-  });
+      expect(result.status).toBe(configured ? "accepted" : "error");
+      if (!configured) {
+        expect(result.error).toContain("model not allowed: anthropic/claude-sonnet-4-6");
+        expectNoChildSpawnSideEffects();
+      }
+    },
+  );
 
   it("rejects an unknown-provider model under unrestricted policy before creating child state", async () => {
     hoisted.resolveProviderRefOwnershipMock.mockReturnValue({ status: "unowned" });

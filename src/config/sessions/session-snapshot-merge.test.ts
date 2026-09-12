@@ -46,6 +46,18 @@ describe("session snapshot merge", () => {
     expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
   });
 
+  it("clears a late policy receipt when a pin switch wins", () => {
+    const stored: SessionEntry = { ...initial, providerOverride: "openai", modelOverride: "old" };
+    const next = { ...stored, modelOverride: "new" };
+    const current = {
+      ...stored,
+      modelPolicyNotice: { sessionId: stored.sessionId, pinnedModel: "openai/old" },
+    };
+    const merged = mergeSessionSnapshotChanges({ initial: stored, next, current });
+    expect(merged.modelOverride).toBe("new");
+    expect(merged.modelPolicyNotice).toBeUndefined();
+  });
+
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const current = {

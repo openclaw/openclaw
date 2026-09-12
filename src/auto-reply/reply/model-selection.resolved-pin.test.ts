@@ -52,7 +52,7 @@ test.each<SelectionCase>([
   { name: "resolved provider-prefixed model", pin: "custom/model", expected: "custom/model" },
   { name: "resolved alias-like model", pin: "middle", expected: "middle" },
   { name: "legacy raw model", pin: "latest", expected: "final", raw: true },
-  { name: "disallowed pin", pin: "denied", expected: "default", disallowed: true },
+  { name: "disallowed pin", pin: "denied", expected: "denied", disallowed: true },
   { name: "explicit heartbeat override", pin: "middle", expected: "heartbeat", heartbeat: true },
   { name: "one-turn override", pin: "middle", expected: "once", oneTurn: true },
   { name: "bound CLI provider", pin: "cli-model", expected: "cli-model", cli: true },
@@ -60,14 +60,14 @@ test.each<SelectionCase>([
   {
     name: "resolved prefix rejected by a colliding exact allowlist",
     pin: "custom/model",
-    expected: "default",
+    expected: "custom/model",
     allow: ["custom/default", "custom/model"],
     disallowed: true,
   },
   {
     name: "inherited resolved prefix rejected by a colliding exact allowlist",
     pin: "custom/model",
-    expected: "default",
+    expected: "custom/model",
     allow: ["custom/default", "custom/model"],
     disallowed: true,
     inherited: true,
@@ -103,7 +103,7 @@ test.each<SelectionCase>([
   {
     name: "namespace wildcard rejects a different model prefix",
     pin: "customness/model",
-    expected: "default",
+    expected: "customness/model",
     allow: ["custom/default", "custom/custom/*"],
     disallowed: true,
   },
@@ -111,7 +111,7 @@ test.each<SelectionCase>([
     name: "exact model namespace does not authorize another provider",
     provider: "custom/team",
     pin: "Reader",
-    expected: "default",
+    expected: "Reader",
     allow: ["custom/default", "custom/team/Reader"],
     disallowed: true,
   },
@@ -119,7 +119,7 @@ test.each<SelectionCase>([
     name: "provider wildcard does not authorize another provider",
     provider: "custom/team",
     pin: "Reader",
-    expected: "default",
+    expected: "Reader",
     allow: ["custom/*"],
     disallowed: true,
   },
@@ -133,7 +133,7 @@ test.each<SelectionCase>([
   {
     name: "exact configured prefix does not authorize the plain model",
     pin: "model",
-    expected: "default",
+    expected: "model",
     allow: ["custom/default", "custom/custom/model"],
     configuredProvider: true,
     disallowed: true,
@@ -261,15 +261,14 @@ test.each<SelectionCase>([
         });
         expect(selection).toMatchObject({
           provider: "custom",
-          model: fixture.expected,
-          resetModelOverride: fixture.disallowed === true && !fixture.inherited,
+          model: fixture.disallowed ? "default" : fixture.expected,
+          resetModelOverride: false,
         });
-        if (fixture.disallowed && !fixture.inherited) {
-          expect(selection.resetModelOverrideReason).toBe("disallowed");
-          expect(entry.modelOverride).toBeUndefined();
-        } else {
-          expect(pinnedEntry.modelOverride).toBe(fixture.pin);
+        if (fixture.disallowed) {
+          expect(selection.blockedModelOverrideRef).toBe(`${provider}/${fixture.pin}`);
+          expect(selection.blockedModelOverrideUsesPrimary).toBe(true);
         }
+        expect(pinnedEntry.modelOverride).toBe(fixture.pin);
         if (fixture.inherited) {
           expect(entry.modelOverride).toBeUndefined();
         }

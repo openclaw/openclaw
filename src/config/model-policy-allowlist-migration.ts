@@ -73,6 +73,15 @@ export function materializeModelPolicyAllowlist(
         : cfg,
     };
   }
+  // A normal config write must not label a hand-written restriction as upgrade-generated.
+  if (
+    !allow &&
+    hasExplicitModelPolicyAllow(cfg.agents?.defaults?.modelPolicy) &&
+    !hasModelPolicyAllowlistMigrationMarker(previousConfig) &&
+    !hasModelPolicyAllowlistMigrationMarker(cfg)
+  ) {
+    return { kind: "complete", config: cfg };
+  }
   return {
     kind: "complete",
     config: {

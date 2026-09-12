@@ -1,4 +1,7 @@
-import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  ModelChoice,
+  ModelAllowList,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
@@ -30,6 +33,7 @@ export type ChatMetadataReadParams = {
 export type ChatMetadataResult = {
   commands?: unknown[];
   models?: ModelChoice[];
+  allowList?: ModelAllowList;
   swarmEnabled: boolean;
   accountSelection?: ChatAccountSelection;
 };

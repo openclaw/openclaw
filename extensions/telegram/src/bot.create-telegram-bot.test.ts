@@ -6570,6 +6570,48 @@ describe("createTelegramBot", () => {
     },
   );
 
+  it.each([
+    { pending: false, notice: "xai: Sign-in needed. Connect with /login xai." },
+    { pending: true, notice: "" },
+  ])(
+    "opens a provider without model choices while pending is $pending",
+    async ({ pending, notice }) => {
+      loadConfig.mockReturnValue({
+        agents: { defaults: { model: "xai/missing-model" } },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      });
+      vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockResolvedValueOnce({
+        byProvider: new Map([["xai", new Set<string>()]]),
+        providers: ["xai"],
+        resolvedDefault: { provider: "xai", model: "missing-model" },
+        modelNames: new Map(),
+        modelCatalog: [],
+        pendingProviders: pending ? ["xai"] : undefined,
+        modelMenu: {
+          modelNames: new Map(),
+          byProvider: new Map([["xai", { available: 0, notice }]]),
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: `empty-model-provider-${pending}`,
+          data: "mdl_list_xai_1",
+          messageId: 24,
+        }),
+      );
+
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("0 available");
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain(
+        pending ? "xai: checking models…" : "Connect with /login xai.",
+      );
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[3]).toMatchObject({
+        reply_markup: { inline_keyboard: [[{ text: "<< Back", callback_data: "mdl_back" }]] },
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");

@@ -53,6 +53,11 @@ import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
+import type { ModelNoticeTranscript } from "./model-notice-publication.js";
+import {
+  attachMissingConfiguredPrimaryNotice,
+  attachModelPolicyNotice,
+} from "./model-policy-notice.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
@@ -525,6 +530,33 @@ export async function prepareReplyAgentPayloads(state: {
     }
     return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
   }
+
+  const settledWriter = context.execution.settledWriter;
+  const modelNoticeTranscript: ModelNoticeTranscript | undefined =
+    context.modelNoticeTranscriptStart && settledWriter && activeSessionEntry
+      ? {
+          start: context.modelNoticeTranscriptStart,
+          scope: settledWriter,
+          expectedSession: { ...activeSessionEntry, ...settledWriter },
+        }
+      : undefined;
+  if (followupRun.run.blockedModelOverrideUsesPrimary && followupRun.run.blockedModelOverrideRef) {
+    replyPayloads = attachModelPolicyNotice({
+      payloads: replyPayloads,
+      pinnedModel: followupRun.run.blockedModelOverrideRef,
+      primaryModel: `${providerUsed}/${modelUsed}`,
+      sessionEntry: activeSessionEntry,
+      sessionKey,
+      storePath,
+      transcript: modelNoticeTranscript,
+    });
+  }
+  replyPayloads = attachMissingConfiguredPrimaryNotice({
+    payloads: replyPayloads,
+    missingPrimary: followupRun.run.missingConfiguredPrimary,
+    primaryModel: `${providerUsed}/${modelUsed}`,
+    transcript: modelNoticeTranscript,
+  });
 
   const successfulCronAdds = runResult.successfulCronAdds ?? 0;
   const hasReminderCommitment = replyPayloads.some(

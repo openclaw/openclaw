@@ -404,6 +404,8 @@ async function loadScopedReadOnlyModelCatalog(
  */
 export async function loadProviderScopedThinkingCatalog(params: {
   config: OpenClawConfig;
+  /** Admitted catalog identity remains separate from command-resolved secret overlays. */
+  catalogOwnerConfig?: OpenClawConfig;
   provider: string;
   model: string;
   agentId?: string;
@@ -412,7 +414,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
   /** Input preparation must resolve modalities for this route, independently of reasoning. */
   requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
 }): Promise<ModelCatalogEntry[]> {
-  const request = { ...params, readOnly: true };
+  const request = { ...params, config: params.catalogOwnerConfig ?? params.config, readOnly: true };
   const publishedOwner = getPreparedModelCatalogOwnerSnapshot(request);
   const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "exact"))?.snapshot;
   const catalog = owner

@@ -55,6 +55,8 @@ export type ModelCatalogEntry = {
 export type ModelCatalogSnapshot = {
   entries: ModelCatalogEntry[];
   routeVariants: ModelCatalogEntry[];
+  /** Captured provider-resolved configured identities, including rows hidden by browse mode. */
+  resolvedConfiguredModelRefs?: readonly { provider: string; model: string }[];
   /** Provider-owned outcome of each live catalog request in this generation. */
   providerOutcomes?: readonly ProviderCatalogOutcome[];
   /** The current acquisition failed while this published inventory remained available. */

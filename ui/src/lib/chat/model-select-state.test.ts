@@ -731,6 +731,32 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
+  it.each([
+    { tags: ["default"], defaultModel: "worker/child", defaultLabel: "Default (Child)" },
+    { tags: ["configured"], defaultModel: "parent/primary", defaultLabel: "Default (Parent)" },
+    { tags: undefined, defaultModel: "parent/primary", defaultLabel: "Default (Parent)" },
+  ])(
+    "uses published default tags before parent defaults: $tags",
+    ({ tags, defaultModel, defaultLabel }) => {
+      const sessionKey = "agent:main:subagent:child";
+      const state = createChatModelState({
+        agentDefaultModel: "parent/primary",
+        modelOverrides: { [sessionKey]: "other/pin" },
+        chatModelCatalog: createModelCatalog(
+          { id: "primary", name: "Parent", provider: "parent" },
+          { id: "child", name: "Child", provider: "worker", tags },
+        ),
+        sessionsResult: createSessionsListResult({
+          defaultsModel: "primary",
+          defaultsProvider: "parent",
+        }),
+      });
+      const resolved = resolveChatModelSelectState({ ...state, sessionKey });
+      expect(resolved).toMatchObject({ defaultModel, defaultLabel, currentOverride: "other/pin" });
+      expect(resolved.options).toHaveLength(2);
+    },
+  );
+
   it("uses the active agent model for the default label", () => {
     const state = createChatModelState({
       agentDefaultModel: "anthropic/claude-opus-4-5",

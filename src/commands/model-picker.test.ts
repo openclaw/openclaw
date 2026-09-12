@@ -2429,7 +2429,7 @@ describe("applyModelAllowlist", () => {
     ]);
   });
 
-  it("seeds provider-scoped configure edits from the effective legacy allowlist", () => {
+  it("keeps provider-scoped configure edits distinct from upgrade-generated lists", () => {
     const config = {
       agents: {
         defaults: {
@@ -2450,10 +2450,10 @@ describe("applyModelAllowlist", () => {
       "anthropic/claude-opus-4-6",
       "openai/gpt-5.6-sol",
     ]);
-    expect(next.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(next.meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
   });
 
-  it("clears an effective legacy restriction and preserves model metadata", () => {
+  it("clears a legacy restriction without marking the authored policy as upgrade-generated", () => {
     const config = {
       agents: {
         defaults: {
@@ -2470,7 +2470,7 @@ describe("applyModelAllowlist", () => {
       "openai/gpt-5.5": { alias: "gpt" },
     });
     expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([]);
-    expect(next.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(next.meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
   });
 });
 

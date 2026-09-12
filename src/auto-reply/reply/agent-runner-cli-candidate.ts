@@ -4,6 +4,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../../agents/cli-execution-auth.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
+import { readCliRunSettledWriter } from "../../agents/cli-runner/settled-writer.js";
 import {
   clearCliSessionInStore,
   persistCliSessionBindingResult,
@@ -14,6 +15,7 @@ import {
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
@@ -50,6 +52,7 @@ export async function runCliFallbackCandidate(
   },
 ): Promise<{
   result: Awaited<ReturnType<typeof runCliAgentWithLifecycle>>;
+  settledWriter?: CompactionAccountingTarget;
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
@@ -157,6 +160,7 @@ export async function runCliFallbackCandidate(
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
   const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
+  let settledWriter: CompactionAccountingTarget | undefined;
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnSettlement(
       {
@@ -454,6 +458,7 @@ export async function runCliFallbackCandidate(
             replyOperation: turn.replyOperation,
           },
         });
+        settledWriter = readCliRunSettledWriter(candidateResult);
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.
@@ -502,6 +507,7 @@ export async function runCliFallbackCandidate(
   );
   return {
     result,
+    settledWriter,
     bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
       result.meta?.systemPromptReport,
     ),

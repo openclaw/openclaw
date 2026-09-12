@@ -16,7 +16,7 @@ import {
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
-import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
+import { resolveAgentDir } from "./bot-handlers.agent.runtime.js";
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
@@ -56,6 +56,7 @@ import {
 import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
+  appendModelAllowListNotice,
   buildModelsKeyboard,
   calculateTotalPages,
   parseModelCallbackData,
@@ -529,18 +530,34 @@ async function handleTelegramModelCallback(params: {
     });
     const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId, {
       sessionEntry: session.sessionEntry,
+      sessionKey: session.sessionKey,
     });
     return { sessionState: session, modelData: providerData };
   });
-  const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
+  const { byProvider, providers } = modelData;
+  const resolvedDefault =
+    modelData.effectiveDefault === undefined
+      ? modelData.resolvedDefault
+      : modelData.effectiveDefault;
+  const withNotice = (text: string) =>
+    appendModelAllowListNotice(text, modelData.allowList, providers.length > 0);
   const providerInfos: ProviderInfo[] = providers.map((provider) => ({
     id: provider,
     count: byProvider.get(provider)?.size ?? 0,
   }));
+  const showChangedModelPicker = () =>
+    retryModelAction(() =>
+      editMessageWithButtons(
+        MODEL_PICKER_CHANGED_MESSAGE,
+        buildTelegramModelsMenuButtons({ providers: providerInfos }),
+      ),
+    );
 
   if (modelCallback.type === "providers" || modelCallback.type === "back") {
     if (providers.length === 0) {
-      await retryModelAction(() => editMessageWithButtons("No providers available.", []));
+      await retryModelAction(() =>
+        editMessageWithButtons(withNotice("No providers available."), []),
+      );
       return true;
     }
     const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
@@ -549,7 +566,9 @@ async function handleTelegramModelCallback(params: {
       .join("\n");
     await retryModelAction(() =>
       editMessageWithButtons(
-        [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
+        withNotice(
+          [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
+        ),
         buildTelegramModelsMenuButtons({ providers: providerInfos }),
       ),
     );
@@ -558,51 +577,44 @@ async function handleTelegramModelCallback(params: {
 
   if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
     const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
-    if (!listSelection) {
-      await retryModelAction(() =>
-        editMessageWithButtons(
-          MODEL_PICKER_CHANGED_MESSAGE,
-          buildTelegramModelsMenuButtons({ providers: providerInfos }),
-        ),
-      );
+    const modelSet = listSelection && byProvider.get(listSelection.provider);
+    if (!listSelection || !modelSet) {
+      await showChangedModelPicker();
       return true;
     }
     const { provider, page } = listSelection;
-    const modelSet = byProvider.get(provider);
-    if (!modelSet || modelSet.size === 0) {
-      await retryModelAction(() =>
-        editMessageWithButtons(
-          MODEL_PICKER_CHANGED_MESSAGE,
-          buildTelegramModelsMenuButtons({ providers: providerInfos }),
-        ),
-      );
-      return true;
-    }
     const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
     const totalPages = calculateTotalPages(models.length);
     const safePage = Math.max(1, Math.min(page, totalPages));
-    const currentModel =
-      sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
     const availability = modelData.modelMenu?.byProvider.get(provider);
     const buttons = buildModelsKeyboard({
       provider,
       models,
-      currentModel,
+      currentModel:
+        sessionState.model ||
+        (resolvedDefault ? `${resolvedDefault.provider}/${resolvedDefault.model}` : undefined),
       currentPage: safePage,
       totalPages,
       modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
     });
-    const text = `${formatModelsAvailableHeader({
+    const header = formatModelsAvailableHeader({
       provider,
       total: models.length,
       cfg: runtimeCfg,
       agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
       sessionEntry: sessionState.sessionEntry,
       availability,
-    })}\nSelecting a model also applies its configured runtime.`;
+    });
+    const text = [
+      header,
+      modelData.pendingProviders?.includes(provider) ? `${provider}: checking models…` : undefined,
+      models.length > 0 ? "Selecting a model also applies its configured runtime." : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n");
     await retryModelAction(() =>
       editMessageWithButtons(
-        [modelData.refreshWarning, text].filter(Boolean).join("\n\n"),
+        withNotice([modelData.refreshWarning, text].filter(Boolean).join("\n\n")),
         buttons,
       ),
     );
@@ -613,22 +625,17 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
-  if (selection.kind !== "resolved" || !byProvider.get(selection.provider)?.has(selection.model)) {
-    await retryModelAction(() =>
-      editMessageWithButtons(
-        MODEL_PICKER_CHANGED_MESSAGE,
-        buildTelegramModelsMenuButtons({ providers: providerInfos }),
-      ),
-    );
+  if (
+    !resolvedDefault ||
+    selection.kind !== "resolved" ||
+    !byProvider.get(selection.provider)?.has(selection.model)
+  ) {
+    await showChangedModelPicker();
     return true;
   }
 
   try {
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
-      agentId: sessionState.agentId,
-    });
-    const resolvedDefault = resolveDefaultModelForAgent({
-      cfg: runtimeCfg,
       agentId: sessionState.agentId,
     });
     const isDefaultSelection =

@@ -110,7 +110,7 @@ describe("createChatSendReplyDispatch", () => {
     expect(projectChatDisplayMessage(prepare())).toMatchObject({
       content: [{ type: "text", text: rawText }],
     });
-    await dispatch.runAgentMediaTranscript({ run: async (operation) => operation() }, async () => {
+    await dispatch.runAgentTranscript({ run: async (operation) => operation() }, async () => {
       const persisted = prepare();
       expect(persisted).toMatchObject({
         content: [{ type: "text", text: rawText }],
@@ -298,7 +298,7 @@ describe("createChatSendReplyDispatch", () => {
     await dispatcher.waitForIdle();
 
     await expect(
-      dispatch.runAgentMediaTranscript(
+      dispatch.runAgentTranscript(
         {
           run: async (operation) => {
             insideAdmission = true;

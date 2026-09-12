@@ -1,14 +1,18 @@
-import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  ModelChoice,
+  ModelAllowList,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelManifestNormalizationContext } from "../../agents/model-ref-shared.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { isSubagentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
@@ -26,20 +30,23 @@ export type ChatMetadataProjectionFacts = {
 
 export type PreparedAgentProjection<T = ChatMetadataResult> = {
   modelCatalog: ModelCatalogEntry[];
-  read: () => T;
+  modelCatalogSnapshot?: ModelCatalogSnapshot;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
+  read: (selection?: Pick<ChatMetadataReadParams, "sessionEntry" | "sessionKey">) => T;
   isCurrent: () => boolean;
 };
 
 export async function prepareChatMetadataModelProjection(params: {
   context: GatewayRequestContext;
   facts: ChatMetadataProjectionFacts;
+  sessionKey?: string;
   requesterProfileId?: string;
   preferredProfileId?: string;
   pinnedProfileId?: string;
   profileProvider?: string;
   runtimeOverride?: string;
   assertCurrent?: () => void;
-}): Promise<PreparedAgentProjection<{ models?: ModelChoice[] }>> {
+}): Promise<PreparedAgentProjection<{ models?: ModelChoice[]; allowList?: ModelAllowList }>> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.
@@ -73,6 +80,9 @@ export async function prepareChatMetadataModelProjection(params: {
       source: { kind: "gateway", context: params.context },
       agentId: params.facts.agentId,
       params: { view: "configured" },
+      ...(params.sessionKey
+        ? { readScope: { agentId: params.facts.agentId, sessionKey: params.sessionKey } }
+        : {}),
       preloadedCatalog: {
         agentId: params.facts.agentId,
         config: params.facts.owner.config,
@@ -84,7 +94,12 @@ export async function prepareChatMetadataModelProjection(params: {
   ]);
   return {
     modelCatalog,
-    read: () => ({ models: readModels.read().models }),
+    modelCatalogSnapshot: snapshot,
+    manifestPlugins: params.facts.owner.metadataSnapshot,
+    read: (selection) => {
+      const { models, allowList } = readModels.read(selection);
+      return { models, ...(allowList ? { allowList } : {}) };
+    },
     isCurrent: readModels.isCurrent,
   };
 }
@@ -93,7 +108,9 @@ export function resolveSessionCatalogProfiles(
   sessionEntry: ChatMetadataSessionEntry | undefined,
   config: OpenClawConfig,
   agentId: string,
+  sessionKey?: string,
 ): {
+  sessionKey?: string;
   preferredProfileId?: string;
   pinnedProfileId?: string;
   profileProvider?: string;
@@ -106,9 +123,11 @@ export function resolveSessionCatalogProfiles(
     (runtime
       ? resolveSessionModelRef(config, sessionEntry, agentId, {
           allowPluginNormalization: false,
+          sessionKey,
         }).provider
       : undefined);
   const context = {
+    ...(sessionKey && isSubagentSessionKey(sessionKey) ? { sessionKey } : {}),
     ...(provider ? { profileProvider: provider } : {}),
     ...(runtime ? { runtimeOverride: runtime } : {}),
   };
@@ -133,6 +152,7 @@ export function sessionProjectionKey(
     profiles.pinnedProfileId ?? "",
     profiles.profileProvider ?? "",
     profiles.runtimeOverride ?? "",
+    profiles.sessionKey ? "subagent" : "",
   ].join("\0");
 }
 
@@ -143,7 +163,8 @@ export function hasSessionCatalogContext(
     profiles.preferredProfileId !== undefined ||
     profiles.pinnedProfileId !== undefined ||
     profiles.profileProvider !== undefined ||
-    profiles.runtimeOverride !== undefined
+    profiles.runtimeOverride !== undefined ||
+    profiles.sessionKey !== undefined
   );
 }
 
@@ -162,6 +183,7 @@ export function projectSessionModelCatalog(
     ownership.modelRef ??
     resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
       allowPluginNormalization: false,
+      sessionKey: readParams.sessionKey,
     });
   return models.map((model) => {
     if (model.provider !== renderedModel.provider || model.id !== renderedModel.model) {
@@ -182,7 +204,11 @@ export function projectChatSessionMetadata(
   metadata: ChatMetadataResult,
   config: OpenClawConfig,
 ): ChatMetadataResult {
-  return metadata.models
-    ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
-    : metadata;
+  if (!metadata.models) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    models: projectSessionModelCatalog(readParams, metadata.models, config),
+  };
 }

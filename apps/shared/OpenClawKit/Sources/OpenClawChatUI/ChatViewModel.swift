@@ -49,6 +49,7 @@ public final class OpenClawChatViewModel {
     var prefersExplicitVerboseLevel: Bool
     public private(set) var modelSelectionID: String = "__default__"
     public internal(set) var modelChoices: [OpenClawChatModelChoice] = []
+    public internal(set) var modelAllowList: OpenClawChatModelAllowList?
     var modelAvailabilityIsSessionScoped = false
     public internal(set) var modelCatalogMessage: String?
     @ObservationIgnored
@@ -766,11 +767,14 @@ public final class OpenClawChatViewModel {
     }
 
     public var showsModelPicker: Bool {
-        !self.modelChoices.isEmpty
+        !self.modelChoices.isEmpty || self.modelAllowList != nil
     }
 
     public var defaultModelLabel: String {
-        guard let defaultModelID = normalizedModelSelectionID(sessionDefaults?.model) else {
+        guard let defaultModelID = normalizedModelSelectionID(
+            self.modelCatalogDefault.model,
+            provider: self.modelCatalogDefault.provider)
+        else {
             return "Default"
         }
         return "Default: \(modelLabel(for: defaultModelID))"
@@ -1257,6 +1261,7 @@ extension OpenClawChatViewModel {
     /// Clears state owned by the current session/agent before a new identity can consume events.
     private func clearSessionOwnedState() {
         self.invalidateComposerCapabilities()
+        self.modelAllowList = nil
         self.modelSelectionID = Self.defaultModelSelectionID
         self.modelAvailabilityIsSessionScoped = false
         self.modelChoices = []
@@ -1532,8 +1537,8 @@ extension OpenClawChatViewModel {
             currentSession?.model,
             provider: currentSession?.modelProvider)
         let defaultModelID = self.normalizedModelSelectionID(
-            self.sessionDefaults?.model,
-            provider: self.sessionDefaults?.modelProvider)
+            self.modelCatalogDefault.model,
+            provider: self.modelCatalogDefault.provider)
         if self.lastSuccessfulModelSelectionIDsByTarget[target] == Self.defaultModelSelectionID,
            explicitModelID == defaultModelID
         {
@@ -1552,30 +1557,6 @@ extension OpenClawChatViewModel {
     private func normalizedSelectionID(_ selectionID: String) -> String {
         let trimmed = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return Self.defaultModelSelectionID }
-        return trimmed
-    }
-
-    private func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
-        guard let modelID else { return nil }
-        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if let provider = Self.normalizedProvider(provider) {
-            let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
-            if let match = modelChoices.first(where: {
-                $0.selectionID == providerQualified ||
-                    ($0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider)
-            }) {
-                return match.selectionID
-            }
-            return providerQualified
-        }
-        if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
-            return trimmed
-        }
-        let matches = self.modelChoices.filter { $0.modelID == trimmed || $0.selectionID == trimmed }
-        if matches.count == 1 {
-            return matches[0].selectionID
-        }
         return trimmed
     }
 

@@ -15,13 +15,11 @@ import {
   resolveEffectiveModelFallbacks,
 } from "../agents/agent-scope.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
-import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "../agents/model-selection-config.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
   buildModelAliasIndex,
   resolveModelRefFromString,
+  resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection-shared.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../agents/openai-routing.js";
 import { normalizeAgentId } from "../routing/session-key.js";

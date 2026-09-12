@@ -309,6 +309,38 @@ describe("getReplyFromConfig channel model input boundary", () => {
 });
 
 describe("turn model selection reply-path differential", () => {
+  it.each([
+    { sessionKey: "agent:main:main", expected: TURN_MODEL_DEFAULT_REF },
+    { sessionKey: "agent:main:subagent:worker", expected: TURN_MODEL_SESSION_REF },
+  ])("uses configured inheritance after reset on $sessionKey", async ({ sessionKey, expected }) => {
+    const actual = await vi.importActual<typeof import("./directive-handling.defaults.js")>(
+      "./directive-handling.defaults.js",
+    );
+    vi.mocked(resolveDefaultModelMock).mockImplementation(actual.resolveDefaultModel);
+    const verdict = turnModelVerdict(expected);
+    const fixture: TurnModelDifferentialFixture = {
+      name: "configured inheritance after reset",
+      ctx: {},
+      child: { ...createTurnModelEntry({}), modelProvider: "mistral", model: "stale-run" },
+      expected: { reply: verdict, status: verdict, harness: verdict, command: verdict },
+    };
+    const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+    const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);
+    const cfg = createConfig({ storePath, workspaceDir: state.workspaceDir });
+    cfg.agents = {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        subagents: { model: "worker-default" },
+        models: { [turnModelRefLabel(TURN_MODEL_SESSION_REF)]: { alias: "worker-default" } },
+        modelPolicy: { allow: [turnModelRefLabel(TURN_MODEL_DEFAULT_REF)] },
+      },
+    };
+    await expect(
+      observeReplySelection({ fixture, cfg, sessionKey, sessionStore }),
+    ).resolves.toMatchObject(expected);
+  });
+
   it.each(TURN_MODEL_DIFFERENTIAL_FIXTURES)("pins observed $name behavior", async (fixture) => {
     const storePath = path.join(state.sessionsDir("main"), "sessions.json");
     const sessionKey = "agent:main:telegram:group:selection";

@@ -1,8 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
 import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -12,7 +15,7 @@ import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessio
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { isSubagentSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
   resolveStoredModelOverride,
   type StoredModelOverride,
@@ -66,7 +69,11 @@ export function resolveSessionSelectedModelRef(params: {
   sessionKey?: string;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> & {
+  modelCatalogSnapshot?: ModelCatalogSnapshot;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
+}): {
+  provider?: string;
+  model?: string;
   storedOverrideSource: StoredModelOverride["source"] | null;
 } {
   // Ownership is session-specific; never reuse the ordinary override cache for native tuples.
@@ -80,11 +87,13 @@ export function resolveSessionSelectedModelRef(params: {
     return { ...ownership.modelRef, storedOverrideSource: null };
   }
   const cachePrefix = `${normalizeAgentId(params.agentId)}\0${params.allowPluginNormalization !== false}\0`;
-  const defaultKey = `${cachePrefix}\0\0`;
+  const defaultKey = `${cachePrefix}${isSubagentSessionKey(params.sessionKey) ? "subagent" : "default"}\0\0`;
   let configuredDefault = params.rowContext?.selectedModelByOverrideRef.get(defaultKey);
   if (!configuredDefault) {
     configuredDefault = resolveSessionModelRef(params.cfg, undefined, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
+      sessionKey: params.sessionKey,
+      manifestPlugins: params.manifestPlugins,
     });
     params.rowContext?.selectedModelByOverrideRef.set(defaultKey, configuredDefault);
   }
@@ -98,7 +107,26 @@ export function resolveSessionSelectedModelRef(params: {
     allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!storedOverride) {
-    return { ...configuredDefault, storedOverrideSource: null };
+    if (!params.modelCatalogSnapshot) {
+      return { ...configuredDefault, storedOverrideSource: null };
+    }
+    const effectiveKey = `prepared:${defaultKey}`;
+    let effectiveDefault = params.rowContext?.selectedModelByOverrideRef.get(effectiveKey);
+    if (effectiveDefault === undefined) {
+      effectiveDefault = createModelVisibilityPolicy({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        catalog: params.modelCatalogSnapshot.entries,
+        modelCatalog: params.modelCatalogSnapshot,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: params.manifestPlugins,
+      }).effectiveDefault.ref;
+      params.rowContext?.selectedModelByOverrideRef.set(effectiveKey, effectiveDefault);
+    }
+    return { ...effectiveDefault, storedOverrideSource: null };
   }
   const selectedEntry = {
     providerOverride: storedOverride.provider,
@@ -111,6 +139,7 @@ export function resolveSessionSelectedModelRef(params: {
     return {
       ...resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
         allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: params.manifestPlugins,
       }),
       storedOverrideSource: storedOverride.source,
     };
@@ -126,6 +155,7 @@ export function resolveSessionSelectedModelRef(params: {
   }
   const selected = resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   params.rowContext.selectedModelByOverrideRef.set(key, selected);
   return { ...selected, storedOverrideSource: storedOverride.source };

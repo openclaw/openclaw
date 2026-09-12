@@ -431,6 +431,46 @@ describe("Discord model picker interactions", () => {
     },
   );
 
+  it.each([
+    { name: "replacement", effectiveDefault: { provider: "anthropic", model: "available" } },
+    { name: "no usable default", effectiveDefault: null },
+  ])("registered model callbacks use the captured $name", async ({ effectiveDefault }) => {
+    const context = createModelPickerContext();
+    const data = createModelsProviderData({ anthropic: ["available", "other"] });
+    data.resolvedDefault = { provider: "anthropic", model: "missing-primary" };
+    data.effectiveDefault = effectiveDefault;
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
+    mockModelCommandPipeline(createModelCommandDefinition());
+    const dispatchSpy = createDispatchSpy();
+
+    const selected = await runModelSelect({
+      context,
+      data: { ...createModelsViewSelectData(), p: "anthropic" },
+      values: ["other"],
+      dispatchCommandInteraction: dispatchSpy,
+    });
+    const menu = JSON.stringify(firstMockArg(selected.editReply, "interaction.editReply"));
+    expect(menu).toContain(
+      effectiveDefault ? "Default: anthropic/available" : "Default: No default available",
+    );
+    expect(menu).not.toContain("missing-primary");
+    expect(dispatchSpy).not.toHaveBeenCalled();
+
+    const reset = await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), act: "reset", p: "anthropic" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+    if (effectiveDefault) {
+      expectDispatchedModelSelection({ dispatchSpy, model: "anthropic/available" });
+    } else {
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(firstMockArg(reset.editReply, "interaction.editReply"))).toContain(
+        "Available models changed. Open /models and choose again.",
+      );
+    }
+  });
+
   it.each(["explicit runtime", "native model policy", "native session pin"])(
     "preserves declared minimum host state with an unsupported %s",
     async (mode) => {
@@ -637,7 +677,10 @@ describe("Discord model picker interactions", () => {
       dispatchCommandInteraction: dispatchSpy,
     });
 
-    expect(loadSpy).toHaveBeenCalledWith(runtimeCfg, "main", { sessionEntry: undefined });
+    expect(loadSpy).toHaveBeenCalledWith(runtimeCfg, "main", {
+      sessionEntry: undefined,
+      sessionKey: "agent:main:main",
+    });
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "openai/gpt-4.1",
@@ -1468,6 +1511,7 @@ describe("Discord model picker interactions", () => {
 
     expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker", {
       sessionEntry: expect.objectContaining(entry),
+      sessionKey: "agent:worker:subagent:bound",
     });
   });
 
@@ -1509,7 +1553,10 @@ describe("Discord model picker interactions", () => {
       safeInteractionCall: async (_label, fn) => await fn(),
     });
 
-    expect(loadSpy).toHaveBeenCalledWith(cfg, "main", { sessionEntry: undefined });
+    expect(loadSpy).toHaveBeenCalledWith(cfg, "main", {
+      sessionEntry: undefined,
+      sessionKey: "agent:main:main",
+    });
     const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
     expect(payload).toContain("openai");
     expect(payload).toContain("gpt-5.5-codex");

@@ -108,6 +108,31 @@ describe("Mattermost model picker", () => {
     expect(modelTexts).toContain("Back to providers");
   });
 
+  it("keeps sign-in guidance reachable without model choices", () => {
+    const notice = "anthropic: Sign-in needed. Connect with /login anthropic.";
+    const emptyProvider = {
+      ...data,
+      byProvider: new Map([["anthropic", new Set<string>()]]),
+      providers: ["anthropic"],
+      modelMenu: {
+        modelNames: new Map<string, string>(),
+        byProvider: new Map([["anthropic", { available: 0, notice }]]),
+      },
+    };
+    expect(
+      renderMattermostProviderPickerView({ ownerUserId: "user-1", data: emptyProvider }).text,
+    ).toContain(notice);
+    const view = renderMattermostModelsPickerView({
+      ownerUserId: "user-1",
+      data: emptyProvider,
+      provider: "anthropic",
+    });
+    expect(view.text).toContain("0 available");
+    expect(view.text).toContain(notice);
+    expect(view.buttons.flat().map((button) => button.text)).toEqual(["Back to providers"]);
+    expect(buildMattermostAllowedModelRefs(emptyProvider)).toEqual(new Set());
+  });
+
   it("renders unique alphanumeric action ids per button", () => {
     const modelsView = renderMattermostModelsPickerView({
       ownerUserId: "user-1",

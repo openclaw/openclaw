@@ -1,8 +1,10 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { captureAssistantTranscriptRewriteStart } from "../../config/sessions/transcript-assistant-rewrite.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  createConfiguredPrimarySessionEntry,
   MODEL_SELECTION_LOCKED_MESSAGE,
   ModelSelectionLockedError,
   isModelSelectionLocked,
@@ -14,12 +16,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
-import {
-  clearAutoFallbackPrimaryProbeSelection,
-  entryMatchesAutoFallbackPrimaryProbe,
-  markAutoFallbackPrimaryProbe,
-  resolveEffectiveModelFallbacks,
-} from "../agent-scope.js";
+import { markAutoFallbackPrimaryProbe, resolveEffectiveModelFallbacks } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import {
   runEmbeddedAgentEntry,
@@ -31,6 +28,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.j
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { prepareModelRunCapabilities } from "../model-catalog-lookup.js";
+import { resolveConfiguredModelFallbacks } from "../model-selection-resolve.js";
 import { resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
@@ -50,13 +48,12 @@ import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
-import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
-import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
+import { resolveInternalSessionEffectsSource, settleAgentPrimaryProbe } from "./session-helpers.js";
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
@@ -103,6 +100,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     storedModelOverride,
     storedModelOverrideSource,
     effectiveTurnThinkLevel,
+    allowListPolicyFallback,
+    missingConfiguredPrimary,
   } = params.modelSelection;
   const thinkingCatalog = params.modelSelection.thinkingCatalog;
   let sessionEntry = params.sessionEntry;
@@ -137,6 +136,10 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();
+  const modelNoticeTranscriptStart =
+    attemptSessionTarget && (allowListPolicyFallback || missingConfiguredPrimary)
+      ? captureAssistantTranscriptRewriteStart(attemptSessionTarget)
+      : undefined;
   const attemptLifecycleState: AgentAttemptLifecycleState = {
     currentTurnUserMessagePersisted: false,
     lifecycleFinishing: false,
@@ -211,6 +214,12 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     refreshSessionEntry: (key) => {
       sessionEntry = sessionStore?.[key] ?? sessionEntry;
       sessionEntryForAttempt = sessionEntry;
+      if (allowListPolicyFallback && sessionEntry) {
+        sessionEntryForAttempt = createConfiguredPrimarySessionEntry(sessionEntry, {
+          provider: defaultProvider,
+          model: defaultModel,
+        });
+      }
     },
   });
   let maintenanceAuthProfile:
@@ -249,20 +258,24 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
         : new Set<string>();
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
-      const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
-        ? []
-        : (params.opts.modelFallbacksOverride ??
-          resolveEffectiveModelFallbacks({
-            cfg,
-            agentId: sessionAgentId,
-            sessionKey,
-            hasSessionModelOverride:
-              hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
-            modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
-            hasAutoFallbackProvenance: hasExplicitRunOverride
-              ? false
-              : hasStoredAutoFallbackProvenance,
-          }));
+      const effectiveFallbacksOverride =
+        allowListPolicyFallback || isModelSelectionLocked(sessionEntry)
+          ? []
+          : (params.opts.modelFallbacksOverride ??
+            (missingConfiguredPrimary
+              ? resolveConfiguredModelFallbacks({ cfg, agentId: sessionAgentId })
+              : undefined) ??
+            resolveEffectiveModelFallbacks({
+              cfg,
+              agentId: sessionAgentId,
+              sessionKey,
+              hasSessionModelOverride:
+                hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+              modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+              hasAutoFallbackProvenance: hasExplicitRunOverride
+                ? false
+                : hasStoredAutoFallbackProvenance,
+            }));
 
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
       attemptLifecycleState.currentTurnUserMessagePersisted = false;
@@ -279,6 +292,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          missingConfiguredPrimary,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride
@@ -308,36 +322,22 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         },
         sessionOverride: {
           kind: "reconcile-completed",
-          reconcile: async ({ provider: winnerProvider, model: winnerModel }) => {
-            if (
-              !autoFallbackPrimaryProbe ||
-              autoFallbackPrimaryProbeInterruptedByLiveSwitch ||
-              !sessionEntry ||
-              !sessionStore ||
-              !sessionKey ||
-              isModelSelectionLocked(sessionEntry) ||
-              params.suppressVisibleSessionEffects ||
-              params.preserveUserFacingSessionModelState ||
-              !entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) ||
-              winnerProvider !== autoFallbackPrimaryProbe.provider ||
-              winnerModel !== autoFallbackPrimaryProbe.model
-            ) {
-              return;
-            }
-            const nextSessionEntry = { ...sessionEntry };
-            clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-            sessionEntry = await persistAgentSession({
+          reconcile: async (winner) => {
+            const settlement = settleAgentPrimaryProbe({
+              probe: autoFallbackPrimaryProbe,
+              winner,
+              sessionEntry,
               sessionStore,
               sessionKey,
               storePath,
-              initialEntry: sessionEntry,
-              entry: nextSessionEntry,
-              shouldPersist: (current) =>
-                Boolean(
-                  current &&
-                  entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
-                ),
+              preserveSelection:
+                autoFallbackPrimaryProbeInterruptedByLiveSwitch ||
+                params.suppressVisibleSessionEffects ||
+                params.preserveUserFacingSessionModelState,
             });
+            if (settlement) {
+              sessionEntry = await settlement;
+            }
           },
         },
         abortSignal: deferredLifecycle.signal,
@@ -414,6 +414,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             const runtimeCatalog = normalizeThinkingCatalogProviders(
               await loadProviderScopedThinkingCatalog({
                 config: cfg,
+                catalogOwnerConfig: params.prepared.commandRuntimeContext?.config,
                 provider: providerOverride,
                 model: modelOverride,
                 agentId: sessionAgentId,
@@ -422,6 +423,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             );
             const allowedRuntimeCatalog = createModelVisibilityPolicy({
               cfg,
+              sessionKey,
               catalog: runtimeCatalog,
               defaultProvider,
               defaultModel,
@@ -626,6 +628,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         }
         provider = err.provider;
         model = err.model;
+        allowListPolicyFallback = undefined;
+        missingConfiguredPrimary = undefined;
         providerForAuthProfileValidation = err.provider;
         if (sessionEntry) {
           sessionEntry = { ...sessionEntry };
@@ -657,16 +661,25 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       );
       await fallbackTrajectoryRecorder?.flush();
       await deferredLifecycle.complete();
+      if (allowListPolicyFallback && !errorLifecycleFields.aborted) {
+        throw new Error(
+          `Pinned model ${sanitizeForLog(allowListPolicyFallback.pinnedModel)} is not in your allow list, and the configured default could not answer. Use /model to change it. ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
+      }
       throw err;
     }
   }
 
   return {
     startedAt,
+    modelNoticeTranscriptStart,
     result,
     fallbackProvider,
     fallbackModel,
     fallbackExhausted,
+    allowListPolicyFallback,
+    missingConfiguredPrimary,
     provider,
     model,
     sessionEntry,

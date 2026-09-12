@@ -18,6 +18,7 @@ import {
   mockCallInput,
 } from "./get-reply-directives.target-session.test-helpers.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import {
   prepareReplyConversation,
   type PreparedReplyConversation,
@@ -73,11 +74,11 @@ async function resolveHelloWithModelDefaults(params: {
     mocks.createModelSelectionState.mockRejectedValueOnce(params.modelError);
   } else {
     mocks.createModelSelectionState.mockResolvedValueOnce({
-      provider: params.selectedProvider ?? "openai",
-      model: params.selectedModel ?? "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
+      ...createModelSelectionStateFixture({
+        agentCfg: params.agentCfg,
+        provider: params.selectedProvider ?? "openai",
+        model: params.selectedModel ?? "gpt-4o-mini",
+      }),
       resolveDefaultThinkingLevel,
       hasConfiguredThinkingDefault: params.hasConfiguredThinkingDefault,
       resolveDefaultReasoningLevel,
@@ -259,11 +260,11 @@ describe("resolveReplyDirectives", () => {
 
     mocks.listAgentEntries.mockReturnValue([]);
     mocks.createModelSelectionState.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
+      ...createModelSelectionStateFixture({
+        agentCfg: undefined,
+        provider: "openai",
+        model: "gpt-4o-mini",
+      }),
       resolveThinkingCatalog: vi.fn(async () => []),
       resolveDefaultThinkingLevel: vi.fn(async () => "off"),
       resolveDefaultReasoningLevel: vi.fn(async () => "off"),

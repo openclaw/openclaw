@@ -11,6 +11,7 @@ const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "assistant",
   "usage",
   "assistantTranscriptOwned",
+  "assistantTranscriptEntryId",
   "assistantTranscriptIdempotencyKey",
   "assistantMessageIndex",
   "diagnosticTrace",
@@ -128,6 +129,9 @@ export function projectSettledTurnFinalizationAttemptResult(
     ...(result.assistantTranscriptOwned
       ? {
           assistantTranscriptOwned: true,
+          ...(result.assistantTranscriptEntryId
+            ? { assistantTranscriptEntryId: result.assistantTranscriptEntryId }
+            : {}),
           ...(result.assistantTranscriptIdempotencyKey
             ? { assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey }
             : {}),

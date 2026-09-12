@@ -47,6 +47,7 @@ import {
 } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import { attachModelPolicyFailureNotice } from "./model-policy-notice.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
@@ -82,7 +83,7 @@ export async function runReplyAgent(
     queueAdmissionState = "empty",
     isActive,
     isRunActive,
-    opts,
+    opts: requestedOpts,
     typing,
     sessionEntry,
     sessionStore,
@@ -93,7 +94,7 @@ export async function runReplyAgent(
     resolvedVerboseLevel,
     toolProgressDetail,
     isNewSession,
-    blockStreamingEnabled,
+    blockStreamingEnabled: requestedBlockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     sessionCtx,
@@ -103,6 +104,13 @@ export async function runReplyAgent(
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
+  const hasModelSelectionNotice =
+    followupRun.run.blockedModelOverrideUsesPrimary === true ||
+    Boolean(followupRun.run.missingConfiguredPrimary);
+  const opts = hasModelSelectionNotice
+    ? { ...requestedOpts, onPartialReply: undefined, onBlockReply: undefined }
+    : requestedOpts;
+  const blockStreamingEnabled = !hasModelSelectionNotice && requestedBlockStreamingEnabled;
   const resolveGatewayContext = providedReplyOperation
     ? getGatewayContextResolver(providedReplyOperation)
     : (readChannelContextGatewayContextResolver(sessionCtx) ??
@@ -681,7 +689,7 @@ export async function runReplyAgent(
       followupRun.replyOperationRunStates,
       replyOperation,
     );
-    return await handleReplyAgentRunError(error, {
+    const failureReply = await handleReplyAgentRunError(error, {
       cfg,
       resolveVisibleReplyDelivery,
       isHeartbeat,
@@ -691,6 +699,7 @@ export async function runReplyAgent(
       returnWithQueuedFollowupDrain,
       sessionCtx,
     });
+    return failureReply ? attachModelPolicyFailureNotice(failureReply, followupRun.run) : undefined;
   } finally {
     await cleanupReplyAgentRun({
       blockReplyPipeline,

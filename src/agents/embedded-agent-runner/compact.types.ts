@@ -95,6 +95,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   senderIsOwner?: boolean;
   provider?: string;
   model?: string;
+  /** Keep a caller-selected primary instead of the configured compaction model. */
+  useSelectedModel?: boolean;
   /** Caller-resolved model/provider shape used by native harness compactors. */
   runtimeModel?: Model;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */

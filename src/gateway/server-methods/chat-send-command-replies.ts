@@ -1,5 +1,5 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { parseInlineDirectives, sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
@@ -25,11 +25,11 @@ function replyMediaDedupeKeys(payload: ReplyPayload): string[] {
 
 function canonicalizeReplyMedia(payload: ReplyPayload): ReplyPayload {
   const mediaUrls = replyMediaUrls(payload);
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...payload,
     mediaUrl: undefined,
     mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-  };
+  });
 }
 
 function mergeDefinedReplySemantics(target: ReplyPayload, source: ReplyPayload): ReplyPayload {
@@ -37,39 +37,42 @@ function mergeDefinedReplySemantics(target: ReplyPayload, source: ReplyPayload):
   const sourceReplyToId =
     sanitizeReplyDirectiveId(source.replyToId) ??
     sanitizeReplyDirectiveId(sourceInlineDirectives?.replyToExplicitId);
-  return {
-    ...target,
-    ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
-      ? { trustedLocalMedia: true }
-      : {}),
-    ...(source.sensitiveMedia === true || target.sensitiveMedia === true
-      ? { sensitiveMedia: true }
-      : {}),
-    ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
-    ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
-    ...(source.interactive !== undefined ? { interactive: source.interactive } : {}),
-    ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
-    ...(source.replyToTag === true || target.replyToTag === true ? { replyToTag: true } : {}),
-    ...(source.replyToCurrent === true ||
-    sourceInlineDirectives?.replyToCurrent === true ||
-    target.replyToCurrent === true
-      ? { replyToCurrent: true }
-      : {}),
-    ...(source.audioAsVoice === true ||
-    sourceInlineDirectives?.audioAsVoice === true ||
-    target.audioAsVoice === true
-      ? { audioAsVoice: true }
-      : {}),
-    ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
-    ...(source.ttsSupplement !== undefined ? { ttsSupplement: source.ttsSupplement } : {}),
-    ...(source.isError === true || target.isError === true ? { isError: true } : {}),
-    ...(source.channelData !== undefined ? { channelData: source.channelData } : {}),
-  };
+  return copyReplyPayloadMetadata(
+    source,
+    copyReplyPayloadMetadata(target, {
+      ...target,
+      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
+        ? { trustedLocalMedia: true }
+        : {}),
+      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
+        ? { sensitiveMedia: true }
+        : {}),
+      ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
+      ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
+      ...(source.interactive !== undefined ? { interactive: source.interactive } : {}),
+      ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
+      ...(source.replyToTag === true || target.replyToTag === true ? { replyToTag: true } : {}),
+      ...(source.replyToCurrent === true ||
+      sourceInlineDirectives?.replyToCurrent === true ||
+      target.replyToCurrent === true
+        ? { replyToCurrent: true }
+        : {}),
+      ...(source.audioAsVoice === true ||
+      sourceInlineDirectives?.audioAsVoice === true ||
+      target.audioAsVoice === true
+        ? { audioAsVoice: true }
+        : {}),
+      ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
+      ...(source.ttsSupplement !== undefined ? { ttsSupplement: source.ttsSupplement } : {}),
+      ...(source.isError === true || target.isError === true ? { isError: true } : {}),
+      ...(source.channelData !== undefined ? { channelData: source.channelData } : {}),
+    }),
+  );
 }
 
 function mergeMediaReplySemantics(target: ReplyPayload, source: ReplyPayload): ReplyPayload {
   const sourceInlineDirectives = parseReplyInlineDirectives(source);
-  return {
+  return copyReplyPayloadMetadata(target, {
     ...target,
     ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
       ? { trustedLocalMedia: true }
@@ -82,7 +85,7 @@ function mergeMediaReplySemantics(target: ReplyPayload, source: ReplyPayload): R
     target.audioAsVoice === true
       ? { audioAsVoice: true }
       : {}),
-  };
+  });
 }
 
 function hasMergeableReplySemantics(payload: ReplyPayload): boolean {
@@ -157,7 +160,10 @@ export function selectChatSendFinalReplyPayloads(params: {
   if (sensitiveMediaDedupeKeys.size > 0) {
     for (const entry of commandBlockPayloadEntriesForDelivery) {
       if (replyMediaDedupeKeys(entry.payload).some((key) => sensitiveMediaDedupeKeys.has(key))) {
-        entry.payload = { ...entry.payload, sensitiveMedia: true };
+        entry.payload = copyReplyPayloadMetadata(entry.payload, {
+          ...entry.payload,
+          sensitiveMedia: true,
+        });
       }
     }
   }
@@ -215,11 +221,11 @@ export function selectChatSendFinalReplyPayloads(params: {
         return [
           {
             ...entry,
-            payload: {
+            payload: copyReplyPayloadMetadata(entry.payload, {
               ...entry.payload,
               mediaUrl: undefined,
               mediaUrls: remainingFinalMediaUrls.length > 0 ? remainingFinalMediaUrls : undefined,
-            },
+            }),
           },
         ];
       })

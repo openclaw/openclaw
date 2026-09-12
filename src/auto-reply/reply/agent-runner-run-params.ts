@@ -6,6 +6,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
+import { resolveConfiguredModelFallbacks } from "../../agents/model-selection-resolve.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
@@ -37,6 +38,16 @@ export function resolveModelFallbackOptions(
     modelOverrideSource: run.modelOverrideSource,
     hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
     modelSelectionLocked: run.modelSelectionLocked,
+    ...(run.blockedModelOverrideUsesPrimary
+      ? { modelFallbacksOverride: [] }
+      : run.missingConfiguredPrimary
+        ? {
+            modelFallbacksOverride: resolveConfiguredModelFallbacks({
+              cfg: config,
+              agentId: run.agentId,
+            }),
+          }
+        : {}),
   });
   return {
     cfg: config,
@@ -48,6 +59,7 @@ export function resolveModelFallbackOptions(
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
+    missingConfiguredPrimary: run.missingConfiguredPrimary,
   };
 }
 
@@ -121,15 +133,7 @@ export async function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbackAvailability = resolveModelFallbackAvailability({
-    cfg: config,
-    agentId: params.run.agentId,
-    sessionKey: params.run.sessionKey,
-    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-    modelOverrideSource: params.run.modelOverrideSource,
-    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-    modelSelectionLocked: params.run.modelSelectionLocked,
-  });
+  const { modelFallbackAvailability } = resolveModelFallbackOptions(params.run, config);
   const modelFallbacksOverride = modelFallbackOverrideFromAvailability(modelFallbackAvailability);
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,

@@ -103,6 +103,7 @@ describe("applyModelOverrideToSessionEntry", () => {
         model: "claude-sonnet-4-6",
         contextTokenBudget: 200_000,
       }),
+      modelPolicyNotice: { sessionId: "sess-1", pinnedModel: "anthropic/claude-sonnet-4-6" },
       fallbackNotice: {
         kind: "active",
         selectedModel: "anthropic/claude-sonnet-4-6",
@@ -118,6 +119,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextTokensSource).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
+    expect(entry.modelPolicyNotice).toBeUndefined();
     expect(entry.fallbackNotice).toBeUndefined();
     expect(entry.modelOverrideSource).toBe("user");
     expect(entry.modelOverrideRouteResolution).toBe("resolved");

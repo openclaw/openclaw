@@ -62,6 +62,7 @@ function buildModelPickerCatalog(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
+  effectiveDefaultRef?: { provider: string; model: string } | null;
   agentId: string;
   aliasIndex: ModelAliasIndex;
   policyAliasIndex: ModelAliasIndex;
@@ -73,6 +74,7 @@ function buildModelPickerCatalog(params: {
     agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    effectiveDefaultRef: params.effectiveDefaultRef,
     aliasIndex: params.aliasIndex,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
@@ -161,7 +163,7 @@ function buildModelPickerCatalog(params: {
 
   // A restricted picker must not reintroduce a default rejected by the active policy.
   if (
-    resolvedDefault.model &&
+    resolvedDefault?.model &&
     isModelKeyAllowedBySet(
       params.allowedModelKeys,
       modelKey(resolvedDefault.provider, resolvedDefault.model),
@@ -226,6 +228,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   model: string;
   defaultProvider: string;
   defaultModel: string;
+  effectiveDefaultRef?: { provider: string; model: string } | null;
   aliasIndex: ModelAliasIndex;
   policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: ReadonlySet<string>;
@@ -283,6 +286,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       sessionEntry: params.sessionEntry,
+      sessionKey: params.sessionKey,
     });
     return reply ?? { text: "No models available." };
   }
@@ -370,6 +374,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    effectiveDefaultRef: params.effectiveDefaultRef,
     agentId: params.activeAgentId,
     aliasIndex: params.aliasIndex,
     policyAliasIndex: params.policyAliasIndex ?? params.aliasIndex,

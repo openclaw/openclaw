@@ -574,6 +574,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      */
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
+    /** Successful policy-notice delivery for this session identity and stored pin. */
+    modelPolicyNotice?: { sessionId: string; pinnedModel: string };
     contextTokens?: number;
     /** Origin of the persisted context window; `resolved` is legacy/unverified. */
     contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";

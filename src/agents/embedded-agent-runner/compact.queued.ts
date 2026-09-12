@@ -24,6 +24,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { createConfiguredPrimarySessionEntry } from "../../sessions/model-overrides.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
@@ -45,6 +46,7 @@ import {
 } from "./compact.foreground-work.js";
 import { compactNativeCliSession } from "./compact.js";
 import {
+  buildCompactionContextEngineRuntimeContext,
   createQueuedCompactionAbortedResult,
   projectQueuedCompactionSessionTarget,
   executeQueuedContextEngineCompaction,
@@ -53,17 +55,13 @@ import {
   withQueuedCompactionCancellationResult,
 } from "./compact.queued-execution.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import {
-  buildEmbeddedCompactionRuntimeContext,
-  resolveCompactionContextTokenBudget,
-} from "./compaction-runtime-context.js";
+import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
   projectCodexHostTranscriptBytePreflightConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import type { acceptCompactionSuccessor } from "./compaction-successor.js";
-import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import type { ContextEngineMaintenanceResources } from "./context-engine-maintenance-work.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { log } from "./logger.js";
@@ -214,11 +212,22 @@ export async function compactEmbeddedAgentSession(
       : undefined;
   try {
     // Resolve the storage address first, then freeze its owner before runtime/plugin awaits.
-    const entry = loadSessionEntryReadOnly({ ...runtimeTarget, readConsistency: "latest" });
+    const storedEntry = loadSessionEntryReadOnly({ ...runtimeTarget, readConsistency: "latest" });
+    const entry =
+      params.useSelectedModel &&
+      storedEntry &&
+      !storedEntry.modelSelectionLocked &&
+      params.provider &&
+      params.model
+        ? createConfiguredPrimarySessionEntry(storedEntry, {
+            provider: params.provider,
+            model: params.model,
+          })
+        : storedEntry;
     const expectedEntry = {
       sessionId: runtimeTarget.sessionId,
-      lifecycleRevision: entry?.lifecycleRevision,
-      activeWriterRunId: entry?.activeWriterRunId,
+      lifecycleRevision: storedEntry?.lifecycleRevision,
+      activeWriterRunId: storedEntry?.activeWriterRunId,
     };
     const resolvedParams = {
       ...params,
@@ -698,35 +707,4 @@ async function compactResolvedContextEngine(
     attemptNativeHarnessCompaction,
     transcriptBytePreflightAuthority,
   });
-}
-
-function buildCompactionContextEngineRuntimeContext(params: {
-  params: CompactEmbeddedAgentSessionParams;
-  agentDir: string;
-  contextEngineSessionKey?: string;
-  harnessRuntime?: string;
-  contextEnginePluginId?: string;
-  contextTokenBudget?: number;
-}): ContextEngineRuntimeContext {
-  const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = params.params;
-  return {
-    ...runtimeParams,
-    sessionTarget: projectQueuedCompactionSessionTarget(params.params),
-    ...buildEmbeddedCompactionRuntimeContext({
-      ...params.params,
-      agentDir: params.agentDir,
-      modelId: params.params.model,
-      harnessRuntime: params.harnessRuntime,
-    }),
-    ...resolveContextEngineCapabilities({
-      config: params.params.config,
-      sessionKey: params.contextEngineSessionKey ?? params.params.sessionKey,
-      explicitAgentId: contextEngineAgentId,
-      authProfileId: params.params.authProfileId,
-      contextEnginePluginId: params.contextEnginePluginId,
-      purpose: "context-engine.compaction",
-    }),
-    tokenBudget: params.contextTokenBudget,
-    currentTokenCount: params.params.currentTokenCount,
-  };
 }

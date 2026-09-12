@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.GatewayModelAllowList
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayLoadedImage
@@ -515,6 +516,8 @@ class ChatController internal constructor(
 
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
+  private val _modelAllowList = MutableStateFlow<GatewayModelAllowList?>(null)
+  val modelAllowList: StateFlow<GatewayModelAllowList?> = _modelAllowList.asStateFlow()
 
   private val _pendingRunCount = MutableStateFlow(0)
   val pendingRunCount: StateFlow<Int> = _pendingRunCount.asStateFlow()
@@ -5085,6 +5088,7 @@ class ChatController internal constructor(
   private fun clearChatMetadata(nextScope: ChatMetadataScope? = null) {
     _commands.value = emptyList()
     _modelCatalog.value = emptyList()
+    _modelAllowList.value = null
     chatMetadataScope = nextScope
     chatMetadataLoadState = ChatMetadataLoadState.Unloaded
   }
@@ -5144,6 +5148,7 @@ class ChatController internal constructor(
         ) {
           val catalog = parseGatewayModelCatalog(catalogResult)
           _modelCatalog.value = catalog.models
+          _modelAllowList.value = catalog.allowList
           val refreshFailed = catalog.refreshFailed
           chatMetadataLoadState = ChatMetadataLoadState.Loaded
           _sessions.value.firstOrNull { it.key == _sessionKey.value }?.let(::publishSelectedSessionSettings)

@@ -208,6 +208,8 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Physical runtime row, distinct from the stream item's assistantMessageIndex. */
+  assistantTranscriptEntryId?: string;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
@@ -215,13 +217,15 @@ export type ReplyPayloadMetadata = {
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
-  onFinalDeliverySuccess?: () => void;
+  onFinalDeliverySuccess?: () => Promise<void> | void;
   /** Host-projected monitoring final; notification policy already normalized its text. */
   heartbeatReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
   sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+  /** The host finalizer owns this reply's publication outside the runtime stream. */
+  hostFinalReply?: true;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** One host-visible status gates a child-completion wake for this exact turn. */

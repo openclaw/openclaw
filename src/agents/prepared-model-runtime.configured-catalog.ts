@@ -56,6 +56,10 @@ function createConfiguredModelCatalogSnapshot(params: {
   return {
     entries: configuredEntries,
     routeVariants: configuredEntries,
+    resolvedConfiguredModelRefs: params.configuredRuntimeModels.map(({ provider, modelId }) => ({
+      provider,
+      model: modelId,
+    })),
     ...(staticEntries.length > 0 ? { staticEntries } : {}),
   };
 }

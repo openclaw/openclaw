@@ -35,6 +35,7 @@ import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -464,6 +465,147 @@ afterEach(() => {
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
+});
+
+describe("runReplyAgent blocked session pin", () => {
+  it.each([true, false])(
+    "suppresses native live projection only after dispatch accepts completion (%s)",
+    async (accepted) => {
+      const onAgentRunStart = vi.fn((_runId: string, _identity?: unknown, _options?: unknown) =>
+        accepted ? "reply-dispatch" : undefined,
+      );
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          params.onExecutionPhase?.({ phase: "model_call_started" });
+          expect(getAgentRunContext(params.runId)).toMatchObject({
+            isControlUiVisible: !accepted,
+            ...(accepted
+              ? { projectSessionMessages: false, completionSource: "reply-dispatch" }
+              : {}),
+          });
+          return { payloads: [{ text: "Primary answer" }], meta: {} };
+        },
+      );
+      await createBaseRun({
+        context: { Provider: "webchat", Surface: "webchat" },
+        run: {
+          messageProvider: "webchat",
+          blockedModelOverrideRef: "anthropic/blocked-model",
+          blockedModelOverrideUsesPrimary: true,
+        },
+        reply: { opts: { onAgentRunStart } },
+      }).run();
+      expect(onAgentRunStart.mock.calls[0]?.[2]).toMatchObject({
+        completionSource: "reply-dispatch",
+        getResult: expect.any(Function),
+      });
+    },
+  );
+
+  it("keeps the pin and explains a failed primary without consuming the notice", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "blocked-model",
+      modelOverrideSource: "user",
+    };
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("401 invalid API key"));
+    const result = await createBaseRun({
+      context: { Provider: "telegram", MessageSid: "failed-primary" },
+      run: {
+        messageProvider: "telegram",
+        blockedModelOverrideRef: "anthropic/blocked-model",
+        blockedModelOverrideUsesPrimary: true,
+      },
+      reply: { sessionEntry },
+    }).run();
+    const payload = expectDefined(Array.isArray(result) ? result[0] : result, "failure reply");
+    expect(payload.isError).toBe(true);
+    expect(payload.text).toContain("configured default could not answer. Use /model");
+    expect(payload.text).not.toContain("This reply used the default");
+    await getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess?.();
+    expect(sessionEntry.modelOverride).toBe("blocked-model");
+    expect(sessionEntry.modelPolicyNotice).toBeUndefined();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("runs the primary without native pin authority and refuses a receipt without a transcript", async () => {
+    const sessionKey = "main";
+    const storePath = path.join(rootDir, "sessions.json");
+    const pin = {
+      providerOverride: "anthropic",
+      modelOverride: "blocked-model",
+      modelOverrideSource: "user" as const,
+      agentRuntimeOverride: "claude-cli",
+      authProfileOverride: "pinned-account",
+      authProfileOverrideSource: "user" as const,
+    };
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      { sessionId: "session", updatedAt: 1, ...pin },
+    );
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "Answer from the primary." }],
+      meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+    });
+    for (let turn = 0; turn < 2; turn += 1) {
+      const sessionEntry = expectDefined(
+        loadSessionEntry({ storePath, sessionKey }),
+        "stored session",
+      );
+      const run = createBaseRun({
+        run: {
+          agentId: "main",
+          config: {
+            agents: {
+              defaults: {
+                model: { primary: "anthropic/claude", fallbacks: ["google/gemini-2.5-pro"] },
+              },
+            },
+          },
+          blockedModelOverrideRef: "anthropic/blocked-model",
+          blockedModelOverrideUsesPrimary: true,
+          hasSessionModelOverride: true,
+          modelOverrideSource: "user",
+        },
+        reply: {
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+        },
+      });
+      const result = await run.run();
+      const payload = expectDefined(Array.isArray(result) ? result[0] : result, "reply payload");
+      expect(payload.text).toContain("Answer from the primary.");
+      expect(payload.text).toContain(
+        "Pinned model anthropic/blocked-model is not in your allow list.",
+      );
+      expect(payload.text).toContain("This reply used the default (anthropic/claude).");
+      expect(payload.text).toContain("/model");
+      expect(loadSessionEntry({ storePath, sessionKey })?.modelPolicyNotice).toBeUndefined();
+      await expectDefined(
+        getReplyPayloadMetadata(payload)?.onFinalDeliverySuccess,
+        "delivery acknowledgment",
+      )();
+      expect(loadSessionEntry({ storePath, sessionKey })?.modelPolicyNotice).toBeUndefined();
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(pin);
+    }
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    for (const [attempt] of runEmbeddedAgentMock.mock.calls) {
+      expect(attempt).toMatchObject({
+        provider: "anthropic",
+        model: "claude",
+        modelFallbacksOverride: [],
+      });
+      expect(attempt.agentHarnessRuntimeOverride).toBeUndefined();
+    }
+    for (const [selection] of runWithModelFallbackMock.mock.calls) {
+      expect(selection.fallbacksOverride).toEqual([]);
+    }
+  });
 });
 
 describe("runReplyAgent pending operator input", () => {

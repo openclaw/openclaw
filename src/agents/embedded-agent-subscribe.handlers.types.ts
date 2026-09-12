@@ -173,6 +173,7 @@ export type EmbeddedAgentSubscribeState = {
   lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
+  assistantTranscriptEntryId?: string;
   lastAssistantTextContentIndex?: number;
   lastAssistantTextItemId?: string;
   lastAssistantTextNormalized?: string;

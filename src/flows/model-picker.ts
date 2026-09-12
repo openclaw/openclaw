@@ -188,7 +188,7 @@ async function resolvePickerLogicalCatalog(params: {
       sourceOrder.set(key, sourceOrder.size);
     }
   }
-  const catalog = await resolveLogicalVisibleModelCatalog({
+  const { entries: catalog } = await resolveLogicalVisibleModelCatalog({
     cfg: params.cfg,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
@@ -209,6 +209,7 @@ async function resolvePickerLogicalCatalog(params: {
       });
       return resolveLogicalModelCatalogEntryState({
         evaluation,
+        provider: entry.provider,
         routePolicy: openAIModelCatalogRoutePolicy,
       });
     },

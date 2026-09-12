@@ -8,10 +8,16 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -134,6 +140,8 @@ const SESSION_KEY = "agent:main:main";
 let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth-native").findCommandByNativeName;
 let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth-native").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-model-picker-ui.js").resolveDiscordNativeChoiceContext;
+let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
+let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth-native").listNativeCommandSpecs;
 
 async function saveSessionOverride(params: {
   providerOverride: string;
@@ -212,6 +220,8 @@ describe("discord native /think autocomplete", () => {
     });
     ({ findCommandByNativeName, resolveCommandArgChoices, resolveDiscordNativeChoiceContext } =
       await loadDiscordThinkAutocompleteModulesForTest());
+    ({ createDiscordNativeCommand } = await import("./native-command.js"));
+    ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth-native"));
 
     // Compile the provider-backed default choice context outside per-case timing.
     const { command, levelArg } = requireThinkLevelCommand();
@@ -326,6 +336,78 @@ describe("discord native /think autocomplete", () => {
     expect(values).toContain("xhigh");
     expect(values).not.toContain("max");
     expect(values).not.toContain("adaptive");
+  });
+
+  it("registered /think autocomplete uses the published replacement for an absent primary", async () => {
+    const previousConfig = getRuntimeConfigSnapshot();
+    const previousSourceConfig = getRuntimeConfigSourceSnapshot();
+    onTestFinished(() => {
+      if (previousConfig) {
+        setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    });
+    const cfg = createConfig();
+    cfg.agents = { defaults: { model: { primary: "anthropic/missing-primary" } } };
+    cfg.channels = {
+      discord: { dm: { enabled: true }, dmPolicy: "open", allowFrom: ["*"] },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    await upsertSessionEntry({
+      storePath: STORE_PATH,
+      sessionKey: SESSION_KEY,
+      entry: {
+        sessionId: "main",
+        updatedAt: Date.now(),
+        providerOverride: undefined,
+        modelOverride: undefined,
+      },
+    });
+    buildPreparedModelsProviderDataMock.mockResolvedValueOnce({
+      byProvider: new Map([["anthropic", new Set(["available"])]]),
+      providers: ["anthropic"],
+      resolvedDefault: { provider: "anthropic", model: "missing-primary" },
+      effectiveDefault: { provider: "anthropic", model: "available" },
+      modelNames: new Map(),
+    });
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
+      context.modelId === "available" ? { levels: [{ id: "off" }, { id: "max" }] } : undefined,
+    );
+    const command = listNativeCommandSpecs({ provider: "discord" }).find(
+      (entry) => entry.name === "think",
+    );
+    if (!command) {
+      throw new Error("expected registered /think command");
+    }
+    const registered = createDiscordNativeCommand({
+      command,
+      cfg,
+      discordConfig: cfg.channels.discord,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const option = registered.options?.find((entry) => entry.name === "level");
+    if (!option || !("autocomplete" in option) || typeof option.autocomplete !== "function") {
+      throw new Error("expected registered /think autocomplete handler");
+    }
+    const respond = vi.fn(async (_choices: Array<{ name: string; value: string }>) => {});
+    await option.autocomplete({
+      options: { getFocused: () => ({ value: "max" }) },
+      respond,
+      rawData: {},
+      channel: { id: "D1", type: ChannelType.DM },
+      user: { id: "U1" },
+      guild: undefined,
+      client: { fetchChannel: async () => ({ id: "D1", type: ChannelType.DM }) },
+    } as AutocompleteInteraction);
+    expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledWith(cfg, "main", {
+      sessionEntry: expect.objectContaining({ sessionId: "main" }),
+      sessionKey: SESSION_KEY,
+    });
+    expect(respond).toHaveBeenCalledWith([{ name: "max", value: "max" }]);
   });
 
   it.each([

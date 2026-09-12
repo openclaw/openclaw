@@ -517,8 +517,8 @@ export async function resolveReplyDirectives(params: {
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
-    defaultProvider,
-    defaultModel,
+    defaultProvider: modelState.modelPolicy.effectiveDefault.ref?.provider ?? defaultProvider,
+    defaultModel: modelState.modelPolicy.effectiveDefault.ref?.model ?? defaultModel,
     aliasIndex: params.aliasIndex,
     provider,
     model,
@@ -545,7 +545,7 @@ export async function resolveReplyDirectives(params: {
     modelId: model,
     agentId,
     sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
-    sessionEntry: targetSessionEntry,
+    sessionEntry: modelState.blockedModelOverrideUsesPrimary ? undefined : targetSessionEntry,
   });
   const thinkingExplicitlySet =
     thinkingLevelOverride !== undefined ||

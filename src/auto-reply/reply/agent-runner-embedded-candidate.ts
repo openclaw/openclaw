@@ -182,7 +182,9 @@ export async function runEmbeddedFallbackCandidate(
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
         lane: params.runLane,
         provider: embeddedRunProvider,
-        agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
+        agentHarnessId: candidateRun.blockedModelOverrideUsesPrimary
+          ? undefined
+          : resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
         agentHarnessRuntimePreparationHint:
           agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,

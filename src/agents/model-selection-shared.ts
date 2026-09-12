@@ -4,6 +4,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -17,13 +18,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
-import { DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   createConfiguredProviderCatalogModelIdNormalizer,
@@ -38,6 +40,37 @@ import { findNormalizedProviderValue, parseModelRef } from "./model-selection-no
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/normalization-core/string-coerce";
+
+export function resolveSubagentConfiguredModelSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  includeAgentPrimary?: boolean;
+}): string | undefined {
+  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
+  return (
+    resolvePrimaryStringValue(agentConfig?.subagents?.model) ??
+    resolvePrimaryStringValue(params.cfg.agents?.defaults?.subagents?.model) ??
+    (params.includeAgentPrimary === false
+      ? undefined
+      : resolvePrimaryStringValue(agentConfig?.model))
+  );
+}
+
+export function resolveConfiguredModelPrimaryValue(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): string | undefined {
+  return (
+    (params.agentId && params.sessionKey && isSubagentSessionKey(params.sessionKey)
+      ? resolveSubagentConfiguredModelSelection({ cfg: params.cfg, agentId: params.agentId })
+      : undefined) ??
+    (params.agentId
+      ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
+      : undefined) ??
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)
+  );
+}
 
 // Shared model-selection helpers for config aliases, allowlists, provider
 // inference, and configured catalog rows used by CLI and runtime selectors.
@@ -746,18 +779,14 @@ export function resolveConfiguredModelRef(
   params: {
     cfg: OpenClawConfig;
     agentId?: string;
+    sessionKey?: string;
     defaultProvider: string;
     defaultModel: string;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): ModelRef {
-  const rawModel =
-    (params.agentId
-      ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
-      : undefined) ??
-    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
-    "";
+  const rawModel = resolveConfiguredModelPrimaryValue(params) ?? "";
   if (rawModel) {
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
@@ -926,7 +955,9 @@ export function resolveConfiguredModelRef(
 
 type ModelPolicyPreparationParams = BuildModelAliasIndexParams & {
   catalog: ModelCatalogEntry[];
+  modelCatalog?: ModelCatalogSnapshot;
   defaultModel?: string;
+  sessionKey?: string;
 };
 
 type AllowedModelSet = {
@@ -934,6 +965,7 @@ type AllowedModelSet = {
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
   allows: (ref: ModelRef) => boolean;
+  allowsByList: (ref: ModelRef) => boolean;
 };
 
 /** Build explicit model override authorization without widening it for automatic fallbacks. */
@@ -944,6 +976,7 @@ export function buildAllowedModelSet(
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
+    sessionKey?: string;
   } & ModelManifestNormalizationContext,
 ): AllowedModelSet {
   return buildAllowedModelSetFromPrepared(params, prepareModelPolicy(params));
@@ -964,6 +997,13 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
     catalog: params.catalog,
     manifestPlugins: params.manifestPlugins,
   });
+  const authoredPrimary = resolveConfiguredModelPrimaryValue(params)
+    ? resolveConfiguredModelRef({
+        ...params,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      })
+    : undefined;
   const metadata = buildModelCatalogMetadata({
     configuredCatalog,
     aliasIndex: selectionAliasIndex,
@@ -977,6 +1017,7 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
     policyAliasIndex,
     selectionAliasIndex,
     configuredCatalog,
+    authoredPrimary,
     metadata,
     catalog,
   };
@@ -984,7 +1025,13 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
 
 function buildAllowedModelSetFromPrepared(
   params: ModelPolicyPreparationParams,
-  { visibility, policyAliasIndex, metadata, catalog }: ReturnType<typeof prepareModelPolicy>,
+  {
+    visibility,
+    policyAliasIndex,
+    metadata,
+    catalog,
+    authoredPrimary,
+  }: ReturnType<typeof prepareModelPolicy>,
 ): AllowedModelSet {
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowAny = !visibility.hasEntries;
@@ -1039,7 +1086,13 @@ function buildAllowedModelSetFromPrepared(
     if (defaultKey) {
       allowedKeys.add(defaultKey);
     }
-    return { allowAny: true, allowedCatalog: catalog, allowedKeys, allows: () => true };
+    return {
+      allowAny: true,
+      allowedCatalog: catalog,
+      allowedKeys,
+      allows: () => true,
+      allowsByList: () => true,
+    };
   };
 
   if (allowAny) {
@@ -1085,8 +1138,8 @@ function buildAllowedModelSetFromPrepared(
       !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
       !syntheticCatalogEntries.has(syntheticKey)
     ) {
-      // Config can allow a model before it appears in live provider catalogs.
-      // Synthetic entries keep UI/model switchers aligned with that allowlist.
+      // Explicit policy can authorize a model before discovery; picker publication
+      // still requires a real catalog row.
       const alias = metadata.aliasByKey.get(key);
       syntheticCatalogEntries.set(syntheticKey, {
         id: parsed.model,
@@ -1101,18 +1154,15 @@ function buildAllowedModelSetFromPrepared(
     addAllowedModelRef(raw);
   }
 
-  if (
-    defaultKey &&
-    ((visibility.exactModelRefs.length > 0 && wildcardModelKeys.size === 0) ||
-      isModelKeyAllowedBySet(wildcardModelKeys, defaultKey))
-  ) {
-    allowedKeys.add(defaultKey);
-    if (defaultRef) {
-      const identity = addAllowedCatalogRef(defaultRef);
-      if (wildcardModelKeys.size === 0) {
-        exactAllowedIdentities.add(identity);
-      }
-    }
+  // The operator's primary is usable independently of session-switch restrictions.
+  // Read authored config, not the caller's current session selection.
+  const primaryRef = authoredPrimary;
+  const primaryKey = primaryRef ? modelKey(primaryRef.provider, primaryRef.model) : undefined;
+  const primaryAllowed = primaryKey !== undefined && Boolean(authoredPrimary);
+  const primaryIdentity =
+    primaryAllowed && primaryRef ? addAllowedCatalogRef(primaryRef) : undefined;
+  if (primaryAllowed && primaryKey) {
+    allowedKeys.add(primaryKey);
   }
 
   const allowedCatalog = [
@@ -1124,23 +1174,24 @@ function buildAllowedModelSetFromPrepared(
     ...syntheticCatalogEntries.values(),
   ];
 
-  if (allowedCatalog.length === 0 && allowedKeys.size === 0 && wildcardModelKeys.size === 0) {
-    return allowAll();
-  }
-
+  const allowsByList = (ref: ModelRef) => {
+    const provider = normalizeProviderId(ref.provider);
+    return (
+      exactAllowedIdentities.has(modelCatalogEntryKey({ provider, id: ref.model })) ||
+      // Wildcard catalog expansion uses display keys; it cannot authorize resolved tuples.
+      (visibility.providerWildcards.has(provider) &&
+        isModelKeyAllowedBySet(wildcardModelKeys, `${provider}/${ref.model}`))
+    );
+  };
   return {
     allowAny: false,
     allowedCatalog,
     allowedKeys,
-    allows: (ref) => {
-      const provider = normalizeProviderId(ref.provider);
-      return (
-        exactAllowedIdentities.has(modelCatalogEntryKey({ provider, id: ref.model })) ||
-        // Wildcard catalog expansion uses display keys; it cannot authorize resolved tuples.
-        (visibility.providerWildcards.has(provider) &&
-          isModelKeyAllowedBySet(wildcardModelKeys, `${provider}/${ref.model}`))
-      );
-    },
+    allowsByList,
+    allows: (ref) =>
+      allowsByList(ref) ||
+      primaryIdentity ===
+        modelCatalogEntryKey({ provider: normalizeProviderId(ref.provider), id: ref.model }),
   };
 }
 
@@ -1166,6 +1217,7 @@ export function getModelRefStatus(
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
+    sessionKey?: string;
   } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   const allowed = buildAllowedModelSet(params);
@@ -1566,6 +1618,7 @@ function resolveAllowedModelSelection(
 }
 
 export type ModelVisibilityPolicy = {
+  effectiveDefault: { ref: ModelRef | null; missingPrimary?: string };
   allowAny: boolean;
   configuredCatalog: readonly ModelCatalogEntry[];
   allowedCatalog: ModelCatalogEntry[];
@@ -1581,13 +1634,9 @@ export type ModelVisibilityPolicy = {
   allowConfigPath?: string | null;
   allowRepairConfigPath: string;
   allows: (ref: { provider: string; model: string }) => boolean;
+  allowsByList: (ref: { provider: string; model: string }) => boolean;
   allowsByWildcard: (ref: { provider: string; model: string }) => boolean;
   resolveSelection: (ref: { provider: string; model: string }) => ModelRef | null;
-  visibleCatalog: (params: {
-    catalog: readonly ModelCatalogEntry[];
-    defaultVisibleCatalog: readonly ModelCatalogEntry[];
-    view?: "default" | "configured" | "all";
-  }) => ModelCatalogEntry[];
 };
 
 export function dedupeModelCatalogEntries(
@@ -1602,15 +1651,17 @@ export function createModelVisibilityPolicyWithFallbacks(
   params: {
     cfg: OpenClawConfig;
     catalog: ModelCatalogEntry[];
+    modelCatalog?: ModelCatalogSnapshot;
     defaultProvider: string;
     defaultModel?: string;
     fallbackModels: readonly string[];
     additionalConfiguredModelRefs?: readonly string[];
     agentId?: string;
+    sessionKey?: string;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
-): ModelVisibilityPolicy {
+): Omit<ModelVisibilityPolicy, "effectiveDefault"> {
   const prepared = prepareModelPolicy(params);
   const { visibility, policyAliasIndex, selectionAliasIndex, configuredCatalog } = prepared;
   const wildcardModelKeys = visibility.wildcardModelKeys;
@@ -1649,23 +1700,31 @@ export function createModelVisibilityPolicyWithFallbacks(
     }
     return resolved.ref;
   };
-  const exactConfiguredKeys = new Set<string>();
   for (const raw of visibility.exactModelRefs) {
-    const resolved = addConfiguredRef(raw, false, policyAliasIndex);
-    if (resolved) {
-      exactConfiguredKeys.add(modelKey(resolved.provider, resolved.model));
-    }
+    addConfiguredRef(raw, false, policyAliasIndex);
   }
   for (const raw of params.additionalConfiguredModelRefs ?? []) {
     addConfiguredRef(raw, false, selectionAliasIndex);
   }
   addConfiguredRef(params.defaultModel, true, selectionAliasIndex);
+  if (params.agentId && params.sessionKey && isSubagentSessionKey(params.sessionKey)) {
+    const scopedPrimary = resolveConfiguredModelPrimaryValue(params);
+    if (scopedPrimary) {
+      const ref = resolveConfiguredModelRef({
+        ...params,
+        defaultModel: params.defaultModel ?? DEFAULT_MODEL,
+      });
+      const key = resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model });
+      configuredKeys.add(key);
+      retainedKeys.add(key);
+    }
+  }
   for (const fallback of params.fallbackModels) {
     // Configured fallbacks remain available for automatic failover and catalog
     // retention, but are not user-selectable overrides unless policy also allows them.
     addConfiguredRef(fallback, true, selectionAliasIndex);
   }
-  const policy: ModelVisibilityPolicy = {
+  const policy: Omit<ModelVisibilityPolicy, "effectiveDefault"> = {
     allowAny: allowed.allowAny,
     configuredCatalog,
     allowedCatalog: allowed.allowedCatalog,
@@ -1681,6 +1740,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowConfigPath: visibility.configPath,
     allowRepairConfigPath: visibility.repairConfigPath,
     allows: allowed.allows,
+    allowsByList: allowed.allowsByList,
     allowsByWildcard: (ref) => {
       const provider = normalizeProviderId(ref.provider);
       return (
@@ -1699,25 +1759,6 @@ export function createModelVisibilityPolicyWithFallbacks(
         allowPluginNormalization: params.allowPluginNormalization,
         manifestPlugins: params.manifestPlugins,
       }),
-    visibleCatalog: ({ catalog, defaultVisibleCatalog, view }) => {
-      if (view === "all") {
-        return [...catalog];
-      }
-      if (allowed.allowAny) {
-        return [...defaultVisibleCatalog];
-      }
-      if (wildcardModelKeys.size === 0) {
-        return [...allowed.allowedCatalog];
-      }
-      return dedupeModelCatalogEntries([
-        ...defaultVisibleCatalog.filter((entry) =>
-          isModelKeyAllowedBySet(wildcardModelKeys, modelKey(entry.provider, entry.id)),
-        ),
-        ...allowed.allowedCatalog.filter((entry) =>
-          exactConfiguredKeys.has(modelKey(entry.provider, entry.id)),
-        ),
-      ]);
-    },
   };
   return policy;
 }

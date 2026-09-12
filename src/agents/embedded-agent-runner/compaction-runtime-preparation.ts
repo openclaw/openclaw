@@ -62,6 +62,7 @@ export function resolveCompactionRuntimeSelection(params: {
   modelId?: string | null;
   authProfileId?: string | null;
   modelSelectionLocked?: boolean;
+  useSelectedModel?: boolean;
   sandboxSessionKey?: string | null;
   sandboxAgentId?: string;
   sessionKey?: string | null;
@@ -85,6 +86,7 @@ export function resolveCompactionRuntimeSelection(params: {
     modelId: params.modelId,
     authProfileId: params.authProfileId,
     modelSelectionLocked: params.modelSelectionLocked,
+    useSelectedModel: params.useSelectedModel,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: params.allowPluginNormalization,

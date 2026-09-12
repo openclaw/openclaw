@@ -4,6 +4,7 @@ import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/m
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
@@ -30,7 +31,11 @@ export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?: SessionModelEntry,
   agentId?: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: ModelManifestNormalizationContext & {
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+    sessionKey?: string;
+  },
 ): { provider: string; model: string } {
   const overrideRouteResolution = resolveSessionModelOverrideRouteResolution(entry);
   const normalizedOverride = normalizeStoredOverrideModel({
@@ -45,6 +50,7 @@ export function resolveSessionModelRef(
       overrideModel: normalizedOverride.modelOverride,
       overrideRouteResolution,
       allowPluginNormalization: options?.allowPluginNormalization,
+      allowManifestNormalization: options?.allowManifestNormalization,
     })!;
   }
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
@@ -54,13 +60,18 @@ export function resolveSessionModelRef(
     ? resolveDefaultModelForAgent({
         cfg,
         agentId,
+        sessionKey: options?.sessionKey,
         allowPluginNormalization: options?.allowPluginNormalization,
+        allowManifestNormalization: options?.allowManifestNormalization,
+        manifestPlugins: options?.manifestPlugins,
       })
     : resolveConfiguredModelRef({
         cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
+        allowManifestNormalization: options?.allowManifestNormalization,
+        manifestPlugins: options?.manifestPlugins,
       });
 
   const persisted = resolvePersistedSelectedModelRef({
@@ -74,6 +85,7 @@ export function resolveSessionModelRef(
     overrideModel: normalizedOverride.modelOverride,
     overrideRouteResolution,
     allowPluginNormalization: options?.allowPluginNormalization,
+    allowManifestNormalization: options?.allowManifestNormalization,
   });
   return persisted ?? resolved;
 }
@@ -83,7 +95,7 @@ export function resolveSessionModelIdentityRef(
   entry?: SessionModelEntry,
   agentId?: string,
   fallbackModelRef?: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: { allowPluginNormalization?: boolean; sessionKey?: string },
 ): { provider?: string; model: string } {
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
@@ -130,6 +142,7 @@ export function resolveSessionModelIdentityRef(
   }
   const resolved = resolveSessionModelRef(cfg, entry, agentId, {
     allowPluginNormalization: options?.allowPluginNormalization,
+    sessionKey: options?.sessionKey,
   });
   return { provider: resolved.provider, model: resolved.model };
 }

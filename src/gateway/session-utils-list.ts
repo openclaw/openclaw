@@ -139,6 +139,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
 
 function filterSessionEntries(params: {
   cfg: OpenClawConfig;
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   store: Record<string, SessionEntry>;
   targetsBySessionKey?: GatewayStoredSessionTargets;
   opts: SessionsListParams;
@@ -269,6 +270,7 @@ function filterSessionEntries(params: {
   const matchesSearch = search
     ? createSessionListSearchMatcher({
         cfg,
+        modelCatalog: params.modelCatalog,
         search,
         now,
         visibleEntries: candidateEntries,
@@ -365,6 +367,7 @@ function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefin
 
 function selectSessionEntries(params: {
   cfg: OpenClawConfig;
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   store: Record<string, SessionEntry>;
   targetsBySessionKey?: GatewayStoredSessionTargets;
   opts: SessionsListParams;
@@ -435,6 +438,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   };
   const selection = selectSessionEntries({
     cfg,
+    modelCatalog: params.modelCatalog,
     store,
     targetsBySessionKey: params.targetsBySessionKey,
     opts,
@@ -525,6 +529,8 @@ function buildSessionsListResult(
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       allowPluginNormalization: false,
       providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
+      modelCatalogSnapshot: preparedDefaultsCatalog?.snapshot,
+      manifestPlugins: preparedDefaultsCatalog?.manifestPlugins,
     }),
     sessions,
   };

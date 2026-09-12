@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.GatewayModelAllowList
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -7,6 +8,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -27,6 +29,70 @@ class ChatControllerCatalogTest {
       assertEquals(listOf("new"), controller.commands.value.map { it.name })
       assertFalse(requests.any { it.first == "models.list" })
       assertEquals("Update your Gateway to use session model choices.", controller.errorText.value)
+    }
+
+  @Test
+  fun loadAndHandleGatewayEventReplaceAndClearPublishedAllowListState() =
+    runTest {
+      var catalogResponse =
+        """{
+          "models":[{"id":"primary","name":"Primary","provider":"fixture","tags":["default"]}],
+          "allowList":{"hiddenCount":2,"settingsPath":"agents.defaults.modelPolicy.allow","selectedModelBlocked":true}
+        }"""
+      val (controller) =
+        chatControllerTestSetup {
+          respond("chat.history", """{"messages":[],"sessionInfo":{"key":"agent:main:work","modelProvider":"fixture","model":"blocked"}}""")
+          respond("chat.metadata", """{"commands":[]}""")
+          respond("models.list") { catalogResponse }
+        }
+
+      controller.load("agent:main:work")
+      advanceUntilIdle()
+
+      assertEquals(listOf("primary"), controller.modelCatalog.value.map { it.id })
+      assertEquals(
+        listOf("default"),
+        controller.modelCatalog.value
+          .single()
+          .tags,
+      )
+      assertEquals(
+        GatewayModelAllowList(
+          hiddenCount = 2,
+          settingsPath = "agents.defaults.modelPolicy.allow",
+          selectedModelBlocked = true,
+        ),
+        controller.modelAllowList.value,
+      )
+
+      catalogResponse =
+        """{
+          "models":[
+            {"id":"primary","name":"Primary","provider":"fixture","tags":["configured"]},
+            {"id":"blocked","name":"Former pin","provider":"fixture","tags":["default"]}
+          ],
+          "allowList":{"hiddenCount":1,"settingsPath":"agents.entries.main.modelPolicy.allow","selectedModelBlocked":false}
+        }"""
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      assertEquals(listOf("primary", "blocked"), controller.modelCatalog.value.map { it.id })
+      assertEquals(listOf(listOf("configured"), listOf("default")), controller.modelCatalog.value.map { it.tags })
+      assertEquals(
+        GatewayModelAllowList(
+          hiddenCount = 1,
+          settingsPath = "agents.entries.main.modelPolicy.allow",
+          selectedModelBlocked = false,
+        ),
+        controller.modelAllowList.value,
+      )
+
+      catalogResponse = """{"models":[]}"""
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      assertEquals(emptyList<String>(), controller.modelCatalog.value.map { it.id })
+      assertNull(controller.modelAllowList.value)
     }
 
   @Test
