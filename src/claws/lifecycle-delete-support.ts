@@ -51,6 +51,11 @@ import {
 import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
+import {
+  clawBootstrapSeedOwned,
+  deleteAdoptedWorkspaceRow,
+  type ClawWorkspaceAdoption,
+} from "./workspace-origin.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 type ClawRemovalDatabase = Pick<
@@ -119,6 +124,35 @@ export function deletionEffects(
     agentDir,
     sessionsDir,
     workspaceSharedWith,
+  };
+}
+
+/** Resolves the retain/trash plan for a workspace using the canonical reason priority. */
+export function planClawWorkspaceRemoval(params: {
+  sharedWorkspace: boolean;
+  sharedWith: string[];
+  adopted: boolean;
+  modified: boolean;
+  untracked: boolean;
+}): {
+  action: "retain" | "trash";
+  details: { retained: boolean; sharedWith: string[] };
+  reason?: string;
+} {
+  const retained = params.sharedWorkspace || params.adopted || params.modified || params.untracked;
+  const reason = params.sharedWorkspace
+    ? "Workspace contains state owned by another agent."
+    : params.adopted
+      ? "Workspace existed before this Claw adopted it."
+      : params.modified
+        ? "Workspace contains locally modified Claw-managed files."
+        : params.untracked
+          ? "Workspace contains files or directories not managed by this Claw."
+          : undefined;
+  return {
+    action: retained ? "retain" : "trash",
+    details: { retained, sharedWith: params.sharedWith },
+    ...(reason ? { reason } : {}),
   };
 }
 
@@ -339,7 +373,7 @@ type ClawRemovableWorkspaceFile = DigestOwnedWorkspaceFile & DigestOwnedWorkspac
 
 export type RemovedWorkspaceFile = {
   path: string;
-  action: "deleted" | "missing" | "retainedModified" | "error";
+  action: "deleted" | "missing" | "retainedModified" | "retainedUnowned" | "error";
   message?: string;
 };
 
@@ -349,7 +383,7 @@ export type ClawManagedFileStatus = PersistedClawWorkspaceFile & {
 };
 
 export type ClawBootstrapStatus = {
-  state: "pending" | "complete" | "modified" | "missing" | "unsafe" | "unknown";
+  state: "pending" | "complete" | "modified" | "missing" | "unsafe" | "unknown" | "unowned";
   workspace: string;
   path: string;
   sourcePath?: string;
@@ -394,6 +428,7 @@ export async function inspectClawWorkspaceFile(
 
 export async function inspectClawBootstrap(
   install: PersistedClawInstall,
+  workspaceOrigin: ClawWorkspaceAdoption,
   options: OpenClawStateDatabaseOptions,
 ): Promise<ClawBootstrapStatus> {
   const nativeState = await resolveWorkspaceBootstrapStatus(install.workspace, options);
@@ -433,6 +468,15 @@ export async function inspectClawBootstrap(
     },
     MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   );
+  // The recorded seed receipt, not the digest, decides whether an adopted workspace's
+  // BOOTSTRAP.md is this install's: a file it never seeded is never a deletion candidate.
+  if (inspected.state !== "missing" && !clawBootstrapSeedOwned(workspaceOrigin)) {
+    return {
+      ...base,
+      state: "unowned",
+      message: "BOOTSTRAP.md exists but this install never seeded it.",
+    };
+  }
   if (inspected.state === "unchanged") {
     return { ...base, state: "pending" };
   }
@@ -553,6 +597,9 @@ export function releaseClawRemoveRows(
           query.deleteFrom("claw_installs").where("agent_id", "=", agentId),
         );
       }
+      // Drop the origin with the install it describes; a later agent reusing this id must not
+      // inherit an adopted-workspace claim from a Claw that no longer exists.
+      deleteAdoptedWorkspaceRow(db, agentId);
       // Complete removals release the fence and retry owner in the same transaction.
       completeDeletion(database);
     }, options);

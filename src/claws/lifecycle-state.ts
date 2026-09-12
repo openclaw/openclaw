@@ -24,6 +24,7 @@ import {
   ClawRemoveError,
   cleanupClawAgentFilesystem,
   deletionEffects,
+  planClawWorkspaceRemoval,
   readClawRemoveCronInventory,
   releaseClawRemoveRows,
   removeClawWorkspaceFile,
@@ -166,6 +167,15 @@ export async function buildClawRemovePlan(
       record.install.workspace,
       trackedWorkspacePaths,
     );
+    // An adopted directory predates the Claw. Once every declared file in it is managed it looks
+    // indistinguishable from one this install created, so origin decides retention, not contents.
+    const workspaceRemoval = planClawWorkspaceRemoval({
+      sharedWorkspace,
+      sharedWith: effects.workspaceSharedWith,
+      adopted: record.workspaceOrigin.adopted,
+      modified: workspaceHasModifiedFiles,
+      untracked: workspaceHasUntrackedEntries,
+    });
     const { attachedJobs, monitors, inspectionUnavailable } = await readClawRemoveCronInventory(
       record.install.agentId,
       options,
@@ -216,23 +226,9 @@ export async function buildClawRemovePlan(
       actions.push({
         kind: "workspace",
         id: record.install.agentId,
-        action:
-          sharedWorkspace || workspaceHasModifiedFiles || workspaceHasUntrackedEntries
-            ? "retain"
-            : "trash",
         target: effects.workspace,
         blocked: record.agentState === "modified",
-        details: {
-          retained: sharedWorkspace || workspaceHasModifiedFiles || workspaceHasUntrackedEntries,
-          sharedWith: effects.workspaceSharedWith,
-        },
-        ...(sharedWorkspace
-          ? { reason: "Workspace contains state owned by another agent." }
-          : workspaceHasModifiedFiles
-            ? { reason: "Workspace contains locally modified Claw-managed files." }
-            : workspaceHasUntrackedEntries
-              ? { reason: "Workspace contains files or directories not managed by this Claw." }
-              : {}),
+        ...workspaceRemoval,
       });
     }
     if (effects.agentDir) {
@@ -461,6 +457,7 @@ export async function applyClawRemovePlan(
   ) {
     throw new ClawRemoveError("remove_changed", "Claw-owned state changed after remove planning.");
   }
+  const workspaceWasAdopted = record.workspaceOrigin.adopted;
   const packageDecisions = await planClawPackageRemovals(record.install, record.packages, {
     ...options,
     deps: options.packageDeps,
@@ -663,6 +660,7 @@ export async function applyClawRemovePlan(
             stateDatabase: options,
             assertCurrent,
             retainWorkspace:
+              workspaceWasAdopted ||
               workspaceHasRemainingEntries ||
               bootstrap?.action === "retainedModified" ||
               workspaceFiles.some((file) => file.action === "retainedModified"),

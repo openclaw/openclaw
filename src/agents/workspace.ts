@@ -783,6 +783,9 @@ export async function seedWorkspaceBootstrap(params: {
   content: Buffer;
   nowMs?: number;
   stateOptions?: OpenClawStateDatabaseOptions;
+  /** "claim" reads an identical pre-existing file as this seed; "conflict" refuses any
+   * pre-existing file before the seed marker is written, for a caller that never wrote one. */
+  existingFile?: "claim" | "conflict";
 }): Promise<"seeded" | "already-seeded" | "consumed"> {
   if (params.content.byteLength > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
     throw new WorkspaceBootstrapSeedConflictError(
@@ -833,6 +836,11 @@ export async function seedWorkspaceBootstrap(params: {
     }
   }
 
+  if (!created && params.existingFile === "conflict") {
+    throw new WorkspaceBootstrapSeedConflictError(
+      "Existing BOOTSTRAP.md was not seeded by this install.",
+    );
+  }
   if (!created) {
     await retryAsync(
       async () => {
