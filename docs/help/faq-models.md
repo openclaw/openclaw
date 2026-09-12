@@ -262,6 +262,11 @@ troubleshooting, see the main [FAQ](/help/faq).
     | `gemini-flash` | `google/gemini-3-flash-preview` |
     | `gemini-flash-lite` | `google/gemini-3.1-flash-lite` |
 
+    These targets are the shipped `DEFAULT_MODEL_ALIASES` defaults and move with
+    each release, so they will not always match the model ids used in examples
+    elsewhere on this page — an alias can point at any model you configure.
+    Run `openclaw models list` to see what the aliases resolve to on your build.
+
     Your own alias with the same name overrides the built-in one.
 
   </Accordion>

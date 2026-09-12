@@ -327,7 +327,7 @@ tier: core
 - send_email: enabled
 ```
 
-```bash
+```console
 $ openclaw path resolve 'oc://x.md/[frontmatter]/tier' --file frontmatter.md --human
 leaf @ L4: "core" (string)
 
@@ -357,7 +357,7 @@ even when the source uses underscores (`send_email` becomes `send-email`).
 }
 ```
 
-```bash
+```console
 $ openclaw path resolve 'oc://config.jsonc/plugins/github/enabled' --file config.jsonc --human
 leaf @ L4: "true" (boolean)
 
@@ -383,7 +383,7 @@ JSONC edits go through `jsonc-parser`, so comments and whitespace survive a
 {"event":"end","userId":"u1","ts":3}
 ```
 
-```bash
+```console
 $ openclaw path find 'oc://session.jsonl/[event=action]/userId' --file session.jsonl --human
 1 match for oc://session.jsonl/[event=action]/userId:
   oc://session.jsonl/L2/userId  →  leaf @ L2: "u1" (string)
@@ -408,7 +408,7 @@ steps:
     command: openclaw.invoke
 ```
 
-```bash
+```console
 $ openclaw path resolve 'oc://workflow.yaml/steps/0/id' --file workflow.yaml --human
 leaf @ L3: "fetch" (string)
 
@@ -476,7 +476,7 @@ Parse-only check. No filesystem access. Useful when you want to confirm a
 template path is well-formed before substituting variables, or when you want
 the structural breakdown for debugging:
 
-```bash
+```console
 $ openclaw path validate 'oc://AGENTS.md/tools/gh' --human
 valid: oc://AGENTS.md/tools/gh
   file:    AGENTS.md

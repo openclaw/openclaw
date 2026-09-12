@@ -251,7 +251,12 @@ permanently. Channel-specific fields remain typed in a deprecated compatibility
 tier so existing external plugins still compile while plugin authors move those
 fields into plugin-local setup input types.
 
-OpenClaw does not ship major releases. A registry sweep on 2026-07-22 inspected
+OpenClaw core does not ship major releases, so a core version bump never
+triggers a removal. The Plugin SDK keeps its own major-version boundary, which
+is what the `next-plugin-sdk-major` removal gate refers to; see
+[Removal timeline](/plugins/sdk-migration/removal-timeline).
+
+A registry sweep on 2026-07-22 inspected
 426 published out-of-tree channel plugins and removed 21 fields with no readers.
 The 22 retained fields each have a known published reader. Each further field is
 deleted as soon as no published plugin reads it; the retained set shrinks as

@@ -182,7 +182,8 @@ Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued
 requests apply input backpressure until earlier responses finish; finite pipelines
 drain in order. Use separate connections for concurrent requests. Keep the release hook returned by
-`beginWebhookRequestPipelineOrReject` in `finally`; it retains any selected
+`beginWebhookRequestPipelineOrReject` (also from
+`openclaw/plugin-sdk/webhook-request-guards`) in `finally`; it retains any selected
 rejection cleanup before releasing the in-flight slot.
 
 ### Post-ack webhook work
@@ -269,7 +270,8 @@ Contract notes:
   tools instead:
   - Embedded runner: session MCP runtime + bundle tools (static + scoped).
   - Codex app-server: dynamic tools via
-    `materializeRequesterScopedMcpToolsForHarnessRun` (scoped-only; static
+    `materializeRequesterScopedMcpToolsForHarnessRun` from
+    `openclaw/plugin-sdk/agent-harness-runtime` (scoped-only; static
     servers stay on Codex's native MCP client).
 - Scoped tool **specs** are session-stable after the first successful resolve in
   that session, so shared-thread harnesses (Codex) do not rotate threads when

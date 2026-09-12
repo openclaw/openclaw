@@ -80,7 +80,7 @@ summary, and an install hint such as `openclaw plugins install clawhub:<package>
 <Note>
 Default official installs follow the catalog's declared source order.
 ClawHub also provides plugin discovery. OpenClaw-owned
-`@openclaw/*` plugin packages are published on npm again; see the current list
+`@openclaw/*` plugin packages are published on npm; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
 [plugin inventory](/plugins/plugin-inventory). Stable installs use `latest`.
 Fresh beta-channel installs with bare/default or `@latest` intent target the
@@ -255,7 +255,7 @@ top-level script files as local helpers. List standalone files explicitly in
 `plugins.load.paths` instead.
 
 <Note>
-Compatible bundles install into the normal plugin root and participate in the same list/info/enable/disable flow. Today, bundle skills, bundle MCP servers, Agent Plugins skills/MCP (with the `PLUGIN_ROOT`/`PLUGIN_DATA` subprocess contract), Claude command-skills, Claude `settings.json` defaults, Claude `.lsp.json` / manifest-declared `lspServers` defaults, Cursor command-skills, and compatible Codex hook directories are supported; other detected bundle capabilities are shown in diagnostics/info but are not yet wired into runtime execution. See [Plugin bundles](/plugins/bundles) for the per-format mapping.
+Compatible bundles install into the normal plugin root and participate in the same list/info/enable/disable flow. Bundle skills, bundle MCP servers, Agent Plugins skills/MCP (with the `PLUGIN_ROOT`/`PLUGIN_DATA` subprocess contract), Claude command-skills, Claude `settings.json` defaults, Claude `.lsp.json` / manifest-declared `lspServers` defaults, Cursor command-skills, and compatible Codex hook directories are supported; other detected bundle capabilities are shown in diagnostics/info but are not yet wired into runtime execution. See [Plugin bundles](/plugins/bundles) for the per-format mapping.
 </Note>
 
 Use `-l`/`--link` to point at a local plugin directory without copying it (adds

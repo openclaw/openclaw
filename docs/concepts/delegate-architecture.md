@@ -97,11 +97,16 @@ Use per-agent tool policy to enforce boundaries at the Gateway level, independen
 
 ```json5
 {
-  id: "delegate",
-  workspace: "~/.openclaw/workspace-delegate",
-  tools: {
-    allow: ["read", "exec", "message", "cron"],
-    deny: ["write", "edit", "apply_patch", "browser", "canvas"],
+  agents: {
+    entries: {
+      delegate: {
+        workspace: "~/.openclaw/workspace-delegate",
+        tools: {
+          allow: ["read", "exec", "message", "cron"],
+          deny: ["write", "edit", "apply_patch", "browser", "canvas"],
+        },
+      },
+    },
   },
 }
 ```
@@ -112,11 +117,16 @@ For high-security deployments, sandbox the delegate agent so it cannot reach the
 
 ```json5
 {
-  id: "delegate",
-  workspace: "~/.openclaw/workspace-delegate",
-  sandbox: {
-    mode: "all",
-    scope: "agent",
+  agents: {
+    entries: {
+      delegate: {
+        workspace: "~/.openclaw/workspace-delegate",
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+        },
+      },
+    },
   },
 }
 ```
@@ -161,14 +171,14 @@ Give the delegate its own account in your identity provider with explicit delega
 
 #### Microsoft 365
 
-Create a dedicated user account for the delegate (for example `delegate@[organization].org`).
+Create a dedicated user account for the delegate (for example `delegate@<organization>.org`).
 
 **Send on Behalf** (Tier 2):
 
 ```powershell
 # Exchange Online PowerShell
-Set-Mailbox -Identity "principal@[organization].org" `
-  -GrantSendOnBehalfTo "delegate@[organization].org"
+Set-Mailbox -Identity "principal@<organization>.org" `
+  -GrantSendOnBehalfTo "delegate@<organization>.org"
 ```
 
 **Read access** (Graph API with application permissions):

@@ -8,7 +8,8 @@ title: "Configuration — agents"
 ---
 
 Agent-scoped configuration keys under `agents.*`, `multiAgent.*`, `session.*`,
-`messages.*`, and `talk.*`. For channels, tools, gateway runtime, and other
+`messages.*`, `talk.*`, and the top-level `tts.*` block that message delivery
+uses. For channels, tools, gateway runtime, and other
 top-level keys, see [Configuration reference](/gateway/configuration-reference).
 
 OpenClaw stamps `agents.ownership: "explicit"` when creating a multi-agent fleet. Such fleets have no default: channels and ambient services need bindings or surface-specific `agentId` targets. Doctor materializes legacy owners during upgrade; sole-agent configs need no marker.

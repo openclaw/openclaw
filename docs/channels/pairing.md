@@ -95,6 +95,15 @@ Installed external plugins can also support DM pairing if they implement
 OpenClaw's pairing API. Check the plugin's documentation for version-specific
 limitations.
 
+Two of those declare the pairing helpers without offering a request-and-approve
+flow you can turn on:
+
+- `synology-chat` accepts only `dmPolicy: "open" | "allowlist" | "disabled"`.
+  Approve senders by adding their numeric Synology user IDs to `allowedUserIds`
+  — see [Synology Chat](/channels/synology-chat).
+- `twitch` runs with `dmPolicy: "open"` and never raises a pairing request.
+  Restrict access with roles and allowlists instead — see [Twitch](/channels/twitch).
+
 ### Reusable sender groups
 
 Use top-level `accessGroups` when the same trusted sender set should apply to

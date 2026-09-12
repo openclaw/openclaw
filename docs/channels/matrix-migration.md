@@ -36,10 +36,18 @@ Doctor migration covers:
 
 ## Upgrading from OpenClaw releases older than 2026.4
 
-Releases through the 2026.6 train also migrated the original flat single-store
-Matrix layout (`~/.openclaw/matrix/bot-storage.json` plus
-`~/.openclaw/matrix/crypto/`) and prepared encrypted-state recovery from the
-old rust crypto store. Current releases no longer carry that migration.
+This section applies only to an installation still on the original flat
+single-store Matrix layout (`~/.openclaw/matrix/bot-storage.json` plus
+`~/.openclaw/matrix/crypto/`), which is what releases older than 2026.4 wrote.
+If your installation already ran 2026.4 or newer, it is past that layout and the
+intermediate step below does not apply — go straight to
+[Recommended upgrade flow](#recommended-upgrade-flow).
+
+Releases through the 2026.6 train also migrated that flat layout and prepared
+encrypted-state recovery from the old rust crypto store. That migration was
+removed in [#104650](https://github.com/openclaw/openclaw/pull/104650), which
+shipped in `v2026.7.2-beta.1`, stable from `v2026.8.1`, so current releases no
+longer carry it.
 
 If you are upgrading an installation that still uses the flat layout, first
 upgrade to a 2026.6 release, run `openclaw doctor --fix`, and start the gateway

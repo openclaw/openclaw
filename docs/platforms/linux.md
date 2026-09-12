@@ -112,10 +112,10 @@ the Gateway; remote Gateway routes are left untouched. If logind or the system
 bus is unavailable, the sleep hook disables itself and the app continues
 normally.
 
-Realtime voice Talk inside the companion's embedded WebView is not validated:
+Realtime voice Talk inside the companion's embedded WebView is not supported:
 the shell does not grant microphone capture to the WebKitGTK WebView, so
-`getUserMedia` is expected to fail there. Until that lands, open the Gateway's
-Control UI in a regular browser for [Talk mode](/nodes/talk).
+`getUserMedia` fails there. Open the Gateway's Control UI in a regular browser
+for [Talk mode](/nodes/talk).
 
 Stable releases built from `main` or their matching `release/YYYY.M.PATCH` branch
 ship `.deb` and AppImage bundles as assets on the
@@ -210,8 +210,8 @@ Gateways whose shared secret is configured through a SecretRef omit it from the
 CLI handoff. Existing paired installs keep working through their stored device
 token, but a fresh install cannot create a pending pairing request under shared-secret
 authentication without that bootstrap credential.
-Setup-code and `bootstrapToken` redemption need dedicated product UI and remain
-a follow-up; Quick Chat does not attempt either flow.
+Setup-code and `bootstrapToken` redemption have no product UI in the Linux
+companion, so Quick Chat does not attempt either flow.
 
 On X11, use the gear in Quick Chat to record or reset a custom shortcut. The
 **Quick Chat shortcut** tray toggle enables or disables it without disabling the

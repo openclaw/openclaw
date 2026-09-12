@@ -171,7 +171,7 @@ MeowCaller is experimental, has no tagged release, and uses a separately paired 
 
   <Step title="Install the reviewed MeowCaller CLI">
 
-    The adapter expects a `meowcaller` executable on the gateway host's `PATH`. Until [MeowCaller PR #7](https://github.com/purpshell/meowcaller/pull/7) merges, build the reviewed branch:
+    The adapter expects a `meowcaller` executable on the gateway host's `PATH`. Until [MeowCaller PR #7](https://github.com/purpshell/meowcaller/pull/7) merges, build the reviewed branch. The branch and commit below were reviewed and recorded on 2026-07-04 in [#99635](https://github.com/openclaw/openclaw/pull/99635); MeowCaller is a third-party project, so no OpenClaw release scopes this step. Check the upstream PR before assuming the workaround is still required.
 
 ```bash
 git clone --branch feat/send-only-notify https://github.com/steipete/meowcaller.git

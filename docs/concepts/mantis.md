@@ -13,8 +13,10 @@ Mantis publishes visual CI evidence and a PR comment for OpenClaw behavior.
 Live transport scenarios compare a known-bad baseline with a candidate ref.
 Focused browser lanes may instead prove one candidate against a deterministic
 mocked transport. Discord shipped first with real bot auth, guild channels, reactions, threads,
-and a browser witness. Slack and focused Control UI chat lanes exist too.
-WhatsApp and Matrix are unimplemented.
+and a browser witness. Slack and focused Control UI chat lanes exist too. The QA
+Lab live-transport harness also registers Matrix, Telegram, and WhatsApp
+(`extensions/qa-lab/src/live-transports/`); the Mantis `--transport` flag itself
+still accepts only `discord`.
 
 ## Ownership
 
@@ -502,7 +504,9 @@ and keep vision checks additive to a platform-API oracle where one exists.
 
 After Discord and Slack, the same runner shape extends to WhatsApp (QR login,
 re-identification, delivery, media, reactions) and Matrix (encrypted rooms,
-thread/reply relations, restart resume). Neither is implemented yet.
+thread/reply relations, restart resume). Both now have live-transport
+registrations in QA Lab, alongside Telegram; Mantis itself does not yet expose
+them through `--transport`.
 
 ## Open questions
 

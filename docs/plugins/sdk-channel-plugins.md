@@ -243,6 +243,14 @@ raw callback string. Actor and source-message checks remain channel-owned.
     });
     ```
 
+    This skeleton stops at `outbound`. `createChatChannelPlugin` passes
+    `base`, `security`, `pairing`, `threading`, and `outbound` straight through
+    and does **not** derive a `message` adapter from `outbound`, so a plugin
+    built from this skeleton alone exposes no `message` adapter. Add one before
+    shipping — `createChannelMessageAdapterFromOutbound(...)` derives it from
+    the `outbound` adapter above; see
+    [Channel message adapter](/plugins/sdk-channel-plugins/message-adapter).
+
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`

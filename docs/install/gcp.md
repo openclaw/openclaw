@@ -43,9 +43,13 @@ in [Docker VM runtime](/install/docker-vm-runtime).
   </Step>
 
   <Step title="Create the project">
+    GCP project ids are globally unique, so `<your-project-id>` must be a name
+    nobody else has taken; `gcloud projects create` fails if it is. Use the same
+    id everywhere it appears below.
+
     ```bash
-    gcloud projects create my-openclaw-project --name="OpenClaw Gateway"
-    gcloud config set project my-openclaw-project
+    gcloud projects create <your-project-id> --name="OpenClaw Gateway"
+    gcloud config set project <your-project-id>
     gcloud services enable compute.googleapis.com
     ```
 
@@ -192,8 +196,8 @@ dedicated service account with the narrowest role that works:
 gcloud iam service-accounts create openclaw-deploy \
   --display-name="OpenClaw Deployment"
 
-gcloud projects add-iam-policy-binding my-openclaw-project \
-  --member="serviceAccount:openclaw-deploy@my-openclaw-project.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding <your-project-id> \
+  --member="serviceAccount:openclaw-deploy@<your-project-id>.iam.gserviceaccount.com" \
   --role="roles/compute.instanceAdmin.v1"
 ```
 

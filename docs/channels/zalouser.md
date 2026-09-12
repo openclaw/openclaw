@@ -55,7 +55,7 @@ openclaw plugins install @openclaw/zalouser
 
 ## Naming
 
-Channel id is `zalouser` to make it explicit this automates a **personal Zalo user account** (unofficial). `zalo` is reserved for a potential future official Zalo API integration.
+Channel id is `zalouser` to make it explicit this automates a **personal Zalo user account** (unofficial). The separate `zalo` channel is the bundled Zalo Bot API integration — see [Zalo](/channels/zalo).
 
 ## Finding IDs (directory)
 
@@ -120,7 +120,7 @@ Example:
       groupAllowFrom: ["1471383327500481391"],
       groups: {
         "123456789": { enabled: true },
-        "Work Chat": { enabled: true },
+        "987654321": { enabled: true },
       },
     },
   },
@@ -150,7 +150,7 @@ Example:
       groupPolicy: "allowlist",
       groups: {
         "*": { enabled: true, requireMention: true },
-        "Work Chat": { enabled: true, requireMention: false },
+        "987654321": { enabled: true, requireMention: false },
       },
     },
   },

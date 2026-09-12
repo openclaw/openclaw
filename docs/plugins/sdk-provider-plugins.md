@@ -403,9 +403,32 @@ a saved policy is not proof that the running Gateway applied it.
   <Step title="Test">
     ### Step 6: Test
 
+    The test below imports the provider config object by name, so move it out of
+    the inline `api.registerProvider({ ... })` call into its own module first:
+
+    ```typescript src/provider.ts
+    // The same object literal that index.ts passes to api.registerProvider.
+    export const acmeProvider = {
+      id: "acme-ai",
+      label: "Acme AI",
+      docsPath: "/providers/acme-ai",
+      envVars: ["ACME_AI_API_KEY"],
+      auth: [
+        /* createProviderApiKeyAuthMethod(...) as above */
+      ],
+      catalog: {
+        /* order + run as above */
+      },
+      resolveDynamicModel: (params) => {
+        /* as above */
+      },
+    };
+    ```
+
+    Then `index.ts` registers it: `api.registerProvider(acmeProvider)`.
+
     ```typescript src/provider.test.ts
     import { describe, it, expect } from "vitest";
-    // Export your provider config object from index.ts or a dedicated file
     import { acmeProvider } from "./provider.js";
 
     describe("acme-ai provider", () => {

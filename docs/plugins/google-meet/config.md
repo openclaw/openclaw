@@ -68,51 +68,61 @@ An `openclaw doctor --fix` migration exists for the legacy `realtime.provider: "
 
 ```json5
 {
-  defaults: {
-    meeting: "https://meet.google.com/abc-defg-hij",
-  },
-  browser: {
-    defaultProfile: "openclaw",
-  },
-  chrome: {
-    guestName: "OpenClaw Agent",
-    waitForInCallMs: 30000,
-    bargeInInputCommand: [
-      "sox",
-      "-q",
-      "-t",
-      "coreaudio",
-      "External Microphone",
-      "-r",
-      "24000",
-      "-c",
-      "1",
-      "-b",
-      "16",
-      "-e",
-      "signed-integer",
-      "-t",
-      "raw",
-      "-",
-    ],
-  },
-  chromeNode: {
-    node: "parallels-macos",
-  },
-  defaultMode: "agent",
-  realtime: {
-    provider: "openai",
-    transcriptionProvider: "openai",
-    voiceProvider: "google",
-    model: "gemini-3.1-flash-live-preview",
-    agentId: "jay",
-    toolPolicy: "owner",
-    introMessage: "Say exactly: I'm here.",
-    providers: {
-      google: {
-        speakerVoice: "Kore",
+  plugins: {
+    entries: {
+      "google-meet": {
+        config: {
+          defaults: {
+            meeting: "https://meet.google.com/abc-defg-hij",
+          },
+          chrome: {
+            guestName: "OpenClaw Agent",
+            waitForInCallMs: 30000,
+            bargeInInputCommand: [
+              "sox",
+              "-q",
+              "-t",
+              "coreaudio",
+              "External Microphone",
+              "-r",
+              "24000",
+              "-c",
+              "1",
+              "-b",
+              "16",
+              "-e",
+              "signed-integer",
+              "-t",
+              "raw",
+              "-",
+            ],
+          },
+          chromeNode: {
+            node: "parallels-macos",
+          },
+          defaultMode: "agent",
+          realtime: {
+            provider: "openai",
+            transcriptionProvider: "openai",
+            voiceProvider: "google",
+            model: "gemini-3.1-flash-live-preview",
+            agentId: "jay",
+            toolPolicy: "owner",
+            introMessage: "Say exactly: I'm here.",
+            providers: {
+              google: {
+                speakerVoice: "Kore",
+              },
+            },
+          },
+        },
       },
     },
+  },
+
+  // `browser.*` is a top-level openclaw.json key, not Google Meet plugin config.
+  browser: {
+    defaultProfile: "openclaw",
   },
 }
 ```
@@ -158,13 +168,21 @@ Twilio-only config:
 
 ```json5
 {
-  defaultTransport: "twilio",
-  twilio: {
-    defaultDialInNumber: "+15551234567",
-    defaultPin: "123456",
-  },
-  voiceCall: {
-    gatewayUrl: "ws://127.0.0.1:18789",
+  plugins: {
+    entries: {
+      "google-meet": {
+        config: {
+          defaultTransport: "twilio",
+          twilio: {
+            defaultDialInNumber: "+15551234567",
+            defaultPin: "123456",
+          },
+          voiceCall: {
+            gatewayUrl: "ws://127.0.0.1:18789",
+          },
+        },
+      },
+    },
   },
 }
 ```

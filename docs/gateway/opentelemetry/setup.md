@@ -17,7 +17,6 @@ openclaw plugins install clawhub:@openclaw/diagnostics-otel
 ```json5
 {
   plugins: {
-    allow: ["diagnostics-otel"],
     entries: {
       "diagnostics-otel": { enabled: true },
     },
@@ -40,6 +39,13 @@ openclaw plugins install clawhub:@openclaw/diagnostics-otel
 ```
 
 Or enable the plugin from the CLI: `openclaw plugins enable diagnostics-otel`.
+
+<Warning>
+`plugins.allow` is an exclusive allowlist: once it is non-empty, every plugin
+absent from it stops loading, including provider and ACP plugins. If your config
+already sets `plugins.allow`, add `"diagnostics-otel"` to the existing list
+rather than replacing it. Leave `plugins.allow` unset if you are not using it.
+</Warning>
 
 With the plugin loaded, changes to `diagnostics.otel` hot-reload only its exporter
 service. The previous generation unsubscribes and flushes before the replacement

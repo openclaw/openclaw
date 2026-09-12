@@ -337,18 +337,21 @@ canonical Claw reader before success.
 
 ## Inspect and preview
 
-Validate the source without planning local changes. For OpenClaw profile
-extensions, inspect also performs the canonical read-only artifact probe and
-reports mapped and unavailable components:
+Validate the source without planning local changes. `inspect` and `add` accept
+either the project directory `create` wrote or a standalone grouped manifest
+file such as `./incident-triage.claw.json`; the walkthrough below uses the
+project directory. For OpenClaw profile extensions, inspect also performs the
+canonical read-only artifact probe and reports mapped and unavailable
+components:
 
 ```bash
-openclaw claws inspect ./incident-triage.claw.json
+openclaw claws inspect ./incident-triage
 ```
 
 Preview all proposed lifecycle actions:
 
 ```bash
-openclaw claws add ./incident-triage.claw.json --dry-run --json
+openclaw claws add ./incident-triage --dry-run --json
 ```
 
 The plan reports the derived agent and workspace, every proposed action,
@@ -357,7 +360,7 @@ digest. Capability records show the exact package, MCP, scheduled-work, sandbox,
 tool, or heartbeat effect. Review the plan before creating the agent:
 
 ```bash
-openclaw claws add ./incident-triage.claw.json \
+openclaw claws add ./incident-triage \
   --yes \
   --plan-integrity <SHA256_FROM_DRY_RUN>
 ```

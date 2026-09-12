@@ -24,8 +24,10 @@ Rules of thumb: prefer Tailscale Serve over LAN binds (Serve keeps the Gateway o
 
 Published container ports (`-p HOST:CONTAINER` or Compose `ports:`) route through Docker's forwarding chains, not only host `INPUT` rules. Enforce rules in `DOCKER-USER` (evaluated before Docker's own accept rules); most modern distros use the `iptables-nft` frontend, which still applies these rules to the nftables backend.
 
-```bash
-# /etc/ufw/after.rules (append as its own *filter section)
+`/etc/ufw/after.rules` (append as its own `*filter` section — this is a rules
+file, not a shell script):
+
+```text
 *filter
 :DOCKER-USER - [0:0]
 -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
@@ -137,14 +139,18 @@ limiting](/gateway/security/rate-limiting#unconfigured-same-host-reverse-proxies
 
 `trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it fails closed on loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
 
-```yaml
-gateway:
-  trustedProxies:
-    - "10.0.0.1" # reverse proxy IP
-  allowRealIpFallback: false # default false; only enable if your proxy cannot provide X-Forwarded-For
-  auth:
-    mode: password
-    password: ${OPENCLAW_GATEWAY_PASSWORD}
+```json5
+{
+  gateway: {
+    trustedProxies: ["10.0.0.1"], // reverse proxy IP
+    // default false; only enable if your proxy cannot provide X-Forwarded-For
+    allowRealIpFallback: false,
+    auth: {
+      mode: "password",
+      password: "${OPENCLAW_GATEWAY_PASSWORD}",
+    },
+  },
+}
 ```
 
 When `trustedProxies` is set, the Gateway uses `X-Forwarded-For` to determine client IP; `X-Real-IP` is ignored unless `gateway.allowRealIpFallback: true` is explicitly set. Ensure your proxy **overwrites** `X-Forwarded-For`/`X-Real-IP` rather than appending to them:
@@ -176,7 +182,7 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 The Control UI generates device identity with pure-JS Ed25519, so pairing works on any origin, including plain HTTP.
 
 - Token/password auth does not replace browser device identity: HTTP browsers still pair with a signed device key, which never crosses the wire. Prefer HTTPS (for example, Tailscale Serve) — plaintext transport still exposes the page and the shared secret to on-path attackers.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input, now fully inert. Control UI browsers pair through the normal device flow; `openclaw doctor --fix` removes the legacy key.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input, fully inert. Control UI browsers pair through the normal device flow; `openclaw doctor --fix` removes the legacy key.
 - Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity when the browser cannot supply one. Browsers that can mint an identity (any origin, including plain HTTP) follow the normal pairing flow instead — automatic with `deviceAutoApprove`, otherwise a one-time approval. This does not extend to node-role Control UI sessions.
 
 ### Insecure/dangerous flags

@@ -13,11 +13,13 @@ notably **OpenAI Codex (ChatGPT OAuth)** and **Anthropic Claude CLI reuse**.
 For Anthropic, the practical split is:
 
 - **Anthropic API key**: normal Anthropic API billing.
-- **Anthropic Claude CLI / subscription auth inside OpenClaw**: Anthropic staff
-  told us this usage is allowed again, so OpenClaw treats Claude CLI reuse and
-  `claude -p` usage as sanctioned for this integration unless Anthropic
-  publishes a new policy. For Anthropic in production, API key auth is still
-  the safer recommended path.
+- **Anthropic Claude CLI / subscription auth inside OpenClaw**: as of 2026-04-06,
+  Anthropic staff told us this usage is allowed again, so OpenClaw treats Claude
+  CLI reuse and `claude -p` usage as sanctioned for this integration unless
+  Anthropic publishes a new policy. That statement was private, so there is no
+  public policy document to cite, and no OpenClaw release scopes it — check
+  Anthropic's current terms before relying on it. For Anthropic in production,
+  API key auth is still the safer recommended path.
 
 OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
 canonical provider id `openai`. Older `openai-codex:*` profile ids and
@@ -126,7 +128,8 @@ reuse when it is available.
 <Warning>
 Anthropic's public Claude Code docs say direct Claude Code use stays within
 Claude subscription limits, and Anthropic staff told us OpenClaw-style Claude
-CLI usage is allowed again. OpenClaw therefore treats Claude CLI reuse and
+CLI usage is allowed again (recorded 2026-04-06; a private statement with no
+public policy document behind it). OpenClaw therefore treats Claude CLI reuse and
 `claude -p` usage as sanctioned for this integration unless Anthropic
 publishes a new policy.
 

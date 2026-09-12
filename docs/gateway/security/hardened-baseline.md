@@ -13,7 +13,7 @@ title: "Hardened baselines"
   gateway: {
     mode: "local",
     bind: "loopback",
-    auth: { mode: "token", token: "replace-with-long-random-token" },
+    auth: { mode: "token", token: "your-long-random-token" },
   },
   session: {
     dmScope: "per-channel-peer",

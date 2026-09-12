@@ -19,7 +19,7 @@ A local Unix socket connects the node host service to the macOS app for exec app
 
 ### Gateway + node transport
 
-- The app runs the Gateway (local mode) and connects to it as a node.
+- In local mode the app manages an external Gateway — a per-user launchd service driven through the `openclaw` CLI — or attaches to one that is already running, then connects to it as a node. It never starts a Gateway inside its own process. See [Bundled Gateway](/platforms/mac/bundled-gateway).
 - Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.present`).
 - Node commands include `canvas.present`, `canvas.hide`, `canvas.navigate`, `camera.list`, `camera.snap`, `camera.clip`, `camera.ptz.status`, `camera.ptz.control`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
 - The node reports a `permissions` map. Agents use it to see whether screen, camera, microphone, speech, automation, or accessibility access is available.

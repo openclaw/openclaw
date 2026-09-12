@@ -35,7 +35,7 @@ openclaw channels add --channel telegram --token <bot-token>
   channels: {
     telegram: {
       enabled: true,
-      botToken: "123:abc",
+      botToken: "<TELEGRAM_BOT_TOKEN>",
       dmPolicy: "pairing",
       groups: { "*": { requireMention: true } },
     },

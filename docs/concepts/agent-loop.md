@@ -207,7 +207,7 @@ by an older delayed failure.
 With diagnostics enabled, a built-in two-minute threshold classifies long `processing` sessions with no observed reply, tool, status, block, or ACP progress:
 
 - Active embedded runs, model calls, and tool calls report as `session.long_running`. Owned silent model calls stay `session.long_running` until the abort threshold so slow or non-streaming providers are not flagged as stalled too early.
-- Active work with no recent progress reports as `session.stalled`. Owned model calls switch to `session.stalled` at or after the abort threshold; ownerless stale model/tool activity is not hidden as long-running.
+- Active work with no recent progress reports as `session.stalled`. Owned model calls, blocked tool calls, and stalled embedded runs all reach this classification; ownerless stale model/tool activity is not hidden as long-running. The [Command queue troubleshooting](/concepts/queue#troubleshooting) section carries the full classification table, including which classifications trigger recovery.
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.

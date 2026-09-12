@@ -153,7 +153,11 @@ If the pipeline requests approval, resume with the token:
 }
 ```
 
-Example: map input items into tool calls:
+Example: map input items into tool calls. This one uses `openclaw.invoke`, so it
+is a **standalone Lobster CLI** example: the embedded runner does not inherit
+gateway auth for nested `openclaw.invoke` calls. See
+[Important limitation: embedded Lobster vs `openclaw.invoke`](#embedded-lobster-vs-openclaw-invoke)
+before copying it.
 
 ```bash
 gog.gmail.search --query 'newer_than:1d' \
@@ -182,6 +186,8 @@ For a **structured LLM step** inside a workflow, enable the optional
   }
 }
 ```
+
+<a id="embedded-lobster-vs-openclaw-invoke" />
 
 ### Important limitation: embedded Lobster vs `openclaw.invoke`
 

@@ -44,9 +44,9 @@ refreshes fail unless they accept a fresh hosted payload, and successful hosted
 refreshes fail if OpenClaw cannot persist the validated snapshot.
 
 The built-in `clawhub-public` profile expects payload identity
-`clawhub-official`. OpenClaw will bundle ClawHub's production public key after
-ClawHub generates and hands off that key. Until then, the built-in profile does
-not grant signed-feed install authority. Public keys must come from a trusted
+`clawhub-official`. OpenClaw ships no ClawHub production public key with it — its
+trusted-key list is empty — so the built-in profile does not grant signed-feed
+install authority. Public keys must come from a trusted
 release or operator channel, not from a key endpoint on the feed host.
 
 OpenClaw verifies the DSSE envelope and, when a profile declares `feedId`,
@@ -54,10 +54,10 @@ requires the decoded payload ID to match it. The built-in `clawhub-public`
 profile always declares its identity, preventing a valid document for another
 feed from being replayed through that profile.
 
-During the staged rollout, existing custom signed profiles that omit `feedId`
-retain signature verification without payload-identity binding. New custom
-profiles should declare `feedId`. The feed-profile configuration surface is
-landing separately with the presentation metadata needed by Control UI; its
-Doctor diagnostic must ask the operator to supply a missing identity and must
-not infer one from the feed URL. This trust binding does not restore the retired
+Existing custom signed profiles that omit `feedId` retain signature
+verification without payload-identity binding. New custom profiles should
+declare `feedId`. The feed-profile configuration surface and its Control UI
+presentation metadata are out of scope for this trust binding; the constraint on
+that surface is that its Doctor diagnostic must ask the operator to supply a
+missing identity and must not infer one from the feed URL. This trust binding does not restore the retired
 root `marketplaces` key.

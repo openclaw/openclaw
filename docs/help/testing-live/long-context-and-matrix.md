@@ -106,11 +106,13 @@ Docker notes:
 - It passes `OPENAI_API_KEY`, copies Codex CLI auth files when present, installs
   `@openai/codex` into a writable mounted npm
   prefix, stages the source tree, then runs only the Codex-harness live test.
-- Docker enables the image, MCP/tool, and Guardian probes by default. Set
-  `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
-  `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` or
+- Docker enables the image, MCP/tool, sub-agent, and Guardian probes by default,
+  and leaves the chat-image and multi-session probes off. Set
+  `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0`,
+  `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0`,
+  `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0`, or
   `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0` when you need a narrower debug
-  run.
+  run. Outside Docker every one of these probes is off unless you set it to `1`.
 - Docker uses the same explicit Codex runtime config, so legacy aliases or OpenClaw
   fallback cannot hide a Codex harness regression.
 - Matrix targets run sequentially in one container. The Docker script scales its

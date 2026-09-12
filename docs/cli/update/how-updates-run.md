@@ -403,6 +403,13 @@ separately from the CLI update that continues in the detached helper:
   so the detached helper can run `openclaw update --yes --json` outside the live
   service process. The old Gateway stays available during validation; this
   response does not mean the service has stopped or the update has completed.
+- `ok: false`, `result.status: "skipped"`,
+  `result.reason: "managed-service-handoff-already-running"`, and
+  `handoff.status: "already-running"`: a second concurrent `update.run` reached
+  the same Gateway process while a handoff was already active. The response
+  carries `handoff.command` and a `handoff.message`; its continuation is not
+  accepted, so retry after the active update completes. Standalone CLI updaters
+  and replacement Gateway processes are outside this process-local guard.
 - `ok: false`, `result.reason: "managed-service-handoff-unavailable"`, and
   `handoff.status: "unavailable"`: OpenClaw could not find a supervising
   service boundary and durable service identity for a safe handoff (for

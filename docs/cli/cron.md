@@ -15,6 +15,22 @@ Run `openclaw automations --help` for the full command surface. See [Automations
 </Tip>
 
 <Note>
+This page covers the common flags. Several real flag families are documented in
+context on the automation pages instead of here, so check those before assuming
+a flag does not exist:
+
+- Payload shape (`--message`, `--system-event`, `--wake`, `--tools`,
+  `--clear-tools`, `--script`, `--script-timeout-seconds`, `--script-tool-budget`)
+  in [Automation payloads](/automation/cron-jobs/payloads)
+- Pacing and trigger scripts (`--pacing-min`, `--pacing-max`, `--clear-pacing`,
+  `--trigger-script`) in [Automation schedules](/automation/cron-jobs/schedules)
+- Failure alerts (`--failure-alert-*`, `--no-failure-alert`) in
+  [Automation delivery](/automation/cron-jobs/delivery)
+- `--delete-after-run` in [Manage automations](/automation/cron-jobs/managing-jobs)
+
+</Note>
+
+<Note>
 All automation mutations (`add`/`create`, `edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call. `tools.exec.*` and exec approvals still govern model-visible exec tools.
 </Note>
 

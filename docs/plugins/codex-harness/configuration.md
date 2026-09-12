@@ -297,6 +297,10 @@ tier processed each call. The full suite took `401.37` seconds. These timings
 are observations, not service-level guarantees.
 
 <Warning>
+The multipliers in this block are OpenAI's published pricing as recorded on
+2026-08-08. They are a third party's terms, so no OpenClaw release scopes them;
+check the linked pricing pages before budgeting against these numbers.
+
 Long context is deliberately opt-in. Once input exceeds `272000` tokens,
 OpenAI bills the entire request at 2× input and cache rates and 1.5× output
 rates. Fast-mode pricing is model-specific; GPT-5.6 Sol API Fast mode (formerly

@@ -26,10 +26,12 @@ Enabling browser control gives the model a real browser. If that profile already
   before returning a short-lived, one-time, connection-bound HMAC proof. Proofs
   bind the protocol version, role, transport, method, resource, flow, profile,
   and relay instance; replay on the same or another socket fails.
-- `browser.extensionRelay.allowLegacyAuth` defaults to `true` for one migration
-  window. This temporarily accepts old Bearer, Basic, and token-subprotocol
-  relay clients. Update every relay client, then set it to `false`. V2 clients
-  never downgrade after a failed proof or unsupported response.
+- `browser.extensionRelay.allowLegacyAuth` defaults to `true`. While it is
+  `true`, the relay still accepts old Bearer, Basic, and token-subprotocol
+  clients. No removal date is recorded for it in the compatibility registry
+  (`src/plugins/compat/`), so treat the default as indefinite: update every
+  relay client, then set it to `false` yourself. V2 clients never downgrade
+  after a failed proof or unsupported response.
 - Chrome extension pairing stores its access mode in extension-owned Chrome
   storage, not Gateway config. **All tabs** exposes every eligible ordinary tab
   in that Chrome profile except session-paused tabs; **Selected tabs** uses the
@@ -43,8 +45,8 @@ Enabling browser control gives the model a real browser. If that profile already
   only a locally owned pairing. It never transfers a remote Gateway key.
 - Native-host manifests, launchers, and status output contain no pairing key.
   OpenClaw refuses symlinks, unsafe ownership/modes, wildcard origins, and
-  foreign registrations using the same host name. Windows uses the manual
-  pairing fallback until an executable native-host path is supported.
+  foreign registrations using the same host name. Windows has no executable
+  native-host path, so it uses the manual pairing fallback.
 - Run a **node host** on the browser machine and let the Gateway proxy browser actions when the Gateway is remote from the browser (see [Browser tool](/tools/browser)); treat node pairing like admin access, keep Gateway and node host on the same tailnet, and avoid exposing relay/control ports over LAN, public internet, or Tailscale Funnel.
 
 ### Browser SSRF policy (strict by default)

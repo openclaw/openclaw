@@ -368,7 +368,7 @@ debug level. None of these failures block realtime startup. Menus remain
 available while the agent is offline and are removed when the bot leaves the
 workspace.
 
-This release publishes native command specs only. Aliases and
+OpenClaw publishes native command specs only. Aliases and
 skill-, plugin-, or custom-command catalogs are not added to the menu. If a
 name is also registered as an HTTP slash command, ClickClack dispatches that
 registration first; other menu commands continue through normal message

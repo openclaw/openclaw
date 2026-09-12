@@ -59,29 +59,43 @@ Symptom-first checks for a Telegram bot that is not behaving.
     - If text works but attachments fail with `getaddrinfo EAI_AGAIN` or `ENOTFOUND`, bare proxy environment variables still leave media downloads subject to local DNS checks. Set `channels.telegram.proxy` to your trusted HTTP(S) or SOCKS5 proxy so it resolves media hostnames, or configure a [managed network proxy](/security/network-proxy). The proxy endpoint itself must remain locally resolvable and reachable. `dangerouslyAllowPrivateNetwork` does not fix missing DNS.
     - On VPS hosts with unstable direct egress/TLS, route Telegram API calls through a proxy:
 
-```yaml
-channels:
-  telegram:
-    proxy: socks5://<user>:<password>@proxy-host:1080
+```json5
+{
+  channels: {
+    telegram: {
+      proxy: "socks5://<PROXY_USER>:<PROXY_PASSWORD>@proxy-host:1080",
+    },
+  },
+}
 ```
 
     - Node 22+ defaults to `autoSelectFamily=true` (except WSL2). Telegram DNS result order honors `OPENCLAW_TELEGRAM_DNS_RESULT_ORDER`, then `channels.telegram.network.dnsResultOrder`, then the process default (for example `NODE_OPTIONS=--dns-result-order=ipv4first`), falling back to `ipv4first` on Node 22+ if none applies.
     - On WSL2, or when IPv4-only behavior works better, force family selection:
 
-```yaml
-channels:
-  telegram:
-    network:
-      autoSelectFamily: false
+```json5
+{
+  channels: {
+    telegram: {
+      network: {
+        autoSelectFamily: false,
+      },
+    },
+  },
+}
 ```
 
     - RFC 2544 benchmark-range answers (`198.18.0.0/15`) are already allowed for Telegram media downloads by default. If a trusted fake-IP or transparent proxy rewrites `api.telegram.org` to some other private/internal/special-use address during media downloads, opt in to the Telegram-only bypass:
 
-```yaml
-channels:
-  telegram:
-    network:
-      dangerouslyAllowPrivateNetwork: true
+```json5
+{
+  channels: {
+    telegram: {
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    },
+  },
+}
 ```
 
     - The same opt-in is available per account at `channels.telegram.accounts.<accountId>.network.dangerouslyAllowPrivateNetwork`.

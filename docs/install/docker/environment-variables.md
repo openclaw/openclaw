@@ -47,7 +47,9 @@ The official image ships no Homebrew. During onboarding, OpenClaw hides brew-onl
 If Docker reports `ResourceExhausted`, `cannot allocate memory`, or aborts during `tsdown`, increase the Docker builder memory limit or retry with smaller explicit heaps:
 
 ```bash
-OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096
+OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 \
+  OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096 \
+  ./scripts/docker/setup.sh
 ```
 
 The explicit tsdown heap override is also the supported opt-in for attempting a build below the automatically detected safe minimum. That attempt may stall or fail.

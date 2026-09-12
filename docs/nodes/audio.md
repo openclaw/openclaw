@@ -34,7 +34,7 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
 
 1. **Active reply model**, when its provider supports audio understanding.
 2. **Configured provider auth** — any `models.providers.*` entry with auth available for a provider that supports audio transcription. This is checked before local CLIs, so a configured API key always wins over a local binary on `PATH`.
-   Provider priority when multiple are configured: Groq, OpenAI, xAI, Deepgram, Google, SenseAudio, ElevenLabs, Mistral.
+   Provider priority when multiple are configured (ties break alphabetically by provider id): Groq/OpenAI &rarr; xAI &rarr; Deepgram &rarr; OpenRouter &rarr; Google/SenseAudio &rarr; Deepinfra/ElevenLabs &rarr; Mistral. [Media understanding](/nodes/media-understanding) carries the full provider capability matrix.
 3. **Local CLIs** (only if no provider auth resolved). OpenClaw builds an ordered fallback list:
    - `whisper-cli`, before CPU defaults only when an earlier model invocation in the current process observed Metal or CUDA
    - `sherpa-onnx-offline` on its default CPU provider (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`, `encoder.onnx`, `decoder.onnx`, and `joiner.onnx`)
