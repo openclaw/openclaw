@@ -105,7 +105,12 @@ final class LaunchAgentManager {
             Self.logger.info("login-agent change skipped (unavailable under app profile)")
             return false
         }
-        await Self.persist(enabled: enabled, bundlePath: bundlePath, plistURL: self.plistURL)
+        do {
+            try await Self.persist(enabled: enabled, bundlePath: bundlePath, plistURL: self.plistURL)
+        } catch {
+            Self.logger.error("login-agent persistence failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
         guard self.generation == generation else { return false }
         guard enabled else { return true }
         let alreadyLoaded = await self.runLaunchctl(["print", "gui/\(getuid())/\(launchdLabel)"]) == 0
@@ -124,13 +129,20 @@ final class LaunchAgentManager {
     }
 
     @concurrent
-    private static func persist(enabled: Bool, bundlePath: String, plistURL: URL) async {
+    private static func persist(enabled: Bool, bundlePath: String, plistURL: URL) async throws {
         if enabled {
+            try FileManager.default.createDirectory(
+                at: plistURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
             let plist = self.plistContents(bundlePath: bundlePath)
-            try? plist.write(to: plistURL, atomically: true, encoding: .utf8)
+            try plist.write(to: plistURL, atomically: true, encoding: .utf8)
         } else {
             // Removing future autostart must not terminate the running login job.
-            try? FileManager.default.removeItem(at: plistURL)
+            do {
+                try FileManager.default.removeItem(at: plistURL)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                return
+            }
         }
     }
 

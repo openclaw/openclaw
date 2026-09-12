@@ -29,7 +29,7 @@ struct LaunchAgentManagerTests {
     func `enabling refreshes the plist and starts only unloaded login jobs`(loaded: Bool) async throws {
         let directory = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let plistURL = directory.appendingPathComponent("login.plist")
+        let plistURL = directory.appendingPathComponent("Library/LaunchAgents/login.plist")
         let calls = LoginAgentCalls()
         let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
             await calls.record(arguments)
@@ -46,6 +46,33 @@ struct LaunchAgentManagerTests {
         #expect(plist["ProgramArguments"] as? [String] == ["/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"])
         let operations = await calls.arguments.map(\.first)
         #expect(operations == (loaded ? ["print"] : ["print", "bootout", "bootstrap", "kickstart"]))
+    }
+
+    @Test(arguments: [true, false])
+    func `failed login plist persistence never invokes launchctl`(blockedParent: Bool) async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plistURL = directory.appendingPathComponent("Library/LaunchAgents/login.plist")
+        let blocker = blockedParent
+            ? directory.appendingPathComponent("Library")
+            : plistURL.appendingPathComponent("existing")
+        try FileManager.default.createDirectory(
+            at: blocker.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "original".write(to: blocker, atomically: true, encoding: .utf8)
+        let calls = LoginAgentCalls()
+        let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
+            await calls.record(arguments)
+            return 0
+        }
+        let applied = await manager.set(
+            enabled: true,
+            bundlePath: "/Applications/OpenClaw.app",
+            profile: AppProfile(environment: [:])).value
+
+        #expect(!applied)
+        #expect(await calls.arguments.isEmpty)
+        #expect(try String(contentsOf: blocker, encoding: .utf8) == "original")
     }
 
     @Test func `late startup status does not overwrite a newer disabled login choice`() async throws {
@@ -70,6 +97,8 @@ struct LaunchAgentManagerTests {
         await hydration.value
 
         #expect(disabled)
+        #expect(await manager.set(
+            enabled: false, bundlePath: "/Applications/OpenClaw.app", profile: profile).value)
         #expect(delivered.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: plistURL.path))
     }
