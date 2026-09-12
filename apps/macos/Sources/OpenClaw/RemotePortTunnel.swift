@@ -336,7 +336,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
-        [
+        var options = [
             "-o", "BatchMode=yes",
             // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
             "-o", "ControlMaster=no",
@@ -350,7 +350,12 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-n",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
-        ] + hostKeyPolicy.hostKeyOptions
+        ]
+        if remotePort < 65535 {
+            let sandboxPort = remotePort + 1
+            options += ["-L", "\(sandboxPort):127.0.0.1:\(sandboxPort)"]
+        }
+        return options + hostKeyPolicy.hostKeyOptions
     }
 
     private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {

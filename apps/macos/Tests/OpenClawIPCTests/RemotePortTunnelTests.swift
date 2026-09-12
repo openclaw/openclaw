@@ -14,6 +14,7 @@ struct RemotePortTunnelTests {
         #expect(options.contains("ControlPersist=no"))
         #expect(options.contains("ForkAfterAuthentication=no"))
         #expect(options.contains("28789:127.0.0.1:18789"))
+        #expect(options.contains("18790:127.0.0.1:18790"))
         #expect(options.contains("StrictHostKeyChecking=yes"))
         #expect(options.contains("UpdateHostKeys=yes"))
     }
