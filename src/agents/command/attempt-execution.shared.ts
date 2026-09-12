@@ -2,6 +2,9 @@
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCandidatePromptMode } from "./prompt-mode-from-tools-profile.js";
+import type { AgentCommandOpts } from "./types.js";
 /** Parameters for merging and persisting a session entry update. */
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -58,4 +61,25 @@ export async function persistAgentSession(
     delete params.sessionStore[params.sessionKey];
   }
   return persisted ?? undefined;
+}
+
+/** Merge per-candidate promptMode so fallbacks recompute tools.profile, not a frozen pre-selector value. */
+export function withCandidatePromptMode(
+  opts: AgentCommandOpts,
+  candidate: {
+    cfg?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    modelProvider?: string;
+    modelId?: string;
+  },
+): AgentCommandOpts {
+  return {
+    ...opts,
+    promptMode: resolveCandidatePromptMode({
+      ...candidate,
+      promptMode: opts.promptMode,
+      promptModeFromToolsProfile: opts.promptModeFromToolsProfile,
+    }),
+  };
 }

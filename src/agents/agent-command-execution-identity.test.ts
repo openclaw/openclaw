@@ -53,6 +53,19 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       assertSourceCurrent: undefined,
     });
   });
+
+  it("strips promptModeFromToolsProfile from plain-JavaScript public ingress", () => {
+    const opts = {
+      prompt: "hello",
+      allowModelOverride: false,
+      promptModeFromToolsProfile: true,
+    } as unknown as AgentCommandIngressOpts;
+
+    expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
+      prompt: "hello",
+      promptModeFromToolsProfile: undefined,
+    });
+  });
 });
 
 describe("Gateway agent command execution identity", () => {

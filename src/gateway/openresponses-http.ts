@@ -407,6 +407,9 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
+      // Same candidate-local opt-in as Chat Completions: each fallback attempt
+      // recomputes promptMode from that model's effective tools profile.
+      promptModeFromToolsProfile: true,
       ...(params.resolveGatewayContext
         ? {
             onAdmittedRunContext: (context: AdmittedRunContext) =>
