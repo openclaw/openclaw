@@ -2153,3 +2153,42 @@ jobs:
           name: windows-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-dispatch.json
           if-no-files-found: warn
+
+  publish_linux:
+    name: Dispatch Linux app assets after publication
+    needs: [resolve_release_target, finalize_github_release]
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+    # App failures are reported by their own workflow; neither npm nor the
+    # published GitHub release depends on native asset availability.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout trusted Linux dispatch tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Dispatch detached Linux app promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          source scripts/lib/release-publish-children.sh
+          verify_release_tag_target
+          promote_linux_release_assets
+
+      - name: Record failed Linux dispatch
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Linux app promotion could not be dispatched; npm and GitHub publication remain complete. Use Linux App Release Request for recovery."
+          echo "- Linux app: dispatch failed; inspect this job before manual recovery." >> "$GITHUB_STEP_SUMMARY"

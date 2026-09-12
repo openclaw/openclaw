@@ -898,6 +898,39 @@ promote_windows_release_assets() {
   echo "- Windows Hub: detached; completion and failure evidence at https://github.com/${GITHUB_REPOSITORY}/actions/runs/${windows_node_run_id}" >> "$GITHUB_STEP_SUMMARY"
 }
 
+promote_linux_release_assets() {
+  if ! is_stable_release; then
+    return 0
+  fi
+  # Retry-safe: skip only when the full publication contract is present.
+  # A partial upload can leave the .deb/.AppImage in place while latest.json
+  # (the updater manifest installed clients read) or the checksum manifest
+  # is missing; treat that as incomplete so recovery can still dispatch.
+  if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets \
+    --jq '[.assets[].name] | (any(endswith(".deb")) and any(endswith(".AppImage")) and any(. == "latest.json") and any(. == "SHA256SUMS.linux-app.txt"))' \
+    2>/dev/null | grep -qx true; then
+    linux_release_note="- Linux app: previously published assets verified; https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
+    echo "${linux_release_note}" >> "${GITHUB_STEP_SUMMARY}"
+    return 0
+  fi
+
+  # linux-app-release.yml only admits workflow_run events from main
+  # (branches: [main], plus its own head_branch == 'main' check), so the
+  # request must be dispatched against verified main, not the release tag;
+  # the tag is passed as its `tag` input instead.
+  local main_sha
+  main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha | select(test("^[a-f0-9]{40}$"))')"
+  if [[ -z "${main_sha}" ]]; then
+    echo "Could not resolve current main SHA for Linux app dispatch." >&2
+    return 1
+  fi
+
+  linux_release_run_id="$(dispatch_workflow_at_ref "main" "${main_sha}" linux-app-release-request.yml \
+    -f tag="${RELEASE_TAG}")" || return 1
+  linux_release_note="- Linux app: publication dispatched (completion not awaited): https://github.com/${GITHUB_REPOSITORY}/actions/runs/${linux_release_run_id}"
+  echo "${linux_release_note}" >> "${GITHUB_STEP_SUMMARY}"
+}
+
 promote_android_release_asset() {
   if ! is_android_release; then
     return 0
