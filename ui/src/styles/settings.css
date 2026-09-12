@@ -53,6 +53,21 @@
   margin-top: var(--space-5);
 }
 
+.content-header--settings {
+  flex-wrap: wrap;
+  max-height: none;
+}
+
+.content-header--settings .page-header-actions {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.content-header--settings .page-header-actions > * {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
 .settings-workspace--fill-height {
   flex: 1 1 auto;
   min-height: 0;
