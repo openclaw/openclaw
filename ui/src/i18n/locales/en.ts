@@ -2300,7 +2300,7 @@ export const en: TranslationMap & {
     uploadInvalidNativePath: "Cannot safely insert the uploaded native file path",
   },
   browser: {
-    nativeTab: "Mac tab",
+    nativeTab: "App tab",
     remoteTab: "Agent browser tab",
     stop: "Stop loading",
     profile: "Browser profile: {profile}",

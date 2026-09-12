@@ -11,6 +11,9 @@ mod gateway_sleep_logind;
 mod gateway_sleep_logind_listener;
 mod gateway_ws;
 mod installer;
+mod native_browser;
+mod native_browser_bridge;
+mod native_browser_platform;
 mod notify;
 mod pending_approvals;
 mod quickchat;
@@ -31,7 +34,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, State, Url, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalPosition, Manager, State, Url, Webview, WebviewUrl,
     WebviewWindowBuilder,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -593,7 +596,9 @@ impl DesktopState {
             url.query_pairs_mut()
                 .clear()
                 .append_pair("mode", "reconnecting");
-            self.navigate_locked(app, url, false)?;
+            app.state::<native_browser_bridge::NativeBrowserBridgeState>()
+                .clear(app);
+            replace_main_webview(app, url, None)?;
         }
         drop(navigation);
         self.connect_selected(app, true)
@@ -673,47 +678,22 @@ impl DesktopState {
         dashboard: Url,
         script: String,
     ) -> Result<(), String> {
-        let window = app
-            .get_window("main")
-            .ok_or_else(|| "Main window is unavailable.".to_string())?;
-        let size = window
-            .inner_size()
-            .map_err(|_| "Could not measure the Gateway window.".to_string())?;
         let mut navigation = self
             .inner
             .navigation
             .lock()
             .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
-        let old_webview = app
-            .get_webview("main")
-            .ok_or_else(|| "Main dashboard view is unavailable.".to_string())?;
+        let bridge_script = app
+            .state::<native_browser_bridge::NativeBrowserBridgeState>()
+            .select(app, &dashboard, true)?
+            .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
         navigation.select_remote();
-        // Keep the native window alive: only its child changes so tray ownership,
-        // geometry and close-to-tray behavior survive auth-bound script injection.
-        old_webview
-            .close()
-            .map_err(|_| "Could not replace the Gateway dashboard view.".to_string())?;
-        let browser_app = app.clone();
-        let builder = WebviewBuilder::new("main", WebviewUrl::External(dashboard))
-            .initialization_script(script)
-            .on_new_window(move |url, _features| {
-                open_external_browser(&browser_app, &url);
-                NewWindowResponse::Deny
-            })
-            .auto_resize();
-        if window
-            .add_child(builder, LogicalPosition::new(0, 0), size)
-            .is_err()
+        if replace_main_webview(app, dashboard, Some(format!("{script}\n{bridge_script}"))).is_err()
         {
             navigation.remote_dashboard = false;
-            let browser_app = app.clone();
-            let restore = WebviewBuilder::new("main", WebviewUrl::App("index.html".into()))
-                .on_new_window(move |url, _features| {
-                    open_external_browser(&browser_app, &url);
-                    NewWindowResponse::Deny
-                })
-                .auto_resize();
-            let _ = window.add_child(restore, LogicalPosition::new(0, 0), size);
+            app.state::<native_browser_bridge::NativeBrowserBridgeState>()
+                .clear(app);
+            let _ = replace_main_webview(app, self.inner.local_url.clone(), None);
             return Err(
                 "Could not open the remote Gateway dashboard. Try connecting again.".to_string(),
             );
@@ -757,7 +737,7 @@ impl DesktopState {
         Ok(cli)
     }
 
-    pub(crate) fn main_window_has_local_content(&self, window: &WebviewWindow) -> bool {
+    pub(crate) fn main_window_has_local_content(&self, window: &Webview) -> bool {
         window.url().is_ok_and(|mut current_url| {
             let mut local_url = self.inner.local_url.clone();
             current_url.set_query(None);
@@ -819,7 +799,7 @@ impl DesktopState {
             .expect("pending approval mutex poisoned")
             .update(pending);
         self.with_tray(|tray| tray.update_pending_count(diff.count));
-        if !main_window(app).is_ok_and(|window| matches!(window.is_focused(), Ok(false))) {
+        if !main_window(app).is_ok_and(|view| matches!(view.window().is_focused(), Ok(false))) {
             return;
         }
         // Notifications are a doorbell only; approval stays in the dashboard or CLI.
@@ -862,12 +842,34 @@ impl DesktopState {
             return Ok(false);
         }
         let onboarding_was_pending = dashboard && navigation.onboarding_pending;
+        let bridge_script = if dashboard {
+            let base =
+                Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
+            app.state::<native_browser_bridge::NativeBrowserBridgeState>()
+                .select(app, &base, false)?
+        } else {
+            app.state::<native_browser_bridge::NativeBrowserBridgeState>()
+                .clear(app);
+            None
+        };
         let url = if dashboard {
             navigation.prepare_dashboard_url(target)?
         } else {
             Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?
         };
-        if let Err(error) = self.navigate_locked(app, url, reveal_window) {
+        let result = if bridge_script.is_some() || !dashboard {
+            replace_main_webview(app, url, bridge_script).map(|()| {
+                if reveal_window {
+                    tray::show_window(app);
+                }
+            })
+        } else {
+            self.navigate_locked(app, url, reveal_window)
+        };
+        if let Err(error) = result {
+            app.state::<native_browser_bridge::NativeBrowserBridgeState>()
+                .clear(app);
+            let _ = replace_main_webview(app, self.inner.local_url.clone(), None);
             if onboarding_was_pending {
                 navigation.mark_onboarding_pending();
             }
@@ -1176,9 +1178,49 @@ mod navigation_tests {
     }
 }
 
-fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    app.get_webview_window("main")
+fn main_window(app: &AppHandle) -> Result<Webview, String> {
+    app.get_webview("main")
         .ok_or_else(|| "Main window is unavailable.".to_string())
+}
+
+fn replace_main_webview(
+    app: &AppHandle,
+    url: Url,
+    initialization_script: Option<String>,
+) -> Result<(), String> {
+    let window = app
+        .get_window("main")
+        .ok_or("Main window is unavailable.")?;
+    let size = window
+        .inner_size()
+        .map_err(|error| format!("Could not measure the dashboard: {error}"))?;
+    // Replace only the dashboard document, retaining the native window, tray and geometry.
+    if let Some(previous) = app.get_webview("main") {
+        native_browser_platform::detach_surface(&previous)?;
+        previous
+            .close()
+            .map_err(|error| format!("Could not replace the dashboard: {error}"))?;
+    }
+    let browser_app = app.clone();
+    let document_token = app
+        .state::<native_browser_bridge::NativeBrowserBridgeState>()
+        .document_token();
+    let mut builder = WebviewBuilder::new("main", WebviewUrl::External(url))
+        .on_new_window(move |url, _| {
+            open_external_browser(&browser_app, &url);
+            NewWindowResponse::Deny
+        })
+        .on_page_load(move |webview, payload| {
+            native_browser_bridge::page_load(webview, payload, document_token.as_deref());
+        })
+        .auto_resize();
+    if let Some(script) = initialization_script {
+        builder = builder.initialization_script(script);
+    }
+    window
+        .add_child(builder, LogicalPosition::new(0, 0), size)
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the dashboard: {error}"))
 }
 
 #[tauri::command]
@@ -1293,6 +1335,8 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
+        app.manage(native_browser::NativeBrowserState::default());
+        app.manage(native_browser_bridge::NativeBrowserBridgeState::default());
         let window_config = app
             .config()
             .app
@@ -1303,6 +1347,11 @@ fn main() {
             .expect("tauri.conf.json must define the main window");
         let browser_app = app.handle().clone();
         let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+            .on_page_load(|window, payload| {
+                if let Some(webview) = window.app_handle().get_webview("main") {
+                    native_browser_bridge::page_load(webview, payload, None);
+                }
+            })
             .on_new_window(move |url, _features| {
                 open_external_browser(&browser_app, &url);
                 NewWindowResponse::Deny
@@ -1365,6 +1414,7 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        native_browser_bridge::native_browser_request,
         quickchat::quickchat_activate,
         quickchat::quickchat_agents,
         quickchat::quickchat_hide,
@@ -1385,6 +1435,14 @@ fn main() {
 
     let app = builder
         .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    app.state::<native_browser::NativeBrowserState>()
+                        .resize(&app)
+                        .await;
+                });
+            }
             if window.label() == quickchat::QUICKCHAT_LABEL {
                 match event {
                     tauri::WindowEvent::Focused(false) => {
