@@ -19,6 +19,13 @@ the current turn as untrusted external content, subject to the existing file
 extraction limits. This also applies to adopted and forked Codex sessions with
 locked model selection. Images continue through Codex's native image input.
 
+For Telegram, a new photo or album takes priority over saved photos when OpenClaw
+rebuilds context for Codex. A text-only follow-up includes the most recent saved
+photo or album. Older captions and attachment references remain available; the
+agent can retrieve an older image when you explicitly ask about it. Saved
+documents and mixed document/image messages keep their existing behavior. This
+does not erase images already present in a resumed native Codex thread.
+
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw
 transfers authoritative attachment bytes over the existing app-server connection

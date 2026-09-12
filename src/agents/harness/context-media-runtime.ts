@@ -31,7 +31,7 @@ export async function prepareHarnessContextMedia(params: {
   accountId?: string;
   sandbox?: { root: string; bridge: SandboxFsBridge };
   assertCurrent: () => void;
-}): Promise<{ text?: string; images: ImageContent[] }> {
+}): Promise<{ text?: string; images: ImageContent[]; imageOnly?: boolean }> {
   params.assertCurrent();
   if (params.message.role !== "user" || params.maxChars <= 0) {
     return { images: [] };
@@ -58,6 +58,7 @@ export async function prepareHarnessContextMedia(params: {
   });
   params.assertCurrent();
   const imageFacts = media.filter(isImageMediaFact);
+  const imageOnly = media.length > 0 ? imageFacts.length === media.length : inlineImages.length > 0;
   const text = [files.text];
   if (imageFacts.length || inlineImages.length) {
     text.push(buildInboundMediaNoteProjection({ media: imageFacts }).text ?? "[Image attachment]");
@@ -66,7 +67,7 @@ export async function prepareHarnessContextMedia(params: {
     if (imageFacts.length || inlineImages.length || files.images.length) {
       text.push("[Attachment images omitted: this model does not support image input]");
     }
-    return { text: text.filter(Boolean).join("\n\n"), images: [] };
+    return { text: text.filter(Boolean).join("\n\n"), images: [], imageOnly };
   }
   const limits = { ...resolveImageSanitizationLimits(params.config), maxBytes: MAX_IMAGE_BYTES };
   const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
@@ -123,6 +124,7 @@ export async function prepareHarnessContextMedia(params: {
     text.push("[Referenced image contents are not included in this context]");
   }
   return {
+    imageOnly,
     text: text.filter(Boolean).join("\n\n"),
     images: entries
       .toSorted(

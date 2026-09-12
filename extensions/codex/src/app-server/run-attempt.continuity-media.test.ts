@@ -221,150 +221,179 @@ describe("Codex attachment continuity", () => {
       closeHost();
     }
   });
-  it.each(["inline", "offloaded", "current", "closed"] as const)(
-    "restores real image bytes with exact source ownership (%s)",
-    async (mode) => {
-      const sessionId = "session-continuity-images";
-      const sessionFile = `agent:main:${sessionId}`;
-      const storePath = path.join(tempDir, "image-continuity.sqlite");
-      const workspaceDir = path.join(tempDir, "image-workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const params = createParams(sessionFile, workspaceDir);
-      params.model = { ...params.model, input: ["text", "image"] };
-      await attachSqliteSessionTarget(params, storePath, sessionId);
-      const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
-      const cutoff = Date.now();
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-existing",
-        cwd: workspaceDir,
-        model: params.modelId,
-        modelProvider: "openai",
-        historyCoveredThrough: new Date(cutoff).toISOString(),
-        dynamicToolsFingerprint: "[]",
-        webSearchThreadConfigFingerprint: JSON.stringify({
-          "features.standalone_web_search": false,
-          web_search: "disabled",
-        }),
-      });
-      const blue = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
-      const green = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
-      const image = {
-        type: "image" as const,
-        mimeType: "image/png",
-        data: blue.toString("base64"),
-      };
-      const saved = await saveMediaBuffer(blue, "image/png", "inbound", undefined, "blue.png");
-      const historical = {
-        role: "user" as const,
-        timestamp: cutoff + 1,
-        idempotencyKey: "historical-image:user",
-        content:
-          mode === "inline"
-            ? [{ type: "text" as const, text: "Read this image." }, image]
-            : "Read this image.",
-        __openclaw: {
-          media: [
-            { url: `media://inbound/${saved.id}`, contentType: "image/png", fileName: "blue.png" },
-          ],
-          mediaImageLayout: {
-            slots: [{ kind: mode === "inline" ? "inline" : "offloaded", factIndex: 0 }],
-          },
-          ...(mode === "inline" ? { mediaImageBlockFactIndexes: [0] } : {}),
+  it.each([
+    "inline",
+    "offloaded",
+    "current",
+    "closed",
+    "telegram-current",
+    "telegram-history",
+  ] as const)("restores real image bytes with exact source ownership (%s)", async (mode) => {
+    const sessionId = "session-continuity-images";
+    const sessionFile = `agent:main:${sessionId}`;
+    const storePath = path.join(tempDir, "image-continuity.sqlite");
+    const workspaceDir = path.join(tempDir, "image-workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const params = createParams(sessionFile, workspaceDir);
+    const hasCurrentImage = mode === "current" || mode === "telegram-current";
+    if (mode.startsWith("telegram-")) {
+      params.messageChannel = "telegram";
+    }
+    params.model = { ...params.model, input: ["text", "image"] };
+    await attachSqliteSessionTarget(params, storePath, sessionId);
+    const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
+    const cutoff = Date.now();
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: params.modelId,
+      modelProvider: "openai",
+      historyCoveredThrough: new Date(cutoff).toISOString(),
+      dynamicToolsFingerprint: "[]",
+      webSearchThreadConfigFingerprint: JSON.stringify({
+        "features.standalone_web_search": false,
+        web_search: "disabled",
+      }),
+    });
+    const blue = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const green = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    const image = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: blue.toString("base64"),
+    };
+    const saved = await saveMediaBuffer(blue, "image/png", "inbound", undefined, "blue.png");
+    const historical = {
+      role: "user" as const,
+      timestamp: cutoff + 1,
+      idempotencyKey: "historical-image:user",
+      content:
+        mode === "inline"
+          ? [{ type: "text" as const, text: "Read this image." }, image]
+          : "Read this image.",
+      __openclaw: {
+        media: [
+          mode === "telegram-current"
+            ? { path: saved.path }
+            : {
+                url: `media://inbound/${saved.id}`,
+                contentType: "image/png",
+                fileName: "blue.png",
+              },
+        ],
+        mediaImageLayout: {
+          slots: [{ kind: mode === "inline" ? "inline" : "offloaded", factIndex: 0 }],
         },
+        ...(mode === "inline" ? { mediaImageBlockFactIndexes: [0] } : {}),
+      },
+    };
+    await appendSessionTranscriptMessageByIdentity({
+      ...target,
+      message: historical,
+      now: cutoff + 1,
+    });
+    params.prompt = "Read this image.";
+    if (mode === "telegram-history") {
+      await appendSessionTranscriptMessageByIdentity({
+        ...target,
+        message: {
+          ...historical,
+          timestamp: cutoff + 2,
+          idempotencyKey: "latest-image:user",
+          content: [{ ...image, data: green.toString("base64") }],
+          __openclaw: {},
+        },
+        now: cutoff + 2,
+      });
+    }
+    if (hasCurrentImage) {
+      const currentImage = { ...image, data: green.toString("base64") };
+      params.images = [currentImage];
+      const current = {
+        role: "user" as const,
+        timestamp: cutoff + 2,
+        idempotencyKey: "current-image:user",
+        content: [{ type: "text" as const, text: params.prompt }, currentImage],
       };
       await appendSessionTranscriptMessageByIdentity({
         ...target,
-        message: historical,
-        now: cutoff + 1,
+        message: current,
+        now: cutoff + 2,
       });
-      params.prompt = "Read this image.";
-      if (mode === "current") {
-        const currentImage = { ...image, data: green.toString("base64") };
-        params.images = [currentImage];
-        const current = {
-          role: "user" as const,
-          timestamp: cutoff + 2,
-          idempotencyKey: "current-image:user",
-          content: [{ type: "text" as const, text: params.prompt }, currentImage],
-        };
-        await appendSessionTranscriptMessageByIdentity({
-          ...target,
-          message: current,
-          now: cutoff + 2,
-        });
-        // Model an already committed current source with no read fence, so both
-        // rows enter projection and only exact current-source identity removes it.
-        params.userTurnTranscriptRecorder = {
-          message: current,
-          resolveMessage: async () => current,
-          getAdmissionReceipt: () => undefined,
-          markRuntimePersistencePending: () => {},
-          markRuntimePersisted: () => {},
-          markBlocked: () => {},
-          hasPersisted: () => true,
-          isBlocked: () => false,
-          hasRuntimePersistencePending: () => false,
-          waitForRuntimePersistence: async () => {},
-          persistApproved: async () => undefined,
-          persistBlocked: async () => undefined,
-          persistFallback: async () => undefined,
-        };
-      }
-      const abort = new AbortController();
-      params.abortSignal = abort.signal;
-      const started = createDeferred<void>();
-      params.onAgentEvent = (event) => {
-        if (event.stream === "lifecycle" && event.data.phase === "start") {
-          started.resolve();
-        }
+      // Model an already committed current source with no read fence, so both
+      // rows enter projection and only exact current-source identity removes it.
+      params.userTurnTranscriptRecorder = {
+        message: current,
+        resolveMessage: async () => current,
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending: () => {},
+        markRuntimePersisted: () => {},
+        markBlocked: () => {},
+        hasPersisted: () => true,
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistApproved: async () => undefined,
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
       };
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    }
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const started = createDeferred<void>();
+    params.onAgentEvent = (event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        started.resolve();
+      }
+    };
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    if (mode === "closed") {
+      const prepare = params.hostCapabilities.prepareContextMedia!;
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareContextMedia: async (request) => {
+          const prepared = await prepare(request);
+          expect(prepared.images).toHaveLength(1);
+          closeHost();
+          return prepared;
+        },
+      };
+    }
+    vi.useFakeTimers();
+    const harness = createResumeHarness();
+    const run = runCodexAppServerAttempt(params);
+    try {
       if (mode === "closed") {
-        const prepare = params.hostCapabilities.prepareContextMedia!;
-        params.hostCapabilities = {
-          ...params.hostCapabilities,
-          prepareContextMedia: async (request) => {
-            const prepared = await prepare(request);
-            expect(prepared.images).toHaveLength(1);
-            closeHost();
-            return prepared;
-          },
-        };
+        await expect(run).rejects.toThrow(/active|closed|authority/i);
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+      } else {
+        await started.promise;
+        await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        const request = harness.requests.find((entry) => entry.method === "turn/start");
+        const input = asOptionalRecord(request?.params)?.input;
+        expect(Array.isArray(input)).toBe(true);
+        const images = Array.isArray(input)
+          ? input.filter((part) => asOptionalRecord(part)?.type === "image")
+          : [];
+        expect(images).toEqual([
+          ...(!mode.startsWith("telegram-")
+            ? [{ type: "image", url: `data:image/png;base64,${blue.toString("base64")}` }]
+            : []),
+          ...(hasCurrentImage || mode === "telegram-history"
+            ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
+            : []),
+        ]);
       }
-      vi.useFakeTimers();
-      const harness = createResumeHarness();
-      const run = runCodexAppServerAttempt(params);
-      try {
-        if (mode === "closed") {
-          await expect(run).rejects.toThrow(/active|closed|authority/i);
-          expect(harness.requests.filter((request) => request.method === "turn/start")).toEqual([]);
-        } else {
-          await started.promise;
-          await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-          expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
-          const request = harness.requests.find((entry) => entry.method === "turn/start");
-          const input = asOptionalRecord(request?.params)?.input;
-          expect(Array.isArray(input)).toBe(true);
-          const images = Array.isArray(input)
-            ? input.filter((part) => asOptionalRecord(part)?.type === "image")
-            : [];
-          expect(images).toEqual([
-            { type: "image", url: `data:image/png;base64,${blue.toString("base64")}` },
-            ...(mode === "current"
-              ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
-              : []),
-          ]);
-        }
-        const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {
-          const message = asOptionalRecord(asOptionalRecord(event)?.message);
-          return message?.idempotencyKey === historical.idempotencyKey ? [message] : [];
-        });
-        expect(rows).toEqual([historical]);
-      } finally {
-        abort.abort("test cleanup");
-        await run.catch(() => undefined);
-        closeHost();
-      }
-    },
-  );
+      const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        return message?.idempotencyKey === historical.idempotencyKey ? [message] : [];
+      });
+      expect(rows).toEqual([historical]);
+    } finally {
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+    }
+  });
 });

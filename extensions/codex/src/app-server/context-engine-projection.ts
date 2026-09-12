@@ -23,7 +23,7 @@ type CodexContextProjection = {
 type PrepareContextFile = (
   message: AgentMessage,
   maxChars: number,
-) => Promise<{ text?: string; images: ImageContent[] }>;
+) => Promise<{ text?: string; images: ImageContent[]; imageOnly?: boolean }>;
 
 /** Attachment preparation must not degrade to a prompt that silently loses the saved input. */
 export class CodexContextAttachmentError extends Error {}
@@ -82,6 +82,8 @@ export async function projectContextEngineAssemblyForCodex(params: {
   toolPayloadMode?: "elide" | "preserve";
   prepareFileContext?: PrepareContextFile;
   currentUserTurnIdempotencyKey?: string;
+  /** Telegram photos should not be replayed as a new multi-image upload. */
+  imageHistory?: "all" | "latest-turn" | "none";
 }): Promise<CodexContextProjection> {
   const prompt = params.prompt.trim();
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
@@ -95,6 +97,7 @@ export async function projectContextEngineAssemblyForCodex(params: {
       maxRenderedContextChars,
       prepareFileContext: params.prepareFileContext,
       currentUserTurnIdempotencyKey: params.currentUserTurnIdempotencyKey,
+      imageHistory: params.imageHistory,
     },
   );
   const boundedContext = context.text;
@@ -365,6 +368,7 @@ async function renderMessagesForCodexContext(
     maxRenderedContextChars: number;
     prepareFileContext?: PrepareContextFile;
     currentUserTurnIdempotencyKey?: string;
+    imageHistory?: "all" | "latest-turn" | "none";
   },
 ): Promise<{ text: string; images: ImageContent[] }> {
   const tail: string[] = [];
@@ -372,6 +376,7 @@ async function renderMessagesForCodexContext(
   let retainedImageChars = 0;
   let totalChars = 0;
   let retainedChars = 0;
+  let seenImageTurn = options.imageHistory === "none";
   // Count the discarded prefix for the existing marker, but never materialize the
   // whole history. Sigil neutralization preserves UTF-16 length and cannot span separators.
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -385,10 +390,27 @@ async function renderMessagesForCodexContext(
     }
     const remaining = options.maxRenderedContextChars - retainedChars;
     // Read only retained attachments, then charge their rendered text to this same window.
-    const files =
+    let files =
       remaining > 0 && message.role === "user"
         ? await options.prepareFileContext?.(message, Math.min(remaining, options.maxTextPartChars))
         : undefined;
+    if (options.imageHistory && options.imageHistory !== "all" && files?.imageOnly === true) {
+      // Walk newest first. Keep the entire latest album, never fall back to an
+      // older photo if that album failed hydration or exceeded the image budget.
+      if (seenImageTurn && files?.images.length) {
+        files = {
+          ...files,
+          images: [],
+          text: [
+            files.text,
+            "[Earlier image pixels omitted; retrieve the attachment if requested.]",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        };
+      }
+      seenImageTurn = true;
+    }
     // Use the shared image estimate; native image payloads consume context too.
     const imageChars =
       (files?.images.length ?? 0) * IMAGE_BLOCK_TOKENS * APPROX_RENDERED_CHARS_PER_TOKEN;
