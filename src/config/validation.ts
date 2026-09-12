@@ -423,18 +423,18 @@ function validateConfigObjectWithPluginsBase(
     return installedPluginRecordIds;
   };
 
-  const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
+  const hasNonFatalEvidenceForUnknownChannel = (channelId: string): boolean => {
     const normalizedChannelId = normalizePluginId(channelId);
-    if (!normalizedChannelId || ensureKnownIds().has(normalizedChannelId)) {
-      return false;
-    }
-    const pluginConfig = config.plugins;
+    const channelConfig = config.channels?.[channelId];
     const matches = (pluginId: string) => normalizePluginId(pluginId) === normalizedChannelId;
     return (
-      (Array.isArray(pluginConfig?.allow) && pluginConfig.allow.some(matches)) ||
-      (isRecord(pluginConfig?.entries) && Object.keys(pluginConfig.entries).some(matches)) ||
-      (isRecord(pluginConfig?.installs) && Object.keys(pluginConfig.installs).some(matches)) ||
-      ensureInstalledPluginRecordIds().has(normalizedChannelId)
+      !ensureKnownIds().has(normalizedChannelId) &&
+      ((channelConfig?.enabled === false && Object.keys(channelConfig).length === 1) ||
+        (Array.isArray(config.plugins?.allow) && config.plugins.allow.some(matches)) ||
+        (isRecord(config.plugins?.entries) && Object.keys(config.plugins.entries).some(matches)) ||
+        (isRecord(config.plugins?.installs) &&
+          Object.keys(config.plugins.installs).some(matches)) ||
+        ensureInstalledPluginRecordIds().has(normalizedChannelId))
     );
   };
 
@@ -628,10 +628,10 @@ function validateConfigObjectWithPluginsBase(
       }
       if (!allowedChannels.has(trimmed)) {
         const issue = { path: `channels.${trimmed}`, message: `unknown channel id: ${trimmed}` };
-        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+        if (hasNonFatalEvidenceForUnknownChannel(trimmed)) {
           warnings.push({
             ...issue,
-            message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+            message: `${issue.message} (disabled or stale channel plugin config ignored; install the plugin to validate it, or run openclaw doctor --fix to remove repairable stale config)`,
           });
         } else {
           issues.push(issue);
