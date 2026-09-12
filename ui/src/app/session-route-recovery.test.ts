@@ -94,7 +94,7 @@ describe("session route reconnect recovery", () => {
       expect(fixture.load).toHaveBeenCalledTimes(2);
       expect(fixture.writeHistory).toHaveBeenCalledExactlyOnceWith(fixture.destination);
       fixture.reconnect();
-      await vi.dynamicImportSettled();
+      await Promise.resolve();
       expect(fixture.load).toHaveBeenCalledTimes(2);
     },
   );
@@ -122,7 +122,7 @@ describe("session route reconnect recovery", () => {
     const match = fixture.router.getState().matches[0];
     fixture.disconnect();
     fixture.reconnect();
-    await vi.dynamicImportSettled();
+    await Promise.resolve();
     expect(fixture.router.getState().matches[0]).toBe(match);
     expect(fixture.load).toHaveBeenCalledOnce();
   });
@@ -136,7 +136,7 @@ describe("session route reconnect recovery", () => {
     deferred.reject(new Error("gateway closed (1006):"));
     await navigation;
     fixture.reconnect();
-    await vi.dynamicImportSettled();
+    await Promise.resolve();
     expect(fixture.load).toHaveBeenCalledOnce();
   });
 
@@ -158,7 +158,7 @@ describe("session route reconnect recovery", () => {
         fixture.router.stop();
       }
       fixture.reconnect();
-      await vi.dynamicImportSettled();
+      await Promise.resolve();
       expect(fixture.load).toHaveBeenCalledOnce();
     },
   );

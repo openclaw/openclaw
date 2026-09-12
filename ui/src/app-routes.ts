@@ -22,7 +22,6 @@ import {
 } from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
-import type { SessionRouteRecoveryState } from "./app/session-route-recovery.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
@@ -251,8 +250,11 @@ export async function startApplicationRouter(
     push: (next) => history.push(next),
     replace: (next) => history.replace(next),
     listen: (listener) => {
-      const recovery: SessionRouteRecoveryState = { listening: true };
+      let listening = true;
       let recoveryQueued = false;
+      let interrupted:
+        | { controller: AbortController; scope: ReturnType<typeof gatewayPresentationScope> }
+        | undefined;
       const currentTarget = () => {
         const state = router.getState();
         return state.pendingMatches[0] ?? state.matches[0];
@@ -260,41 +262,59 @@ export async function startApplicationRouter(
       const recoverSessionRoute = () => {
         const target = currentTarget();
         if (!target || !isSessionRouteId(target.routeId)) {
-          recovery.interrupted = undefined;
+          interrupted = undefined;
           return;
         }
         const scope = gatewayPresentationScope(context.gateway);
-        if (recovery.interrupted?.controller !== target.abortController) {
-          recovery.interrupted = undefined;
+        if (interrupted?.controller !== target.abortController) {
+          interrupted = undefined;
         }
-        if (recovery.interrupted && recovery.interrupted.scope !== scope) {
+        if (interrupted && interrupted.scope !== scope) {
           return;
         }
         if (context.gateway.snapshot.phase !== "connected") {
           if (target.status === "pending" || target.isFetching === "loader") {
-            recovery.interrupted = { controller: target.abortController, scope };
+            interrupted = { controller: target.abortController, scope };
           }
           return;
         }
         if (target.status === "success" && !target.isFetching) {
-          recovery.interrupted = undefined;
+          interrupted = undefined;
         }
-        if (!recovery.interrupted || recoveryQueued || target.status !== "error") {
+        if (!interrupted || recoveryQueued || target.status !== "error") {
           return;
         }
         recoveryQueued = true;
-        // Only interrupted loads need replay code; observation stays synchronous.
-        void import("./app/session-route-recovery.ts").then(
-          ({ replaySessionRoute }) => {
-            recoveryQueued = false;
-            replaySessionRoute(router, context, recovery);
-          },
-          (error: unknown) => {
-            recoveryQueued = false;
-            recovery.interrupted = undefined;
-            console.error("[openclaw] Session route recovery failed", error);
-          },
-        );
+        // Other subscribers may navigate synchronously; recover only their final intent.
+        queueMicrotask(() => {
+          recoveryQueued = false;
+          const latest = currentTarget();
+          if (
+            !listening ||
+            !interrupted ||
+            latest?.abortController !== interrupted.controller ||
+            gatewayPresentationScope(context.gateway) !== interrupted.scope ||
+            context.gateway.snapshot.phase !== "connected" ||
+            latest.status !== "error"
+          ) {
+            return;
+          }
+          interrupted = undefined;
+          // The loader publishes its error before retiring its run. Abort it so
+          // same-match revalidation cannot join the already failed promise.
+          latest.abortController.abort();
+          if (currentTarget()?.abortController !== latest.abortController) {
+            return;
+          }
+          void router
+            .navigate(
+              latest.routeId,
+              context,
+              { history: "none", revalidate: true },
+              latest.location,
+            )
+            .catch(() => undefined);
+        });
       };
       const stopSessionRecovery = router.subscribe(recoverSessionRoute);
       let lastHello = context.gateway.snapshot.hello;
@@ -306,7 +326,7 @@ export async function startApplicationRouter(
         lastHello = snapshot.hello;
         setPluginTabSlugs(snapshot.hello?.controlUiTabs);
         queueMicrotask(() => {
-          if (!recovery.listening || context.gateway.snapshot.phase !== "connected") {
+          if (!listening || context.gateway.snapshot.phase !== "connected") {
             return;
           }
           const current = history.location();
@@ -353,8 +373,8 @@ export async function startApplicationRouter(
         listener(canonical);
       });
       return () => {
-        recovery.listening = false;
-        recovery.interrupted = undefined;
+        listening = false;
+        interrupted = undefined;
         stopSessionRecovery();
         stopGateway();
         stopHistory();
