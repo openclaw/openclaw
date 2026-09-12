@@ -78,7 +78,7 @@ describe("openclaw-modal-dialog", () => {
 
   it("occludes native tabs through nested dialogs, closing animations, and removal", async () => {
     const changes = vi.fn();
-    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
     try {
       const { modal, webAwesomeDialog } = await renderModal();
       const nested = document.createElement("openclaw-modal-dialog");

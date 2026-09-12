@@ -204,7 +204,8 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              accounts: [personal],
+              // Reopening retries an empty inventory; a populated one stays cached.
+              accounts: input === "keyboard" ? [] : [personal],
               nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
@@ -255,21 +256,48 @@ suite.define(() => {
         await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-        const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
+        const refreshRequests = await gateway.getRequests("users.listModelAccounts");
+        if (input === "keyboard") {
+          await gateway.deferNext("users.listModelAccounts", {});
+        }
         await trigger.press("Enter");
         await expect.poll(() => more.isVisible()).toBe(true);
-        expect(await gateway.getRequests("users.listModelAccounts")).toEqual(inventoryRequests);
+        const pendingMoreTarget = await more.elementHandle();
+        expect(pendingMoreTarget).not.toBeNull();
+        if (input === "keyboard") {
+          const refresh = await gateway.waitForRequest("users.listModelAccounts", {
+            after: refreshRequests.length,
+          });
+          expect(refresh.params).toEqual({});
+          const loading = picker.locator('[data-chat-account-option="loading"]');
+          await expect.poll(() => loading.isVisible()).toBe(true);
+          expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+          await pendingMoreTarget!.focus();
+          await gateway.resolveDeferred("users.listModelAccounts", {
+            profileId: "test-person",
+            accounts: [personal],
+            nextCursor: "accounts-page-2",
+            links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+          });
+          await expect.poll(() => loading.isVisible()).toBe(false);
+          await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+          await expect
+            .poll(() =>
+              pendingMoreTarget!.evaluate((element) => element === document.activeElement),
+            )
+            .toBe(true);
+        } else {
+          expect(await gateway.getRequests("users.listModelAccounts")).toEqual(refreshRequests);
+        }
         expect(
           await picker
             .locator('[data-chat-account-option="current"]')
             .getAttribute("aria-selected"),
         ).toBe("true");
+        const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
         await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
-        const pendingMoreTarget = await more.elementHandle();
-        expect(pendingMoreTarget).not.toBeNull();
         const beforePaginationUrl = page.url();
         if (input === "keyboard") {
-          await pendingMoreTarget!.focus();
           await page.keyboard.press("Enter");
         } else {
           await pendingMoreTarget!.click();

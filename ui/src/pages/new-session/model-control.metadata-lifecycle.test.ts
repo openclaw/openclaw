@@ -100,7 +100,7 @@ describe("new-session model metadata lifecycle", () => {
       expect(request).toHaveBeenLastCalledWith(
         "models.list",
         { view: "configured", agentId: "main", authProfileId: account.authProfileId },
-        { signal: expect.any(AbortSignal) },
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
       );
       expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
       preview.resolve({ ...connected, refreshFailed });

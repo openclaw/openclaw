@@ -628,6 +628,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
     submitDisabledReason: props.submitDisabledReason,
+    submitPending: props.submitPending,
     connected: props.connected,
     draft: visibleDraft,
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),

@@ -71,6 +71,19 @@ Manually allowlisted senders are not automatically command owners. If an
 authorized sender has no owner access, owner-only commands reply with the exact
 `openclaw config set commands.ownerAllowFrom` command for the operator to run.
 
+### Set up an owner without DM pairing
+
+Run `openclaw channels add` and complete the channel setup. When no command owner
+exists, the wizard offers **Set up my operator account** separately from chat
+access. Enter your personal user ID and confirm the exact account that may
+administer this installation. **Skip for now** leaves ownership unchanged.
+
+This also works for Discord servers and other group channels with DMs disabled.
+An owner can use `/update`, restart the Gateway, change configuration, and approve
+commands. Ownership does not grant chat access: existing channel and group access
+rules still apply. The wizard never promotes chat allowlists automatically or
+replaces an existing owner.
+
 <Note>
 WhatsApp's login QR links a WhatsApp account to OpenClaw. DM access requests
 approve people who message that account. These are separate flows.

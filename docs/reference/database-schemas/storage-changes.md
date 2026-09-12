@@ -51,6 +51,14 @@ MCP App pinning retains its existing source-interaction checks. A delayed adapte
 revalidate that source authority at its actual write admission; checking view registration
 alone cannot replace the supported asynchronous interaction policy.
 
+Backup outcome recording and freshness reads expose asynchronous operations from
+the shared-state owner. Archive, SQLite snapshot, and Git backup commands await
+recording before reporting completion; a recording failure remains a warning and
+does not change the backup result. Status and Doctor await freshness before
+formatting it. These operations still execute synchronous SQLite internally;
+they retain the existing insertion-and-pruning transaction, 200-row limit, and
+non-creating freshness reads.
+
 Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
 eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
 existing asynchronous admission owner runs the full integrity and foreign-key

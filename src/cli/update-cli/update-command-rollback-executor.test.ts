@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createConfigIO } from "../../config/config.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -20,6 +21,51 @@ async function readPreviousConfig(env: NodeJS.ProcessEnv) {
 }
 
 describe("package rollback executor ownership", () => {
+  it("checks the new history target after its admission environment changes", async () => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-first-target-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const pendingEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-pending-target-") };
+    const pendingRun = createUpdateRun({ trigger: "cli" }, { env: pendingEnv });
+    const root = dirs.make("rollback-target-package-");
+    const runtime = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
+    createRetainedUpdateRecovery(
+      { runId: pendingRun.runId, from: runtime, to: runtime },
+      { env: pendingEnv },
+    );
+    const configSnapshot = await readPreviousConfig(env);
+    closeOpenClawStateDatabaseForTest();
+    const files = [resolveOpenClawStateSqlitePath(env), resolveOpenClawStateSqlitePath(pendingEnv)];
+    const before = await Promise.all(files.map((file) => fs.readFile(file)));
+    let changed = false;
+    const lstat = fs.lstat.bind(fs);
+    const observation = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const result = await lstat(...args);
+      if (String(args[0]) === path.dirname(files[0]!)) {
+        changed = true;
+        env.OPENCLAW_STATE_DIR = pendingEnv.OPENCLAW_STATE_DIR;
+      }
+      return result;
+    });
+    try {
+      const result = await rollbackFailedUpdate({
+        result: { status: "error", mode: "npm", root, steps: [], durationMs: 0 },
+        previousRoot: root,
+        rollbackBlockedReason: "state-migrated-no-rollback",
+        configSnapshot,
+        opts: { run },
+        timeoutMs: 1000,
+      });
+      expect(changed).toBe(true);
+      expect(result).toMatchObject({
+        rolledBack: false,
+        pendingRecoveryReason: expect.stringContaining(pendingRun.runId),
+      });
+      expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(before);
+    } finally {
+      observation.mockRestore();
+    }
+  });
+
   it("preserves the real package and recovery material when its executor is lost during observation", async () => {
     const base = dirs.make("rollback-real-executor-");
     const { packageRoot, transaction } = await createRetainedPackageSwap(base);

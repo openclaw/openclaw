@@ -222,9 +222,19 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     candidate = httpPrefix.rest;
   }
 
-  const payload = parseApiErrorPayload(candidate);
+  let payload = parseApiErrorPayload(candidate);
   if (!payload) {
     return null;
+  }
+  // A proxy can wrap the terminal upstream error in its ordered attempt history.
+  for (let depth = 0; depth < 4; depth++) {
+    const attempts: unknown = asOptionalRecord(payload.error)?.attempts;
+    const finalAttempt = Array.isArray(attempts) ? asOptionalRecord(attempts.at(-1)) : undefined;
+    const details = finalAttempt?.details;
+    if (!isErrorPayloadObject(details)) {
+      break;
+    }
+    payload = details;
   }
 
   const requestId =

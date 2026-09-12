@@ -554,7 +554,9 @@ describe("human mention submission", () => {
     });
     const sending = handleSendChat(host);
     await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
+        signal: expect.any(AbortSignal),
+      }),
     );
     host.chatMentions = [{ profileId: "profile-second", start: 0, end: 5 }];
     history.resolve({

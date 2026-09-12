@@ -25,6 +25,7 @@ export type ChatRunControlsProps = {
   canAbort: boolean;
   canSend: boolean;
   submitDisabledReason?: string | null;
+  submitPending?: boolean;
   connected: boolean;
   draft: string;
   hasAttachments?: boolean;
@@ -580,7 +581,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       : nothing;
   const sendDisabledReason =
     props.canSend && isChatControlCommand(props.draft) ? null : props.submitDisabledReason;
-  const sendBusy = props.sending || Boolean(sendDisabledReason);
+  const sendBusy = props.sending || Boolean(sendDisabledReason && props.submitPending);
   const sendStatus =
     sendDisabledReason ??
     (props.sending
@@ -597,7 +598,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
         @click=${send}
-        ?disabled=${!props.canSend || sendBusy || !hasComposedContent}
+        ?disabled=${!props.canSend || props.sending || Boolean(sendDisabledReason) || !hasComposedContent}
         aria-label=${sendStatus ?? activeRunActionDescription}
         aria-busy=${sendBusy ? "true" : "false"}
       >

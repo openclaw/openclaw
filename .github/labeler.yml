@@ -667,6 +667,12 @@
           - "extensions/qwen/**"
           - "docs/providers/qwen.md"
           - "docs/plugins/reference/qwen.md"
+"extensions: radius":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/radius/**"
+          - "docs/providers/radius.md"
+          - "docs/plugins/reference/radius.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:

@@ -2252,6 +2252,7 @@
                       "providers/perplexity-provider",
                       "providers/qianfan",
                       "providers/qwen",
+                      "providers/radius",
                       "providers/stepfun",
                       "providers/synthetic",
                       "providers/tencent",
