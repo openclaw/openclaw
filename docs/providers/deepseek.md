@@ -169,6 +169,9 @@ the selected model.
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
+  <Card title="ds4 local server" href="/providers/ds4" icon="server">
+    Running DeepSeek V4 Flash from a local OpenAI-compatible ds4 server.
+  </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config reference for agents, models, and providers.
   </Card>

@@ -37,6 +37,7 @@ type SessionListFence = {
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
   workerEnvironmentInventoryVersion: number;
+  workerMachineShapeVersion: number;
   workerPlacementDiskSpaceVersion: number;
   workerPlacementRunnerAvailabilityVersion: number;
 };
@@ -104,6 +105,7 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
     workerEnvironmentInventoryVersion: context.workerEnvironmentService?.inventoryVersion() ?? 0,
+    workerMachineShapeVersion: context.workerEnvironmentService?.machineShapeVersion() ?? 0,
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
     workerPlacementRunnerAvailabilityVersion:
       context.workerPlacementRunnerAvailabilityReader?.version() ?? 0,
@@ -125,6 +127,7 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
     value.workerEnvironmentInventoryVersion === fence.workerEnvironmentInventoryVersion &&
+    value.workerMachineShapeVersion === fence.workerMachineShapeVersion &&
     value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion &&
     value.workerPlacementRunnerAvailabilityVersion ===
       fence.workerPlacementRunnerAvailabilityVersion
@@ -213,9 +216,10 @@ export async function respondWithCachedSessionList(params: {
   // Activity windows and child retention expire without mutations; hidden paginated rows
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.
   // Rejected and off-page candidates can change live/goal state without a store write.
-  // Searches may coalesce in flight, but returned rows cannot fence their completed cache.
+  // Searches and active-only reads may coalesce in flight, but cannot reuse completed pages.
   const cacheCompleted =
     params.request.activeMinutes === undefined &&
+    params.request.activeOnly !== true &&
     !params.request.spawnedBy &&
     !params.request.search?.trim();
   const completed = cacheCompleted

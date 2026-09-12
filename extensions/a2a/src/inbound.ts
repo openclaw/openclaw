@@ -36,6 +36,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       channel: "a2a",
       accountId: params.account.accountId,
       peer: { kind: "direct", id: `${params.peerName}:${params.contextId}` },
+      parentPeer: { kind: "direct", id: params.peerName },
       // Untrusted remote peers must never land in the operator's main session,
       // so A2A pins the most isolated scope instead of inheriting session.dmScope.
       // The peer id embeds the A2A contextId, giving one session per peer+context.

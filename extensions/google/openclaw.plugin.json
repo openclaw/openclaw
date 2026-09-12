@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "categories": ["models", "memory", "voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {},
   "sessionRouteStateOwners": [

@@ -9,6 +9,8 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshot, type OAuthCredential } from "../../auth-profiles.js";
 import { testing as externalAuthTesting } from "../../auth-profiles/external-auth.test-support.js";
+import { clearAuthProfileMigrationDiagnostics } from "../../auth-profiles/legacy-source-diagnostic.js";
+import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
 import type { AgentHarness } from "../../harness/types.js";
 import * as modelRuntime from "../model.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
@@ -70,6 +72,7 @@ describe("embedded run auth plan provider pin", () => {
   });
 
   afterEach(async () => {
+    clearAuthProfileMigrationDiagnostics();
     clearRuntimeAuthProfileStoreSnapshot(agentDir);
     externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     readCodexCliCredentialsCachedMock.mockReset();
@@ -77,12 +80,161 @@ describe("embedded run auth plan provider pin", () => {
     await state.cleanup();
   });
 
+  it("prepares a LiteLLM turn while Anthropic credentials await migration", async () => {
+    await state.writeJson("agents/main/agent/auth-profiles.json", {
+      version: 1,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "legacy-key" },
+      },
+    });
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+    const model: Model = {
+      ...platformModel,
+      provider: "litellm",
+      id: "chat",
+      name: "Chat",
+      api: "openai-completions",
+      baseUrl: "https://litellm.example.test/v1",
+    };
+    const config: OpenClawConfig = {
+      models: {
+        providers: { litellm: { baseUrl: model.baseUrl, apiKey: "litellm-key", models: [] } },
+      },
+    };
+    const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+    vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
+      ...stores,
+      model,
+      logicalRef: { provider: model.provider, model: model.id },
+    });
+    const prepared = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+      () =>
+        prepareEmbeddedRunAuthPlan({
+          runParams: {
+            sessionId: "migration-session",
+            runId: "migration-run",
+            workspaceDir: state.workspaceDir,
+            prompt: "Auth preparation only",
+            timeoutMs: 5_000,
+            config,
+          },
+          provider: "litellm",
+          modelId: model.id,
+          model,
+          agentDir,
+          workspaceDir: state.workspaceDir,
+          nativeModelOwned: false,
+          ...stores,
+          getAgentHarness: () => openClawHarness,
+          setAgentHarness: () => {},
+          getRuntimeModel: () => model,
+          getEffectiveModel: () => model,
+          applyResolvedRuntimeModel: () => {},
+          selectHarnessForPreparedAttempts: () => openClawHarness,
+        }),
+    );
+    expect(prepared.preparedAuthAttempts[0]).toMatchObject({
+      kind: "direct",
+      plan: { providerForAuth: "litellm", selectedAuthMode: "api-key" },
+    });
+  });
+
   it.each([
-    { pin: true, authMode: "api-key", authRequirement: "api-key", kind: "direct" },
-    { pin: false, authMode: "oauth", authRequirement: "subscription", kind: "profile" },
+    {
+      allowAuthProfileFallback: undefined,
+      configuredBackup: false,
+      profileIds: ["openai:selected", "openai:backup"],
+    },
+    {
+      allowAuthProfileFallback: false,
+      configuredBackup: false,
+      profileIds: ["openai:selected"],
+    },
+    {
+      allowAuthProfileFallback: false,
+      configuredBackup: true,
+      profileIds: ["openai:selected"],
+    },
   ])(
-    "selects $authMode with ambient Codex OAuth and api-key pin=$pin",
-    async ({ pin, authMode, authRequirement, kind }) => {
+    "prepares permitted credentials with fallback=$allowAuthProfileFallback and configured backup=$configuredBackup",
+    async ({ allowAuthProfileFallback, configuredBackup, profileIds }) => {
+      readCodexCliCredentialsCachedMock.mockReturnValue(null);
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            "openai:selected": { type: "api_key", provider: "openai", key: "selected-key" },
+            "openai:backup": { type: "api_key", provider: "openai", key: "backup-key" },
+          },
+          order: { openai: ["openai:backup", "openai:selected"] },
+        },
+        agentDir,
+      );
+      const model = platformModel;
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: model.baseUrl,
+              models: [],
+              ...(configuredBackup
+                ? { apiKey: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" } }
+                : {}),
+            },
+          },
+        },
+      };
+      const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+      const resolution = {
+        ...stores,
+        model,
+        logicalRef: { provider: model.provider, model: model.id },
+      };
+      vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue(resolution);
+      const prepared = await withPluginRuntimeGenerationScope(
+        { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+        () =>
+          prepareEmbeddedRunAuthPlan({
+            runParams: {
+              sessionId: "verify-session",
+              runId: "verify-run",
+              workspaceDir: state.workspaceDir,
+              prompt: "Verify the selected credential",
+              timeoutMs: 5_000,
+              config,
+              authProfileId: "openai:selected",
+              authProfileIdSource: "user",
+              allowAuthProfileFallback,
+            },
+            provider: "openai",
+            modelId: model.id,
+            model,
+            agentDir,
+            workspaceDir: state.workspaceDir,
+            nativeModelOwned: false,
+            ...stores,
+            getAgentHarness: () => openClawHarness,
+            setAgentHarness: () => {},
+            getRuntimeModel: () => model,
+            getEffectiveModel: () => model,
+            applyResolvedRuntimeModel: () => {},
+            selectHarnessForPreparedAttempts: () => openClawHarness,
+          }),
+      );
+
+      expect(prepared.preparedAuthAttempts.map((attempt) => attempt.profileId)).toEqual(profileIds);
+      expect(prepared.activePreparedAuthPlan.forwardedAuthProfileCandidateIds).toEqual(profileIds);
+      expect(Object.keys(prepared.attemptAuthProfileStore.profiles).toSorted()).toEqual([
+        "openai:backup",
+        "openai:selected",
+      ]);
+    },
+  );
+
+  it.each([true, false])(
+    "uses host API-key auth without importing Codex OAuth (pin=%s)",
+    async (pin) => {
       const config: OpenClawConfig = {
         models: {
           providers: {
@@ -96,6 +248,7 @@ describe("embedded run auth plan provider pin", () => {
       vi.spyOn(modelRuntime, "resolveModelAsync").mockImplementation(
         async (_provider, _modelId, _agentDir, cfg) => ({
           ...stores,
+          logicalRef: { provider: _provider, model: _modelId },
           model:
             cfg?.models?.providers?.openai?.api === "openai-responses"
               ? platformModel
@@ -138,13 +291,12 @@ describe("embedded run auth plan provider pin", () => {
       );
 
       expect(prepared.preparedAuthAttempts[0]).toMatchObject({
-        kind,
-        plan: { selectedAuthMode: authMode, modelRoute: { authRequirement } },
+        kind: "direct",
+        plan: { selectedAuthMode: "api-key", modelRoute: { authRequirement: "api-key" } },
       });
-      expect(prepared.attemptAuthProfileStore.profiles["openai:default"]?.type).toBe(
-        pin ? undefined : "oauth",
-      );
-      expect(model).toEqual(pin ? platformModel : subscriptionModel);
+      expect(prepared.attemptAuthProfileStore.profiles["openai:default"]).toBeUndefined();
+      expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
+      expect(model).toEqual(platformModel);
     },
   );
 });

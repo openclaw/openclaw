@@ -157,6 +157,7 @@ export function resolveAgentScopedOutboundMediaAccess(
     agentId?: string;
     mediaSources?: readonly string[];
     workspaceDir?: string;
+    sessionWorkspaceDir?: string;
     mediaAccess?: OutboundMediaAccess;
     /** Workspace-bounded transport reader; sender policy remains owned by this resolver. */
     workspaceMediaAccess?: OutboundMediaAccess;
@@ -176,6 +177,7 @@ export function resolveAgentScopedOutboundMediaAccess(
       cfg: params.cfg,
       agentId: params.agentId,
       mediaSources: params.mediaSources,
+      sessionWorkspaceDir: params.sessionWorkspaceDir,
     });
   const workspaceLocalRoots = params.workspaceMediaAccess?.localRoots ?? [];
   const baseLocalRoots = mediaReadAllowed

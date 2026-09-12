@@ -4,7 +4,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { compareReleaseVersions, parseReleaseVersion } from "../../../lib/release-version.mjs";
+import {
+  compareReleaseVersions,
+  parsePinnedReleaseVersion,
+  parseReleaseVersion,
+} from "../../../lib/release-version.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -15,6 +19,7 @@ export const CONFIG_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 type ConfigStep = {
   id: string;
   intent: string;
+  intents?: string[];
   argv: string[];
   prepublishPluginPackages?: string[];
 };
@@ -395,14 +400,68 @@ function adaptStepForBaseline(
   return step;
 }
 
+function* adaptRecipeForBaseline(
+  steps: ConfigStep[],
+  baselineVersion: string | null,
+  summary: BaselineAdaptationSummary,
+): Generator<ConfigStep> {
+  // Older and suffixed releases retain their existing command and receipt contract.
+  const pinnedVersion = parsePinnedReleaseVersion(baselineVersion ?? "");
+  const comparison = pinnedVersion ? compareReleaseVersions(pinnedVersion, "2026.6.34") : null;
+  const batchChannels = comparison !== null && comparison >= 0;
+  let batchedThrough = -1;
+  // Adapt only reached steps so an earlier failure cannot report future skipped intents.
+  for (const [index, step] of steps.entries()) {
+    if (index <= batchedThrough) {
+      continue;
+    }
+    if (
+      batchChannels &&
+      step.id === "channels-discord" &&
+      steps[index + 1]?.id === "channels-telegram" &&
+      steps[index + 2]?.id === "channels-whatsapp"
+    ) {
+      const channels = steps.slice(index, index + 3).map((channel) => {
+        const adapted = adaptStepForBaseline(channel, baselineVersion, summary);
+        if (!adapted || adapted.argv[3] === undefined) {
+          throw new Error(`config recipe step ${channel.id} is missing its JSON value`);
+        }
+        return {
+          intent: adapted.intent,
+          path: adapted.argv[2],
+          value: JSON.parse(adapted.argv[3]),
+        };
+      });
+      yield {
+        id: "channels",
+        intent: "channels",
+        intents: channels.map((channel) => channel.intent),
+        argv: [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify(channels.map((channel) => ({ path: channel.path, value: channel.value }))),
+        ],
+      };
+      batchedThrough = index + 2;
+      continue;
+    }
+    const adapted = adaptStepForBaseline(step, baselineVersion, summary);
+    if (adapted) {
+      yield adapted;
+    }
+  }
+}
+
 export function resolveUpgradeSurvivorConfigStepsForBaseline(
   scenario = "base",
   baselineVersion: string | null = null,
 ): ConfigStep[] {
-  const summary: BaselineAdaptationSummary = { skippedIntents: [] };
-  return resolveUpgradeSurvivorConfigSteps(scenario)
-    .map((step) => adaptStepForBaseline(step, baselineVersion, summary))
-    .filter((step): step is ConfigStep => step !== null);
+  return [
+    ...adaptRecipeForBaseline(resolveUpgradeSurvivorConfigSteps(scenario), baselineVersion, {
+      skippedIntents: [],
+    }),
+  ];
 }
 
 export function resolveUpgradeSurvivorOpenClawCommand(
@@ -450,6 +509,7 @@ export function runUpgradeSurvivorOpenClawStep(step: ConfigStep, params: ConfigC
   return {
     id: step.id,
     intent: step.intent,
+    intents: step.intents,
     command: invocation.commandLabel,
     status: result.status,
     signal: result.signal,
@@ -484,15 +544,15 @@ function applyRecipe() {
     steps: [],
   };
 
-  for (const step of recipeSteps) {
-    const adaptedStep = adaptStepForBaseline(step, baselineVersion, summary);
-    if (!adaptedStep) {
-      continue;
-    }
-    const outcome = runUpgradeSurvivorOpenClawStep(adaptedStep);
+  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion, summary)) {
+    const outcome = runUpgradeSurvivorOpenClawStep(step);
     summary.steps.push(outcome);
-    if (outcome.ok && !summary.acceptedIntents.includes(adaptedStep.intent)) {
-      summary.acceptedIntents.push(adaptedStep.intent);
+    if (outcome.ok) {
+      for (const intent of step.intents ?? [step.intent]) {
+        if (!summary.acceptedIntents.includes(intent)) {
+          summary.acceptedIntents.push(intent);
+        }
+      }
     }
     writeJson(summaryPath, summary);
     if (!outcome.ok) {

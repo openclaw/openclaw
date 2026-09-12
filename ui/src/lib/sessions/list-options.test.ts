@@ -1,8 +1,14 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
-import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
+import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 function createSessions(client: GatewayBrowserClient, key: string, ownerId?: string) {
   return createTestSessionCapability({
@@ -356,6 +362,172 @@ describe("session list replacement options", () => {
     expect(sessions.state.result?.sessions[0]?.archived).toBe(false);
     sessions.dispose();
   });
+
+  it("keeps a restored Active row when another observer replays an older archive event", async () => {
+    vi.useFakeTimers();
+    const original: GatewaySessionRow = {
+      key: "agent:main:restored-archive",
+      agentId: "main",
+      sessionId: "restored-archive",
+      kind: "direct",
+      updatedAt: 10,
+      archived: false,
+    };
+    let offered = original;
+    const client = createTestGatewayClient(async (method) => {
+      if (method === "sessions.list") {
+        return sessionsResult([offered], offered.updatedAt ?? 0);
+      }
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          path: "(multiple)",
+          key: original.key,
+          entry: { sessionId: original.sessionId, updatedAt: 20 },
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway);
+    const archived = {
+      ...original,
+      sessionKey: original.key,
+      reason: "archive",
+      updatedAt: 20,
+      archived: true,
+      archivedAt: 20,
+    };
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      emitEvent({ type: "event", event: "sessions.changed", payload: archived });
+      expect(sessions.state.result?.sessions).toEqual([]);
+      expect(sessions.archiveVisibility(original.key)).toBe("archived");
+
+      offered = { ...original, updatedAt: 20 };
+      await sessions.patch(
+        original.key,
+        { archived: false },
+        { agentId: "main", expectedSessionId: original.sessionId, deferListRefresh: true },
+      );
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions).toEqual([offered]);
+
+      // The same payload retains its first receipt across capability consumers.
+      sessions.reconcileChanged(archived);
+      expect(sessions.state.result?.sessions).toEqual([offered]);
+      expect(sessions.state.result?.count).toBe(1);
+      expect(sessions.archiveVisibility(original.key)).toBeUndefined();
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["primary", "managed"] as const)(
+    "does not transfer an archive event to a replacement in the %s list",
+    async (owner) => {
+      vi.useFakeTimers();
+      const selected: GatewaySessionRow = {
+        key: "agent:main:main",
+        kind: "direct",
+        sessionId: "selected-session",
+        updatedAt: 10,
+      };
+      const original: GatewaySessionRow = {
+        key: "agent:main:archive-event",
+        kind: "direct",
+        sessionId: "archive-event-old",
+        label: "Archive event",
+        updatedAt: 10,
+        archived: false,
+      };
+      const replacement = {
+        ...original,
+        sessionId: "archive-event-new",
+        label: "Archive event replacement",
+        updatedAt: 30,
+      };
+      let offered = original;
+      const query = { agentId: "main", search: "Archive event", archivedFilter: "active" as const };
+      const client = createTestGatewayClient(async (method, params) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        const rows =
+          owner === "primary"
+            ? [selected, offered]
+            : asOptionalRecord(params)?.search
+              ? [offered]
+              : [selected];
+        return {
+          ...sessionsResult(rows, offered.updatedAt ?? 0),
+          totalCount: 4,
+          hasMore: true,
+          nextOffset: rows.length,
+        };
+      });
+      const { gateway, emitEvent } = createGatewayHarness(client);
+      const sessions = createTestSessionCapability(gateway);
+      const updates = vi.fn();
+      const stop =
+        owner === "managed" ? sessions.subscribeList(query, updates) : sessions.subscribe(updates);
+      const snapshot = () => (owner === "managed" ? sessions.listSnapshot(query) : sessions.state);
+      const refresh = () =>
+        owner === "managed"
+          ? sessions.refreshList({ ...query, force: true })
+          : sessions.refresh({ agentId: "main", force: true });
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        if (owner === "managed") {
+          await refresh();
+        }
+        const primary = sessions.state.result;
+        const offset = snapshot().result?.nextOffset;
+        updates.mockClear();
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            ...original,
+            sessionKey: original.key,
+            agentId: "main",
+            reason: "archive",
+            updatedAt: 20,
+            archived: true,
+            archivedAt: 20,
+            archiveReason: "Archived for the test",
+          },
+        });
+        expect(snapshot().result?.sessions.some((row) => row.key === original.key)).toBe(false);
+        expect(updates).toHaveBeenCalled();
+        expect(sessions.archiveVisibility(original.key)).toBe("archived");
+        expect(snapshot()).toMatchObject({ loading: false, error: null });
+        expect(snapshot().result).toMatchObject({
+          totalCount: 4,
+          hasMore: true,
+          nextOffset: offset,
+        });
+
+        offered = replacement;
+        await refresh();
+        expect(snapshot().result?.sessions.find((row) => row.key === original.key)).toEqual(
+          replacement,
+        );
+        expect(sessions.archiveVisibility(original.key)).toBeUndefined();
+        expect(sessions.state.result?.sessions.find((row) => row.key === selected.key)).toEqual(
+          selected,
+        );
+        if (owner === "managed") {
+          expect(sessions.state.result).toBe(primary);
+        }
+      } finally {
+        stop();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps derived titles while an enriched roster response is temporarily degraded", async () => {
     const key = "agent:main:dashboard:session-1";

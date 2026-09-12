@@ -390,6 +390,10 @@ jobs:
     permissions:
       actions: read
       contents: read
+    outputs:
+      blocked_count: ${{ steps.validate_evidence.outputs.blocked_count }}
+      failed_count: ${{ steps.validate_evidence.outputs.failed_count }}
+      scorecard_passed: ${{ steps.validate_evidence.outputs.scorecard_passed }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -464,6 +468,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate QA evidence manifest
+        id: validate_evidence
         env:
           QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -525,6 +530,37 @@ jobs:
           if (profilePlanSha256 !== manifest.profilePlanSha256) {
             throw new Error("QA evidence profilePlan digest does not match the manifest");
           }
+
+          const counts = { pass: 0, fail: 0, blocked: 0, skipped: 0 };
+          for (const entry of evidence.entries) {
+            counts[entry.result.status] += 1;
+          }
+          const scorecardPassed =
+            manifest.qaPassed === true && counts.fail === 0 && counts.blocked === 0;
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            [
+              `scorecard_passed=${scorecardPassed}`,
+              `failed_count=${counts.fail}`,
+              `blocked_count=${counts.blocked}`,
+              `passed_count=${counts.pass}`,
+              `skipped_count=${counts.skipped}`,
+              "",
+            ].join("\n"),
+          );
+          fs.appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            [
+              "### Maturity scorecard result",
+              "",
+              `- Passed: \`${counts.pass}\``,
+              `- Failed: \`${counts.fail}\``,
+              `- Blocked: \`${counts.blocked}\``,
+              `- Skipped: \`${counts.skipped}\``,
+              `- Overall: **${scorecardPassed ? "PASS" : "FAIL"}**`,
+              "",
+            ].join("\n"),
+          );
           NODE
 
       - name: Ensure maturity scorecard agent key exists
@@ -824,3 +860,28 @@ jobs:
             - Source SHA: `${{ needs.validate_selected_ref.outputs.selected_revision }}`
             - QA evidence run: `${{ inputs.qa_evidence_run_id || github.run_id }}`
             - Strict score validation and maturity docs rendering passed.
+
+  maturity_result:
+    name: Require complete maturity evidence
+    needs:
+      - publish
+      - publish_generated_pr
+    if: >-
+      ${{ always() &&
+        needs.publish.result == 'success' &&
+        (needs.publish_generated_pr.result == 'success' ||
+          needs.publish_generated_pr.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail incomplete maturity evidence
+        env:
+          BLOCKED_COUNT: ${{ needs.publish.outputs.blocked_count }}
+          FAILED_COUNT: ${{ needs.publish.outputs.failed_count }}
+          SCORECARD_PASSED: ${{ needs.publish.outputs.scorecard_passed }}
+        run: |
+          set -euo pipefail
+          if [[ "$SCORECARD_PASSED" != "true" ]]; then
+            echo "::error title=Maturity scorecard failed::${FAILED_COUNT} failed and ${BLOCKED_COUNT} blocked scenarios. Generated maturity PR was still published when requested."
+            exit 1
+          fi
+          echo "Maturity scorecard passed with zero failed or blocked scenarios."

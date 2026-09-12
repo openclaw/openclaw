@@ -1135,30 +1135,38 @@ describe("sendMessageMatrix mentions", () => {
     );
   });
 
-  it("does not emit mentions for escaped qualified users", async () => {
-    const { client, sendMessage } = makeClient();
+  it.each(["\\@alice:example.org", "`literal then \\@alice:example.org"])(
+    "does not emit mentions for escaped qualified users in %j",
+    async (markdown) => {
+      const { client, sendMessage } = makeClient();
 
-    await sendMessageMatrix("room:!room:example", "\\@alice:example.org", {
-      client,
-      cfg: {} as never,
-    });
+      await sendMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+      });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    expect((sentContent(sendMessage) as { formatted_body?: string }).formatted_body).not.toContain(
-      "matrix.to/#/@alice:example.org",
-    );
-  });
+      expect(sentContent(sendMessage).body).toBe(markdown);
+      expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+      expect(
+        (sentContent(sendMessage) as { formatted_body?: string }).formatted_body,
+      ).not.toContain("matrix.to/");
+    },
+  );
 
-  it("does not emit mentions for escaped room mentions", async () => {
-    const { client, sendMessage } = makeClient();
+  it.each(["\\@room please review", "``literal then \\@room please review"])(
+    "does not emit mentions for escaped room mentions in %j",
+    async (markdown) => {
+      const { client, sendMessage } = makeClient();
 
-    await sendMessageMatrix("room:!room:example", "\\@room please review", {
-      client,
-      cfg: {} as never,
-    });
+      await sendMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+      });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-  });
+      expect(sentContent(sendMessage).body).toBe(markdown);
+      expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    },
+  );
 
   it("marks room mentions via m.mentions.room", async () => {
     const { client, sendMessage } = makeClient();

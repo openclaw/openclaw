@@ -1,6 +1,24 @@
 // Small value formatters for status overview rows.
 // These helpers keep terse row text consistent between compact and full status reports.
 
+import type { HostDesktopStatus } from "../gateway/desktop/host-source.js";
+
+export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
+  if (!status || status.state === "disabled") {
+    return "disabled";
+  }
+  if (status.state === "managed") {
+    return status.managedState === "running"
+      ? `managed · running · display :${status.display} · 127.0.0.1:${status.port} · security VncAuth`
+      : status.managedState === "failed"
+        ? `managed · failed: ${status.error}`
+        : status.managedState === "unknown"
+          ? "managed · runtime state unavailable"
+          : `managed · ${status.managedState === "not-started" ? "not started" : "starting"}`;
+  }
+  return `${status.state} · 127.0.0.1:${status.port}${status.security ? ` · security ${status.security}` : ""}`;
+}
+
 type AgentStatusLike = {
   bootstrapPendingCount: number;
   totalSessions: number;

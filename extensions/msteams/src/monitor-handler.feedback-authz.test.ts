@@ -225,6 +225,31 @@ describe("msteams feedback invoke authz", () => {
     });
   });
 
+  it("does not record feedback when personal scope contradicts team metadata", async () => {
+    await withFeedbackHandler({
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "allowlist",
+            allowFrom: ["owner-aad"],
+          },
+        },
+      } as OpenClawConfig,
+      context: {
+        reaction: "like",
+        conversationId: "a:personal-chat;messageid=bot-msg-1",
+        conversationType: "personal",
+        senderId: "owner-aad",
+        teamId: "unexpected-team",
+        comment: "must not cross scope",
+      },
+      assertResult: async () => {
+        expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
+        expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   it("does not record feedback for a DM sender outside allowFrom", async () => {
     await withFeedbackHandler({
       cfg: {

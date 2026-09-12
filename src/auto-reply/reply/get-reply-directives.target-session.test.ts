@@ -467,7 +467,7 @@ describe("resolveReplyDirectives", () => {
       },
     });
 
-    expectContinueResult(result, { cleanedBody: body });
+    await expectContinueResult(result, { cleanedBody: body });
     expect(mockCallInput(mocks.createModelSelectionState).hasModelDirective).toBe(false);
     expect(mockCallInput(mocks.applyInlineDirectiveOverrides).directives).toMatchObject({
       hasModelDirective: false,
@@ -483,7 +483,7 @@ describe("resolveReplyDirectives", () => {
       },
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedFastMode: "auto",
       resolvedFastModeAutoOnSeconds: 60,
     });
@@ -512,7 +512,7 @@ describe("resolveReplyDirectives", () => {
       provider: "openai",
       model: "gpt-5.5",
     });
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       provider: "openai",
       model: "gpt-5.5",
       resolvedFastMode: "auto",
@@ -556,7 +556,7 @@ describe("resolveReplyDirectives", () => {
         },
       });
 
-      expectContinueResult(result, { resolvedThinkLevel: expectedThinking });
+      await expectContinueResult(result, { resolvedThinkLevel: expectedThinking });
       expect(resolveDefaultThinkingLevel).toHaveBeenLastCalledWith({
         provider: "openai",
         model: targetModel,
@@ -593,7 +593,7 @@ describe("resolveReplyDirectives", () => {
       },
     });
 
-    expectContinueResult(result, { resolvedThinkLevel: "low" });
+    await expectContinueResult(result, { resolvedThinkLevel: "low" });
     expect(resolveDefaultThinkingLevel).toHaveBeenLastCalledWith({
       provider: "openai",
       model: "gpt-5.6-sol",
@@ -680,7 +680,7 @@ describe("resolveReplyDirectives", () => {
       targetSessionEntry,
     );
     expect(mockCallInput(mocks.resolveReplyExecOverrides).sessionEntry).toBe(targetSessionEntry);
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "high",
       resolvedFastMode: true,
       resolvedVerboseLevel: "full",
@@ -756,7 +756,7 @@ describe("resolveReplyDirectives", () => {
       defaultReasoning: "on",
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "on",
     });
@@ -770,7 +770,7 @@ describe("resolveReplyDirectives", () => {
       sessionEntry: makeSessionEntry({ thinkingLevel: "off" }),
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
     });
@@ -784,7 +784,7 @@ describe("resolveReplyDirectives", () => {
       opts: { thinkingLevelOverride: "off" },
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
     });
@@ -798,7 +798,7 @@ describe("resolveReplyDirectives", () => {
       agentEntries: [{ id: "main", thinkingDefault: "off" }],
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
     });
@@ -812,7 +812,7 @@ describe("resolveReplyDirectives", () => {
       hasConfiguredThinkingDefault: true,
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
     });
@@ -825,7 +825,7 @@ describe("resolveReplyDirectives", () => {
       defaultReasoning: "on",
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "low",
       resolvedReasoningLevel: "off",
     });
@@ -839,7 +839,7 @@ describe("resolveReplyDirectives", () => {
       agentCfg: { reasoningDefault: "off" },
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
     });
@@ -853,7 +853,7 @@ describe("resolveReplyDirectives", () => {
       agentCfg: { reasoningDefault: "stream" },
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedReasoningLevel: "off",
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
@@ -866,7 +866,7 @@ describe("resolveReplyDirectives", () => {
       defaultReasoning: "on",
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedReasoningLevel: "off",
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
@@ -879,7 +879,7 @@ describe("resolveReplyDirectives", () => {
       sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedReasoningLevel: "off",
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
@@ -893,7 +893,7 @@ describe("resolveReplyDirectives", () => {
       commandAuthorized: true,
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedReasoningLevel: "stream",
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
@@ -907,7 +907,7 @@ describe("resolveReplyDirectives", () => {
       ctx: { GatewayClientScopes: ["operator.admin"] },
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedReasoningLevel: "stream",
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
@@ -921,7 +921,7 @@ describe("resolveReplyDirectives", () => {
       commandAuthorized: true,
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       resolvedReasoningLevel: "stream",
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
@@ -984,7 +984,7 @@ describe("resolveReplyDirectives", () => {
       skillFilter: undefined,
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       cleanedBody: "",
     });
     expect(sessionCtx.Body).toBe("");
@@ -1001,7 +1001,7 @@ describe("resolveReplyDirectives", () => {
       sessionCtx: { commandText: "hello", agentText, rawText: "hello" },
     });
 
-    expectContinueResult(result, { cleanedBody: agentText });
+    await expectContinueResult(result, { cleanedBody: agentText });
   });
 
   it("does not resurrect a consumed command from the inbound context", async () => {
@@ -1048,7 +1048,7 @@ describe("resolveReplyDirectives", () => {
       typing: makeTypingController(),
     });
 
-    expectContinueResult(directResult, { commandSource: "", cleanedBody: "" });
+    await expectContinueResult(directResult, { commandSource: "", cleanedBody: "" });
   });
 
   it("does not apply or remove directives when the command projection is explicitly empty", async () => {
@@ -1064,7 +1064,7 @@ describe("resolveReplyDirectives", () => {
       },
     });
 
-    expectContinueResult(result, {
+    await expectContinueResult(result, {
       commandSource: "",
       cleanedBody: "/trace on",
     });
@@ -1091,6 +1091,6 @@ describe("resolveReplyDirectives", () => {
       },
     });
 
-    expectContinueResult(result, { cleanedBody: agentText });
+    await expectContinueResult(result, { cleanedBody: agentText });
   });
 });

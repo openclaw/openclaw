@@ -30,7 +30,7 @@
 
 .chat-inline-disclosure:focus-visible {
   color: var(--text);
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -222,6 +222,12 @@
   flex-shrink: 0;
 }
 
+.chat-tool-msg-summary__icon img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
 .chat-tool-msg-summary__icon svg {
   width: 16px;
   height: 16px;
@@ -364,6 +370,7 @@
   display: flex;
   align-items: baseline;
   min-width: max-content;
+  min-height: 1lh;
   padding-right: 12px;
 }
 
@@ -558,7 +565,6 @@
 
 .chat-bubble--tool-shell .chat-tool-msg-body > .chat-text {
   max-height: min(46vh, 540px);
-  margin: 0;
   padding: 12px 14px 14px;
   overflow: auto;
   font-family: var(--mono);
@@ -733,7 +739,6 @@
 .chat-tool-card__detail-link:hover,
 .chat-tool-card__detail-link:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .chat-tool-card__block {
@@ -949,8 +954,8 @@
 }
 
 .chat-tool-card__preview-image-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
 }
 
 .chat-tool-card__preview-frame {
@@ -1174,7 +1179,6 @@
   color: var(--muted);
   font: inherit;
   cursor: var(--cursor-action);
-  text-decoration: none;
 }
 
 .chat-tasks-status__link:hover,

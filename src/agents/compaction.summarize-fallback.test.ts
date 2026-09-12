@@ -4,6 +4,7 @@ import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { summarizeWithFallback } from "./compaction.test-support.js";
 
@@ -66,13 +67,7 @@ describe("summarizeWithFallback", () => {
     async ({ error, attempts }) => {
       agentSessionMocks.generateSummary.mockRejectedValue(error);
       const signal = new AbortController().signal;
-      const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: "hello",
-          timestamp: 1,
-        } satisfies UserMessage,
-      ];
+      const messages: AgentMessage[] = [makeUserMessage("hello", 1) satisfies UserMessage];
 
       const result = expect(
         summarizeWithFallback({
@@ -110,13 +105,7 @@ describe("summarizeWithFallback", () => {
       .mockResolvedValueOnce("recovered summary after provider disconnect");
 
     const summary = summarizeWithFallback({
-      messages: [
-        {
-          role: "user",
-          content: "hello",
-          timestamp: 1,
-        } satisfies UserMessage,
-      ],
+      messages: [makeUserMessage("hello", 1) satisfies UserMessage],
       model: testModel,
       apiKey: "test-key", // pragma: allowlist secret
       signal: new AbortController().signal, // not aborted
@@ -143,13 +132,7 @@ describe("summarizeWithFallback", () => {
 
     const result = expect(
       summarizeWithFallback({
-        messages: [
-          {
-            role: "user",
-            content: "hello",
-            timestamp: 1,
-          } satisfies UserMessage,
-        ],
+        messages: [makeUserMessage("hello", 1) satisfies UserMessage],
         model: testModel,
         apiKey: "test-key", // pragma: allowlist secret
         signal: new AbortController().signal,
@@ -168,13 +151,7 @@ describe("summarizeWithFallback", () => {
 
     const result = expect(
       summarizeWithFallback({
-        messages: [
-          {
-            role: "user",
-            content: "hello",
-            timestamp: 1,
-          } satisfies UserMessage,
-        ],
+        messages: [makeUserMessage("hello", 1) satisfies UserMessage],
         model: testModel,
         apiKey: "test-key", // pragma: allowlist secret
         signal: controller.signal, // already aborted
@@ -197,13 +174,7 @@ describe("summarizeWithFallback", () => {
 
     const startedAt = Date.now();
     const promise = summarizeWithFallback({
-      messages: [
-        {
-          role: "user",
-          content: "hello",
-          timestamp: 1,
-        } satisfies UserMessage,
-      ],
+      messages: [makeUserMessage("hello", 1) satisfies UserMessage],
       model: testModel,
       apiKey: "test-key", // pragma: allowlist secret
       signal: controller.signal,
@@ -225,11 +196,7 @@ describe("summarizeWithFallback", () => {
     // Oversized-message fallback tries the safe subset so a huge attachment or
     // tool output does not prevent summarizing the rest of the transcript.
     const messages: AgentMessage[] = [
-      {
-        role: "user",
-        content: "small",
-        timestamp: 1,
-      } satisfies UserMessage,
+      makeUserMessage("small", 1) satisfies UserMessage,
       {
         role: "user",
         content: "x".repeat(500_000),

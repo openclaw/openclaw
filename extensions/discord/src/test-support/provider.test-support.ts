@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 
 type NativeCommandSpecMock = {
   name: string;
@@ -261,11 +262,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
   voiceRuntimeModuleLoadedMock.mockClear();
 }
 
-export const baseRuntime = (): RuntimeEnv => ({
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-});
+export const baseRuntime = (): RuntimeEnv => createRuntimeSpies();
 
 export const baseConfig = (): OpenClawConfig =>
   ({

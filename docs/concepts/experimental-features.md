@@ -129,7 +129,7 @@ For one agent only:
 }
 ```
 
-Restart the Gateway after changing the flag. Lean filtering removes `browser`, `automations`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf` unless you explicitly preserve them with `tools.allow` or `tools.alsoAllow`; Tool Search may still catalog preserved tools instead of exposing them directly.
+Restart the Gateway after changing the flag in the config file. Toggling **Lean tools for local models** from Control UI Labs instead takes effect for future agent runs without a restart. Lean filtering removes `browser`, `automations`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf` unless you explicitly preserve them with `tools.allow` or `tools.alsoAllow`; Tool Search may still catalog preserved tools instead of exposing them directly.
 
 ## Experimental does not mean hidden
 

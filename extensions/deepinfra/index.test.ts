@@ -40,21 +40,13 @@ function makeAgentModelEntry(id = "profile/live-model") {
   };
 }
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
 function mockDiscoveryFetch(id = "profile/live-model") {
   return vi.fn(async (url: string) => {
     if (url === DEEPINFRA_MODELS_URL) {
-      return jsonResponse({ data: [makeAgentModelEntry(id)] });
+      return Response.json({ data: [makeAgentModelEntry(id)] });
     }
     expect(url).toBe("https://api.deepinfra.com/models/list");
-    return jsonResponse([
+    return Response.json([
       {
         model_name: id,
         pricing: {
@@ -98,7 +90,7 @@ describe("deepinfra capability registration", () => {
       const mockFetch = vi.fn(async (url: string) => {
         const metadata = url === DEEPINFRA_MODELS_URL;
         if (scenario === "empty" && metadata) {
-          return jsonResponse({ data: [] });
+          return Response.json({ data: [] });
         }
         if (
           (scenario === "metadata" && metadata) ||
