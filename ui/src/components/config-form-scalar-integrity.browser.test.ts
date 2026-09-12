@@ -440,108 +440,142 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], identifier);
   });
 
-  it("preserves the current branch type in unconstrained primitive unions", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    const schema = {
-      anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
-    };
-    const renderValue = (value: unknown, defaultValue?: unknown) => {
-      render(
-        renderTextInput({
-          schema: defaultValue === undefined ? schema : { ...schema, default: defaultValue },
-          value,
-          path: ["providerOptions", "deepgram", "temperature"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          inputType: "text",
-          onPatch,
-        }),
-        container,
+  it.each(["anyOf", "type-array"])(
+    "preserves the current branch type in %s primitive unions",
+    (syntax) => {
+      const container = document.createElement("div");
+      const onPatch = vi.fn();
+      const schema =
+        syntax === "anyOf"
+          ? { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] }
+          : { type: ["string", "number", "boolean"] };
+      const renderValue = (value: unknown, defaultValue?: unknown) => {
+        const analysis = analyzeConfigSchema({
+          type: "object",
+          properties: {
+            providerOptions: {
+              type: "object",
+              properties: {
+                deepgram: {
+                  type: "object",
+                  properties: {
+                    temperature:
+                      defaultValue === undefined ? schema : { ...schema, default: defaultValue },
+                  },
+                },
+              },
+            },
+          },
+        });
+        expect(analysis.unsupportedPaths).toEqual([]);
+        render(
+          renderConfigForm({
+            schema: analysis.schema,
+            value: { providerOptions: { deepgram: { temperature: value } } },
+            uiHints: {},
+            unsupportedPaths: analysis.unsupportedPaths,
+            onPatch,
+          }),
+          container,
+        );
+        return expectElement(
+          container.querySelector<HTMLInputElement>("input[type='text']"),
+          "mixed primitive union input",
+        );
+      };
+
+      let input = renderValue(42);
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+      onPatch.mockClear();
+      input = renderValue(1);
+      input.value = "1.0000000000000001";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onPatch).not.toHaveBeenCalled();
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(input.value).toBe("1.0000000000000001");
+
+      onPatch.mockClear();
+      input = renderValue("42");
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        "43",
       );
-      return expectElement(
-        container.querySelector<HTMLInputElement>("input[type='text']"),
-        "mixed primitive union input",
+
+      onPatch.mockClear();
+      input = renderValue(undefined);
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+      onPatch.mockClear();
+      input = renderValue(undefined, 42);
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+      onPatch.mockClear();
+      input = renderValue(undefined, "42");
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        "43",
       );
-    };
 
-    let input = renderValue(42);
-    input.value = "43";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+      onPatch.mockClear();
+      input = renderValue("false");
+      input.value = "true";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        "true",
+      );
 
-    onPatch.mockClear();
-    input = renderValue(1);
-    input.value = "1.0000000000000001";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(input.value).toBe("1.0000000000000001");
+      onPatch.mockClear();
+      input = renderValue(false);
+      input.value = "true";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        true,
+      );
 
-    onPatch.mockClear();
-    input = renderValue("42");
-    input.value = "43";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], "43");
+      onPatch.mockClear();
+      const identifier = "1048113311314608148";
+      input = renderValue(undefined);
+      input.value = identifier;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        identifier,
+      );
+    },
+  );
 
-    onPatch.mockClear();
-    input = renderValue(undefined);
-    input.value = "43";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
-
-    onPatch.mockClear();
-    input = renderValue(undefined, 42);
-    input.value = "43";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
-
-    onPatch.mockClear();
-    input = renderValue(undefined, "42");
-    input.value = "43";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], "43");
-
-    onPatch.mockClear();
-    input = renderValue("false");
-    input.value = "true";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(
-      ["providerOptions", "deepgram", "temperature"],
-      "true",
-    );
-
-    onPatch.mockClear();
-    input = renderValue(false);
-    input.value = "true";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], true);
-
-    onPatch.mockClear();
-    const identifier = "1048113311314608148";
-    input = renderValue(undefined);
-    input.value = identifier;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(
-      ["providerOptions", "deepgram", "temperature"],
-      identifier,
-    );
-  });
-
-  it.each([
-    ["unset", undefined],
-    ["number", 0],
-  ] as const)(
-    "keeps an initial %s branch stable while an identifier is typed",
-    (_name, initial) => {
+  it.each(
+    ["anyOf", "type-array"].flatMap((syntax) => [
+      { syntax, initial: undefined, branch: "unset" },
+      { syntax, initial: 0, branch: "number" },
+    ]),
+  )(
+    "keeps an initial $branch branch stable while an identifier is typed with $syntax",
+    ({ syntax, initial }) => {
       const container = document.createElement("div");
       document.body.append(container);
       const identifier = "1048113311314608148";
-      const schema = {
-        anyOf: [{ type: "string", pattern: "^[0-9]{19}$" }, { type: "number" }],
-      };
+      const analysis = analyzeConfigSchema(
+        syntax === "anyOf"
+          ? { anyOf: [{ type: "string", pattern: "^[0-9]{19}$" }, { type: "number" }] }
+          : { type: ["string", "number"], pattern: "^[0-9]{19}$" },
+      );
+      expect(analysis.unsupportedPaths).toEqual([]);
+      const schema = analysis.schema!;
       const patches: unknown[] = [];
       let persisted: unknown = initial;
       let value: unknown = initial;

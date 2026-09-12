@@ -8,9 +8,9 @@
   },
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.26",
+    "typebox": "1.3.27",
     "zca-js": "2.1.2",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

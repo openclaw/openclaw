@@ -462,7 +462,7 @@ describe("gateway run chunk metadata", () => {
         producerMs += performance.now() - start;
       }
     };
-    const bundles = await build({
+    const { bundles } = await build({
       config: false,
       cwd: root,
       entry: { "cli/run-main": "entry.ts" },
@@ -500,7 +500,7 @@ describe("gateway run chunk metadata", () => {
   it("permits subset builds that do not include the gateway command", async () => {
     const root = createGatewayBuildFixture();
     fs.writeFileSync(join(root, "entry.ts"), "export const unrelated = 1;");
-    const bundles = await build({
+    const { bundles } = await build({
       config: false,
       cwd: root,
       entry: "entry.ts",

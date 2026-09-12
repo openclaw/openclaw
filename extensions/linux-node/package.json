@@ -4,7 +4,7 @@
   "description": "OpenClaw Linux node device capabilities",
   "type": "module",
   "dependencies": {
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

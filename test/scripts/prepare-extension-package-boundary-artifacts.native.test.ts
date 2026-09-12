@@ -9,6 +9,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   installNativeAncestorTypes,
   materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
   resolveNativeFixtureShortPath,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
@@ -337,6 +338,7 @@ if (fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringif
         if (process.platform === "win32") {
           f.write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
         }
+        overrideNativeFixtureExecutable(f.root, launcher);
         await f.run();
         expect(readArtifactRecord(f.recordPath)).toBeDefined();
         f.write(`${f.output}/orphan.d.ts`, "export interface Orphan {}\n");

@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@pierre/diffs": "1.4.0",
+    "@pierre/diffs": "1.4.1",
     "@shikijs/langs": "4.4.3",
-    "playwright-core": "1.62.1",
-    "typebox": "1.3.26",
-    "zod": "4.4.3"
+    "playwright-core": "1.63.0",
+    "typebox": "1.3.27",
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

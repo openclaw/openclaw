@@ -8,7 +8,7 @@
     "libopus-wasm": "0.2.0",
     "werift": "0.24.4",
     "ws": "8.21.3",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

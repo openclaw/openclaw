@@ -38,7 +38,7 @@ describe("check-package-patches", () => {
       ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
       ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
       ["vitest@5.0.0", "patches/vitest@5.0.0.patch"],
-      ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
+      ["matrix-js-sdk@42.3.0", "patches/matrix-js-sdk@42.3.0.patch"],
     ] as const;
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });
@@ -69,8 +69,8 @@ ${approvedPatches.map(([specifier]) => `  "${specifier}": a9aea1790d2c65b1ae543c
 
   it.each([
     ["left-pad@1.3.0", "patches/left-pad@1.3.0.patch"],
-    ["matrix-js-sdk@42.2.1", "patches/matrix-js-sdk@42.2.1.patch"],
-    ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0-other.patch"],
+    ["matrix-js-sdk@42.3.1", "patches/matrix-js-sdk@42.3.1.patch"],
+    ["matrix-js-sdk@42.3.0", "patches/matrix-js-sdk@42.3.0-other.patch"],
   ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });

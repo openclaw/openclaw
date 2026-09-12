@@ -69,7 +69,7 @@ export type AnthropicVertexStreamDeps = {
 };
 
 const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
-  AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
+  AnthropicVertex: AnthropicVertexSdk,
   GoogleAuth,
   streamAnthropic: streamDefault,
 };

@@ -3,6 +3,8 @@ import fs from "node:fs";
 import readline from "node:readline";
 
 let nextRequestId = 1;
+let nextThreadId = 1;
+let nextTurnId = 1;
 const pending = new Map();
 const tracePath = process.env.OPENCLAW_ACPX_PROCESS_FIXTURE_TRACE;
 
@@ -59,7 +61,12 @@ async function handle(method, params) {
   }
   if (method === "thread/start") {
     return {
-      thread: { id: "thread-process", name: "Process fixture", preview: "", cwd: process.cwd() },
+      thread: {
+        id: `thread-process-${nextThreadId++}`,
+        name: "Process fixture",
+        preview: "",
+        cwd: process.cwd(),
+      },
       model: model.id,
       modelProvider: "openai",
       reasoningEffort: "medium",
@@ -67,7 +74,7 @@ async function handle(method, params) {
     };
   }
   if (method === "turn/start") {
-    const turnId = "turn-process";
+    const turnId = `turn-process-${nextTurnId++}`;
     const turn = { id: turnId, items: [], status: "inProgress", error: null };
     queueMicrotask(() => {
       void (async () => {

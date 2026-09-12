@@ -6,9 +6,9 @@
   "type": "module",
   "dependencies": {
     "mdast-util-from-markdown": "2.0.3",
-    "typebox": "1.3.26",
+    "typebox": "1.3.27",
     "yaml": "2.9.0",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/memory-core": "workspace:*",

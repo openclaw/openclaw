@@ -2071,7 +2071,7 @@ describe("runtime dependency ownership build contract", () => {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, source);
     }
-    const bundles = await build({
+    const { bundles } = await build({
       config: false,
       tsconfig: false,
       cwd: root,

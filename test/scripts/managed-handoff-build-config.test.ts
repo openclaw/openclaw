@@ -48,7 +48,7 @@ it("loads the staged production handoff runtime without neighboring SQL or JSON 
   const outDir = tempDirs.make("openclaw-handoff-build-");
   const directory = tempDirs.make("openclaw-handoff-stage-");
   // Use the production graph unchanged, not the invocation compiler's extra plugins.
-  const bundles = await build({ ...config, config: false, outDir, logLevel: "silent" });
+  const { bundles } = await build({ ...config, config: false, outDir, logLevel: "silent" });
   try {
     vi.mocked(resolveRuntimeWorkerUrl).mockReturnValue(
       pathToFileURL(path.join(outDir, MANAGED_HANDOFF_RUNTIME_ENTRY)),

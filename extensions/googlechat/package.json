@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "google-auth-library": "11.0.2",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

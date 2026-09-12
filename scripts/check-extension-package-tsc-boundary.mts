@@ -71,13 +71,13 @@ type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter
 const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
 const tscBin = require.resolve("typescript/bin/tsc");
-const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
-const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));
-const nativePreviewBin = nativePreviewPackageJson.bin?.tsgo;
-if (typeof nativePreviewBin !== "string") {
-  throw new Error("@typescript/native-preview does not declare the tsgo binary");
+const nativePackageJsonPath = require.resolve("typescript-native/package.json");
+const nativePackageJson = JSON.parse(readFileSync(nativePackageJsonPath, "utf8"));
+const nativeBin = nativePackageJson.bin?.tsc;
+if (typeof nativeBin !== "string") {
+  throw new Error("typescript-native does not declare the tsc binary");
 }
-const tsgoBin = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewBin);
+const tsgoBin = resolve(dirname(nativePackageJsonPath), nativeBin);
 const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
   resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
 );

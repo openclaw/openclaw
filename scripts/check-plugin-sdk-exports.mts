@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -34,18 +35,7 @@ import { findUndeclaredBundlerHelperDtsExports } from "./lib/sanitize-bundler-he
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
-const nativePreviewPackageJsonPath = resolve(
-  repoRoot,
-  "node_modules/@typescript/native-preview/package.json",
-);
-const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8")) as {
-  bin?: { tsgo?: string };
-};
-const nativePreviewTsgoBin = nativePreviewPackageJson.bin?.tsgo;
-if (!nativePreviewTsgoBin) {
-  throw new Error("@typescript/native-preview does not declare the tsgo binary");
-}
-const tsgoPath = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewTsgoBin);
+const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
 const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
@@ -210,8 +200,8 @@ export default defineChannelPluginEntry({
     );
 
     const result = spawnSync(
-      process.execPath,
-      [tsgoPath, "-p", join(consumerRoot, "tsconfig.json"), "--pretty", "false"],
+      tsgoPath,
+      ["-p", join(consumerRoot, "tsconfig.json"), "--pretty", "false"],
       { cwd: consumerRoot, encoding: "utf8" },
     );
     if (result.error) {

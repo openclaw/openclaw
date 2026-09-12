@@ -130,8 +130,8 @@ type WhatsAppReplyDeliveryParams = {
   textLimit: number;
   chunkMode?: ChunkMode;
   replyLogger: {
-    info: (obj: unknown, msg: string) => void;
-    warn: (obj: unknown, msg: string) => void;
+    info: (obj: object, msg: string) => void;
+    warn: (obj: object, msg: string) => void;
   };
   connectionId?: string;
   skipLog?: boolean;

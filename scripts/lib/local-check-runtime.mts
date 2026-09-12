@@ -1,8 +1,11 @@
 // Applies resource policy for expensive local and CI check commands.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createDeclarationInputBoundary } from "./tsdown-declaration-boundary.mts";
 
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
@@ -70,6 +73,19 @@ export function resolveRepoToolBinPath(
     resolveCommonDir = resolveGitCommonDir,
   }: RepoToolOptions = {},
 ) {
+  if (toolName === "tsgo") {
+    // TypeScript 6 owns the in-process compiler API; CLI checks use the stable
+    // native compiler explicitly, independent of either package's tsc bin link.
+    const inputs = createDeclarationInputBoundary(cwd);
+    const require = createRequire(path.join(inputs.root, "package.json"));
+    const nativeRoot = path.dirname(
+      inputs.assert(require.resolve("typescript-native/package.json")),
+    );
+    const getExePath: { default: () => string } = require(
+      inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
+    );
+    return inputs.assert(fileURLToPath(pathToFileURL(getExePath.default())));
+  }
   const localPath = path.resolve(cwd, "node_modules", ".bin", toolName);
   if (fileExists(localPath)) {
     return localPath;

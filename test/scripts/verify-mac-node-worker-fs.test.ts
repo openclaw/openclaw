@@ -21,7 +21,7 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
     compiled = builds.make("openclaw-worker-fs-build-");
     const selected = buildConfigs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     expect(selected).toBeDefined();
-    const bundles = await build({
+    const { bundles } = await build({
       ...selected,
       config: false,
       entry: {
