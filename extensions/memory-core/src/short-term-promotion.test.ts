@@ -30,6 +30,7 @@ import {
   deleteShortTermLockEntryIfCurrent,
   withMemoryWorkspaceLock,
 } from "./memory-workspace-lock.js";
+import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -177,6 +178,119 @@ function groundedCandidateFixture(
     ...params,
   };
 }
+
+describe("normalizeShortTermRecallStore numeric decoding", () => {
+  const nowIso = "2026-09-13T00:00:00.000Z";
+
+  function storeWithEntry(entry: Record<string, unknown>): unknown {
+    return {
+      version: 1,
+      updatedAt: nowIso,
+      entries: {
+        k1: {
+          path: "memory/2026-09-01.md",
+          source: "memory",
+          snippet: "A note.",
+          firstRecalledAt: nowIso,
+          lastRecalledAt: nowIso,
+          ...entry,
+        },
+      },
+    };
+  }
+
+  function normalizedEntry(entry: Record<string, unknown>) {
+    const normalized = normalizeShortTermRecallStore(storeWithEntry(entry), nowIso);
+    return normalized.entries.k1;
+  }
+
+  baseIt("keeps canonical integers and finite scores", () => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount: 3,
+      dailyCount: 1,
+      groundedCount: 0,
+      totalScore: 1.5,
+      maxScore: 0.75,
+    });
+    expect(entry).toBeDefined();
+    expect(entry?.startLine).toBe(1);
+    expect(entry?.endLine).toBe(2);
+    expect(entry?.recallCount).toBe(3);
+    expect(entry?.totalScore).toBe(1.5);
+    expect(entry?.maxScore).toBe(0.75);
+  });
+
+  baseIt.each([
+    ["hex", "0x10", "0x12"],
+    ["exponent", "1e2", "1e3"],
+    ["binary", "0b101", "0b110"],
+    ["boolean", true, false],
+    ["array", [1, 2], [3]],
+    ["fractional", 1.5, 2.5],
+    ["negative", -1, -2],
+  ])(
+    "drops a row whose line range is a non-canonical %s encoding",
+    (_label, startLine, endLine) => {
+      expect(
+        normalizedEntry({ startLine, endLine, recallCount: 1, totalScore: 1, maxScore: 1 }),
+      ).toBeUndefined();
+    },
+  );
+
+  baseIt.each([
+    ["Infinity", Infinity],
+    ["NaN", Number.NaN],
+    ["negative", -5],
+  ])("clamps a non-finite or negative recall count (%s) to zero", (_label, recallCount) => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount,
+      totalScore: 1,
+      maxScore: 1,
+    });
+    expect(entry?.recallCount).toBe(0);
+  });
+
+  baseIt("clamps a non-finite score to zero instead of persisting it", () => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount: 1,
+      totalScore: Number.NaN,
+      maxScore: Infinity,
+    });
+    expect(entry?.totalScore).toBe(0);
+    expect(entry?.maxScore).toBe(0);
+  });
+
+  baseIt("never persists a non-finite numeric field", () => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount: Infinity,
+      dailyCount: Number.NaN,
+      groundedCount: -1,
+      totalScore: Number.NaN,
+      maxScore: Infinity,
+    });
+    expect(entry).toBeDefined();
+    for (const value of [
+      entry?.startLine,
+      entry?.endLine,
+      entry?.recallCount,
+      entry?.dailyCount,
+      entry?.groundedCount,
+      entry?.totalScore,
+      entry?.maxScore,
+    ]) {
+      expect(typeof value === "number" && Number.isFinite(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
 
 describe("short-term promotion", () => {
   let fixtureRoot = "";
