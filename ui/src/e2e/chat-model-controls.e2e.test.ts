@@ -7,6 +7,86 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it("keeps effort selectable from a usable snapshot when model refresh fails", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const thinkingLevels = [
+        { id: "low", label: "Low" },
+        { id: "xhigh", label: "Extra high" },
+      ];
+      const model = {
+        id: "gpt-6-astra",
+        name: "GPT-6 Astra",
+        provider: "openai",
+        available: true,
+        reasoning: true,
+        thinkingLevels,
+      };
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-6-astra",
+        models: [model],
+        methodResponses: {
+          "models.list": {
+            sequence: [
+              { models: [model] },
+              {
+                __mockError: {
+                  code: "UNAVAILABLE",
+                  message: "Model catalog refresh unavailable",
+                },
+              },
+            ],
+          },
+          "sessions.list": {
+            count: 1,
+            path: "",
+            ts: 1,
+            defaults: {
+              model: model.id,
+              modelProvider: model.provider,
+              thinkingDefault: "low",
+              thinkingLevels,
+            },
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                model: model.id,
+                modelProvider: model.provider,
+                thinkingDefault: "low",
+                thinkingLevel: "xhigh",
+                thinkingLevels,
+                updatedAt: 1,
+              },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__input").first();
+      const effortPicker = composer.locator(".chat-controls__effort-picker");
+      const effort = composer.locator('[data-chat-thinking-select="true"]');
+      await expect.poll(() => effort.isVisible()).toBe(true);
+      await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
+      expect(await effortPicker.getAttribute("aria-hidden")).toBe("false");
+      expect(await effortPicker.getAttribute("class")).not.toContain(
+        "chat-controls__effort-picker--reserved",
+      );
+
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await composer.locator('[data-chat-model-select="true"]').click();
+      await expect
+        .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
+        .toContain("Some models could not be refreshed");
+      await expect.poll(() => effort.isVisible()).toBe(true);
+      await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
+      expect(await effortPicker.getAttribute("aria-hidden")).toBe("false");
+      expect(await effortPicker.getAttribute("class")).not.toContain(
+        "chat-controls__effort-picker--reserved",
+      );
+    });
+  });
+
   it.each(["chat", "new"])("keeps a large pending model catalog usable in /%s", async (route) => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = Array.from({ length: 1_000 }, (_, index) => ({
