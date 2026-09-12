@@ -1,4 +1,5 @@
 // Clones and normalizes task registry records at persistence boundaries.
+import { isDeepStrictEqual } from "node:util";
 import {
   isTerminalTaskStatus,
   type TaskDeliveryState,
@@ -10,6 +11,11 @@ export function cloneTaskRecord(record: TaskRecord): TaskRecord {
     ...record,
     ...(record.detail !== undefined ? { detail: structuredClone(record.detail) } : {}),
   };
+}
+
+/** Restored or replayed projections must not persist when they already match durable state. */
+export function isEquivalentTaskRecord(current: TaskRecord, next: TaskRecord): boolean {
+  return isDeepStrictEqual(current, next);
 }
 
 /** Observer notifications need detached metadata, never runtime-owned detail. */

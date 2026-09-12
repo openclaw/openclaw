@@ -503,6 +503,25 @@ describe("task-flow-registry", () => {
       expect(delivered.status).toBe("blocked");
       expect(delivered.endedAt).toBe(200);
       expect(delivered.updatedAt).toBe(200);
+      expect(delivered.revision).toBe(blocked.revision);
+
+      const stale = syncFlowFromTaskForTest({
+        taskId: "task-blocked",
+        parentFlowId: mirrored.flowId,
+        status: "failed",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 260,
+        endedAt: 260,
+        terminalSummary: "Provider failed.",
+      });
+      if (!stale) {
+        throw new Error("Expected stale mirrored flow repair");
+      }
+      expect(stale.status).toBe("failed");
+      expect(stale.endedAt).toBe(260);
+      expect(stale.revision).toBe(blocked.revision + 1);
 
       const terminalCreated = createTaskFlowForTask({
         task: {

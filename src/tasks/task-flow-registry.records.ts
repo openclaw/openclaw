@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   JsonValue,
@@ -106,6 +107,19 @@ export function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       : {}),
     ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
   };
+}
+
+function withoutFlowRevision(flow: TaskFlowRecord): Omit<TaskFlowRecord, "revision"> {
+  const { revision: _revision, ...projection } = flow;
+  return projection;
+}
+
+/** Mirrored sync must not bump revision when the derived projection is unchanged. */
+export function isEquivalentMirroredFlowProjection(
+  current: TaskFlowRecord,
+  next: TaskFlowRecord,
+): boolean {
+  return isDeepStrictEqual(withoutFlowRevision(current), withoutFlowRevision(next));
 }
 
 export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {

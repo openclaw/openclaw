@@ -58,6 +58,7 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   requestFlowCancel,
+  updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
@@ -1819,6 +1820,91 @@ describe("task-registry", () => {
       expect(() => ensureTaskRuntimeStateReady()).toThrow(
         "Task registry restore failed: SQLITE_IOERR: task startup restore failed",
       );
+    });
+  });
+
+  it("replays an equivalent terminal task without rewriting its mirrored flow", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForTests();
+
+      const task = createTaskFixture("subagent", {
+        runId: "run-equivalent-terminal-replay",
+        childSessionKey: "agent:main:subagent:equivalent-terminal-replay",
+        task: "Replay equivalent terminal projection",
+        deliveryStatus: "pending",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+      const flow = createTaskFlowForTask({ task });
+      const linked = linkTaskToFlowById({
+        taskId: task.taskId,
+        flowId: flow.flowId,
+      });
+      expect(linked?.parentFlowId).toBe(flow.flowId);
+
+      finalizeSubagentTask(task, {
+        status: "succeeded",
+        endedAt: 200,
+        lastEventAt: 200,
+        progressSummary: "restored result",
+        terminalSummary: null,
+        suppressDelivery: true,
+      });
+      const first = requireTaskById(task.taskId);
+      const firstFlow = getTaskFlowById(flow.flowId);
+      expect(first.status).toBe("succeeded");
+      expect(first.deliveryStatus).toBe("not_applicable");
+      expect(firstFlow?.status).toBe("succeeded");
+      expect(firstFlow?.revision).toBeGreaterThan(flow.revision);
+
+      finalizeSubagentTask(task, {
+        status: "succeeded",
+        endedAt: 200,
+        lastEventAt: 200,
+        progressSummary: "restored result",
+        terminalSummary: null,
+        suppressDelivery: true,
+      });
+      const replayed = requireTaskById(task.taskId);
+      const replayedFlow = getTaskFlowById(flow.flowId);
+      expect(replayed).toMatchObject({
+        status: "succeeded",
+        endedAt: 200,
+        lastEventAt: 200,
+        progressSummary: "restored result",
+        deliveryStatus: "not_applicable",
+      });
+      expect(replayedFlow?.revision).toBe(firstFlow?.revision);
+      expect(replayedFlow?.status).toBe("succeeded");
+
+      const stale = updateFlowRecordByIdExpectedRevision({
+        flowId: flow.flowId,
+        expectedRevision: replayedFlow!.revision,
+        patch: {
+          status: "failed",
+          updatedAt: 999,
+          endedAt: 999,
+        },
+      });
+      expect(stale.applied).toBe(true);
+      if (!stale.applied) {
+        throw new Error("expected stale mirrored flow patch to apply");
+      }
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("failed");
+
+      finalizeSubagentTask(task, {
+        status: "succeeded",
+        endedAt: 200,
+        lastEventAt: 200,
+        progressSummary: "restored result",
+        terminalSummary: null,
+        suppressDelivery: true,
+      });
+      const repaired = getTaskFlowById(flow.flowId);
+      expect(repaired?.status).toBe("succeeded");
+      expect(repaired?.endedAt).toBe(200);
+      expect(repaired?.revision).toBe(stale.flow.revision + 1);
     });
   });
 

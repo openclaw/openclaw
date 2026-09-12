@@ -45,6 +45,7 @@ import {
   resetTaskRegistryForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../../tasks/task-runtime.test-helpers.js";
+import { getTaskFlowById } from "../../../tasks/task-flow-registry.js";
 import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 import {
   createSessionStore,
@@ -1391,6 +1392,84 @@ describe("subagent registry seam flow", () => {
           progressSummary: "restored result",
         }),
       );
+    } finally {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+    }
+  });
+
+  it("does not rewrite an equivalent terminal mirrored flow on repeated restore", async () => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    try {
+      const startedAt = Date.now() - 2_000;
+      const endedAt = Date.now() - 1_000;
+      const runId = "run-restored-equivalent-flow";
+      const childSessionKey = "agent:main:subagent:restored-equivalent-flow";
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore({ lifecycleRevision: "revision-child" }, childSessionKey),
+      );
+      expect(
+        createRunningTaskRun(
+          makeRunningTaskParams({
+            runId,
+            childSessionKey,
+            task: "restore equivalent terminal flow",
+            startedAt,
+          }),
+        ),
+      ).not.toBeNull();
+      const restoreTerminalRun = () => {
+        mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+          runs: Map<string, SubagentRunRecord>;
+        }) => {
+          params.runs.set(
+            runId,
+            createSubagentRunRecord({
+              runId,
+              childSessionKey,
+              task: "restore equivalent terminal flow",
+              cleanup: "keep",
+              createdAt: startedAt,
+              startedAt,
+              endedAt,
+              endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+              outcome: { status: "ok" },
+              completion: { required: false, resultText: "restored result" },
+              cleanupCompletedAt: endedAt,
+              suppressCompletionDelivery: true,
+            }),
+          );
+          return 1;
+        }) as never);
+      };
+      restoreTerminalRun();
+      hydrateAndActivateRegistry();
+      await waitForFast(() =>
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({
+          status: "succeeded",
+          endedAt,
+          progressSummary: "restored result",
+        }),
+      );
+      const restored = findTaskByRunIdForStatus(runId);
+      const flowId = restored?.parentFlowId;
+      expect(flowId).toBeTruthy();
+      const firstFlow = getTaskFlowById(flowId!);
+      expect(firstFlow?.status).toBe("succeeded");
+      const firstRevision = firstFlow?.revision;
+
+      mod.resetSubagentRegistryForTests({ persist: false });
+      restoreTerminalRun();
+      hydrateAndActivateRegistry();
+      await waitForFast(() =>
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({
+          status: "succeeded",
+          endedAt,
+          progressSummary: "restored result",
+        }),
+      );
+      expect(getTaskFlowById(flowId!)?.revision).toBe(firstRevision);
     } finally {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
