@@ -241,6 +241,102 @@ class WearConversationContextTest {
       }
     }
 
+  @Test
+  fun replacementNotificationOpensAfterOriginalPhoneStopTimeout() = assertReplacementNotificationAfterStop(transportFailure = false)
+
+  @Test
+  fun replacementNotificationOpensAfterOriginalPhoneStopTransportFailure() = assertReplacementNotificationAfterStop(transportFailure = true)
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun assertReplacementNotificationAfterStop(transportFailure: Boolean) =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        val gate = CompletableDeferred<Unit>()
+        flow.stopGate = gate
+        flow.holdStopResponses = !transportFailure
+        flow.failStopTransport = transportFailure
+        // This notification owns Stop; its replacement does not call stop again.
+        flow.vm.openNotification(WearConversationTarget("agent:beta:shared", "phone-a"))
+        flow.idle()
+        assertEquals(listOf("phone-a"), flow.stoppedPhones)
+        flow.changePhone("phone-b")
+        flow.vm.openNotification(WearConversationTarget("agent:alpha:shared", "phone-b"))
+        flow.idle()
+        assertTrue(flow.state.talkBusy)
+        assertTrue(flow.historyKeys.none { it == "agent:alpha:shared" })
+        gate.complete(Unit)
+        flow.idle()
+        if (!transportFailure) {
+          testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS - 1)
+          flow.idle()
+          assertTrue("Replacement still waits for original cleanup", flow.state.talkBusy)
+          assertTrue(flow.historyKeys.none { it == "agent:alpha:shared" })
+          testScheduler.advanceTimeBy(1)
+          flow.idle()
+        }
+        assertEquals("phone-b", flow.state.selectedSession?.phoneNodeId)
+        assertEquals("agent:alpha:shared", flow.state.selectedSession?.key)
+        assertNull(flow.state.failure)
+        assertFalse(flow.state.loading)
+        assertFalse(flow.state.talkBusy)
+        assertFalse(flow.talkClient.isCapturing.value)
+        assertEquals(listOf("talk-beta"), flow.stoppedAttempts)
+        assertEquals(listOf("phone-a"), flow.stoppedPhones)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun samePhoneReplacementRetainsOriginalStopTimeout() =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        flow.holdStopResponses = true
+        flow.vm.openNotification(WearConversationTarget("agent:beta:shared", "phone-a"))
+        flow.idle()
+        flow.vm.openNotification(WearConversationTarget("agent:alpha:shared", "phone-a"))
+        flow.idle()
+        testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS)
+        flow.idle()
+        assertNull(flow.state.selectedSession)
+        assertNotNull(flow.state.failure)
+        assertFalse(flow.state.talkBusy)
+        assertTrue(flow.historyKeys.none { it == "agent:alpha:shared" })
+        testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
+        flow.idle()
+        assertEquals("Discovery cannot retry failed cleanup automatically", listOf("phone-a"), flow.stoppedPhones)
+        assertNull(flow.state.selectedSession)
+        flow.holdStopResponses = false
+        flow.vm.refresh()
+        flow.idle()
+        assertEquals("agent:alpha:shared", flow.state.selectedSession?.key)
+        assertNull(flow.state.failure)
+        assertEquals("Explicit refresh retains canonical recovery without another Stop RPC", listOf("phone-a"), flow.stoppedPhones)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun replacementNotificationMustMatchRediscoveredPhoneAfterStopFailure() =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        flow.holdStopResponses = true
+        flow.vm.openNotification(WearConversationTarget("agent:beta:shared", "phone-a"))
+        flow.idle()
+        // The requested destination alone is not evidence that phone B is preferred.
+        flow.vm.openNotification(WearConversationTarget("agent:alpha:shared", "phone-b"))
+        flow.idle()
+        testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS)
+        flow.idle()
+        assertNull(flow.state.selectedSession)
+        assertEquals(WearConversationFailure.ACTION_REJECTED, flow.state.failure)
+        assertTrue(flow.historyKeys.none { it == "agent:alpha:shared" })
+        assertEquals(listOf("phone-a"), flow.stoppedPhones)
+      }
+    }
+
   @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun samePhoneAndUnknownRouteRetainSharedStopTimeout() =

@@ -174,7 +174,10 @@ internal class WearRealtimeTalkClient(
       }
     }
 
-  suspend fun stop(currentPhoneNodeId: String? = null): WearRealtimeTalkSnapshot {
+  suspend fun stop(
+    currentPhoneNodeId: String? = null,
+    latestDestinationPhoneNodeId: (() -> String?)? = null,
+  ): WearRealtimeTalkSnapshot {
     var ownsStop = false
     val completion =
       synchronized(audioLock) {
@@ -183,45 +186,44 @@ internal class WearRealtimeTalkClient(
           ownsStop = true
         }
       }
-    if (!ownsStop) {
-      // Wait for the owner even when its phone is not known until startup releases
-      // the lifecycle lock. A confirmed other phone cannot inherit this outcome.
-      val outcome = completion.await()
-      currentCoroutineContext().ensureActive()
-      if (currentPhoneNodeId != null && outcome.target != null && outcome.target.nodeId != currentPhoneNodeId) {
-        return WearRealtimeTalkSnapshot()
+    val outcome =
+      if (!ownsStop) {
+        completion.await()
+      } else {
+        var locked = false
+        var target: StopTarget? = null
+        try {
+          lifecycleLock.lock()
+          locked = true
+          val attempt = activeAttempt
+          // The captured phone scopes the actual cleanup, never a later destination.
+          target =
+            (attempt?.let { StopTarget(it.nodeId, it.attemptId) } ?: unsettledStopTarget)
+              ?.takeIf { currentPhoneNodeId == null || it.nodeId == currentPhoneNodeId }
+          unsettledStopTarget = target
+          // Local audio stops before the remote acknowledgment, as before.
+          closeLocal(attempt)
+          val snapshot =
+            if (target == null) WearRealtimeTalkSnapshot() else repository.stopRealtimeTalk(target.nodeId, target.attemptId)
+          unsettledStopTarget = null
+          StopOutcome(target, Result.success(snapshot)).also { completion.complete(it) }
+        } catch (err: Throwable) {
+          StopOutcome(target, Result.failure(err)).also { completion.complete(it) }
+        } finally {
+          synchronized(audioLock) { if (pendingStop === completion) pendingStop = null }
+          if (locked) lifecycleLock.unlock()
+        }
       }
-      // Unknown routing/source and same-phone callers retain the cleanup failure,
-      // including owner cancellation; only this caller's cancellation aborts await.
-      return outcome.result.getOrThrow()
+    currentCoroutineContext().ensureActive()
+    // A notification may replace its destination while this caller owns Stop,
+    // without becoming another joiner. Only outcome interpretation follows it.
+    val destinationPhone =
+      if (latestDestinationPhoneNodeId == null) currentPhoneNodeId else latestDestinationPhoneNodeId()
+    if (destinationPhone != null && outcome.target != null && outcome.target.nodeId != destinationPhone) {
+      return WearRealtimeTalkSnapshot()
     }
-    var locked = false
-    var target: StopTarget? = null
-    try {
-      lifecycleLock.lock()
-      locked = true
-      val attempt = activeAttempt
-      // A confirmed replacement phone cannot inherit an old phone's cleanup.
-      // Unknown routing keeps same-owner recovery available until rediscovery.
-      target =
-        (attempt?.let { StopTarget(it.nodeId, it.attemptId) } ?: unsettledStopTarget)
-          ?.takeIf { currentPhoneNodeId == null || it.nodeId == currentPhoneNodeId }
-      unsettledStopTarget = target
-      // Stop Watch-owned audio before waiting for the phone. A slow or lost
-      // Stop response must never keep the microphone or speaker alive.
-      closeLocal(attempt)
-      val snapshot =
-        if (target == null) WearRealtimeTalkSnapshot() else repository.stopRealtimeTalk(target.nodeId, target.attemptId)
-      unsettledStopTarget = null
-      completion.complete(StopOutcome(target, Result.success(snapshot)))
-      return snapshot
-    } catch (err: Throwable) {
-      completion.complete(StopOutcome(target, Result.failure(err)))
-      throw err
-    } finally {
-      synchronized(audioLock) { if (pendingStop === completion) pendingStop = null }
-      if (locked) lifecycleLock.unlock()
-    }
+    // Same/unknown destination or unresolved source retains the original failure.
+    return outcome.result.getOrThrow()
   }
 
   fun shutdown() {
