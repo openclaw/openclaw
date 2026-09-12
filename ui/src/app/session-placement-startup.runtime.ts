@@ -8,6 +8,8 @@ import {
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import {
   clearSessionPlacementRecovery,
+  formatSessionPlacementRecoveryError,
+  retainSessionPlacementSendError,
   listSessionPlacementRecoveries,
   readSessionPlacementRecovery,
   type SessionPlacementRecovery,
@@ -86,7 +88,9 @@ function initialTurn(entry: PlacementStartupEntry): ChatQueueItem {
             ? "unconfirmed"
             : "failed"
           : "sending",
-    ...(recovery.phase === "paused" ? { sendError: recovery.error } : {}),
+    ...(recovery.phase === "paused"
+      ? { sendError: formatSessionPlacementRecoveryError(recovery) }
+      : {}),
   };
 }
 
@@ -203,6 +207,7 @@ export default function createApplicationPlacementStartupRuntime(
       recovering,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsRecovery(entry),
+      readSendError: () => entry.work.recovery.sendError,
       clearRecovery: () =>
         clearSessionPlacementRecovery(
           entry.owner.gatewayUrl,
@@ -217,6 +222,35 @@ export default function createApplicationPlacementStartupRuntime(
       },
     })
       .then((result) => {
+        if (result.status === "interrupted" && result.error && entry.retainsConnection()) {
+          // Reconnect may have already checked this same submission. Retain its late
+          // transport diagnostic only for the exact message and credential owner.
+          const current = findEntry(entry.owner.sessionKey)?.entry;
+          if (
+            current?.owner.messageId === entry.owner.messageId &&
+            ownsRecovery(current) &&
+            current.retainsConnection()
+          ) {
+            let retained: SessionPlacementRecovery = retainSessionPlacementSendError(
+              current.work.recovery,
+              result.error,
+            );
+            if (current.persistRecovery && !writeSessionPlacementRecoveryIfAvailable(retained)) {
+              retained = pauseSessionPlacementRecovery(
+                retained,
+                retained.phase === "paused" ? retained.error : result.error,
+                current.persistRecovery,
+              ).recovery;
+            }
+            // A paused recovery may still have a history check in flight. Retaining
+            // diagnostics must not reopen admission to another check, even if saving fails.
+            current.work =
+              current.work.kind !== "checking" && retained.phase === "paused"
+                ? { kind: "paused", recovery: retained }
+                : { kind: "checking", recovery: retained };
+            publish();
+          }
+        }
         if (!ownsRecovery(entry) || !entry.retainsConnection()) {
           retireEntry(entry);
           return;
@@ -374,7 +408,7 @@ export default function createApplicationPlacementStartupRuntime(
         ...(entry.work.kind !== "running"
           ? {
               ...(entry.work.recovery.phase === "paused"
-                ? { error: entry.work.recovery.error }
+                ? { error: formatSessionPlacementRecoveryError(entry.work.recovery) }
                 : {}),
               retryable: true,
               action:
@@ -419,7 +453,7 @@ export default function createApplicationPlacementStartupRuntime(
         run(entry, entry.work.recovery, true);
         return;
       }
-      const { reason, error: _error, ...submission } = entry.work.recovery;
+      const { reason, error: _error, sendError: _sendError, ...submission } = entry.work.recovery;
       const recovery: SessionPlacementPendingRecovery = {
         ...submission,
         phase: "dispatching",

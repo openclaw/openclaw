@@ -37,6 +37,7 @@ type SessionPlacementSubmission = {
   sessionKey: string;
   messageId: string;
   message: string;
+  sendError?: string;
   mentions?: readonly HumanMention[];
   attachments?: unknown[];
   target: SessionPlacementTarget;
@@ -195,6 +196,9 @@ function validateSessionPlacementRecovery(
     !isNonEmptyString(value.sessionKey) ||
     (expectedSessionKey !== undefined && value.sessionKey !== expectedSessionKey) ||
     !isNonEmptyString(value.messageId) ||
+    (value.sendError !== undefined &&
+      (!isNonEmptyString(value.sendError) ||
+        value.sendError.length > SESSION_PLACEMENT_ERROR_MAX_LENGTH)) ||
     typeof value.message !== "string" ||
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
@@ -561,4 +565,27 @@ export function pauseSessionPlacementRecovery(
     );
   }
   return { recovery: paused, persisted };
+}
+
+/** Preserve the send failure independently of later read-only reconciliation. */
+export function retainSessionPlacementSendError<T extends SessionPlacementRecovery>(
+  recovery: T,
+  error: string,
+): T & { sendError: string } {
+  return {
+    ...recovery,
+    sendError:
+      recovery.sendError ??
+      truncateUtf16Safe(formatUiError(error), SESSION_PLACEMENT_ERROR_MAX_LENGTH),
+  };
+}
+
+export function formatSessionPlacementRecoveryError(
+  recovery: SessionPlacementPausedRecovery,
+): string {
+  if (!recovery.sendError || recovery.sendError === recovery.error) {
+    return recovery.error;
+  }
+  // Reserve room for both the original failure and the latest check, without accumulating checks.
+  return `${truncateUtf16Safe(recovery.sendError, SESSION_PLACEMENT_ERROR_MAX_LENGTH / 2)}\n\n${truncateUtf16Safe(recovery.error, SESSION_PLACEMENT_ERROR_MAX_LENGTH / 2 - 2)}`;
 }

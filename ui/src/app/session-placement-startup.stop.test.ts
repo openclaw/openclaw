@@ -314,6 +314,87 @@ describe("cloud Stop owns the held initial turn", () => {
       }
     },
   );
+  it.each([
+    { persistent: true, storageFails: false },
+    { persistent: false, storageFails: false },
+    { persistent: true, storageFails: true },
+  ])(
+    "keeps Check delivery active after a late send rejection following Stop (persistent: $persistent, storage failure: $storageFails)",
+    async ({ persistent, storageFails }) => {
+      const sent = createDeferred<unknown>();
+      const history = createDeferred<{ messages: unknown[] }>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return Promise.resolve({ placement: createStartupPlacement("active", 1) });
+        }
+        if (method === "sessions.send") {
+          return sent.promise;
+        }
+        if (method === "chat.history") {
+          return history.promise;
+        }
+        if (method === "sessions.reclaim") {
+          return Promise.resolve({ ok: true });
+        }
+        throw new Error(`Unexpected ${method}`);
+      });
+      const { startup, input, gateway } = createPlacementStartupHarness(request);
+      const stopClient = gateway.snapshot.client;
+      if (!stopClient) {
+        throw new Error("Expected the startup fixture client");
+      }
+      input.persistRecovery = persistent;
+      if (!persistent) {
+        sessionStorage.clear();
+      }
+      try {
+        startup.start(input);
+        await vi.waitFor(() =>
+          expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+        );
+        await requestCloudWorkerStop(stopClient, { key: input.recovery.sessionKey }, startup);
+        startup.retry(input.recovery.sessionKey);
+        await vi.waitFor(() =>
+          expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
+        );
+        if (storageFails) {
+          blockStorageWrites();
+        }
+        sent.reject(new Error("gateway closed: original send interrupted"));
+        await vi.waitFor(() =>
+          expect(startup.get(input.recovery.sessionKey)?.error).toContain(
+            "original send interrupted",
+          ),
+        );
+        if (storageFails) {
+          expect(startup.get(input.recovery.sessionKey)?.error).toContain(
+            "Recovery could not be saved in this tab. Keep this page open.",
+          );
+        }
+        startup.retry(input.recovery.sessionKey);
+        expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+        vi.unstubAllGlobals();
+        history.resolve({ messages: [] });
+        await vi.waitFor(() =>
+          expect(startup.get(input.recovery.sessionKey)?.error).toContain(
+            "No matching user message",
+          ),
+        );
+        const status = startup.get(input.recovery.sessionKey);
+        expect(status?.error).toContain("original send interrupted");
+        expect(status?.initialTurn?.sendError).toBe(status?.error);
+        expect(status?.action).toBe("check-delivery");
+        startup.retry(input.recovery.sessionKey);
+        expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(2);
+        for (const method of ["sessions.dispatch", "sessions.send", "sessions.reclaim"]) {
+          expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+        }
+      } finally {
+        startup.dispose();
+        history.resolve({ messages: [] });
+      }
+    },
+  );
   it.each([true, false])(
     "keeps delivery uncertain when Stop follows an in-flight send (persistent: %s)",
     async (persistent) => {

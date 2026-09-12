@@ -5,6 +5,8 @@ import {
 } from "../../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
   clearSessionPlacementRecovery,
+  formatSessionPlacementRecoveryError,
+  retainSessionPlacementSendError,
   listSessionPlacementRecoveries,
   migrateSessionPlacementRecoveryScope,
   parseSessionPlacementCreateParams,
@@ -158,6 +160,8 @@ describe("session placement recovery", () => {
         ),
       ).toEqual(paused);
       expect(writeSessionPlacementRecovery({ ...paused, error: "x".repeat(4097) })).toBe(false);
+      expect(writeSessionPlacementRecovery({ ...paused, sendError: "x".repeat(4097) })).toBe(false);
+      expect(writeSessionPlacementRecovery({ ...paused, sendError: "" })).toBe(false);
       expect(
         readSessionPlacementRecovery(
           recovery.gatewayUrl,
@@ -171,14 +175,15 @@ describe("session placement recovery", () => {
   it.each([false, true])(
     "keeps input in memory on a failed pause write (already paused=%s)",
     (alreadyPaused) => {
+      const withSendError = retainSessionPlacementSendError(recovery, "transport failed");
       const retained = alreadyPaused
         ? {
-            ...recovery,
+            ...withSendError,
             phase: "paused" as const,
             reason: "not-sent" as const,
             error: "first failure",
           }
-        : recovery;
+        : withSendError;
       expect(writeSessionPlacementRecovery(retained)).toBe(true);
       const storage = sessionStorage;
       vi.stubGlobal("sessionStorage", {
@@ -196,6 +201,7 @@ describe("session placement recovery", () => {
           phase: "paused",
           reason: "not-sent",
           error: expect.stringContaining("Keep this page open"),
+          sendError: "transport failed",
         },
       });
       expect(
@@ -212,10 +218,25 @@ describe("session placement recovery", () => {
     "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
     (persistent) => {
       const error = `${"x".repeat(4095)}🤖`;
-      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+      const retained = retainSessionPlacementSendError(recovery, error);
+      const paused = pauseSessionPlacementRecovery(retained, error, persistent);
 
+      expect(paused.recovery.sendError).toBe("x".repeat(4095));
       expect(paused.recovery.error).toBe("x".repeat(4095));
       expect(paused.persisted).toBe(persistent);
+      const checked = pauseSessionPlacementRecovery(
+        paused.recovery,
+        `${"y".repeat(4095)}🤖`,
+        false,
+      ).recovery;
+      const displayed = formatSessionPlacementRecoveryError(checked);
+      expect(displayed).toHaveLength(4096);
+      expect(() => encodeURIComponent(displayed)).not.toThrow();
+      expect(displayed).toContain("x");
+      expect(displayed).toContain("y");
+      expect(retainSessionPlacementSendError(checked, "later send error").sendError).toBe(
+        retained.sendError,
+      );
       expect(
         readSessionPlacementRecovery(
           recovery.gatewayUrl,

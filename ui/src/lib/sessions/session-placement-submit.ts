@@ -9,6 +9,7 @@ import { formatUiError } from "../format-error.ts";
 import { isUiGlobalSessionKey } from "./session-key.ts";
 import {
   pauseSessionPlacementRecovery,
+  retainSessionPlacementSendError,
   readSessionPlacementRecovery,
   type SessionPlacementRecovery,
   type SessionPlacementPausedRecovery,
@@ -26,7 +27,7 @@ export type SessionPlacementDraftAdvanceResult =
   | { status: "accepted" }
   | { status: "paused"; recovery: SessionPlacementPausedRecovery }
   | { status: "cancelled"; cleanupError?: string; recoveryPersisted: boolean }
-  | { status: "interrupted" }
+  | { status: "interrupted"; error?: string }
   | { status: "ownership-lost" };
 
 type SessionPlacementRecoveryRetirement = "resolved" | "interrupted";
@@ -39,11 +40,12 @@ export async function advanceSessionPlacementDraft(params: {
   recovering: boolean;
   isLifecycleCurrent: () => boolean;
   ownsRecovery: () => boolean;
+  readSendError?: () => string | undefined;
   clearRecovery: (retirement: SessionPlacementRecoveryRetirement) => void;
   setRecoveryPhase: (phase: "sending", durable: boolean) => void;
 }): Promise<SessionPlacementDraftAdvanceResult> {
   const persistRecovery = params.persistRecovery !== false;
-  const recovery = params.recovery;
+  let recovery = params.recovery;
   let reason: SessionPlacementPausedRecovery["reason"] = "not-sent";
   const pause = (error: string, next = reason): SessionPlacementDraftAdvanceResult => ({
     status: "paused",
@@ -73,6 +75,12 @@ export async function advanceSessionPlacementDraft(params: {
       .catch((error: unknown) => ({ error: formatUiError(error) }));
     if (!isCurrentOwner()) {
       return { status: "interrupted" };
+    }
+    // The old send may reject while this check awaits history. Read its owner-held
+    // diagnostic after both fences, without replacing the captured submission.
+    const sendError = params.readSendError?.();
+    if (sendError) {
+      recovery = retainSessionPlacementSendError(recovery, sendError);
     }
     if ("error" in history) {
       return pause(history.error, "unconfirmed");
@@ -191,11 +199,16 @@ export async function advanceSessionPlacementDraft(params: {
       return persisted;
     },
   );
-  if (!params.cleanupOnCancellation() && !isCurrentOwner()) {
-    return { status: "interrupted" };
-  }
   if (placementStart.status === "interrupted") {
     return placementStart;
+  }
+  if (!params.cleanupOnCancellation() && !isCurrentOwner()) {
+    return placementStart.status === "send-rejected"
+      ? { status: "interrupted", error: placementStart.error }
+      : { status: "interrupted" };
+  }
+  if (placementStart.status === "send-rejected") {
+    recovery = retainSessionPlacementSendError(recovery, placementStart.error);
   }
   if (placementStart.status === "cancelled") {
     const cleanupError = await deleteSessionPlacementDraft(

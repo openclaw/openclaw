@@ -21,7 +21,7 @@ import type { SessionPlacementTarget } from "./session-placement-recovery.ts";
 type SessionPlacementStartOutcome =
   | { status: "started"; messageId: string }
   | { status: "cancelled" }
-  | { status: "interrupted" }
+  | { status: "interrupted"; error?: string }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
   | { status: "session-missing"; error: string }
@@ -486,7 +486,7 @@ export async function startSessionPlacementInitialTurn(
   } catch (error) {
     if (!isCurrent()) {
       if (!cleanupOnCancellation()) {
-        return { status: "interrupted" };
+        return { status: "interrupted", error: formatUiError(error) };
       }
       const cleanupError = await reclaimSessionPlacement(client, params);
       return cleanupError

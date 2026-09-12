@@ -21,6 +21,183 @@ describe("application placement delivery recovery", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    "connected",
+    "disconnect",
+    "late-rejection",
+    "during-check",
+    "storage-unavailable",
+  ] as const)(
+    "retains the original send diagnostic through repeated delivery checks (%s)",
+    async (timing) => {
+      const send = createDeferred<unknown>();
+      const history = createDeferred<unknown>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return Promise.resolve({ placement: createStartupPlacement("active", 2) });
+        }
+        if (method === "sessions.send") {
+          return send.promise;
+        }
+        if (method === "chat.history") {
+          return timing === "during-check" ? history.promise : Promise.resolve({ messages: [] });
+        }
+        throw new Error(`unexpected method ${method}`);
+      });
+      const { startup, input, gateway, client, dependencies } =
+        createPlacementStartupHarness(request);
+      const transition = (phase: "connected" | "reconnecting") => {
+        client.recoveryScopeReady = phase === "connected";
+        Object.assign(gateway, { snapshot: { ...gateway.snapshot, phase } });
+        for (const [listener] of vi.mocked(gateway.subscribe).mock.calls) {
+          listener(gateway.snapshot);
+        }
+      };
+      startup.start(input);
+      try {
+        await vi.waitFor(() =>
+          expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+        );
+        if (timing !== "connected") {
+          transition("reconnecting");
+        }
+        if (timing === "late-rejection") {
+          transition("connected");
+          await vi.waitFor(() =>
+            expect(startup.get(input.recovery.sessionKey)?.error).toContain(
+              "No matching user message",
+            ),
+          );
+        }
+        if (timing === "during-check") {
+          transition("connected");
+          await vi.waitFor(() =>
+            expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
+          );
+        }
+        if (timing === "storage-unavailable") {
+          const storage = sessionStorage;
+          vi.stubGlobal("sessionStorage", {
+            getItem: storage.getItem.bind(storage),
+            removeItem: storage.removeItem.bind(storage),
+            setItem: () => {
+              throw new DOMException("quota exceeded", "QuotaExceededError");
+            },
+          });
+        }
+        send.reject(new Error("gateway closed (1006): socket interrupted"));
+        await flushStartupMicrotasks();
+        history.resolve({ messages: [] });
+        if (timing === "storage-unavailable") {
+          expect(
+            readSessionPlacementRecovery(
+              input.recovery.gatewayUrl,
+              input.recovery.recoveryScope,
+              input.recovery.sessionKey,
+            ),
+          ).toBeNull();
+          vi.unstubAllGlobals();
+        }
+        if (timing === "disconnect" || timing === "storage-unavailable") {
+          transition("connected");
+        }
+        await vi.waitFor(() =>
+          expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"),
+        );
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          startup.retry(input.recovery.sessionKey);
+          await vi.waitFor(() =>
+            expect(startup.get(input.recovery.sessionKey)?.error).toContain(
+              "No matching user message",
+            ),
+          );
+          const status = startup.get(input.recovery.sessionKey);
+          expect(status?.error).toContain("socket interrupted");
+          expect(status?.error).toContain("No matching user message");
+          expect(status?.initialTurn?.sendError).toBe(status?.error);
+          expect(status?.action).toBe("check-delivery");
+        }
+        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+        expect(
+          request.mock.calls.filter(([method]) => method === "sessions.dispatch"),
+        ).toHaveLength(1);
+        expect(
+          readSessionPlacementRecovery(
+            input.recovery.gatewayUrl,
+            input.recovery.recoveryScope,
+            input.recovery.sessionKey,
+          ),
+        ).toMatchObject({
+          messageId: input.recovery.messageId,
+          message: input.recovery.message,
+          sendError: "gateway closed (1006): socket interrupted",
+          reason: "unconfirmed",
+        });
+        startup.dispose();
+        const reloaded = createApplicationPlacementStartup(dependencies);
+        try {
+          reloaded.resumeRecovery();
+          await vi.waitFor(() =>
+            expect(reloaded.get(input.recovery.sessionKey)?.error).toContain("socket interrupted"),
+          );
+        } finally {
+          reloaded.dispose();
+        }
+      } finally {
+        startup.dispose();
+      }
+    },
+  );
+
+  it.each(["message", "credential"] as const)(
+    "does not retain a late send diagnostic after %s ownership changes",
+    async (change) => {
+      const send = createDeferred<unknown>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return Promise.resolve({ placement: createStartupPlacement("active", 2) });
+        }
+        if (method === "sessions.send") {
+          return send.promise;
+        }
+        throw new Error(`unexpected method ${method}`);
+      });
+      const { startup, input, gateway } = createPlacementStartupHarness(request);
+      startup.start(input);
+      try {
+        await vi.waitFor(() =>
+          expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+        );
+        if (change === "message") {
+          writeSessionPlacementRecovery({ ...input.recovery, messageId: "replacement-message" });
+        } else {
+          Object.assign(gateway, { connectionRevision: 1 });
+        }
+        const before = readSessionPlacementRecovery(
+          input.recovery.gatewayUrl,
+          input.recovery.recoveryScope,
+          input.recovery.sessionKey,
+        );
+        send.reject(new Error("old owner's transport failure"));
+        await flushStartupMicrotasks();
+        expect(
+          readSessionPlacementRecovery(
+            input.recovery.gatewayUrl,
+            input.recovery.recoveryScope,
+            input.recovery.sessionKey,
+          ),
+        ).toEqual(before);
+        expect(startup.get(input.recovery.sessionKey)).toBeNull();
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "sessions.dispatch",
+          "sessions.send",
+        ]);
+      } finally {
+        startup.dispose();
+      }
+    },
+  );
+
   it.each(["rpc", "error", "timeout"] as const)(
     "delivery recovery rotates a cached %s rejection only on explicit Retry",
     async (failure) => {
