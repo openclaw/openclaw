@@ -2533,7 +2533,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ["chunks broad shell helper globs after isolated targets", "test/scripts/*.test.ts"],
   ])("%s", (_title, target) => {
     const plans = buildVitestRunPlans([target], process.cwd());
-    expect(plans.slice(0, 4)).toEqual([
+    expect(plans.slice(0, 5)).toEqual([
       expect.objectContaining({
         config: "test/vitest/vitest.unit-fast.config.ts",
         includePatterns: expect.arrayContaining(["test/scripts/arg-utils.test.ts"]),
@@ -2547,6 +2547,12 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ios-release-plan.test.ts",
           "test/scripts/mac-native-fixtures.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/pr-ci-sweeper.reopen-timer.test.ts"],
         watchMode: false,
       },
       {
@@ -2571,7 +2577,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
     const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
     const toolingPlans = plans
-      .slice(4)
+      .slice(5)
       .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
