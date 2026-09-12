@@ -10,7 +10,7 @@ export type ParsedAgentSessionKey = {
 
 /** Split the ownership head without changing opaque tail bytes or empty tail segments. */
 export function parseAgentSessionKeyParts(sessionKey: string): ParsedAgentSessionKey | null {
-  if (sessionKey.slice(0, 6).toLowerCase() !== "agent:") {
+  if (!sessionKey.startsWith("agent:") && sessionKey.slice(0, 6).toLowerCase() !== "agent:") {
     return null;
   }
   const agentIdEnd = sessionKey.indexOf(":", 6);
