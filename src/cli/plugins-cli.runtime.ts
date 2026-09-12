@@ -32,6 +32,7 @@ import type {
   PluginMarketplaceRefreshOptions,
   PluginRegistryOptions,
 } from "./plugins-cli.js";
+import { formatVersionLabel } from "./version-format.js";
 
 type PluginInstallActionOptions = {
   acceptCapabilities?: boolean;
@@ -1053,7 +1054,7 @@ export async function runPluginMarketplaceListCommand(
     `${theme.heading("Marketplace")} ${theme.muted(result.manifest.name ?? result.sourceLabel)}`,
   );
   for (const plugin of result.manifest.plugins) {
-    const suffix = plugin.version ? theme.muted(` v${plugin.version}`) : "";
+    const suffix = plugin.version ? theme.muted(` ${formatVersionLabel(plugin.version)}`) : "";
     const desc = plugin.description ? ` - ${theme.muted(plugin.description)}` : "";
     defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
   }

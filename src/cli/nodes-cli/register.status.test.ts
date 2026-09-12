@@ -41,6 +41,34 @@ describe.each(["status", "describe"])("nodes %s host stats", (command) => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
+    ["1.2.3", "v1.2.3"],
+    ["v1.2.3", "v1.2.3"],
+    ["V1.2.3", "V1.2.3"],
+    ["canary", "canary"],
+    ["  v1.2.3  ", "v1.2.3"],
+  ])("preserves core/UI version rendering and JSON for %s", async (version, display) => {
+    const node = {
+      nodeId: "node-1",
+      paired: true,
+      connected: true,
+      coreVersion: version,
+      uiVersion: version,
+    };
+    mocks.call.mockResolvedValue(command === "status" ? { nodes: [node] } : node);
+    const nodes = new Command("nodes");
+    registerNodesStatusCommands(nodes);
+    const args = command === "status" ? [command] : [command, "--node", "node-1"];
+    await nodes.parseAsync(args, { from: "user" });
+    expect(mocks.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+      `core ${display} · ui ${display}`,
+    );
+    await nodes.parseAsync([...args, "--json"], { from: "user" });
+    expect(mocks.writeJson).toHaveBeenCalledWith(
+      command === "status" ? { ts: now, nodes: [node] } : node,
+    );
+  });
+
+  it.each([
     { label: "connected", connected: true, stats: hostStats },
     { label: "last known", connected: false, stats: hostStats },
     {

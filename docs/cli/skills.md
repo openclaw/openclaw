@@ -79,6 +79,9 @@ openclaw skills workshop reject <proposal-id> --reason "Not reusable"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
+Search results preserve existing version prefixes. JSON output keeps the
+registry's original version values.
+
 `search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
 installs a native ClawHub skill. `install skills-sh:<owner>/<repo>/<slug>` asks
 ClawHub to resolve an external listing to its exact synchronized GitHub commit;

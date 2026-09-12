@@ -79,6 +79,7 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
+import { formatVersionLabel } from "./version-format.js";
 
 export type {
   SkillInfoOptions,
@@ -606,7 +607,9 @@ export function registerSkillsCli(program: Command) {
           const isExternalSource =
             installRef?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX) === true &&
             entry.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE;
-          const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
+          const version = entry.version
+            ? ` ${formatVersionLabel(formatClawHubSearchText(entry.version))}`
+            : "";
           const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
           const displayName = formatClawHubSearchText(entry.displayName);
           const trust = isExternalSource ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";

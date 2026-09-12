@@ -456,35 +456,38 @@ describe("skills cli commands", () => {
     );
   }
 
-  it("distinguishes duplicate ClawHub skill slugs by owner", async () => {
-    searchSkillsFromClawHubMock.mockResolvedValue([
-      {
-        slug: "calendar",
-        ownerHandle: "demo-owner",
-        installRef: "@demo-owner/calendar",
-        displayName: "Calendar",
-        summary: "CalDAV helpers",
-        version: "1.2.3",
-      },
-      {
-        slug: "calendar",
-        ownerHandle: "work-owner",
-        installRef: "@work-owner/calendar",
-        displayName: "Team Calendar",
-      },
-    ]);
+  it.each(["1.2.3", "v1.2.3"])(
+    "distinguishes owner-qualified skills with version %s",
+    async (version) => {
+      searchSkillsFromClawHubMock.mockResolvedValue([
+        {
+          slug: "calendar",
+          ownerHandle: "demo-owner",
+          installRef: "@demo-owner/calendar",
+          displayName: "Calendar",
+          summary: "CalDAV helpers",
+          version,
+        },
+        {
+          slug: "calendar",
+          ownerHandle: "work-owner",
+          installRef: "@work-owner/calendar",
+          displayName: "Team Calendar",
+        },
+      ]);
 
-    await runCommand(["skills", "search", "calendar"]);
+      await runCommand(["skills", "search", "calendar"]);
 
-    expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({
-      query: "calendar",
-      limit: undefined,
-    });
-    expect(runtimeLogs).toEqual([
-      "@demo-owner/calendar v1.2.3  Calendar  CalDAV helpers",
-      "@work-owner/calendar  Team Calendar",
-    ]);
-  });
+      expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({
+        query: "calendar",
+        limit: undefined,
+      });
+      expect(runtimeLogs).toEqual([
+        "@demo-owner/calendar v1.2.3  Calendar  CalDAV helpers",
+        "@work-owner/calendar  Team Calendar",
+      ]);
+    },
+  );
 
   it("keeps bare skill slugs when ClawHub omits the owner", async () => {
     searchSkillsFromClawHubMock.mockResolvedValue([
@@ -548,7 +551,7 @@ describe("skills cli commands", () => {
         ownerHandle: "demo-owner",
         displayName: "Calendar",
         summary: "CalDAV helpers",
-        version: "1.2.3",
+        version: "v1.2.3",
         updatedAt: 1_700_000_000_000,
       },
     ];

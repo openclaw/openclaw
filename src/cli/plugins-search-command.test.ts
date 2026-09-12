@@ -133,6 +133,38 @@ describe("plugins search command", () => {
     expect(mocks.logs.join("\n")).toContain(`Install: ${scenario.command}`);
   });
 
+  it.each([
+    ["1.2.3", "v1.2.3"],
+    ["v1.2.3", "v1.2.3"],
+    ["V1.2.3", "V1.2.3"],
+    ["canary", "canary"],
+    [undefined, undefined],
+  ])("renders catalog version %s without changing JSON", async (version, display) => {
+    const results = [
+      {
+        score: 1,
+        package: {
+          name: "version-fixture",
+          displayName: "Fixture",
+          family: "bundle-plugin",
+          channel: "community",
+          isOfficial: false,
+          createdAt: 1,
+          updatedAt: 1,
+          latestVersion: version,
+        },
+      },
+    ];
+    mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce(results);
+    await runPluginsSearchCommand("version", {}, mocks.runtime);
+    expect(mocks.logs.join("\n")).toContain(
+      `bundle-plugin | community${display ? ` | ${display}` : ""}\n`,
+    );
+    mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce(results);
+    await runPluginsSearchCommand("version", { json: true }, mocks.runtime);
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({ results }, 2);
+  });
+
   it("writes JSON results when requested", async () => {
     mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
