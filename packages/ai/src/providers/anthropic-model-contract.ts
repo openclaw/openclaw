@@ -1,5 +1,6 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
+  CLAUDE_FABLE_5_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
@@ -105,7 +106,7 @@ export function requiresClaudeAdaptiveThinking(model: {
   return requiresClaudeMandatoryAdaptiveThinking(model);
 }
 
-/** Return whether omitted thinking should default to adaptive/high. */
+/** Return whether omitted thinking should default to adaptive mode. */
 export function defaultsClaudeAdaptiveThinking(model: {
   id?: string;
   params?: Record<string, unknown>;
@@ -124,7 +125,11 @@ export function resolveAnthropicThinkingEffort(
   model: Model<"anthropic-messages">,
   level: SimpleStreamOptions["reasoning"],
 ): AnthropicEffort {
-  const requestedLevel = level as ModelThinkingLevel | undefined;
+  const requestedLevel: ModelThinkingLevel | undefined =
+    level ??
+    (resolveClaudeFable5ModelIdentity(model)
+      ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+      : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,

@@ -222,7 +222,7 @@ export function resolveModelDirectiveSelection(params: {
       }
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
-      if (model.endsWith("*") || !policy.allowsKey(key)) {
+      if (model.endsWith("*") || !policy.allows({ provider, model })) {
         continue;
       }
       if (providerFilter && provider !== providerFilter) {
@@ -244,8 +244,7 @@ export function resolveModelDirectiveSelection(params: {
         });
       }
       for (const match of aliasMatches) {
-        const key = modelKey(match.provider, match.model);
-        if (!policy.allowsKey(key)) {
+        if (!policy.allows(match)) {
           continue;
         }
         if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
@@ -331,7 +330,7 @@ export function resolveModelDirectiveSelection(params: {
       ...(resolved.alias ? { alias: resolved.alias } : {}),
     },
   };
-  const permitted = policy.allowsKey(resolvedKey);
+  const permitted = policy.allows(resolved.ref);
   // Preserve catalog hints for bare fragments, while explicit routes and aliases
   // depend only on policy, never on finite picker membership.
   if (

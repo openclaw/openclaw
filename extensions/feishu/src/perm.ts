@@ -113,19 +113,14 @@ async function removeMember(
 // ============ Tool Registration ============
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
-  if (!api.config) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
-  if (!toolsCfg.perm) {
-    return;
-  }
-
   type FeishuPermExecuteParams = FeishuPermParams & { accountId?: string };
 
   api.registerTool(
     (ctx) => {
+      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
+      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).perm) {
+        return null;
+      }
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_perm",
@@ -137,7 +132,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
           const p = params as FeishuPermExecuteParams;
           try {
             const client = createFeishuToolClient({
-              api,
+              cfg,
               executeParams: p,
               defaultAccountId,
               requiredTool: { family: "perm", label: "Perm" },

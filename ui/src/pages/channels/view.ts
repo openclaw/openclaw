@@ -62,7 +62,6 @@ export function renderChannels(props: ChannelsProps) {
       .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
-  const selectedPlugin = selected ? resolveChannelPlugin(props, selected) : undefined;
 
   return html`
     ${renderSettingsPage(html`
@@ -137,7 +136,6 @@ export function renderChannels(props: ChannelsProps) {
             channelId: selected,
             label: resolveChannelLabel(props, selected),
             pluginIconUrl: props.pluginIconUrls[selected],
-            preferPluginIcon: selectedPlugin?.hasIcon === true,
             props,
             data,
             onClose: () => props.onCloseDetail(),
@@ -151,8 +149,6 @@ export function renderChannels(props: ChannelsProps) {
             wizard: props.wizard,
             channelLabel: (channelId) => resolveChannelLabel(props, channelId),
             channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
-            channelHasPluginIcon: (channelId) =>
-              resolveChannelPlugin(props, channelId)?.hasIcon === true,
             multiselectValues: props.wizardMultiselect,
             onToggleMultiselect: props.onWizardToggleMultiselect,
             textValue: props.wizardTextValue,
@@ -277,7 +273,6 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
     >
       ${renderChannelIcon(key, label, "tile", {
         pluginIconUrl: props.pluginIconUrls[key],
-        preferPluginIcon: resolveChannelPlugin(props, key)?.hasIcon === true,
       })}
       <div class="settings-row__text">
         <span class="settings-row__title">${label}</span>
@@ -306,7 +301,6 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
       >
         ${renderChannelIcon(key, label, "tile", {
           pluginIconUrl: props.pluginIconUrls[key],
-          preferPluginIcon: plugin?.hasIcon === true,
         })}
         <span class="settings-row__text">
           <span class="settings-row__title">${label}</span>

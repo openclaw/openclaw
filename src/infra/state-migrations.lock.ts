@@ -71,6 +71,7 @@ export async function withLegacyMigrationStateLock(
     }
   }
   if (releaseError) {
+    delete result.warningDisposition;
     result.warnings.push(
       `${options.releaseLabel} migration lock release failed: ${formatErrorMessage(releaseError)}`,
     );

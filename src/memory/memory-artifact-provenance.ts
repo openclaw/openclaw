@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errors.js";
-import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
+import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 
 const MEMORY_ARTIFACT_PROVENANCE_OWNER_ID = "core:memory-artifact-provenance";
 const MEMORY_ARTIFACT_PROVENANCE_NAMESPACE = "workspace-files";
@@ -89,7 +89,7 @@ function resolveAddress(params: {
 }
 
 function openStore() {
-  return createCorePluginStateSyncKeyedStore<StoredMemoryArtifactProvenance>({
+  return createCorePluginStateKeyedStore<StoredMemoryArtifactProvenance>({
     ownerId: MEMORY_ARTIFACT_PROVENANCE_OWNER_ID,
     namespace: MEMORY_ARTIFACT_PROVENANCE_NAMESPACE,
     maxEntries: MEMORY_ARTIFACT_PROVENANCE_MAX_ENTRIES,
@@ -143,7 +143,7 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   const store = openStore();
   const reservationId = randomUUID();
   let previous: StoredMemoryArtifactProvenance | undefined;
-  store.update(address.storeKey, (current) => {
+  await store.update(address.storeKey, (current) => {
     previous = normalizeStoredProvenance(current, address);
     const originClass =
       params.originClass === "agent" &&
@@ -167,12 +167,15 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   return async () => {
     const rollbackStore = openStore();
     if (previous) {
-      rollbackStore.update(address.storeKey, (current) =>
+      await rollbackStore.update(address.storeKey, (current) =>
         current?.reservationId === reservationId ? previous : undefined,
       );
       return;
     }
-    rollbackStore.deleteIf(address.storeKey, (current) => current.reservationId === reservationId);
+    await rollbackStore.deleteIf(
+      address.storeKey,
+      (current) => current.reservationId === reservationId,
+    );
   };
 }
 
@@ -186,7 +189,7 @@ export async function clearMemoryArtifactProvenance(params: {
     return;
   }
   const expectedHash = sha256(params.contentBefore);
-  openStore().deleteIf(address.storeKey, (current) => current.fileHash === expectedHash);
+  await openStore().deleteIf(address.storeKey, (current) => current.fileHash === expectedHash);
 }
 
 export async function readMemoryArtifactProvenance(params: {
@@ -197,7 +200,7 @@ export async function readMemoryArtifactProvenance(params: {
   if (!address) {
     return undefined;
   }
-  const stored = normalizeStoredProvenance(openStore().lookup(address.storeKey), address);
+  const stored = normalizeStoredProvenance(await openStore().lookup(address.storeKey), address);
   return stored ? toPublicProvenance(stored) : undefined;
 }
 
@@ -206,8 +209,7 @@ export async function listMemoryArtifactProvenance(params: {
 }): Promise<Array<{ relativePath: string; provenance: MemoryArtifactProvenance }>> {
   const workspaceKey = sha256(normalizeWorkspaceKey(params.workspaceDir));
   const prefix = `${workspaceKey}:`;
-  return openStore()
-    .entries()
+  return (await openStore().entries())
     .filter((entry) => entry.key.startsWith(prefix))
     .flatMap((entry) => {
       const address = {

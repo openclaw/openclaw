@@ -36,10 +36,13 @@ plugin and uses the Anthropic Messages API.
     ```
   </Step>
   <Step title="Verify the default model">
-    Onboarding sets the default model to:
-    ```text
-    synthetic/hf:MiniMaxAI/MiniMax-M3
+    Onboarding sets the default model to `synthetic/hf:MiniMaxAI/MiniMax-M3`.
+    Confirm it is registered:
+
+    ```bash
+    openclaw models list --provider synthetic
     ```
+
   </Step>
 </Steps>
 

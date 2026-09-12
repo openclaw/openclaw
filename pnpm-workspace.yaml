@@ -10,28 +10,11 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
-  # Reviewed Proxyline Bun runtime fix; remove after 2026-09-13 20:51 UTC.
-  - "@openclaw/proxyline@0.3.11"
+  # Reviewed proxy DNS/TLS controls; remove after 2026-09-15 10:08 UTC.
+  - "@openclaw/proxyline@0.3.12"
   # GHSA-vp8m-p9jh-q5pm / GHSA-w293-vg96-wgc3 security fixes; remove after 2026-09-12.
   - "undici@8.10.2"
   - "undici@7.29.1"
-  # Authorized Vitest 5.0.0 migration; remove after 2026-09-10 12:24:37.187 UTC.
-  - "vitest@5.0.0"
-  - "@vitest/coverage-v8@5.0.0"
-  - "@vitest/browser@5.0.0"
-  - "@vitest/browser-playwright@5.0.0"
-  - "@vitest/mocker@5.0.0"
-  - "@vitest/pretty-format@5.0.0"
-  - "@vitest/spy@5.0.0"
-  - "@vitest/ui@5.0.0"
-  - "@vitest/utils@5.0.0"
-  # GHSA-58mr-gqgx-xq4g / GHSA-qw65-cvwx-89v3 security fix; remove after 2026-09-09.
-  - "fast-uri@4.1.4"
-  # GHSA-2x7j-588g-ccc2 security fix; remove after 2026-09-08.
-  - "nodemailer@9.1.1"
-  # Reviewed Crabline bundle fix and its required Zod version; remove after 2026-09-10.
-  - "@openclaw/crabline@0.1.20"
-  - "zod@4.5.2"
   - "@openai/codex"
   - "@openai/codex-*"
   # fs-safe 0.8.5 reviewed hardlink policy fix; remove after 2026-09-14 09:53 UTC.
@@ -58,44 +41,41 @@ overrides:
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"
   "@agentclientprotocol/codex-acp@1.6.2>@openai/codex": 0.153.4
-  "@codemirror/commands@6.11.0>@codemirror/view": 6.43.9
-  "@anthropic-ai/sdk": 0.120.0
-  "@opentelemetry/core": 2.10.0
-  "@opentelemetry/propagator-jaeger": 2.10.0
+  "@codemirror/commands@6.11.0>@codemirror/view": 6.43.11
+  "@anthropic-ai/sdk": 0.123.0
+  "@opentelemetry/core": 2.11.0
+  "@opentelemetry/propagator-jaeger": 2.11.0
   "@aws-sdk/core": 3.977.9
-  "@aws-sdk/credential-provider-node": 3.972.81
+  "@aws-sdk/credential-provider-node": 3.972.82
   "@aws-sdk/xml-builder": 3.972.40
   "@hono/node-server": 2.1.1
-  axios: 1.19.0
+  axios: 1.20.0
   fast-uri: 4.1.4
   follow-redirects: 1.16.0
   defu: 6.1.7
-  fast-xml-parser: 5.11.0
+  fast-xml-parser: 5.11.1
   request: "npm:@cypress/request@4.0.1"
   request-promise: "npm:@cypress/request-promise@5.0.0"
-  basic-ftp: 6.2.0
+  basic-ftp: 6.2.1
   brace-expansion: 5.0.9
   file-type: 22.0.2
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
-  ip-address: 10.5.0
-  # Keep the cooled HTML converter security fix while Mailparser is rolled back.
-  "mailparser@3.9.15>html-to-text": 10.0.1
-  "mailauth@5.0.2>nodemailer": 9.1.1
+  ip-address: 10.7.0
+  "mailauth@5.0.3>nodemailer": 9.1.1
   # Mailauth pins vulnerable Undici; remove when its direct dependency is fixed.
-  "mailauth@5.0.2>undici": 8.10.2
-  "mailparser@3.9.15>nodemailer": 9.1.1
+  "mailauth@5.0.3>undici": 8.10.2
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
-  qs: 6.15.3
+  qs: 6.16.0
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.18
+  typebox: 1.3.26
   tar: 7.5.22
   tough-cookie: 6.0.2
   "tsdown>rolldown-plugin-dts": 0.28.2
   "zca-js@2.1.2>tough-cookie": 5.1.2
   yauzl: 3.4.0
-  protobufjs: 8.7.2
+  protobufjs: 8.8.0
   uuid: 14.0.2
 
 allowBuilds:

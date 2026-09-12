@@ -225,6 +225,14 @@ export async function recoverEmbeddedRunAttempt(input: {
         providerPlugin: runtime.providerRuntimeHandle?.plugin,
       })
     : null;
+  const assistantOverflowClassification =
+    assistantOverflowCandidate === attemptAssistant
+      ? assistantFailure
+      : assistantOverflowCandidate?.stopReason === "error"
+        ? classifyFailoverSignal(buildAssistantFailoverSignal(assistantOverflowCandidate), {
+            providerPlugin: runtime.providerRuntimeHandle?.plugin,
+          })
+        : null;
   const failureReason = promptError
     ? resolveFailoverReasonFromError(promptError, preparedRuntime.provider)
     : assistantFailure?.kind === "reason"
@@ -263,12 +271,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     contextEngineAgentId: runInput.contextEngineAgentId,
     agentDir: runInput.agentDir,
     workspaceDir: runInput.workspaceDir,
-    provider: compactionSelection.provider,
-    modelId: compactionSelection.model,
+    modelSelection: compactionSelection,
     harnessRuntime: runtime.agentHarness.id,
     thinkLevel: runtime.thinkLevel,
-    authProfileId: compactionSelection.authProfileId,
-    authProfileIdSource: compactionSelection.authProfileIdSource,
     resolveContextEnginePluginId: input.resolveContextEnginePluginId,
     buildRuntimeSettings: input.buildRuntimeSettings,
     ...compactionRuntime,
@@ -355,8 +360,13 @@ export async function recoverEmbeddedRunAttempt(input: {
     aborted,
     signalOwnedInterruption,
     promptError,
-    assistantErrorText,
-    assistantOverflowCandidate,
+    assistantErrorText:
+      currentAttemptCompletedAssistant !== undefined
+        ? assistantOverflowCandidate?.errorMessage
+        : assistantErrorText,
+    assistantOverflowCandidate: assistantOverflowCandidate
+      ? { message: assistantOverflowCandidate, classification: assistantOverflowClassification }
+      : undefined,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,

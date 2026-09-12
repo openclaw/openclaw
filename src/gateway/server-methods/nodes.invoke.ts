@@ -124,10 +124,14 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       return;
     }
     const invokeDeadlineAtMs =
-      typeof p.timeoutMs === "number" && p.timeoutMs > 0 ? Date.now() + p.timeoutMs : undefined;
+      typeof p.timeoutMs === "number" && p.timeoutMs > 0
+        ? performance.now() + p.timeoutMs
+        : undefined;
     let nodeCommandDispatched = false;
     const resolveRemainingInvokeTimeoutMs = () =>
-      invokeDeadlineAtMs === undefined ? p.timeoutMs : Math.max(0, invokeDeadlineAtMs - Date.now());
+      invokeDeadlineAtMs === undefined
+        ? p.timeoutMs
+        : Math.max(0, invokeDeadlineAtMs - performance.now());
     const respondIfInvokeExpired = () => {
       if (invokeDeadlineAtMs === undefined || resolveRemainingInvokeTimeoutMs() !== 0) {
         return false;
@@ -146,6 +150,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       const generation = await awaitWithinDeadline(
         () => captureNodePairingGeneration(nodeId),
         invokeDeadlineAtMs,
+        () => performance.now(),
       );
       if (generation === ABSOLUTE_DEADLINE_EXPIRED) {
         respondIfInvokeExpired();
@@ -165,6 +170,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           const pairingCurrent = await awaitWithinDeadline(
             () => isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
             invokeDeadlineAtMs,
+            () => performance.now(),
           );
           if (pairingCurrent === ABSOLUTE_DEADLINE_EXPIRED) {
             respondIfInvokeExpired();
@@ -202,6 +208,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 generation,
               }),
             invokeDeadlineAtMs,
+            () => performance.now(),
           );
           if (wake === ABSOLUTE_DEADLINE_EXPIRED) {
             respondIfInvokeExpired();
@@ -252,6 +259,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                   generation,
                 }),
               invokeDeadlineAtMs,
+              () => performance.now(),
             );
             if (retryWake === ABSOLUTE_DEADLINE_EXPIRED) {
               respondIfInvokeExpired();
@@ -306,6 +314,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                   generation,
                 }),
               invokeDeadlineAtMs,
+              () => performance.now(),
             );
             if (nudge === ABSOLUTE_DEADLINE_EXPIRED) {
               respondIfInvokeExpired();
@@ -430,6 +439,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 threadId: p.turnSourceThreadId,
               },
               timeoutMs: p.timeoutMs,
+              deadlineAtMs: invokeDeadlineAtMs,
               signal: invocationLifecycle,
               resolveRemainingTimeoutMs: resolveRemainingInvokeTimeoutMs,
               onNodeCommandDispatched: () => {
@@ -444,6 +454,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               ...(nodeInvokeStream ? { nodeInvokeStream } : {}),
             }),
           invokeDeadlineAtMs,
+          () => performance.now(),
         );
         if (policyResult === ABSOLUTE_DEADLINE_EXPIRED) {
           respondIfInvokeExpired();
@@ -564,6 +575,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           command,
           params: forwardedParams.params,
           timeoutMs: dispatchTimeoutMs,
+          deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
           ...(sessionKey ? { sessionKey } : {}),
@@ -610,12 +622,20 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               ttlMs: nodeInvokePolicy.pendingActionTtlMs,
               maxPerNode: nodeInvokePolicy.pendingActionMaxPerNode,
             });
-            const wake = await maybeWakeNodeWithApns(nodeId, {
-              cfg,
-              lifecycle: wakeLifecycle,
-              generation,
-            });
-            if (!(await continuePairingWork())) {
+            const wake = await awaitWithinDeadline(
+              () =>
+                maybeWakeNodeWithApns(nodeId, {
+                  cfg,
+                  lifecycle: wakeLifecycle,
+                  generation,
+                }),
+              invokeDeadlineAtMs,
+              () => performance.now(),
+            );
+            if (wake === ABSOLUTE_DEADLINE_EXPIRED || !(await continuePairingWork())) {
+              if (wake === ABSOLUTE_DEADLINE_EXPIRED) {
+                respondIfInvokeExpired();
+              }
               if (queued.created) {
                 removePendingNodeAction({
                   nodeId,

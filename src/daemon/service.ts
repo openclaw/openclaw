@@ -20,6 +20,7 @@ import {
 } from "./launchd.js";
 import {
   installScheduledTask,
+  isScheduledTaskEnabled,
   isScheduledTaskInstalled,
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
@@ -30,7 +31,12 @@ import {
   uninstallScheduledTask,
 } from "./schtasks.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
+import {
+  ServiceInspectionError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 import { resolveServiceEntrypoint } from "./service-layout.js";
+import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
@@ -95,7 +101,7 @@ export type GatewayService = {
   hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   isAbsent?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readDefinitionMutationCapability?: (
-    args: GatewayServiceEnvArgs & { environment?: GatewayServiceEnv },
+    args: GatewayServiceEnvArgs & { environment?: GatewayServiceEnv; requireLoaded?: boolean },
   ) => ReturnType<typeof readSystemdDefinitionMutationCapability>;
   readCommand: (
     env: GatewayServiceEnv,
@@ -109,6 +115,8 @@ export type GatewayService = {
 
 type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
   requireEffective?: boolean;
+  requireLoadedCommand?: boolean;
+  loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
   validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
 };
 
@@ -196,7 +204,11 @@ export async function readGatewayServiceLoadState(
   try {
     return { status: (await service.isLoaded(args)) ? "loaded" : "not-loaded" };
   } catch (error) {
-    return { status: "unknown", detail: String(error) };
+    return {
+      status: "unknown",
+      detail: String(error),
+      ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
+    };
   }
 }
 
@@ -218,9 +230,22 @@ export async function readGatewayServiceState(
       runtime: { status: "stopped", missingUnit: true },
     };
   }
+  let commandInspectionReason: ServiceInspectionReason | undefined;
   const command = args.requireEffective
-    ? await service.readCommand(baseEnv, { timeoutMs, requireEffective: true })
-    : await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
+    ? await service.readCommand(baseEnv, {
+        timeoutMs,
+        requireEffective: true,
+        ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
+        ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
+      })
+    : await service
+        .readCommand(baseEnv, {
+          timeoutMs,
+          onInspectionFailure: (reason) => {
+            commandInspectionReason = reason;
+          },
+        })
+        .catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
   // Reject persisted selector drift before invoking the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
@@ -230,16 +255,29 @@ export async function readGatewayServiceState(
       : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
     readGatewayServiceLoadState(service, { env, timeoutMs }),
     service
-      .readRuntime(env, { timeoutMs })
+      .readRuntime(env, {
+        timeoutMs,
+        ...(args.requireEffective && args.requireLoadedCommand ? { requireLoaded: true } : {}),
+        ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
+      })
       .catch((error: unknown) => createServiceRuntimeInspectionFailure(error)),
     // Update policy needs definition authority; ordinary status/start reads do not.
     args.requireEffective
       ? service
-          .readDefinitionMutationCapability?.({ env: baseEnv, environment: env, timeoutMs })
+          .readDefinitionMutationCapability?.({
+            env: baseEnv,
+            environment: env,
+            timeoutMs,
+            ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
+          })
           .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const)
       : undefined,
   ]);
   return {
+    inspectionReason:
+      commandInspectionReason ??
+      runtime?.inspectionReason ??
+      (loadState.status === "unknown" ? loadState.inspectionReason : undefined),
     installed,
     loadState,
     running: runtime?.status === "running",
@@ -404,11 +442,16 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
+    isEnabled: isSystemdServiceEnabled,
     isAbsent: ({ env }) => isSystemdServiceAbsent(env ?? process.env),
     hasInstalledDefinition: async ({ env }) =>
       (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
-    readDefinitionMutationCapability: ({ env, environment, timeoutMs }) =>
-      readSystemdDefinitionMutationCapability(env ?? process.env, { environment, timeoutMs }),
+    readDefinitionMutationCapability: ({ env, environment, timeoutMs, requireLoaded }) =>
+      readSystemdDefinitionMutationCapability(env ?? process.env, {
+        environment,
+        timeoutMs,
+        ...(requireLoaded ? { requireLoaded: true } : {}),
+      }),
     readCommand: readSystemdServiceExecStart,
     readRuntime: readSystemdServiceRuntime,
   },
@@ -423,15 +466,16 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopScheduledTask,
     restart: restartScheduledTask,
     isLoaded: isScheduledTaskInstalled,
+    isEnabled: isScheduledTaskEnabled,
     readCommand: readScheduledTaskCommand,
     readRuntime: readScheduledTaskRuntime,
   },
 };
 
-function guardGatewayServiceMutation<TArgs extends { env?: GatewayServiceEnv }, TResult>(
-  action: string,
-  mutate: (args: TArgs) => Promise<TResult>,
-): (args: TArgs) => Promise<TResult> {
+function guardGatewayServiceMutation<
+  TArgs extends { env?: GatewayServiceEnv; assertCurrent?: () => void },
+  TResult,
+>(action: string, mutate: (args: TArgs) => Promise<TResult>): (args: TArgs) => Promise<TResult> {
   return async (args) => {
     // Mutations must satisfy both lifecycle ownership and durable-config
     // version guards before invoking any platform service manager.
@@ -439,8 +483,18 @@ function guardGatewayServiceMutation<TArgs extends { env?: GatewayServiceEnv }, 
     if (args.env && args.env !== process.env) {
       assertGatewayServiceMutationAllowed(action, args.env);
     }
-    await assertFutureConfigActionAllowed(action);
-    return await mutate(args);
+    const assertCaller = args.assertCurrent;
+    return await withGatewayServiceOperationLock(args.env ?? process.env, async (assertNative) => {
+      const assertCurrent = () => {
+        assertNative();
+        assertCaller?.();
+      };
+      await assertFutureConfigActionAllowed(action);
+      assertCurrent();
+      const result = await mutate({ ...args, assertCurrent });
+      assertCurrent();
+      return result;
+    });
   };
 }
 

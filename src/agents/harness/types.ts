@@ -1,3 +1,5 @@
+// Harness contracts depend on the model-ref data shape, not its runtime normalization.
+import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
@@ -9,7 +11,6 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
-import type { ModelRef } from "../model-ref-shared.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
@@ -540,7 +541,7 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
+  configuredModelRefs?: readonly ModelRef[];
 };
 
 type AgentHarnessModelCatalogCapability = {
@@ -552,10 +553,28 @@ type AgentHarnessModelCatalogCapability = {
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
    * picker metadata only, never execution authorization or a host-route credential.
+   * When known, authMode describes this same account observation.
    */
   readModelCatalogReadiness?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-  ): { accountType: string } | undefined;
+  ): { accountType: string; authMode?: string } | undefined;
+};
+
+type AgentHarnessTaskHistoryCapability = {
+  /** Reads native task history without creating an OpenClaw child session. */
+  taskHistory?: {
+    taskKinds: readonly string[];
+    read(params: {
+      task: Readonly<import("../../tasks/task-registry.types.js").TaskRecord>;
+      cfg: OpenClawConfig;
+      cursor?: string;
+      limit: number;
+      /** Revalidate the task, requester access, and registered owner after awaited work. */
+      assertCurrent: () => void;
+    }): Promise<
+      import("../../../packages/gateway-protocol/src/schema/tasks.js").TasksHistoryResult
+    >;
+  };
 };
 
 /**
@@ -572,6 +591,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
+  AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
@@ -585,6 +605,7 @@ export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParams
   AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
+  AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

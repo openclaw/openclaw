@@ -1,13 +1,16 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  type ModelRef,
 } from "../agents/model-selection.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
@@ -21,13 +24,21 @@ export {
 
 type SummarizeTextDeps = {
   completeWithPreparedSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
-  prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
+  prepareSimpleCompletionModel: (
+    params: import("../agents/simple-completion-runtime.js").PrepareSimpleCompletionModelParams,
+  ) => ReturnType<
+    typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel
+  >;
   requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
 
-let defaultSummarizeTextDepsPromise: Promise<SummarizeTextDeps> | undefined;
+type DefaultSummarizeTextDeps = Omit<SummarizeTextDeps, "prepareSimpleCompletionModel"> & {
+  acquireSimpleCompletionModelWithSelection: typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelWithSelection;
+};
 
-function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
+let defaultSummarizeTextDepsPromise: Promise<DefaultSummarizeTextDeps> | undefined;
+
+function loadDefaultSummarizeTextDeps(): Promise<DefaultSummarizeTextDeps> {
   // Speech provider imports should not initialize the LLM stack. Load it only
   // when synthesis actually needs summarization, then reuse the module bindings.
   return (defaultSummarizeTextDepsPromise ??= Promise.all([
@@ -36,7 +47,8 @@ function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
   ]).then(([completionRuntime, { requireApiKey }]) => ({
     completeWithPreparedSimpleCompletionModel:
       completionRuntime.completeWithPreparedSimpleCompletionModel,
-    prepareSimpleCompletionModel: completionRuntime.prepareSimpleCompletionModel,
+    acquireSimpleCompletionModelWithSelection:
+      completionRuntime.acquireSimpleCompletionModelWithSelection,
     requireApiKey,
   })));
 }
@@ -48,31 +60,33 @@ type SummarizeResult = {
   outputLength: number;
 };
 
-type SummaryModelSelection = {
-  ref: ModelRef;
-  source: "summaryModel" | "default";
-};
-
-function resolveSummaryModelRef(
+function resolveSummaryModelSelection(
   cfg: OpenClawConfig,
   config: ResolvedTtsConfig,
-): SummaryModelSelection {
-  const defaultRef = resolveDefaultModelForAgent({ cfg });
+  manifestPlugins?: PluginMetadataSnapshot,
+) {
+  const defaultRef = resolveDefaultModelForAgent({ cfg, manifestPlugins });
   const override = normalizeOptionalString(config.summaryModel);
-  if (!override) {
-    return { ref: defaultRef, source: "default" };
-  }
-
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: defaultRef.provider });
-  const resolved = resolveModelRefFromString({
-    raw: override,
-    defaultProvider: defaultRef.provider,
-    aliasIndex,
-  });
-  if (!resolved) {
-    return { ref: defaultRef, source: "default" };
-  }
-  return { ref: resolved.ref, source: "summaryModel" };
+  const resolved = override
+    ? resolveModelRefFromString({
+        cfg,
+        raw: override,
+        defaultProvider: defaultRef.provider,
+        aliasIndex: buildModelAliasIndex({
+          cfg,
+          defaultProvider: defaultRef.provider,
+          manifestPlugins,
+        }),
+        manifestPlugins,
+      })
+    : null;
+  const raw = resolved ? override : resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
+  const model = raw ? splitTrailingAuthProfile(raw).model : undefined;
+  const ref = resolved?.ref ?? defaultRef;
+  return {
+    selection: { provider: ref.provider, modelId: ref.model },
+    ...(model && !model.includes("/") ? { shorthandModelId: model } : {}),
+  };
 }
 
 /** Summarize long text before synthesis using the configured summary model. */
@@ -92,80 +106,107 @@ export async function summarizeText(
   }
 
   const startTime = Date.now();
-  const resolvedDeps = deps ?? (await loadDefaultSummarizeTextDeps());
-  const { ref } = resolveSummaryModelRef(cfg, config);
-  // Dynamic model discovery precedes the request timeout, matching the established
-  // summarization contract. The timeout below bounds only the completion request.
-  const prepared = await resolvedDeps.prepareSimpleCompletionModel({
-    cfg,
-    provider: ref.provider,
-    modelId: ref.model,
-  });
-  if ("error" in prepared) {
-    throw new Error(prepared.error);
-  }
-  const completionModel = prepared.model;
-  const providerKey = resolvedDeps.requireApiKey(prepared.auth, ref.provider);
-
-  try {
-    const controller = new AbortController();
-    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-    const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
+  const completeSummary = async (
+    prepared: Awaited<ReturnType<SummarizeTextDeps["prepareSimpleCompletionModel"]>>,
+    provider: string | undefined,
+    completionDeps: Pick<
+      SummarizeTextDeps,
+      "completeWithPreparedSimpleCompletionModel" | "requireApiKey"
+    >,
+  ): Promise<SummarizeResult> => {
+    if ("error" in prepared) {
+      throw new Error(prepared.error);
+    }
+    const completionModel = prepared.model;
+    const providerKey = completionDeps.requireApiKey(
+      prepared.auth,
+      provider ?? completionModel.provider,
+    );
 
     try {
-      // Keep summarization on the simple-completion path so provider auth,
-      // aliases, and timeout behavior match other lightweight model calls.
-      const res = await resolvedDeps.completeWithPreparedSimpleCompletionModel({
-        model: completionModel,
-        auth: { ...prepared.auth, apiKey: providerKey },
-        context: {
-          messages: [
-            {
-              role: "user",
-              content:
-                `You are an assistant that summarizes texts concisely while keeping the most important information. ` +
-                `Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. ` +
-                `Reply only with the summary, without additional explanations.\n\n` +
-                `<text_to_summarize>\n${text}\n</text_to_summarize>`,
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        cfg,
-        options: {
-          maxTokens: Math.ceil(targetLength / 2),
-          temperature: 0.3,
-          // Summary text is spoken; never recover incomplete reasoning as visible prose.
-          strictReasoningTags: true,
-          signal: controller.signal,
-        },
-      });
-      const summary = sanitizeAssistantVisibleText(
-        res.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text.trim())
-          .filter(Boolean)
-          .join(" "),
-      );
+      const controller = new AbortController();
+      const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+      const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
-      if (!summary) {
-        throw new Error("No summary returned");
+      try {
+        // Keep summarization on the simple-completion path so provider auth,
+        // aliases, and timeout behavior match other lightweight model calls.
+        const res = await completionDeps.completeWithPreparedSimpleCompletionModel({
+          model: completionModel,
+          auth: { ...prepared.auth, apiKey: providerKey },
+          context: {
+            messages: [
+              {
+                role: "user",
+                content:
+                  `You are an assistant that summarizes texts concisely while keeping the most important information. ` +
+                  `Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. ` +
+                  `Reply only with the summary, without additional explanations.\n\n` +
+                  `<text_to_summarize>\n${text}\n</text_to_summarize>`,
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          cfg,
+          options: {
+            maxTokens: Math.ceil(targetLength / 2),
+            temperature: 0.3,
+            // Summary text is spoken; never recover incomplete reasoning as visible prose.
+            strictReasoningTags: true,
+            signal: controller.signal,
+          },
+        });
+        const summary = sanitizeAssistantVisibleText(
+          res.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text.trim())
+            .filter(Boolean)
+            .join(" "),
+        );
+
+        if (!summary) {
+          throw new Error("No summary returned");
+        }
+
+        return {
+          summary,
+          latencyMs: Date.now() - startTime,
+          inputLength: text.length,
+          outputLength: summary.length,
+        };
+      } finally {
+        clearTimeout(timeout);
       }
+    } catch (err) {
+      const error = err as Error;
+      if (error.name === "AbortError") {
+        throw new Error("Summarization timed out", { cause: err });
+      }
+      throw err;
+    }
+  };
 
-      return {
-        summary,
-        latencyMs: Date.now() - startTime,
-        inputLength: text.length,
-        outputLength: summary.length,
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
-  } catch (err) {
-    const error = err as Error;
-    if (error.name === "AbortError") {
-      throw new Error("Summarization timed out", { cause: err });
-    }
-    throw err;
+  // The shipped dependency-injection argument keeps its caller-owned prepared model contract.
+  if (deps) {
+    const { selection } = resolveSummaryModelSelection(cfg, config);
+    const prepared = await deps.prepareSimpleCompletionModel({
+      cfg,
+      provider: selection.provider,
+      modelId: selection.modelId,
+    });
+    return await completeSummary(prepared, selection.provider, deps);
   }
+
+  const resolvedDeps = await loadDefaultSummarizeTextDeps();
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    // Preparation precedes the request timer; the completion and its cleanup own the model.
+    const prepared = await resolvedDeps.acquireSimpleCompletionModelWithSelection(
+      { cfg },
+      (manifestPlugins) => resolveSummaryModelSelection(cfg, config, manifestPlugins),
+    );
+    if (!("error" in prepared)) {
+      onAcquired({ release: async () => await prepared[Symbol.asyncDispose]() });
+    }
+    return await completeSummary(prepared, prepared.selection?.provider, resolvedDeps);
+  });
 }

@@ -124,20 +124,13 @@ function mapVoiceCallConsultTranscript(
 function createRuntimeResourceLifecycle(params: {
   config: VoiceCallConfig;
   webhookServer: VoiceCallWebhookServer;
+  manager: CallManager;
 }): {
   setTunnelResult: (result: TunnelResult | null) => void;
   stop: (opts?: { suppressErrors?: boolean }) => Promise<void>;
 } {
   let tunnelResult: TunnelResult | null = null;
   let stopPromise: Promise<void> | null = null;
-
-  const runStep = async (step: () => Promise<void>, suppressErrors: boolean) => {
-    if (suppressErrors) {
-      await step().catch(() => {});
-      return;
-    }
-    await step();
-  };
 
   return {
     setTunnelResult: (result) => {
@@ -149,17 +142,24 @@ function createRuntimeResourceLifecycle(params: {
       }
       const suppressErrors = opts?.suppressErrors ?? false;
       stopPromise = (async () => {
-        await runStep(async () => {
-          if (tunnelResult) {
-            await tunnelResult.stop();
+        let failure: { error: unknown } | undefined;
+        for (const step of [
+          async () => {
+            await tunnelResult?.stop();
+          },
+          () => cleanupTailscaleExposure(params.config),
+          () => params.webhookServer.stop(),
+          () => params.manager.stop(),
+        ]) {
+          try {
+            await step();
+          } catch (error) {
+            failure ??= { error };
           }
-        }, suppressErrors);
-        await runStep(async () => {
-          await cleanupTailscaleExposure(params.config);
-        }, suppressErrors);
-        await runStep(async () => {
-          await params.webhookServer.stop();
-        }, suppressErrors);
+        }
+        if (failure && !suppressErrors) {
+          throw failure.error;
+        }
       })();
       return stopPromise;
     },
@@ -462,7 +462,7 @@ export async function createVoiceCallRuntime(params: {
     }
     webhookServer.setRealtimeHandler(realtimeHandler);
   }
-  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer });
+  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer, manager });
 
   const localUrl = await webhookServer.start();
 

@@ -177,8 +177,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
-    "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
-  "gateway.auth.password": "Required for Tailscale funnel.",
+    "Shared secret selected by gateway.auth.mode=token, the default for new local onboarding. Clients may send it in either auth.token or auth.password. Non-loopback binds require an enabled authentication mode.",
+  "gateway.auth.password":
+    "Shared secret selected by gateway.auth.mode=password. Clients may send it in either auth.token or auth.password. Password mode is required for Tailscale Funnel.",
   "agents.defaults.sandbox.browser.network":
     'Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Use the dedicated default or a custom bridge network; "none" is unsupported because browser control requires published CDP ports.',
   "agents.entries.*.sandbox.browser.network":
@@ -412,7 +413,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
-    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+    "Controls rolling-history tool-loop detection and the post-compaction guard. Omit to keep rolling detection off and post-compaction protection on. Set true to enable both, or false to disable both.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":

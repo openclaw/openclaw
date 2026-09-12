@@ -330,6 +330,9 @@ export async function persistCliRunBlock(
         // Skip only this stale blocked-message write; the outer runner still returns blocked.
         return;
       }
+      const { restoreSessionColdTranscript } =
+        await import("../../config/sessions/session-cold-storage.js");
+      await restoreSessionColdTranscript(sessionTarget);
       sessionManager = SessionManager.open(sessionTarget);
     }
     sessionManager.appendMessage(
@@ -372,6 +375,12 @@ export async function finalizeCliContextEngineTurn(params: {
           runParams.abortSignal?.aborted === true,
         yieldAborted: false,
         isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+        runtimeContext: {
+          provider: runParams.modelProvider ?? runParams.provider,
+          modelId: context.modelId,
+          modelContextWindow: runParams.modelContextWindow,
+          tokenBudget: context.contextWindowInfo?.tokens,
+        },
       });
     }
   } else {

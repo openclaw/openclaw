@@ -8,6 +8,7 @@ import {
   type GatewayBrowserClient,
 } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isAwaitingGatewayFailure } from "../../lib/gateway-availability.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
   isTerminalFailureChatSendAck,
@@ -32,6 +33,7 @@ type PlacementReadResult =
   | { status: "read"; placement?: SessionPlacement; sessionId?: string }
   | { status: "missing" }
   | { status: "rejected"; error: string }
+  | { status: "awaiting-gateway" }
   | { status: "unavailable" };
 type PlacementResolution =
   | { status: "active"; placement: SessionPlacement }
@@ -64,6 +66,7 @@ export function sessionPlacementDispatchParams(params: {
     ...(params.target.kind === "profile"
       ? {
           profileId: params.target.profileId,
+          ...(params.target.os ? { os: params.target.os } : {}),
           ...(params.target.machineClass ? { machineClass: params.target.machineClass } : {}),
         }
       : params.target.kind === "device"
@@ -97,6 +100,9 @@ async function readPlacement(
       ...(typeof sessionId === "string" && sessionId.trim() ? { sessionId } : {}),
     };
   } catch (error) {
+    if (isAwaitingGatewayFailure(error, null)) {
+      return { status: "awaiting-gateway" };
+    }
     if (!isAmbiguousDispatchError(error)) {
       return {
         status: "rejected",
@@ -142,8 +148,9 @@ async function resolveActivePlacement(
     if (result.status === "rejected") {
       return { status: "cleanup-rejected", error: result.error };
     }
-    if (result.status === "unavailable") {
-      lookupFailures += 1;
+    if (result.status === "unavailable" || result.status === "awaiting-gateway") {
+      // A planned Gateway interruption says nothing about the worker's health.
+      lookupFailures = result.status === "awaiting-gateway" ? 0 : lookupFailures + 1;
       const submissionCancelled = !isCurrent();
       if (submissionCancelled || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
         if (!params.cleanupOnCancellation() && submissionCancelled) {
@@ -238,7 +245,7 @@ export async function deleteSessionPlacementDraft(
   if (existing.status === "rejected") {
     return existing.error;
   }
-  if (existing.status === "unavailable") {
+  if (existing.status === "unavailable" || existing.status === "awaiting-gateway") {
     return "placement draft session could not be verified";
   }
   if (!existing.sessionId) {
@@ -308,7 +315,7 @@ export async function deleteRecoveredSessionPlacementDraft(
   if (existing.status === "rejected") {
     return existing.error;
   }
-  if (existing.status === "unavailable") {
+  if (existing.status === "unavailable" || existing.status === "awaiting-gateway") {
     return "session placement could not be verified";
   }
   if (existing.placement) {

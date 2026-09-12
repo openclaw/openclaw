@@ -219,8 +219,8 @@ backend intentionally needs its own watchdog policy.
   clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
   with a fresh session when the failure is eligible for recovery.
 - Set it to `"invalidated-only"` to suppress fresh replacement unless the
-  canonical invalidation predicate proves the old session is dead. Currently,
-  only `session_expired` does so.
+  canonical invalidation predicate proves the old session is dead. Only
+  `session_expired` does so.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
 or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
@@ -264,6 +264,13 @@ effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
 applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
+`resolveExecutionArgs(ctx)` also receives optional `ctx.fastMode`, the effective
+boolean for this invocation. Core resolves automatic mode after CLI and process
+scope admission and backend preparation, so elapsed waits count toward its cutoff. Explicit on
+and off remain unchanged. The field follows the session, agent, and model fast-mode
+settings; backends may map it to their native arguments or ignore it. A spawned
+process keeps that decision for the invocation; it does not receive raw `"auto"`.
+
 `prepareExecution(ctx)` may also return an optional `execute` transport when a
 backend owns the installed CLI's protocol or SDK integration. The transport
 receives the exact prepared command, arguments, optional `argv0`, environment,
@@ -271,7 +278,9 @@ prompt, session, and tool availability; it yields the backend's existing structu
 stream records. Preserve the prepared command, `argv0`, and interpreter or script
 prefix in `args` when constructing the CLI invocation. `argv0` preserves
 the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
-are private prompt-build additions, separate from the ordinary `prompt`. Transport
+are private prompt-build additions and bounded saved session notes, separate from
+the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
+resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
 complete logical prompt. Native tool actions must use the provided, run-bound

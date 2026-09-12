@@ -6,12 +6,14 @@ import { pathToFileURL } from "node:url";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
+import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { completePendingPackageLifecycle } from "./package-lifecycle.js";
+import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
+import { readPackageVersionIfPresent } from "./package-update-integrity.js";
 import {
   isBlockingPackageUpdateStep,
   PackageUpdateActivationError,
-  readPackageVersionIfPresent,
   removePackageUpdatePath,
   swapStagedPackageInstall,
   type PackageUpdateTransaction,
@@ -20,6 +22,7 @@ import {
 import { trimLogTail } from "./restart-sentinel.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+  normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
@@ -57,6 +60,7 @@ type PackageUpdateStepRunner = (params: {
 }) => Promise<UpdateStepResult>;
 
 type PackageUpdateStepsResult = {
+  localOverrides?: LocalPackageOverridesResult;
   reason?: "already-current";
   steps: UpdateStepResult[];
   activePackageRoot: string | null;
@@ -298,24 +302,52 @@ export function markPackagePostInstallDoctorAdvisory<
   result: UpdatePostInstallDoctorResult | null,
 ): T & {
   advisory?: UpdateStepResult["advisory"];
+  warnings?: UpdateStepResult["warnings"];
 } {
   if (
-    step.exitCode !== UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE ||
-    result?.status !== "advisory" ||
-    !isNormalProcessExit(step)
+    !result ||
+    result.status === "error" ||
+    !isNormalProcessExit(step) ||
+    !(
+      (step.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
+        result.status === "advisory") ||
+      (step.exitCode === 0 && result.warnings?.length)
+    )
   ) {
     return step;
   }
+  const repairGuidance = "Run openclaw doctor --fix to finish deferred repairs.";
+  const deferredWarnings =
+    result.status === "advisory"
+      ? normalizeUpdatePostInstallDoctorWarnings(result.advisory.details).map(
+          (detail) => `${detail}\n${repairGuidance}`,
+        )
+      : [];
   const advisoryTail = [
     step.stderrTail,
-    ...result.advisory.details,
+    ...(result.status === "advisory" ? result.advisory.details : []),
+    ...(result.warnings ?? []),
     PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
   ]
     .filter((line): line is string => Boolean(line?.trim()))
     .join("\n");
   return {
     ...step,
-    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+    warnings: [
+      ...new Set([
+        ...normalizeUpdatePostInstallDoctorWarnings(result.warnings ?? []),
+        ...deferredWarnings,
+      ]),
+    ].slice(0, 32),
+    advisory: {
+      ...PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+      message: [
+        ...(result.warnings ?? []),
+        ...(result.status === "advisory" ? result.advisory.details : []),
+        PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
+        repairGuidance,
+      ].join("\n"),
+    },
     stderrTail: trimLogTail(advisoryTail) ?? step.stderrTail,
   };
 }
@@ -671,14 +703,17 @@ export async function runGlobalPackageUpdateSteps(params: {
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
+  localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
 }): Promise<PackageUpdateStepsResult> {
   // Transaction callbacks must never silently become an in-place manager install.
   const requireStaging = Boolean(
     params.validateCandidate ||
     params.beforeActivate ||
     params.onTransaction ||
-    params.activateGitRoot,
+    params.activateGitRoot ||
+    params.localOverrides,
   );
+  let localOverrides: LocalPackageOverridesResult | undefined;
   let stagedInstall: StagedPackageInstall | null = null;
   let packedInstallDir: string | null = null;
   const originalPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
@@ -709,6 +744,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
     }
     return {
+      localOverrides,
       steps: failedSteps,
       activePackageRoot,
       afterVersion,
@@ -1128,6 +1164,11 @@ export async function runGlobalPackageUpdateSteps(params: {
           return await packageUpdateFailure(lifecycleStep, steps);
         }
       }
+      if (!params.expectedGitCheckout && verificationErrors.length === 0) {
+        verificationErrors.push(
+          ...(await collectPackageDistContentInventoryErrors(verificationPackageRoot)),
+        );
+      }
       if (verificationErrors.length > 0) {
         steps.push({
           name: "global install verify",
@@ -1177,6 +1218,32 @@ export async function runGlobalPackageUpdateSteps(params: {
             liveTreeMutated = true;
           },
           onTransaction: params.onTransaction,
+          localOverrides: params.expectedGitCheckout ? undefined : params.localOverrides,
+          onLocalOverrides: (result) => {
+            localOverrides = result;
+            if (result.status === "none") {
+              return;
+            }
+            const message = `Local package overrides: ${result.status}; ${result.applied} replayed. Recovery bundle: ${result.recoveryDir}. ${result.warnings.join(" ")}`;
+            const report: UpdateStepResult = {
+              name: "local package overrides",
+              command: "preserve packaged dist edits",
+              cwd: originalPackageRoot ?? process.cwd(),
+              durationMs: 0,
+              exitCode: result.status === "error" ? 1 : 0,
+              stdoutTail: message,
+              // Existing warning rows keep recovery location visible after handoff/finalization.
+              ...(result.status === "error"
+                ? { stderrTail: message }
+                : { advisory: { kind: "recoverable-maintenance", message } }),
+            };
+            const previous = steps.findIndex((step) => step.name === report.name);
+            if (previous === -1) {
+              steps.push(report);
+            } else {
+              steps[previous] = report;
+            }
+          },
         });
         steps.push(swap.step);
         if (swap.postVerifyStep) {
@@ -1223,6 +1290,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       return await packageUpdateFailure(failedStep, steps);
     }
     return {
+      localOverrides,
       steps,
       activePackageRoot,
       afterVersion,

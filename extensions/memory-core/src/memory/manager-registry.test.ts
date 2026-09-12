@@ -1,6 +1,7 @@
 // Memory Core tests cover manager registry behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { memoryRuntime } from "../runtime-provider.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import {
   closeAllMemoryIndexManagers,
@@ -291,6 +292,40 @@ describe("memory index", () => {
       providerFixture.providerCloseGate = null;
     }
     await globalClose;
+  });
+
+  it("retains failed reload retirement through healthy acquisition and final close", async () => {
+    const cfg = createCfg({});
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    trackManager(first);
+    await first.probeEmbeddingAvailability();
+    providerFixture.providerCloseFailuresRemaining = 2;
+    const retirement = memoryRuntime.prepareReload({
+      retireRuntime: true,
+      retiringEmbeddingProviders: [],
+    });
+    try {
+      await expect(retirement.drain()).resolves.toEqual({
+        errors: [expect.objectContaining({ message: "provider close failed" })],
+      });
+      expect(providerFixture.providerCloseCalls).toBe(2);
+    } finally {
+      retirement.resume();
+    }
+
+    const replacement = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    trackManager(replacement);
+    expect(replacement).not.toBe(first);
+    expect(providerFixture.providerCloseCalls).toBe(2);
+    await replacement.probeEmbeddingAvailability();
+    expect(requireManager(await getMemorySearchManager({ cfg, agentId: "main" }))).toBe(
+      replacement,
+    );
+
+    await closeAllMemoryIndexManagers();
+    expect(providerFixture.providerCloseCalls).toBe(4);
+    await closeAllMemoryIndexManagers();
+    expect(providerFixture.providerCloseCalls).toBe(4);
   });
 
   it("retains a failed scoped close owner until provider retirement succeeds", async () => {

@@ -86,6 +86,9 @@ export async function withTransferredUpdateHandoff(
   const activatePath = path.join(root, "activate");
   const updatedPath = path.join(root, "updated");
   const updaterPath = path.join(root, "updater.cjs");
+  const managerStatePath = path.join(root, "manager-state.json");
+  const managerPath = path.join(root, "manager.cjs");
+  const managerPreloadPath = path.join(root, "manager-preload.cjs");
   await fs.writeFile(
     updaterPath,
     `
@@ -113,30 +116,70 @@ export async function withTransferredUpdateHandoff(
     stdio: ["pipe", "ignore", "ignore"],
   });
   let helper: Awaited<ReturnType<typeof handoff.startManagedServiceUpdateHandoff>> | undefined;
-  startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
-    helper = await handoff.startManagedServiceUpdateHandoff({
-      ...params,
-      root,
-      supervisor: null,
-      parentPid: parent.pid,
-      execPath: process.execPath,
-      argv1: updaterPath,
-      runId: undefined,
-      meta: {},
-      beforePark: async () => {
-        await params.beforePark?.();
-        await onNotice(params.runId!);
-        expect(parent.exitCode).toBeNull();
-        parent.stdin?.end();
-      },
-    });
-    return helper;
-  });
-  transferManagedServiceUpdateHandoffMock.mockImplementationOnce(
-    handoff.transferManagedServiceUpdateHandoff,
-  );
   try {
+    const parentPid = parent.pid;
+    if (parentPid === undefined) {
+      throw new Error("expected the disposable Gateway parent to have a process ID");
+    }
+    const { createManagedServiceManagerFixtureScript } =
+      await import("../../infra/update-managed-service-handoff-lifecycle.test-support.js");
+    await fs.writeFile(
+      managerPath,
+      createManagedServiceManagerFixtureScript({
+        kind: "launchd",
+        parentPid,
+        statePath: managerStatePath,
+        commandsPath: path.join(root, "manager-commands.log"),
+        configPath: path.join(root, "openclaw.json"),
+      }),
+    );
+    // Invoke the shared manager through Node so the fixture also works without Unix executables.
+    await fs.writeFile(
+      managerPreloadPath,
+      `
+    const children = require("node:child_process");
+    const spawn = children.spawn;
+    children.spawn = (command, args, options) => command === "launchctl"
+      ? spawn(process.execPath, [${JSON.stringify(managerPath)}, ...args], options)
+      : spawn(command, args, options);
+  `,
+    );
+    startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
+      helper = await handoff.startManagedServiceUpdateHandoff({
+        ...params,
+        root,
+        supervisor: "launchd",
+        env: {
+          ...process.env,
+          NODE_OPTIONS:
+            `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(managerPreloadPath)}`.trim(),
+        },
+        parentPid,
+        execPath: process.execPath,
+        argv1: updaterPath,
+        runId: undefined,
+        meta: {},
+        beforePark: async () => {
+          await params.beforePark?.();
+          await onNotice(params.runId!);
+          expect(parent.exitCode).toBeNull();
+        },
+      });
+      return helper;
+    });
+    transferManagedServiceUpdateHandoffMock.mockImplementationOnce(
+      handoff.transferManagedServiceUpdateHandoff,
+    );
     await run(() => fs.writeFile(activatePath, "activate"));
+    await vi.waitFor(
+      async () => {
+        expect(JSON.parse(await fs.readFile(managerStatePath, "utf8"))).toMatchObject({
+          parked: true,
+        });
+      },
+      { timeout: 5_000 },
+    );
+    parent.stdin?.end();
     await vi.waitFor(() => fs.access(updatedPath), { timeout: 5_000 });
   } finally {
     parent.stdin?.end();

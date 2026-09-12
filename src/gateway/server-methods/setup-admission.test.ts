@@ -438,7 +438,7 @@ describe("setup admission", () => {
         expect(await session.next()).toMatchObject({
           done: true,
           ...(failWrite
-            ? { status: "error", error: "Error: settings write failed" }
+            ? { status: "error", error: "settings write failed" }
             : { status: "done", modelActivation: { modelRef: "ollama/local-model" } }),
         });
       } finally {

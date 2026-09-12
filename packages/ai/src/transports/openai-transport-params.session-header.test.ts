@@ -13,7 +13,15 @@ const codexModel = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
 } as Model;
 
-const context = { messages: [] } as unknown as Context;
+const context = { messages: [] } satisfies Context;
+
+const proxyResponsesModel = {
+  id: "gpt-5.5",
+  provider: "openai-proxy",
+  api: "openai-responses",
+  baseUrl: "https://responses-proxy.example.test/v1",
+  compat: { sendSessionIdHeader: true },
+} as Model;
 
 describe("buildOpenAIClientHeaders session_id affinity header", () => {
   it("clamps long internal session ids to the backend's 64-char cache key limit", () => {
@@ -35,6 +43,68 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
   it("passes short session ids through unchanged", () => {
     const headers = buildOpenAIClientHeaders(codexModel, context, undefined, undefined, "abc-123");
     expect(headers.session_id).toBe("abc-123");
+  });
+
+  it.each([
+    "openai-responses",
+    "openai-chatgpt-responses",
+    "azure-openai-responses",
+    "openclaw-openai-responses-transport",
+    "openclaw-openai-chatgpt-responses-transport",
+    "openclaw-azure-openai-responses-transport",
+  ] as const)("honors the explicit %s proxy session header opt-in", (api) => {
+    const headers = buildOpenAIClientHeaders(
+      { ...proxyResponsesModel, api },
+      context,
+      undefined,
+      undefined,
+      "proxy-session-123",
+    );
+
+    expect(headers.session_id).toBe("proxy-session-123");
+  });
+
+  it.each(["short", "none"] as const)(
+    "preserves a mixed-case caller header with %s retention",
+    (cacheRetention) => {
+      const headers = buildOpenAIClientHeaders(
+        proxyResponsesModel,
+        context,
+        { SeSsIoN_Id: "caller-affinity" },
+        undefined,
+        "generated-affinity",
+        cacheRetention,
+      );
+      expect(new Headers(headers).get("session_id")).toBe("caller-affinity");
+      expect(
+        Object.keys(headers).filter((name) => name.toLowerCase() === "session_id"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("honors an explicit native Responses session header opt-out", () => {
+    const headers = buildOpenAIClientHeaders(
+      { ...codexModel, compat: { sendSessionIdHeader: false } },
+      context,
+      undefined,
+      undefined,
+      "native-session-123",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("omits generated Responses session headers when caching is disabled", () => {
+    const headers = buildOpenAIClientHeaders(
+      proxyResponsesModel,
+      context,
+      undefined,
+      undefined,
+      "proxy-session-123",
+      "none",
+    );
+
+    expect(headers.session_id).toBeUndefined();
   });
 });
 

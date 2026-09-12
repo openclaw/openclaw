@@ -53,6 +53,152 @@ function keyPresses(keysyms: readonly number[]) {
 }
 
 suite.define(() => {
+  it.each([
+    { destination: "canvas", release: true },
+    { destination: "toolbar", release: true },
+    { destination: "toolbar", release: false },
+  ])(
+    "keeps Shift held across $destination focus and respects release=$release before paste",
+    async ({ destination, release }) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        const { panel, peer, input } = await openKeyboard(page);
+        await page.keyboard.down("Shift");
+        const held = [{ down: true, keysym: 0xffe1 }];
+        await expect.poll(peer.keyEvents).toEqual(held);
+        const keyboardButton = panel.getByRole("button", { name: "Keyboard", exact: true });
+        await (
+          destination === "canvas"
+            ? panel.locator(".desktop-surface canvas")
+            : panel.getByRole("combobox", { name: "Desktop size", exact: true })
+        ).click();
+        await expect.poll(peer.keyEvents).toEqual(held);
+        if (release) {
+          await page.keyboard.up("Shift");
+        }
+        if (destination === "toolbar") {
+          await page.keyboard.press("Escape");
+        }
+        await keyboardButton.click();
+        await expect.poll(() => input.evaluate((element) => element.matches(":focus"))).toBe(true);
+        await input.evaluate((element) => {
+          if (!(element instanceof HTMLTextAreaElement)) {
+            throw new Error("Expected the desktop keyboard textarea");
+          }
+          element.setRangeText("p", element.selectionStart, element.selectionEnd, "end");
+          element.dispatchEvent(
+            new InputEvent("input", {
+              bubbles: true,
+              inputType: "insertFromPaste",
+              data: "p",
+            }),
+          );
+        });
+        await expect
+          .poll(peer.keyEvents)
+          .toEqual([...keyPresses([0xffe1, 0x70]), ...(release ? [] : held)]);
+        if (!release) {
+          await page.keyboard.up("Shift");
+          await expect
+            .poll(peer.keyEvents)
+            .toEqual([...keyPresses([0xffe1, 0x70]), ...keyPresses([0xffe1])]);
+        }
+      });
+    },
+  );
+
+  it.each([
+    {
+      platform: "MacIntel",
+      key: "Meta",
+      code: "MetaLeft",
+      location: 1,
+      flag: "metaKey",
+      keysym: 0xffe9,
+    },
+    {
+      platform: "MacIntel",
+      key: "Meta",
+      code: "MetaRight",
+      location: 2,
+      flag: "metaKey",
+      keysym: 0xffeb,
+    },
+    {
+      platform: "Win32",
+      key: "Control",
+      code: "ControlLeft",
+      location: 1,
+      flag: "ctrlKey",
+      keysym: 0xffe3,
+    },
+    {
+      platform: "Win32",
+      key: "Control",
+      code: "ControlRight",
+      location: 2,
+      flag: "ctrlKey",
+      keysym: 0xffe4,
+    },
+  ])(
+    "keeps $code paste local on $platform and sends literal text without held modifiers",
+    async (modifier) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        await page.addInitScript((platform) => {
+          Object.defineProperty(navigator, "platform", { value: platform });
+        }, modifier.platform);
+        const { peer, input } = await openKeyboard(page);
+        const text = "Aa7!z?Bb8@x#Cc9$w%Dd0^v&Ee1*f(G)";
+        const defaults = await input.evaluate(
+          (element, paste) => {
+            if (!(element instanceof HTMLTextAreaElement)) {
+              throw new Error("Expected the desktop keyboard textarea");
+            }
+            const dispatch = (type: string, key: string, code: string, held = true) =>
+              element.dispatchEvent(
+                new KeyboardEvent(type, {
+                  key,
+                  code,
+                  location: code === paste.modifier.code ? paste.modifier.location : 0,
+                  [paste.modifier.flag]: held,
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              );
+            dispatch("keydown", paste.modifier.key, paste.modifier.code);
+            const allowed = dispatch("keydown", "v", "KeyV");
+            // Supply synthetic browser paste input without reading or changing the OS clipboard.
+            if (allowed) {
+              element.setRangeText(paste.text, element.selectionStart, element.selectionEnd, "end");
+              element.dispatchEvent(
+                new InputEvent("input", {
+                  bubbles: true,
+                  inputType: "insertFromPaste",
+                  data: paste.text,
+                }),
+              );
+            }
+            const released = dispatch("keyup", "v", "KeyV");
+            dispatch("keydown", "a", "KeyA");
+            dispatch("keyup", "a", "KeyA");
+            dispatch("keyup", paste.modifier.key, paste.modifier.code, false);
+            return { allowed, released };
+          },
+          { modifier, text },
+        );
+        expect(defaults).toEqual({ allowed: true, released: true });
+        await expect
+          .poll(peer.keyEvents)
+          .toEqual([
+            ...keyPresses([modifier.keysym]),
+            ...keyPresses(Array.from(text, (character) => character.charCodeAt(0))),
+            { down: true, keysym: modifier.keysym },
+            ...keyPresses([0x61]),
+            { down: false, keysym: modifier.keysym },
+          ]);
+      });
+    },
+  );
+
   it("accepts 32 pasted ASCII characters only after connected control and disables view-only input", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await page.setViewportSize({ width: 720, height: 540 });

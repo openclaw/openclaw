@@ -10,6 +10,17 @@ import {
 } from "./registry.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
+function lookupTranslation(map: TranslationMap | undefined, keys: readonly string[]): unknown {
+  let value: unknown = map;
+  for (const key of keys) {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    value = Reflect.get(value, key);
+  }
+  return value;
+}
+
 type Subscriber = (locale: Locale) => void;
 type LocaleLoadRecovery = {
   isUnrecoverableError: (error: unknown) => boolean;
@@ -233,30 +244,19 @@ class I18nManager {
     this.subscribers.forEach((sub) => sub(this.locale));
   }
 
+  public translateActive(key: string): string | undefined {
+    const value = lookupTranslation(this.translations[this.locale], key.split("."));
+    return typeof value === "string" ? value : undefined;
+  }
+
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value: unknown = this.translations[this.locale] || this.translations[DEFAULT_LOCALE];
-
-    for (const k of keys) {
-      if (value && typeof value === "object") {
-        value = (value as Record<string, unknown>)[k];
-      } else {
-        value = undefined;
-        break;
-      }
-    }
-
-    // Fallback to English.
+    let value = lookupTranslation(
+      this.translations[this.locale] || this.translations[DEFAULT_LOCALE],
+      keys,
+    );
     if (value === undefined && this.locale !== DEFAULT_LOCALE) {
-      value = this.translations[DEFAULT_LOCALE];
-      for (const k of keys) {
-        if (value && typeof value === "object") {
-          value = (value as Record<string, unknown>)[k];
-        } else {
-          value = undefined;
-          break;
-        }
-      }
+      value = lookupTranslation(this.translations[DEFAULT_LOCALE], keys);
     }
 
     if (typeof value !== "string") {
@@ -275,6 +275,7 @@ class I18nManager {
 
 export const i18n = new I18nManager();
 export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
+export const translateActive = (key: string) => i18n.translateActive(key);
 
 if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {

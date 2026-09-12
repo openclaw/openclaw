@@ -1,6 +1,7 @@
 // Slack helper module supports format behavior.
 import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   chunkTextForOutbound,
   FormatCapabilityProfile,
@@ -201,6 +202,7 @@ const SLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
 type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
 
+// Slack mrkdwn backslashes are literal, including immediately before code delimiters.
 function tokenizeSlackMrkdwn(text: string): string[] {
   const tokens: string[] = [];
   for (let index = 0; index < text.length;) {
@@ -230,15 +232,6 @@ function tokenizeSlackMrkdwn(text: string): string[] {
     }
     const character = String.fromCodePoint(codePoint);
     index += character.length;
-    if (character === "\\" && index < text.length) {
-      const escapedCodePoint = text.codePointAt(index);
-      if (escapedCodePoint !== undefined) {
-        const escapedCharacter = String.fromCodePoint(escapedCodePoint);
-        tokens.push(character + escapedCharacter);
-        index += escapedCharacter.length;
-        continue;
-      }
-    }
     tokens.push(character);
   }
   return tokens;
@@ -374,8 +367,6 @@ function projectSlackMrkdwnVisibleText(
       visible = "";
     } else if (!activeMarker && token === ">" && !lineHasVisibleContent) {
       visible = "";
-    } else if (token.startsWith("\\") && token.length > 1) {
-      visible = token.slice(1);
     }
 
     appendSlackVisibleProjection(projection, visible, activeMarker !== undefined);
@@ -458,8 +449,7 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     text.includes("&amp;") ||
     text.includes("&lt;") ||
     text.includes("&gt;") ||
-    (text.match(/<[^>\n]+>/gu)?.some(isAllowedSlackAngleToken) ?? false) ||
-    /\\[\s\S]/u.test(text);
+    (text.match(/<[^>\n]+>/gu)?.some(isAllowedSlackAngleToken) ?? false);
   if (!hasProtectedToken) {
     return chunkTextForOutbound(text, limit, { preserveWhitespace: true });
   }
@@ -540,13 +530,23 @@ export function markdownToSlackMrkdwnChunks(
     }),
   );
   const renderOptions = buildSlackRenderOptions();
+  const normalizedLimit =
+    limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });
   return renderMarkdownIRChunksWithinLimit({
     ir,
-    limit,
-    renderChunk: (chunk) =>
-      protectSlackAssistantTranscriptRoleHeaders(
-        renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE),
-      ),
+    limit: normalizedLimit,
+    renderChunk: (chunk) => {
+      const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
+      // Protection only adds a prefix, so an oversized probe cannot become a fit.
+      return rendered.length > normalizedLimit
+        ? rendered
+        : protectSlackAssistantTranscriptRoleHeaders(rendered);
+    },
     measureRendered: (rendered) => rendered.length,
-  }).map(({ rendered }) => rendered);
+  }).map(({ rendered }) =>
+    // Unsplittable safety fallbacks still need protection before leaving Slack.
+    rendered.length > normalizedLimit
+      ? protectSlackAssistantTranscriptRoleHeaders(rendered)
+      : rendered,
+  );
 }

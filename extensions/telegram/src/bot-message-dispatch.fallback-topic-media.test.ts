@@ -20,33 +20,6 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 
-const visibleFinalReceipt = {
-  counts: {
-    tool: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    block: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    final: {
-      delivered: 1,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-  },
-  anyVisibleDelivered: true,
-} as const;
-
 function createMessageToolOnlyGroupContext(): TelegramMessageContext {
   return createContext({
     chatId: -1001234,
@@ -71,7 +44,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
   it("uses resolved DM config for auto-topic-label overrides", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: true,
-      settledReceipt: visibleFinalReceipt,
     });
     loadSessionStore.mockReturnValue({ s1: {} });
     const bot = createBot();
@@ -110,7 +82,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: true,
-      settledReceipt: visibleFinalReceipt,
     });
     const bot = createBot();
     const base = "a".repeat(499);
@@ -199,6 +170,31 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
 
     expect(deliverReplies).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "honors send-policy denial when fallback delivery fails=%s",
+    async (deliveryFailed) => {
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });
+        if (deliveryFailed) {
+          await dispatcherOptions.onError?.(new Error("Final delivery failed"), { kind: "final" });
+        }
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sendPolicyDenied: true,
+        };
+      });
+
+      await dispatchWithContext({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        context: createMessageToolOnlyGroupContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains the failure fallback when message-tool-only delivery also fails", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {

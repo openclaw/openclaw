@@ -232,7 +232,7 @@ export async function runProvisionSetup(
         }),
     );
     if (result.termination !== "exit" || result.code !== 0) {
-      throw new WorkerProviderError(crabboxCommandError(params.phase, result).message);
+      throw crabboxCommandError(params.phase, result);
     }
   } catch (error) {
     params.signal?.throwIfAborted();
@@ -261,5 +261,5 @@ export async function failProvisionAfterCleanup(
   } catch (cleanupError) {
     throw WorkerProviderError.cleanupIndeterminate(params.id, provisionError, cleanupError);
   }
-  throw provisionError;
+  throw WorkerProviderError.cleanupComplete(params.id, provisionError);
 }

@@ -6,7 +6,6 @@ import {
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  MEMORY_INDEX_FTS_TABLE,
   runWithConcurrency,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -30,7 +29,6 @@ import type {
   MemorySyncProgressState,
 } from "./manager-sync-base.js";
 
-const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const SOURCE_SYNC_YIELD_EVERY = 10;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
 const log = createSubsystemLogger("memory");
@@ -48,36 +46,13 @@ function createSourceSyncYield(total: number): () => Promise<void> {
 }
 
 export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyncOps {
-  protected clearIndexedFileData(pathname: string, source: MemorySource): void {
-    this.deleteVectorRowsForSource(pathname, source);
-    if (this.fts.enabled && this.fts.available) {
-      try {
-        // Lexical search is model-agnostic; remove every model for this source.
-        this.db
-          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
-          .run(pathname, source);
-      } catch {}
-    }
-    this.db
-      .prepare("DELETE FROM memory_index_chunks WHERE path = ? AND source = ?")
-      .run(pathname, source);
-  }
-
   protected async deleteIndexedFile(
     pathname: string,
     source: MemorySource,
     expectedHash = resolveMemorySourceExistingHash({ db: this.db, path: pathname, source }),
   ): Promise<void> {
     await runSqliteImmediateTransaction(this.db, async () => () => {
-      if (
-        resolveMemorySourceExistingHash({ db: this.db, path: pathname, source }) !== expectedHash
-      ) {
-        return;
-      }
-      this.clearIndexedFileData(pathname, source);
-      this.db
-        .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ?")
-        .run(pathname, source);
+      this.database.sourceIndex.deleteIfCurrent({ path: pathname, source, expectedHash });
     });
   }
 

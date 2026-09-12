@@ -4,9 +4,23 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parsePluginInstallRecordMap } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  isPluginInPackageBundledRoots,
+  resolveBundledDirFromPackageRoot,
+  resolveBundledPluginsDir,
+} from "../plugins/bundled-dir.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import {
+  resolveBundledSourceCheckoutExtensionsDir,
+  resolvePluginPackageEntries,
+} from "../plugins/discovery.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
+import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { resolvePackageExtensionEntries } from "../plugins/manifest.js";
+import { pluginCacheRealpathSync } from "../plugins/plugin-cache-files.js";
 import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { resolveUserPath } from "./home-dir.js";
 import {
@@ -15,9 +29,106 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
 import { copyUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
-import { resolveUpdateCandidatePluginPath } from "./update-candidate-state.js";
+
+function bundledPluginRedirects(
+  candidateRoot: string,
+  env?: NodeJS.ProcessEnv,
+): Map<string, string> {
+  const redirects = new Map<string, string>();
+  const sourceDir = resolveBundledPluginsDir(env);
+  const sourcePackageRoot = sourceDir && resolveOpenClawPackageRootSync({ cwd: sourceDir });
+  const candidateDir = resolveBundledDirFromPackageRoot(candidateRoot);
+  if (
+    !sourceDir ||
+    !sourcePackageRoot ||
+    !candidateDir ||
+    !isPluginInPackageBundledRoots({ rootDir: candidateDir, packageRoot: candidateRoot })
+  ) {
+    return redirects;
+  }
+  const bundledEnv = { ...env, OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1" };
+  const candidates = new Map(
+    loadBundledPluginManifestRegistry({ env: bundledEnv, bundledRoot: candidateDir }).plugins.map(
+      (plugin) => [plugin.id, plugin],
+    ),
+  );
+  for (const directory of [sourceDir, resolveBundledSourceCheckoutExtensionsDir(sourceDir)]) {
+    if (
+      !directory ||
+      !isPluginInPackageBundledRoots({ rootDir: directory, packageRoot: sourcePackageRoot })
+    ) {
+      continue;
+    }
+    const sourceReal = pluginCacheRealpathSync(directory, true);
+    if (!sourceReal) {
+      continue;
+    }
+    for (const source of listBundledPluginMetadata({
+      scanDir: directory,
+      includeChannelConfigs: false,
+    })) {
+      const sourceRoot = pluginCacheRealpathSync(path.join(directory, source.dirName), true);
+      if (!sourceRoot || !isPathInside(sourceReal, sourceRoot)) {
+        continue;
+      }
+      const manifest = { name: source.packageName, openclaw: source.packageManifest };
+      const extensions = resolvePackageExtensionEntries(manifest);
+      if (extensions.status !== "ok") {
+        continue;
+      }
+      const entries = resolvePluginPackageEntries({
+        packageDir: sourceRoot,
+        packageRootRealPath: sourceRoot,
+        manifest,
+        manifestId: source.manifest.id,
+        extensions: extensions.entries,
+        origin: "bundled",
+        sourceLabel: sourceRoot,
+        diagnostics: [],
+        rejectHardlinks: false,
+      });
+      let allEntriesMatched = entries.length === extensions.entries.length;
+      const candidateRoots = new Set<string>();
+      for (const entry of entries) {
+        const candidate = candidates.get(entry.idHint);
+        if (!candidate || path.parse(entry.source).name !== path.parse(candidate.source).name) {
+          allEntriesMatched = false;
+          continue;
+        }
+        const from = pluginCacheRealpathSync(entry.source, true);
+        const to = pluginCacheRealpathSync(candidate.source, true);
+        const targetRoot = pluginCacheRealpathSync(candidate.rootDir, true);
+        if (
+          !from ||
+          !to ||
+          !targetRoot ||
+          !isPathInside(sourceRoot, from) ||
+          !isPathInside(targetRoot, to) ||
+          !isPluginInPackageBundledRoots({ rootDir: targetRoot, packageRoot: candidateRoot })
+        ) {
+          allEntriesMatched = false;
+          continue;
+        }
+        redirects.set(from, to);
+        const declared = pluginCacheRealpathSync(path.resolve(sourceRoot, entry.entryPath), true);
+        if (declared && isPathInside(sourceRoot, declared)) {
+          redirects.set(declared, to);
+        }
+        candidateRoots.add(targetRoot);
+      }
+      // A package alias moves only when all its entries move together to one candidate package.
+      const [targetRoot] = candidateRoots;
+      if (allEntriesMatched && candidateRoots.size === 1 && targetRoot) {
+        redirects.set(sourceRoot, targetRoot);
+      }
+    }
+  }
+  return redirects;
+}
 
 async function resolvePluginFilePackageRoot(file: string): Promise<string> {
   const directory = path.dirname(file);
@@ -49,7 +160,8 @@ export async function projectUpdateCandidatePlugins(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<Record<string, string>> {
   const sourceRoot = path.resolve(params.stateDir);
-  const shared = path.join(params.targetStateDir, "state", "openclaw.sqlite");
+  const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
+  const shared = path.join(targetStateDir, "state", "openclaw.sqlite");
   let value: Record<string, unknown> | undefined;
   let records: Record<string, PluginInstallRecord> = params.config.plugins?.installs ?? {};
   if (
@@ -98,7 +210,7 @@ export async function projectUpdateCandidatePlugins(params: {
     throw error;
   });
   const project = (source: string) =>
-    resolveUpdateCandidatePluginPath(canonicalStateRoot, params.targetStateDir, source);
+    resolveUpdateCandidatePluginPath(canonicalStateRoot, targetStateDir, source);
   const locators: Array<{ source: string; real: string; file: boolean }> = [];
   const roots = new Map<string, string>();
   const npmProjects = path.join(canonicalStateRoot, "npm", "projects");
@@ -118,6 +230,10 @@ export async function projectUpdateCandidatePlugins(params: {
   for (const source of params.config.plugins?.load?.paths ?? []) {
     sources.add(resolve(source));
   }
+  const bundledRedirects =
+    sources.size > 0
+      ? bundledPluginRedirects(params.candidateRoot, params.env)
+      : new Map<string, string>();
   const pluginPaths: Record<string, string> = {};
   for (const source of sources) {
     const stat = await fs.stat(source).catch((error: unknown) => {
@@ -132,9 +248,13 @@ export async function projectUpdateCandidatePlugins(params: {
       continue;
     }
     const real = await fs.realpath(source);
+    const bundled = bundledRedirects.get(real);
+    if (bundled) {
+      pluginPaths[source] = bundled;
+      continue;
+    }
     const file = stat.isFile();
     locators.push({ source, real, file });
-    const managed = isPathInside(npmProjects, real) || isPathInside(npmModules, real);
     // Copy the whole managed project so hoisted dependencies remain available.
     const owner = isPathInside(npmProjects, real)
       ? path.join(npmProjects, path.relative(npmProjects, real).split(path.sep)[0]!)
@@ -144,13 +264,13 @@ export async function projectUpdateCandidatePlugins(params: {
           ? await resolvePluginFilePackageRoot(real)
           : real;
     if (!roots.has(owner)) {
-      roots.set(owner, project(managed || file ? owner : source));
+      roots.set(owner, project(owner));
     }
   }
-  const { copies, hostLinks } = await copyUpdateCandidatePluginTrees({
+  const copies = await copyUpdateCandidatePluginTrees({
     roots,
     project,
-    targetStateDir: params.targetStateDir,
+    targetStateDir,
     candidateRoot: params.candidateRoot,
   });
   for (const { source, real, file } of locators) {
@@ -159,9 +279,9 @@ export async function projectUpdateCandidatePlugins(params: {
       throw new Error("Plugin payload has no private copy root");
     }
     const target = path.join(copy[1], path.relative(copy[0], real));
-    const alias = file && path.basename(source) !== path.basename(real) ? project(source) : target;
+    const alias = path.basename(source) !== path.basename(real) ? project(source) : target;
     if (alias !== target) {
-      // Preserve the entry filename/ID, while Node resolves relative imports beside its copied target.
+      // Preserve the entry basename/ID while Node resolves imports from its canonical copied owner.
       const [existing, targetIdentity] = await Promise.all([
         fs.stat(alias, { bigint: true }).catch((error: unknown) => {
           if (hasNodeErrorCode(error, "ENOENT")) {
@@ -175,22 +295,14 @@ export async function projectUpdateCandidatePlugins(params: {
       if (!existing || !sameFileIdentity(existing, targetIdentity)) {
         await fs.mkdir(path.dirname(alias), { recursive: true });
         await fs.rm(alias, { force: true });
-        await fs.symlink(target, alias, "file");
+        await fs.symlink(
+          target,
+          alias,
+          file ? "file" : process.platform === "win32" ? "junction" : "dir",
+        );
       }
     }
     pluginPaths[source] = alias;
-  }
-  for (const link of hostLinks) {
-    const { linkOpenClawPeerDependencies } = await import("../plugins/plugin-peer-link.js");
-    const result = await linkOpenClawPeerDependencies({
-      installedDir: path.dirname(path.dirname(link)),
-      hostRoot: params.candidateRoot,
-      peerDependencies: { openclaw: "*" },
-      logger: {},
-    });
-    if (result.skipped) {
-      throw new Error("Could not bind copied plugin to candidate host");
-    }
   }
   if (value) {
     const projected = structuredClone(records);

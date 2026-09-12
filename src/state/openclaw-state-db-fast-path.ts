@@ -15,13 +15,15 @@ import {
   assertCanonicalStateSchemaShape,
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
 } from "./openclaw-state-db-schema-repair.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  assertSupportedStateSchemaVersion,
+  readStateSchemaMigrationVersion,
+} from "./openclaw-state-db-schema-version.js";
 import {
   getOpenClawStateRuntimeSchema,
   isOpenClawStateStartupRepairableSchemaIssue,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
-import { readStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolean {
   let database: DatabaseSync | undefined;
@@ -29,7 +31,7 @@ export function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolea
     database = openNodeSqliteDatabase(pathname, { readOnly: true });
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
-      readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
       detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
@@ -58,7 +60,7 @@ export function isOpenClawStateSchemaFastPathEligible(
 ): boolean {
   return runSqliteDeferredTransactionSync(database, () => {
     assertSupportedStateSchemaVersion(database, pathname);
-    if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
       return false;
     }
     assertSqliteIntegrity(database, pathname);

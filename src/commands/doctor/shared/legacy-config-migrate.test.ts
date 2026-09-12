@@ -1205,6 +1205,7 @@ describe("legacy memory search config migrate", () => {
       "Moved agents.list[1].memorySearch → agents.list[1].memory.search.",
       'Moved memory.search.provider from legacy "auto" to "openai".',
       'Moved agents.list[0].memory.search.provider from legacy "auto" to "openai".',
+      "Stamped the multi-agent roster for explicit per-surface ownership.",
     ]);
   });
 });
@@ -1312,6 +1313,7 @@ describe("legacy agent system prompt override config migrate", () => {
     expect(res.changes).toEqual([
       "Removed agents.defaults.systemPromptOverride.",
       "Removed agents.list[0].systemPromptOverride.",
+      "Stamped the multi-agent roster for explicit per-surface ownership.",
     ]);
   });
 });

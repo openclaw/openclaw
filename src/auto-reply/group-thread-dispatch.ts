@@ -9,6 +9,8 @@ import {
   isAcpSessionKey,
   normalizeAccountId,
   resolveThreadSessionKeys,
+  toAgentRequestSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
@@ -20,6 +22,7 @@ import {
   recordGroupThreadReply,
 } from "./group-thread-context.js";
 import { runGroupThread } from "./group-thread.js";
+import { isReplyPayloadTerminalContent } from "./reply-payload.js";
 import { resolveBoundAcpDispatchSessionKey } from "./reply/dispatch-from-config.context.js";
 import type {
   DispatchFromConfigParams,
@@ -67,14 +70,19 @@ function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
       pending.push(
         outcome.promise.then((result) => {
           counts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[result]]++;
-          if (kind === "final" && result === "delivered") {
-            recordGroupThreadReply(outcome.getDeliveredPayload() ?? payload);
+          const delivered = outcome.getDeliveredPayload() ?? payload;
+          if (
+            kind !== "tool" &&
+            result === "delivered" &&
+            isReplyPayloadTerminalContent(delivered)
+          ) {
+            recordGroupThreadReply(delivered);
           }
         }),
       );
     } else if (accepted) {
       counts[kind].delivered++;
-      if (kind === "final") {
+      if (kind !== "tool" && isReplyPayloadTerminalContent(payload)) {
         recordGroupThreadReply(payload);
       }
     }
@@ -262,24 +270,33 @@ export async function dispatchGroupThread(
     formatReply: params.replyOptions?.groupThreadReplyFormatter,
     runTurn: async (turn) => {
       await adoptGroupThreadRoot(params.replyOptions?.turnAdoptionLifecycle);
-      let sessionKey = buildAgentSessionKey({
-        agentId: turn.agentId,
-        channel,
-        accountId,
-        peer: { kind, id: peerId },
-        dmScope: ctx.DmScope ?? cfg.session?.dmScope,
-        identityLinks: cfg.session?.identityLinks,
-      });
+      // Direct-message routing may already isolate accounts and chat-qualified topics.
+      const resolvedDirectKey = kind === "direct" ? ctx.SessionKey : undefined;
+      let sessionKey = resolvedDirectKey
+        ? toAgentStoreSessionKey({
+            agentId: turn.agentId,
+            requestKey: toAgentRequestSessionKey(resolvedDirectKey),
+          })
+        : buildAgentSessionKey({
+            agentId: turn.agentId,
+            channel,
+            accountId,
+            peer: { kind, id: peerId },
+            dmScope: ctx.DmScope ?? cfg.session?.dmScope,
+            identityLinks: cfg.session?.identityLinks,
+          });
       if (kind !== "direct" && accountId !== DEFAULT_ACCOUNT_ID) {
         sessionKey = resolveThreadSessionKeys({
           baseSessionKey: sessionKey,
           threadId: `${channel}-account-${accountId}`,
         }).sessionKey;
       }
-      sessionKey = resolveThreadSessionKeys({
-        baseSessionKey: sessionKey,
-        threadId: ctx.MessageThreadId?.toString(),
-      }).sessionKey;
+      if (!resolvedDirectKey) {
+        sessionKey = resolveThreadSessionKeys({
+          baseSessionKey: sessionKey,
+          threadId: ctx.MessageThreadId?.toString(),
+        }).sessionKey;
+      }
       const child = prepareParticipant(params, sessionKey);
       return withReplyDispatcher({ dispatcher: child.dispatcher, run: () => dispatch(child) });
     },

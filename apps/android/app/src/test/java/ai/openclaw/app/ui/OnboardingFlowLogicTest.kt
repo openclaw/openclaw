@@ -26,7 +26,6 @@ class OnboardingFlowLogicTest {
       MascotMood.Curious to onboardingMascotMood(OnboardingStep.Permissions),
       MascotMood.Thinking to onboardingMascotMood(OnboardingStep.NodeApproval),
       MascotMood.Working to onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Finishing),
-      MascotMood.Working to onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.TakingLonger),
       MascotMood.Celebrating to onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Connected),
       MascotMood.Sad to onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Failed),
       MascotMood.Sad to
@@ -607,11 +606,8 @@ class OnboardingFlowLogicTest {
     assertEquals(
       GatewayRecoveryUiState.Connected,
       gatewayPairingUiState(
-        gatewayPaired = true,
         gatewayPairingCanContinue = true,
         statusText = "Waiting for node approval",
-        connectSettling = false,
-        connectTimedOut = true,
       ),
     )
   }
@@ -621,10 +617,8 @@ class OnboardingFlowLogicTest {
     assertEquals(
       GatewayRecoveryUiState.Connected,
       gatewayPairingUiState(
-        gatewayPaired = true,
         gatewayPairingCanContinue = true,
         statusText = "Connected (node offline)",
-        connectSettling = false,
         gatewayConnectionProblem = pairingRequiredProblem(),
       ),
     )
@@ -635,10 +629,8 @@ class OnboardingFlowLogicTest {
     assertEquals(
       GatewayRecoveryUiState.ApprovalRequired,
       gatewayPairingUiState(
-        gatewayPaired = true,
         gatewayPairingCanContinue = false,
         statusText = "Connected (node offline)",
-        connectSettling = false,
         gatewayConnectionProblem = pairingRequiredProblem(),
       ),
     )
@@ -649,10 +641,8 @@ class OnboardingFlowLogicTest {
     assertEquals(
       GatewayRecoveryUiState.Pairing,
       gatewayPairingUiState(
-        gatewayPaired = true,
         gatewayPairingCanContinue = false,
         statusText = "Connected (node offline)",
-        connectSettling = false,
         gatewayConnectionProblem = pairingRequiredProblem(retryable = true),
       ),
     )
@@ -661,29 +651,51 @@ class OnboardingFlowLogicTest {
   @Test
   fun gatewayPairingWaitsWhenOperatorConnectedButNoContinueDestinationExists() {
     assertEqualsCases(
-      GatewayRecoveryUiState.Finishing to gatewayPairingState(gatewayPaired = true, connectTimedOut = false),
-      GatewayRecoveryUiState.TakingLonger to gatewayPairingState(gatewayPaired = true, connectTimedOut = true),
+      GatewayRecoveryUiState.Finishing to gatewayPairingState("Connected (node offline)"),
+      GatewayRecoveryUiState.Finishing to gatewayPairingState("Connecting…"),
     )
   }
 
   @Test
-  fun gatewayPairingShowsSlowConnectionWhenGatewayNeverPairs() {
-    assertEqualsCases(
-      GatewayRecoveryUiState.Finishing to gatewayPairingState(gatewayPaired = false, connectTimedOut = false),
-      GatewayRecoveryUiState.TakingLonger to gatewayPairingState(gatewayPaired = false, connectTimedOut = true),
+  fun networkFailureKeepsRetryAndTailscaleHelpSeparateFromAuthRecovery() {
+    val problem =
+      authProblem(code = "NETWORK_UNREACHABLE", recommendedNextStep = null)
+        .copy(pauseReconnect = false, retryable = true, isTailscaleRoute = true)
+    assertEquals(
+      GatewayRecoveryUiState.Failed,
+      gatewayPairingUiState(
+        gatewayPairingCanContinue = false,
+        statusText = "Reconnecting…",
+        gatewayConnectionProblem = problem,
+      ),
     )
+    assertEquals(GatewayRecoveryPrimaryAction.Retry, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed, problem))
+    assertEquals("https://tailscale.com/docs/install/android", gatewayNetworkRecoveryHelpUrl(problem))
+    assertNull(gatewayNetworkRecoveryHelpUrl(problem.copy(isTailscaleRoute = false)))
+    assertNull(gatewayNetworkRecoveryHelpUrl(problem.copy(code = "AUTH_TOKEN_MISMATCH")))
+    assertTrue(recoveryGatewayAuthDetail(problem).contains("may use Tailscale"))
+  }
+
+  @Test
+  fun transportCleanupKeepsItsOwnStatusWithoutImplyingDestinationFailure() {
+    val message = "The previous network request is still stopping. Check your connection, then retry."
+    val problem =
+      authProblem(code = "NETWORK_UNREACHABLE", message = message, recommendedNextStep = null)
+        .copy(reason = "transport-cleanup", pauseReconnect = false, retryable = true, isTailscaleRoute = true)
+
+    assertEquals("Stopping previous connection", gatewayStatusLabel(message, false, problem))
+    assertEquals(message, recoveryGatewayAuthDetail(problem))
+    assertNull(gatewayNetworkRecoveryHelpUrl(problem))
+    assertEquals(GatewayRecoveryPrimaryAction.Retry, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed, problem))
   }
 
   @Test
   fun gatewayPairingPreservesExplicitFailureStatusText() {
     val tlsError = "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
     assertEqualsCases(
-      GatewayRecoveryUiState.Failed to gatewayPairingState(gatewayPaired = false, connectTimedOut = false, statusText = tlsError),
-      GatewayRecoveryUiState.Failed to gatewayPairingState(gatewayPaired = false, connectTimedOut = true, statusText = tlsError),
+      GatewayRecoveryUiState.Failed to gatewayPairingState(statusText = tlsError),
       GatewayRecoveryUiState.Failed to
         gatewayPairingState(
-          gatewayPaired = false,
-          connectTimedOut = false,
           statusText = "Gateway error: unauthorized: gateway token missing",
         ),
     )
@@ -749,11 +761,10 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun recoveryPrimaryActionOnlyAppearsForCompleteFailureOrSlowConnectionStates() {
+  fun recoveryPrimaryActionOnlyAppearsForCompleteFailureOrApprovalStates() {
     assertEqualsCases(
       GatewayRecoveryPrimaryAction.Finish to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Connected),
       GatewayRecoveryPrimaryAction.Back to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed),
-      GatewayRecoveryPrimaryAction.Retry to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.TakingLonger),
       GatewayRecoveryPrimaryAction.Retry to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.ApprovalRequired),
       null to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.NodeCapabilityApprovalPending),
       null to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Pairing),
@@ -762,9 +773,8 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun recoveryDiagnosticActionAppearsForFailuresSlowStatesAndGatewayProblems() {
+  fun recoveryDiagnosticActionAppearsForFailuresAndGatewayProblems() {
     assertTrue(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.Failed, gatewayConnectionProblem = null))
-    assertTrue(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.TakingLonger, gatewayConnectionProblem = null))
     assertTrue(
       gatewayRecoveryShowsDiagnosticAction(
         GatewayRecoveryUiState.Pairing,
@@ -836,23 +846,6 @@ class OnboardingFlowLogicTest {
       gatewayRecoveryProgressItems(
         state = GatewayRecoveryUiState.Finishing,
         statusText = "Connecting…",
-        connectSettling = true,
-      ),
-    )
-  }
-
-  @Test
-  fun recoveryProgressDoesNotAdvanceToGatewayAccessJustBecauseSettlingEnds() {
-    assertEquals(
-      listOf(
-        GatewayRecoveryProgressItem(nativeText("Opening Gateway connection"), GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem(nativeText("Checking pairing access"), GatewayRecoveryProgressStatus.Pending),
-        GatewayRecoveryProgressItem(nativeText("Checking node access"), GatewayRecoveryProgressStatus.Pending),
-      ),
-      gatewayRecoveryProgressItems(
-        state = GatewayRecoveryUiState.Finishing,
-        statusText = "Connecting…",
-        connectSettling = false,
       ),
     )
   }
@@ -949,16 +942,11 @@ class OnboardingFlowLogicTest {
     )
 
   private fun gatewayPairingState(
-    gatewayPaired: Boolean,
-    connectTimedOut: Boolean,
-    statusText: String = if (gatewayPaired) "Connected (node offline)" else "Connecting…",
+    statusText: String,
   ): GatewayRecoveryUiState =
     gatewayPairingUiState(
-      gatewayPaired = gatewayPaired,
       gatewayPairingCanContinue = false,
       statusText = statusText,
-      connectSettling = false,
-      connectTimedOut = connectTimedOut,
     )
 
   private fun pairingRequiredProblem(

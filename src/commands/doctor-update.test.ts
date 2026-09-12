@@ -71,8 +71,11 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         allowGatewayActivation: false,
       }),
     );
-    expect(progress.onStepStart).toHaveBeenCalledWith(step);
-    expect(progress.onStepComplete).toHaveBeenCalledWith({ ...step, durationMs: 1, exitCode: 0 });
+    expect(progress.onStepStart).toHaveBeenCalledWith(step, undefined);
+    expect(progress.onStepComplete).toHaveBeenCalledWith(
+      { ...step, durationMs: 1, exitCode: 0 },
+      undefined,
+    );
     expect(mocks.createUpdateProgress).toHaveBeenCalledWith(true);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).not.toHaveBeenCalled();
@@ -557,6 +560,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       if (safe) {
         expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).toHaveBeenCalledWith({
           recovery: { serviceRestartSafe: true, version: "2026.4.24", buildId: "synthetic-build" },
+          updateRun: await mocks.admitUpdateCommandRun.mock.results[0]!.value,
           preManagedServiceStop: expect.objectContaining({ stopped: true }),
           jsonMode: false,
           timeoutMs: 1_200_000,

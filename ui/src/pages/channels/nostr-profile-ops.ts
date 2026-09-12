@@ -1,9 +1,16 @@
 // Nostr profile HTTP operations for the channels page: gateway REST calls for
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
+import { fetchWithControlUiAuth } from "../../app/control-ui-auth.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+
+type NostrProfileRequest = {
+  accountId: string;
+  authCandidates: readonly string[];
+  isCurrent: () => boolean;
+};
 
 type NostrProfileHttpResult<T> = {
   data: T | null;
@@ -12,7 +19,8 @@ type NostrProfileHttpResult<T> = {
 
 async function requestNostrProfile<T>(
   url: string,
-  init: Omit<RequestInit, "signal">,
+  init: { method: string; headers: Record<string, string>; body: string },
+  auth: NostrProfileRequest,
 ): Promise<NostrProfileHttpResult<T>> {
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -23,7 +31,12 @@ async function requestNostrProfile<T>(
     NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
   );
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetchWithControlUiAuth(
+      url,
+      { ...init, signal: controller.signal },
+      auth.authCandidates,
+      auth.isCurrent,
+    );
     let data: T | null = null;
     try {
       data = (await response.json()) as T;
@@ -64,42 +77,45 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
 }
 
-export async function putNostrProfile(params: {
-  accountId: string;
-  headers: Record<string, string>;
-  values: NostrProfile;
-}) {
+export async function putNostrProfile(
+  params: NostrProfileRequest & {
+    values: NostrProfile;
+  },
+) {
   return await requestNostrProfile<{
     ok?: boolean;
     error?: string;
     details?: unknown;
     persisted?: boolean;
-  }>(buildNostrProfileUrl(params.accountId), {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      ...params.headers,
+  }>(
+    buildNostrProfileUrl(params.accountId),
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(params.values),
     },
-    body: JSON.stringify(params.values),
-  });
+    params,
+  );
 }
 
-export async function importNostrProfile(params: {
-  accountId: string;
-  headers: Record<string, string>;
-}) {
+export async function importNostrProfile(params: NostrProfileRequest) {
   return await requestNostrProfile<{
     ok?: boolean;
     error?: string;
     imported?: NostrProfile;
     merged?: NostrProfile;
     saved?: boolean;
-  }>(buildNostrProfileUrl(params.accountId, "/import"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...params.headers,
+  }>(
+    buildNostrProfileUrl(params.accountId, "/import"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ autoMerge: true }),
     },
-    body: JSON.stringify({ autoMerge: true }),
-  });
+    params,
+  );
 }

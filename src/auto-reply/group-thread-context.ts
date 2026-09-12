@@ -3,7 +3,7 @@ import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identit
 import type {
   PluginHookMessageContext,
   PluginHookMessageSendingEvent,
-} from "../plugins/hook-types.js";
+} from "../plugins/hook-message.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { TurnAdoptionLifecycle } from "./get-reply-options.types.js";
 import type { FinalizedMsgContext } from "./templating.js";
@@ -134,6 +134,16 @@ export function bindGroupThreadDispatchContext(ctx: FinalizedMsgContext): GroupT
 
 export function getGroupThreadDispatchContext(): GroupThreadScope["dispatch"] {
   return currentScope()?.dispatch;
+}
+
+/** Data-only delivery identity, including unlabeled single-participant groups. */
+export function getGroupThreadDeliverySession():
+  | { agentId: string; sessionKey: string }
+  | undefined {
+  const ctx = currentScope()?.dispatch?.ctx;
+  return ctx?.AgentId && ctx.SessionKey
+    ? { agentId: ctx.AgentId, sessionKey: ctx.SessionKey }
+    : undefined;
 }
 
 export function recordGroupThreadReply(payload: ReplyPayload): void {

@@ -4,7 +4,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import workerDeployBrowserRuntime from "./worker-deploy-browser-runtime.js";
 import { runWorkerProcess } from "./worker-process.js";
 
-assertSupportedRuntime();
+await assertSupportedRuntime();
 
 const args = process.argv.slice(2);
 const internalWorkerIpc = args.includes("--internal-worker-ipc");

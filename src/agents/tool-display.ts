@@ -12,7 +12,6 @@ import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,
-  formatToolDetailText,
   formatDetailKey,
   normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
@@ -94,8 +93,7 @@ export function resolveToolDisplay(params: {
 
 /** Formats and redacts detail text for display. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
-  return formatToolDetailText(detailRaw);
+  return display.detail ? redactToolDetail(display.detail) : undefined;
 }
 
 /** Infers compact display metadata for a tool invocation from its arguments. */

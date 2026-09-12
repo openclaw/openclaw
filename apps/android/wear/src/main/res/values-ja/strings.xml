@@ -79,6 +79,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"アクションは受け付けられませんでした"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"問題が発生しました"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"リストを更新して、もう一度お試しください。"</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"一部のモデルを更新できませんでした。一覧に表示されているモデルは引き続き利用できます。"</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"このチャットでモデルを選択するには、スマートフォンのOpenClawとGatewayを更新してください。"</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ウォッチからもう一度お試しください。"</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"更新が必要"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スマートフォンとウォッチの両方でOpenClawを更新してください。"</string>

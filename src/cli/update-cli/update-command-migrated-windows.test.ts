@@ -12,10 +12,8 @@ import {
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import {
-  continueMigratedUpdateInFreshProcess,
-  type MigratedUpdateFinalizationInput,
-} from "./update-command-migrated.js";
+import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
+import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -143,6 +141,7 @@ it.each([
           signal: null,
           killed: false,
           termination: "exit",
+          cleanup: "normal",
         };
       });
       const runId = "migrated-windows-run";

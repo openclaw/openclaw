@@ -1,5 +1,6 @@
 {
   "id": "comfy",
+  "categories": ["media"],
   "activation": {
     "onStartup": false
   },

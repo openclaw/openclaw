@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+openclaw_resolve_frozen_session_cold_storage_contract "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openai-chat-tools-e2e" OPENCLAW_OPENAI_CHAT_TOOLS_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_OPENAI_CHAT_TOOLS_E2E_SKIP_BUILD:-0}"
@@ -63,6 +69,7 @@ echo "Running OpenAI Chat Completions tools Docker E2E..."
 echo "Profile file: $PROFILE_STATUS"
 docker_e2e_run_logged_with_harness openai-chat-tools \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e "OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE=$OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE" \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
@@ -71,6 +78,6 @@ docker_e2e_run_logged_with_harness openai-chat-tools \
   -e "OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES=$MAX_BODY_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -e "PORT=$PORT" \
-  "${PROFILE_MOUNT[@]}" \
+  ${PROFILE_MOUNT[@]+"${PROFILE_MOUNT[@]}"} \
   "$IMAGE_NAME" \
   bash scripts/e2e/lib/openai-chat-tools/scenario.sh

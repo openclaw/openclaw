@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import type { AgentEventPayload } from "../../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  type AgentEventPayload,
+} from "../../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -23,6 +26,7 @@ import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
@@ -599,12 +603,13 @@ describe("requester settle wake product flow", () => {
   });
 
   it.each([
-    { runtime: "cli", acceptNextChild: true },
-    { runtime: "cli", acceptNextChild: false },
-    { runtime: "native", acceptNextChild: true },
+    { runtime: "cli", acceptNextChild: true, attachRequesterFinal: false },
+    { runtime: "cli", acceptNextChild: false, attachRequesterFinal: false },
+    { runtime: "native", acceptNextChild: true, attachRequesterFinal: false },
+    { runtime: "cli", acceptNextChild: true, attachRequesterFinal: true },
   ] as const)(
-    "preserves serial continuation without replaying an accepted wave ($runtime, next child accepted=$acceptNextChild)",
-    async ({ runtime, acceptNextChild }) => {
+    "preserves serial continuation without replaying an accepted wave ($runtime, next child accepted=$acceptNextChild, requester final=$attachRequesterFinal)",
+    async ({ runtime, acceptNextChild, attachRequesterFinal }) => {
       vi.setSystemTime(100_000);
       const context = {} as GatewayRequestContext;
       context.resolveGatewayContext = () => context;
@@ -751,85 +756,117 @@ describe("requester settle wake product flow", () => {
       const ordinaryGatewayCall = callGatewayMock.getMockImplementation()!;
       let firstWakeReturned = false;
       let visibleFinals = 0;
-      await callGatewayMock.withImplementation(
-        async (request) => {
-          if (
-            request.method !== "agent" ||
-            !request.params?.idempotencyKey?.startsWith("announce:requester-settle:")
-          ) {
-            return await ordinaryGatewayCall(request);
-          }
-          if (!firstWakeReturned) {
-            // Gateway preflight uses this exact idempotency key as the run ID.
-            const requesterTurnRunId = request.params.idempotencyKey;
-            if (acceptNextChild) {
-              const firstEndedAt = registry.getSubagentRunByRunId(alpha.runId)?.execution.endedAt;
-              expect(firstEndedAt).toEqual(expect.any(Number));
-              vi.setSystemTime(firstEndedAt! + 1);
-              await spawnVisibleChild({ ...beta, requesterTurnRunId });
-              expect(registry.getSubagentRunByRunId(beta.runId)?.createdAt).toBeGreaterThan(
-                firstEndedAt!,
-              );
+      const initialRequesterTurnRunId = "requester-serial-initial";
+      const append = vi.fn(() => true);
+      const attachment = attachRequesterFinal
+        ? registerRequesterFinalAttachment({
+            requesterAgentId: "main",
+            requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+            requesterSessionId: "sess-main",
+            requesterTurnRunId: initialRequesterTurnRunId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            timeoutMs: 600_000,
+            append,
+          })
+        : undefined;
+      try {
+        await callGatewayMock.withImplementation(
+          async (request) => {
+            if (
+              request.method !== "agent" ||
+              !request.params?.idempotencyKey?.startsWith("announce:requester-settle:")
+            ) {
+              return await ordinaryGatewayCall(request);
             }
-            const result = await yieldTurn(requesterTurnRunId, acceptNextChild ? [beta] : []);
-            firstWakeReturned = true;
-            return { runId: requesterTurnRunId, status: "ok", result };
-          }
-          visibleFinals += 1;
-          return await ordinaryGatewayCall(request);
-        },
-        async () => {
-          const requesterTurnRunId = "requester-serial-initial";
-          await spawnVisibleChild({ ...alpha, requesterTurnRunId });
-          await yieldTurn(requesterTurnRunId, [alpha]);
-          emitCompleted(alpha.runId, alpha.childSessionKey, "alpha findings");
-          await vi.waitFor(() => expect(firstWakeReturned).toBe(true));
-          await vi.advanceTimersByTimeAsync(0);
-          expect(getRequesterWakeCalls()).toHaveLength(1);
-          expect(visibleFinals).toBe(0);
-          if (acceptNextChild) {
-            expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(1);
-            expect(registry.getSubagentRunByRunId(beta.runId)).toMatchObject({
-              requesterTurnRunId: undefined,
-              requesterSettleWake: {
-                status: "pending",
-                batchRunIds: [beta.runId],
-                requesterYieldBatch: true,
+            if (!firstWakeReturned) {
+              // Gateway preflight uses this exact idempotency key as the run ID.
+              const requesterTurnRunId = request.params.idempotencyKey;
+              if (acceptNextChild) {
+                const firstEndedAt = registry.getSubagentRunByRunId(alpha.runId)?.execution.endedAt;
+                expect(firstEndedAt).toEqual(expect.any(Number));
+                vi.setSystemTime(firstEndedAt! + 1);
+                await spawnVisibleChild({ ...beta, requesterTurnRunId });
+                expect(registry.getSubagentRunByRunId(beta.runId)?.createdAt).toBeGreaterThan(
+                  firstEndedAt!,
+                );
+              }
+              const result = await yieldTurn(requesterTurnRunId, acceptNextChild ? [beta] : []);
+              firstWakeReturned = true;
+              return { runId: requesterTurnRunId, status: "ok", result };
+            }
+            visibleFinals += 1;
+            const response = await ordinaryGatewayCall(request);
+            return attachRequesterFinal
+              ? {
+                  ...response,
+                  result: {
+                    ...response.result,
+                    meta: { durationMs: 1, finalAssistantVisibleText: "completion delivered" },
+                  },
+                }
+              : response;
+          },
+          async () => {
+            await spawnVisibleChild({ ...alpha, requesterTurnRunId: initialRequesterTurnRunId });
+            await yieldTurn(initialRequesterTurnRunId, [alpha]);
+            attachment?.releaseProvisional();
+            emitCompleted(alpha.runId, alpha.childSessionKey, "alpha findings");
+            await vi.waitFor(() => expect(firstWakeReturned).toBe(true));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(getRequesterWakeCalls()).toHaveLength(1);
+            expect(visibleFinals).toBe(0);
+            expect(append).not.toHaveBeenCalled();
+            if (acceptNextChild) {
+              expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(
+                1,
+              );
+              expect(registry.getSubagentRunByRunId(beta.runId)).toMatchObject({
+                requesterTurnRunId: undefined,
+                requesterSettleWake: {
+                  status: "pending",
+                  batchRunIds: [beta.runId],
+                  requesterYieldBatch: true,
+                },
+              });
+              emitCompleted(beta.runId, beta.childSessionKey, "beta findings");
+            } else {
+              expect(registry.getSubagentRunByRunId(beta.runId)).toBeUndefined();
+            }
+            // Cross both native retry deadlines; a transferred obligation must not
+            // start an extra parent turn, while an empty failed handoff must recover.
+            await vi.advanceTimersByTimeAsync(151_000);
+            await registry.testing.sweepOnceForTests();
+            await vi.advanceTimersByTimeAsync(0);
+            for (const child of acceptNextChild ? [alpha, beta] : [alpha]) {
+              await waitForDeliveredCleanup(child.runId);
+            }
+            const wakeIdentities = getRequesterWakeCalls().map((request) => ({
+              sourceSessionKey: request.params?.inputProvenance?.sourceSessionKey,
+              idempotencyKey: request.params?.idempotencyKey,
+            }));
+            expect(wakeIdentities).toEqual([
+              {
+                sourceSessionKey: alpha.childSessionKey,
+                idempotencyKey: expect.not.stringContaining(":retry-"),
               },
-            });
-            emitCompleted(beta.runId, beta.childSessionKey, "beta findings");
-          } else {
-            expect(registry.getSubagentRunByRunId(beta.runId)).toBeUndefined();
-          }
-          // Cross both native retry deadlines; a transferred obligation must not
-          // start an extra parent turn, while an empty failed handoff must recover.
-          await vi.advanceTimersByTimeAsync(151_000);
-          await registry.testing.sweepOnceForTests();
-          await vi.advanceTimersByTimeAsync(0);
-          for (const child of acceptNextChild ? [alpha, beta] : [alpha]) {
-            await waitForDeliveredCleanup(child.runId);
-          }
-          const wakeIdentities = getRequesterWakeCalls().map((request) => ({
-            sourceSessionKey: request.params?.inputProvenance?.sourceSessionKey,
-            idempotencyKey: request.params?.idempotencyKey,
-          }));
-          expect(wakeIdentities).toEqual([
-            {
-              sourceSessionKey: alpha.childSessionKey,
-              idempotencyKey: expect.not.stringContaining(":retry-"),
-            },
-            {
-              sourceSessionKey: acceptNextChild ? beta.childSessionKey : alpha.childSessionKey,
-              idempotencyKey: acceptNextChild
-                ? expect.not.stringContaining(":retry-")
-                : expect.stringContaining(":retry-"),
-            },
-          ]);
-          expect(visibleFinals).toBe(1);
-          expect(sendMessageMock).not.toHaveBeenCalled();
-          expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(0);
-        },
-      );
+              {
+                sourceSessionKey: acceptNextChild ? beta.childSessionKey : alpha.childSessionKey,
+                idempotencyKey: acceptNextChild
+                  ? expect.not.stringContaining(":retry-")
+                  : expect.stringContaining(":retry-"),
+              },
+            ]);
+            expect(visibleFinals).toBe(1);
+            expect(sendMessageMock).not.toHaveBeenCalled();
+            expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(0);
+            if (attachRequesterFinal) {
+              expect(append).toHaveBeenCalledExactlyOnceWith("completion delivered");
+            }
+          },
+        );
+      } finally {
+        attachment?.revoke();
+      }
     },
   );
 

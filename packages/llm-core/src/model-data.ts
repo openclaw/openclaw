@@ -9,6 +9,7 @@ export const MODEL_DATA_APIS = [
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
+  "pi-messages",
   "azure-openai-responses",
 ] as const;
 

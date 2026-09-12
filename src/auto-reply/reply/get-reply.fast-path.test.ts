@@ -22,6 +22,7 @@ import {
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { buildCommandContext } from "./commands-context.js";
 import { handleGoalCommand } from "./commands-goal.js";
+import type { CommandDispatchParams } from "./commands-types.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
   emptyAliasIndex,
@@ -44,7 +45,7 @@ import "./get-reply.test-runtime-mocks.js";
 registerGetReplyBaselineBypass();
 
 type LoadModelCatalogFn =
-  typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
+  typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog;
 
 const mocks = vi.hoisted(() => ({
   buildStatusReply: vi.fn(),
@@ -66,7 +67,7 @@ vi.mock("./commands-status.js", () => ({
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: mocks.loadModelCatalog,
+  readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../../agents/workspace.js", () => ({
@@ -193,11 +194,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
     mocks.ensureAgentWorkspace.mockReset();
     mocks.handleCommands.mockReset();
-    mocks.handleCommands.mockImplementation(async (params: unknown) => {
-      const result = await handleGoalCommand(
-        params as Parameters<typeof handleGoalCommand>[0],
-        true,
-      );
+    mocks.handleCommands.mockImplementation(async (params: CommandDispatchParams) => {
+      const modelLevels = await params.resolveModelLevels();
+      const result = await handleGoalCommand({ ...params, ...modelLevels }, true);
       return result ?? { shouldContinue: true, reply: undefined };
     });
     mocks.handleInlineActions.mockReset();
@@ -272,8 +271,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       expect(mocks.initSessionState).not.toHaveBeenCalled();
       expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
       expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-      const preparedReplyParams = requirePreparedReplyParams();
-      expect(preparedReplyParams.cfg).toBe(cfg);
+      expect(requirePreparedReplyParams().cfg).toBe(cfg);
     },
   );
 
@@ -306,6 +304,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       createGetReplySessionState({
         sessionKey: "agent:main:slack:channel:C123",
         sessionId: "rotated-session",
+        sessionEntry: { lifecycleRevision: "prepared-revision" },
         storePath: "/tmp/custom-sessions.json",
       }),
     );
@@ -324,6 +323,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(onSessionPrepared).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       sessionId: "rotated-session",
+      lifecycleRevision: "prepared-revision",
       storePath: "/tmp/custom-sessions.json",
     });
   });

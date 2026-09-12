@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createReleaseCheckSelection } from "../../scripts/plan-release-workflow-matrix.mjs";
 
 const WORKFLOW_PATH = ".github/workflows/openclaw-cross-os-release-checks-reusable.yml";
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
@@ -386,13 +387,10 @@ describe("cross-OS release checks workflow", () => {
       package_required: "${{ steps.inputs.outputs.package_required }}",
     });
     const capture = step(resolveTarget, "Capture selected inputs");
-    expect(capture.run).toContain("cross_os_scheduled=false");
-    expect(capture.run).toContain("docker_required=false");
-    expect(capture.run).toContain("package_required=false");
-    expect(capture.run).toContain("group_selected cross-os && cross_os_scheduled=true");
     expect(capture.run).toContain(
-      '"$live_e2e_scheduled" == "true" && -z "$repo_live_suite_filter"',
+      "import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs'",
     );
+    expect(capture.run).toContain("JSON.stringify(createReleaseCheckSelection({");
 
     const producer = job(workflow, "prepare_release_package");
     expect(producer.if).toBe("needs.resolve_target.outputs.package_required == 'true'");
@@ -411,6 +409,33 @@ describe("cross-OS release checks workflow", () => {
     expect(job(workflow, "docker_e2e_release_checks").if).toBe(
       "needs.resolve_target.outputs.docker_required == 'true'",
     );
+    for (const [rerunGroup, phase, repoLiveSuiteFilter, crossOs, docker, packageRequired] of [
+      ["install-smoke", "all", "", false, false, false],
+      ["cross-os", "all", "", true, false, true],
+      ["package", "all", "", false, false, true],
+      ["live-e2e", "all", "", false, true, true],
+      ["live-e2e", "all", "repo-e2e", false, false, false],
+      ["cross-os", "independent", "", false, false, false],
+    ] as const) {
+      const selected = createReleaseCheckSelection({ rerunGroup, phase, repoLiveSuiteFilter });
+      expect(selected, `${rerunGroup}/${phase}/${repoLiveSuiteFilter}`).toMatchObject({
+        cross_os_scheduled: crossOs,
+        docker_required: docker,
+        package_required: packageRequired,
+      });
+      const context = {
+        needs: {
+          resolve_target: {
+            outputs: Object.fromEntries(
+              Object.entries(selected).map(([key, value]) => [key, String(value)]),
+            ),
+          },
+        },
+      };
+      expect(runInNewContext(producer.if!, context)).toBe(packageRequired);
+      expect(runInNewContext(job(workflow, "cross_os_release_checks").if!, context)).toBe(crossOs);
+      expect(runInNewContext(job(workflow, "docker_e2e_release_checks").if!, context)).toBe(docker);
+    }
   });
 
   it("downloads and re-exports exact candidate artifacts only by immutable id", () => {

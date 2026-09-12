@@ -87,6 +87,7 @@ struct OpenClawChatComposer: View {
     @State private var slashPanelHeight: CGFloat = 0
     @State private var slashHighlightIndex = 0
     @State var dictationTask: Task<Void, Never>?
+    @State private var signInContext: OpenClawChatModelSignInContext?
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showsPhotoPicker = false
@@ -106,7 +107,31 @@ struct OpenClawChatComposer: View {
     @ScaledMetric(relativeTo: .body) private var scaledBodyLineHeight: CGFloat = 22
 
     var body: some View {
-        self.lifecycleComposer
+        VStack(alignment: .leading, spacing: 4) {
+            self.lifecycleComposer
+            HStack {
+                if let message = self.viewModel.modelCatalogMessage {
+                    Text(message).font(OpenClawChatTypography.caption)
+                }
+                Spacer()
+                Button {
+                    Task { self.signInContext = await self.viewModel.modelSignInContext() }
+                } label: {
+                    Text("Model sign-in").font(OpenClawChatTypography.caption)
+                }
+                .accessibilityIdentifier("chat-model-sign-in")
+            }
+            .foregroundStyle(.secondary)
+        }
+        .sheet(isPresented: Binding(
+            get: { self.signInContext != nil },
+            set: { if !$0 { self.signInContext = nil } }))
+        {
+            if let context = self.signInContext {
+                OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+            }
+        }
+        .onChange(of: self.presentationOwner) { _, _ in self.signInContext = nil }
     }
 
     private var styledComposer: some View {
@@ -392,13 +417,13 @@ struct OpenClawChatComposer: View {
                         }
                         #if os(macOS)
                         self.verbosityPicker.labelsHidden()
-                        if self.viewModel.selectedModelSupportsFastMode {
+                        if self.viewModel.showsFastModeControls {
                             self.fastModeToggle.labelsHidden()
                         }
                         #endif
                     }
                     if self.viewModel.showsModelPicker {
-                        self.modelPicker.labelsHidden()
+                        self.modelPicker
                         if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
                             self.modelPinButton
                         }

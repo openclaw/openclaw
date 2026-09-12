@@ -39,6 +39,8 @@ export const DesktopObserveResultSchema = closedObject({
   wsPath: NonEmptyString,
   expiresAtMs: Type.Integer({ minimum: 0 }),
   control: Type.Boolean(),
+  // Permission to request resizing, not proof that the RFB server supports it.
+  canResize: Type.Optional(Type.Boolean()),
   vncPassword: Type.Optional(NonEmptyString),
   // Auth drives credential prompting without coupling clients to RFB security numbers.
   auth: Type.Optional(Type.String({ enum: ["none", "vnc-password", "ard-account"] })),

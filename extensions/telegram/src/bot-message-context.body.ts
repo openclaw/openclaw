@@ -329,7 +329,7 @@ export async function resolveTelegramInboundBody(params: {
 
   const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
-    ? hasBotMention(msg, botUsername) ||
+    ? hasBotMention(msg, botUsername, primaryCtx.me?.id) ||
       (richText ? hasBotMentionInText(richText, botUsername) : false)
     : false;
   const groupThread = resolveGroupThreadMentionFacts({

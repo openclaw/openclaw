@@ -46,6 +46,13 @@ function pickerTrigger(picker: HTMLElement): HTMLElement | null {
     : picker.querySelector<HTMLElement>("[slot=trigger]");
 }
 
+function clearPointerFocus(this: HTMLElement): void {
+  // Blur and keyboard takeover complete the same pointer-focus lifetime.
+  this.removeEventListener("blur", clearPointerFocus);
+  this.removeEventListener("keydown", clearPointerFocus);
+  this.removeAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE);
+}
+
 function dismissChatComposerPickersOutside(event: PointerEvent): void {
   const path = event.composedPath();
   for (const picker of openChatComposerPickers()) {
@@ -186,7 +193,6 @@ export function restorePointerOpenedChatComposerTrigger(event: Event): void {
       return;
     }
     trigger.setAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE, "");
-    const clearPointerFocus = () => trigger.removeAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE);
     trigger.addEventListener("blur", clearPointerFocus, { once: true });
     trigger.addEventListener("keydown", clearPointerFocus, { once: true });
     trigger.focus({ preventScroll: true });

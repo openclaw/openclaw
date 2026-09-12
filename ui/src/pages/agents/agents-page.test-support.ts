@@ -8,6 +8,7 @@ import type {
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type { CronState } from "../../lib/cron/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentsRouteData } from "./route.ts";
@@ -69,6 +70,9 @@ export function setPageGateway(
   connected = true,
   sourceChanged = false,
 ) {
+  if (!page.context?.gateway || sourceChanged) {
+    page.context = { ...page.context, gateway: gateway(snapshot(client, connected)) };
+  }
   page.gateway.applySnapshot(snapshot(client, connected), { initial: false, sourceChanged });
 }
 
@@ -99,9 +103,33 @@ export function snapshot(
   };
 }
 
+const eventListeners = new WeakMap<
+  ApplicationContext["gateway"],
+  Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>
+>();
+
+export function emitCatalogChanged(currentGateway: ApplicationContext["gateway"]) {
+  const client = currentGateway.snapshot.client;
+  if (client) {
+    invalidateChatMetadataStore(client);
+  }
+  for (const listener of eventListeners.get(currentGateway) ?? []) {
+    listener({ type: "event", event: "chat.metadata.changed", payload: {} });
+  }
+}
+
 export function gateway(current: ApplicationGatewaySnapshot): ApplicationContext["gateway"] {
-  return {
+  const listeners = new Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>();
+  const result = {
+    subscribeEvents: (
+      listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
+    ) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     snapshot: current,
     subscribe: vi.fn(() => () => undefined),
   } as unknown as ApplicationContext["gateway"];
+  eventListeners.set(result, listeners);
+  return result;
 }

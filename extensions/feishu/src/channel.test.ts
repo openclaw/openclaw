@@ -90,6 +90,21 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
+function createFetchedTextMessage(
+  messageId: string,
+  chatId: string,
+  chatType: "group" | "private",
+  content: string,
+) {
+  return {
+    messageId,
+    chatId,
+    chatType,
+    content,
+    contentType: "text",
+  };
+}
+
 function describeFeishuMessageTool(cfg: OpenClawConfig, accountId?: string) {
   return feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId });
 }
@@ -2150,39 +2165,23 @@ describe("feishuPlugin actions", () => {
   // silent-drop this PR removes. Post-fix the resolver rejects the malformed
   // intent before the text branch, at both the top level and inside attachments[].
   it.each([
-    {
-      label: "top-level `file: {}`",
-      params: { file: {} },
-      expectedError: "`file` attachment-intent parameter is not supported",
-    },
-    {
-      label: "top-level `buffer: {}`",
-      params: { buffer: {} },
-      expectedError: "buffer/base64 payloads are not supported",
-    },
-    {
-      label: "top-level `base64: {}`",
-      params: { base64: {} },
-      expectedError: "buffer/base64 payloads are not supported",
-    },
-    {
-      label: "top-level `file: 42`",
-      params: { file: 42 },
-      expectedError: "`file` attachment-intent parameter is not supported",
-    },
-    {
-      label: "nested `attachments: [{ file: {} }]`",
-      params: { attachments: [{ file: {} }] },
-      expectedError: "`file` attachment-intent parameter is not supported",
-    },
-    {
-      label: "nested `attachments: [{ buffer: {} }]`",
-      params: { attachments: [{ buffer: {} }] },
-      expectedError: "buffer/base64 payloads are not supported",
-    },
+    ["top-level `file: {}`", { file: {} }, "`file` attachment-intent parameter is not supported"],
+    ["top-level `buffer: {}`", { buffer: {} }, "buffer/base64 payloads are not supported"],
+    ["top-level `base64: {}`", { base64: {} }, "buffer/base64 payloads are not supported"],
+    ["top-level `file: 42`", { file: 42 }, "`file` attachment-intent parameter is not supported"],
+    [
+      "nested `attachments: [{ file: {} }]`",
+      { attachments: [{ file: {} }] },
+      "`file` attachment-intent parameter is not supported",
+    ],
+    [
+      "nested `attachments: [{ buffer: {} }]`",
+      { attachments: [{ buffer: {} }] },
+      "buffer/base64 payloads are not supported",
+    ],
   ])(
-    "rejects malformed (non-string) $label attachment intent on send instead of text-only success",
-    async ({ params, expectedError }) => {
+    "rejects malformed (non-string) %s attachment intent on send instead of text-only success",
+    async (_label, params, expectedError) => {
       await expect(
         feishuPlugin.actions?.handleAction?.({
           action: "send",
@@ -2489,13 +2488,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("reads messages", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_1",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_1", "oc_group_1", "group", "hello"),
+    );
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "read",
@@ -2517,13 +2512,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("reads an explicit group target authorized only by groupAllowFrom", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_group_allow_from",
-      chatId: "oc_group_allow_from",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_group_allow_from", "oc_group_allow_from", "group", "hello"),
+    );
 
     await expect(
       feishuPlugin.actions?.handleAction?.({
@@ -2571,13 +2562,9 @@ describe("feishuPlugin actions", () => {
       chat_mode: "group",
       chat_type: "private",
     });
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_open_group",
-      chatId: "oc_open_group",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_open_group", "oc_open_group", "group", "hello"),
+    );
 
     await expect(
       feishuPlugin.actions?.handleAction?.({
@@ -2646,13 +2633,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("resolves private message visibility before applying read policy", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_private_group",
-      chatId: "oc_group_1",
-      chatType: "private",
-      content: "hidden",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_private_group", "oc_group_1", "private", "hidden"),
+    );
 
     await expect(
       feishuPlugin.actions?.handleAction?.({
@@ -2698,13 +2681,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("edits messages", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_2",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "before",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_2", "oc_group_1", "group", "before"),
+    );
     editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_2", contentType: "post" });
 
     const result = await feishuPlugin.actions?.handleAction?.({
@@ -2973,13 +2952,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("creates pins", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_pin",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "pin me",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_pin", "oc_group_1", "group", "pin me"),
+    );
     createPinFeishuMock.mockResolvedValueOnce({ messageId: "om_pin", chatId: "oc_group_1" });
 
     const result = await feishuPlugin.actions?.handleAction?.({
@@ -3032,13 +3007,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("removes pins", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_pin",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "unpin me",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_pin", "oc_group_1", "group", "unpin me"),
+    );
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "unpin",
       params: { messageId: "om_pin" },
@@ -3369,13 +3340,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("adds a reaction after authorizing the direct operator's ID-only target", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_msg1",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_msg1", "oc_group_1", "group", "hello"),
+    );
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "react",
@@ -3395,13 +3362,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("allows explicit clearAll=true when removing all bot reactions", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_msg1",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_msg1", "oc_group_1", "group", "hello"),
+    );
     listReactionsFeishuMock.mockResolvedValueOnce([
       { reactionId: "r1", operatorType: "app", operatorId: "cli_main" },
       { reactionId: "r2", operatorType: "app", operatorId: "cli_main" },
@@ -3440,13 +3403,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("removes an own reaction from an authorized Feishu message", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_msg1",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_msg1", "oc_group_1", "group", "hello"),
+    );
     listReactionsFeishuMock.mockResolvedValueOnce([
       { reactionId: "r-other", operatorType: "app", operatorId: "cli_other" },
       { reactionId: "r1", operatorType: "app", operatorId: "cli_main" },
@@ -3474,13 +3433,9 @@ describe("feishuPlugin actions", () => {
   });
 
   it("does not remove another app's matching reaction", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_msg1",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_msg1", "oc_group_1", "group", "hello"),
+    );
     listReactionsFeishuMock.mockResolvedValueOnce([
       { reactionId: "r-other", operatorType: "app", operatorId: "cli_other" },
       { reactionId: "r-user", operatorType: "user", operatorId: "ou_user" },
@@ -3504,13 +3459,9 @@ describe("feishuPlugin actions", () => {
 
   it("lists reactions from an authorized Feishu message", async () => {
     const reactions = [{ reactionId: "r1", operatorType: "app", operatorId: "cli_main" }];
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_msg1",
-      chatId: "oc_group_1",
-      chatType: "group",
-      content: "hello",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_msg1", "oc_group_1", "group", "hello"),
+    );
     listReactionsFeishuMock.mockResolvedValueOnce(reactions);
 
     const result = await feishuPlugin.actions?.handleAction?.({
@@ -3570,67 +3521,35 @@ describe("feishuPlugin actions", () => {
   });
 
   it.each([
-    {
-      name: "message reads",
-      action: "read",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "message edits",
-      action: "edit",
-      params: { messageId: "om_blocked", chatId: "oc_blocked", text: "blocked" },
-    },
-    {
-      name: "reaction addition",
-      action: "react",
-      params: { messageId: "om_blocked", chatId: "oc_blocked", emoji: "THUMBSUP" },
-    },
-    {
-      name: "reaction removal",
-      action: "react",
-      params: {
+    ["message reads", "read", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["message edits", "edit", { messageId: "om_blocked", chatId: "oc_blocked", text: "blocked" }],
+    [
+      "reaction addition",
+      "react",
+      { messageId: "om_blocked", chatId: "oc_blocked", emoji: "THUMBSUP" },
+    ],
+    [
+      "reaction removal",
+      "react",
+      {
         messageId: "om_blocked",
         chatId: "oc_blocked",
         emoji: "THUMBSUP",
         remove: true,
       },
-    },
-    {
-      name: "reaction clearing",
-      action: "react",
-      params: { messageId: "om_blocked", chatId: "oc_blocked", clearAll: true },
-    },
-    {
-      name: "reaction lookup",
-      action: "reactions",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "pin creation",
-      action: "pin",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "pin removal",
-      action: "unpin",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "pin lookup",
-      action: "list-pins",
-      params: { chatId: "oc_blocked" },
-    },
-    {
-      name: "channel info",
-      action: "channel-info",
-      params: { chatId: "oc_blocked" },
-    },
-    {
-      name: "member info",
-      action: "member-info",
-      params: { chatId: "oc_blocked", memberId: "ou_blocked" },
-    },
-  ])("rejects blocked Feishu $name before provider content reads", async ({ action, params }) => {
+    ],
+    [
+      "reaction clearing",
+      "react",
+      { messageId: "om_blocked", chatId: "oc_blocked", clearAll: true },
+    ],
+    ["reaction lookup", "reactions", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["pin creation", "pin", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["pin removal", "unpin", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["pin lookup", "list-pins", { chatId: "oc_blocked" }],
+    ["channel info", "channel-info", { chatId: "oc_blocked" }],
+    ["member info", "member-info", { chatId: "oc_blocked", memberId: "ou_blocked" }],
+  ])("rejects blocked Feishu %s before provider content reads", async (_name, action, params) => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
         action,
@@ -3659,29 +3578,13 @@ describe("feishuPlugin actions", () => {
   });
 
   it.each([
-    {
-      name: "message reads",
-      action: "read",
-      params: { messageId: "om_unknown", chatId: "oc_unknown" },
-    },
-    {
-      name: "pin lookup",
-      action: "list-pins",
-      params: { chatId: "oc_unknown" },
-    },
-    {
-      name: "channel info",
-      action: "channel-info",
-      params: { chatId: "oc_unknown" },
-    },
-    {
-      name: "member info",
-      action: "member-info",
-      params: { chatId: "oc_unknown", memberId: "ou_unknown" },
-    },
+    ["message reads", "read", { messageId: "om_unknown", chatId: "oc_unknown" }],
+    ["pin lookup", "list-pins", { chatId: "oc_unknown" }],
+    ["channel info", "channel-info", { chatId: "oc_unknown" }],
+    ["member info", "member-info", { chatId: "oc_unknown", memberId: "ou_unknown" }],
   ])(
-    "does not expose failed metadata lookup details for ambiguous Feishu $name",
-    async ({ action, params }) => {
+    "does not expose failed metadata lookup details for ambiguous Feishu %s",
+    async (_name, action, params) => {
       getChatInfoMock.mockRejectedValueOnce(new Error("chat not found"));
 
       await expect(
@@ -3711,13 +3614,9 @@ describe("feishuPlugin actions", () => {
   );
 
   it("rejects a Feishu message returned from a different chat than the authorized target", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_other",
-      chatId: "oc_other",
-      chatType: "group",
-      content: "hidden",
-      contentType: "text",
-    });
+    getMessageFeishuMock.mockResolvedValueOnce(
+      createFetchedTextMessage("om_other", "oc_other", "group", "hidden"),
+    );
 
     await expect(
       feishuPlugin.actions?.handleAction?.({

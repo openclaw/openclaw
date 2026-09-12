@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { scrollState } from "./scroll-state.ts";
 
 export function handleComposerMenuKeydown(
   event: KeyboardEvent,
@@ -48,18 +48,7 @@ export function renderComposerMenu(options: {
     role="listbox"
     aria-label=${options.label}
   >
-    <div
-      class="slash-menu__scroll"
-      ${ref(syncMenuScroll)}
-      @scroll=${
-        options.trackScroll === false
-          ? nothing
-          : (event: Event) =>
-              syncMenuScroll(
-                event.currentTarget instanceof Element ? event.currentTarget : undefined,
-              )
-      }
-    >
+    <div class="slash-menu__scroll" ${scrollState(false, options.trackScroll)}>
       ${options.content}
     </div>
   </div>`;
@@ -114,20 +103,4 @@ function scrollActiveOptionIntoView(activeId: string | null): void {
       scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
     }
   });
-}
-
-function syncMenuScroll(element: Element | undefined): void {
-  if (!(element instanceof HTMLElement)) {
-    return;
-  }
-  const sync = () => {
-    const scrollable = element.scrollHeight > element.clientHeight + 1;
-    element.dataset.scrollable = String(scrollable);
-    element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
-    element.dataset.atEnd = String(
-      !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-    );
-  };
-  sync();
-  requestAnimationFrame(sync);
 }

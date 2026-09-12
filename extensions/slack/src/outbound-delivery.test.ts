@@ -157,6 +157,42 @@ describe("slack outbound shared hook wiring", () => {
     expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.567"]);
   });
 
+  it.each(["text", "context"] as const)(
+    "preserves prose after a Windows root path in long %s presentations",
+    async (type) => {
+      const client = createSlackSendTestClient();
+      sendMessageSlackMock.mockImplementation(
+        async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
+          await sendMessageSlack(to, text, { ...opts, client }),
+      );
+      const intro = "Install in `C:\\` and continue. ";
+      const text = intro + "Ordinary prose. ".repeat(220) + "Done.";
+
+      const result = await sendDurableMessageBatch({
+        cfg,
+        channel: "slack",
+        to: "C123",
+        payloads: [{ presentation: { blocks: [{ type, text }] } }],
+        accountId: "default",
+      });
+
+      assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
+      expect(client.chat.postMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          blocks: [expect.stringContaining(intro), expect.not.stringContaining("`")].map((chunk) =>
+            type === "context"
+              ? {
+                  type: "context",
+                  elements: [{ type: "mrkdwn", text: chunk, verbatim: true }],
+                }
+              : { type: "section", text: { type: "mrkdwn", text: chunk } },
+          ),
+        }),
+      );
+      expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.567"]);
+    },
+  );
+
   it("preserves a field-rich section and every receipt when native table delivery falls back", async () => {
     const client = createSlackSendTestClient();
     client.chat.postMessage

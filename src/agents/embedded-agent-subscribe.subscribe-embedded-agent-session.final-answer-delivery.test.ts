@@ -22,6 +22,7 @@ import {
   createOpenAiResponsesTextEvent,
   type OpenAiResponsesTextEventPhase,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 describe("text_end snapshot reconciliation", () => {
   it.each([
@@ -427,6 +428,132 @@ function expectSingleBlockReplyText(params: {
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it.each([
+    {
+      name: "decoded reasoning and reply controls",
+      body: "<think>hidden [[reply_to:example-id]]</think>Visible reply.",
+      expected: "Visible reply.",
+    },
+    {
+      name: "decoded tool-call controls",
+      body: '<tool_call>{"name":"example","arguments":{}}</tool_call>Visible reply.',
+      expected: "Visible reply.",
+    },
+    {
+      name: "an entirely hidden decoded body",
+      body: "<think>hidden [[reply_to:example-id]]</think>",
+      expected: "",
+    },
+    {
+      name: "decoded inline code",
+      body: "Use `<think>literal</think>` literally.",
+      expected: "Use `<think>literal</think>` literally.",
+    },
+    {
+      name: "decoded fenced code",
+      body: "```text\n<think>literal</think>\n```\n\nVisible reply.",
+      expected: "```text\n<think>literal</think>\n```\n\nVisible reply.",
+    },
+    {
+      name: "decoded final-answer prose",
+      body: "Before <think>literal tag text after",
+      phase: "final_answer",
+      expected: "Before <think>literal tag text after",
+    },
+    {
+      name: "decoded final prose after commentary",
+      body: "Before <think>literal tag text after",
+      mixedPhases: true,
+      expected: "Before <think>literal tag text after",
+    },
+    {
+      name: "an outer final envelope",
+      body: "Visible reply.",
+      enforceFinalTag: true,
+      finalEnvelope: true,
+      expected: "Visible reply.",
+    },
+    {
+      name: "a missing required final envelope",
+      body: "Visible reply.",
+      enforceFinalTag: true,
+      expected: "",
+    },
+  ])("prepares $name from standalone message-tool JSON", async (scenario) => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-decoded-message-tool",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      enforceFinalTag: scenario.enforceFinalTag,
+    });
+    const encoded = JSON.stringify({
+      name: "message",
+      arguments: { action: "send", target: "test-target", message: scenario.body },
+    }).replaceAll("<", "\\u003c");
+    const message = {
+      ...textAssistant(scenario.finalEnvelope ? `<final>${encoded}</final>` : encoded),
+      api: "openai-completions",
+      phase: scenario.phase,
+      ...(scenario.mixedPhases
+        ? {
+            content: [
+              createOpenAiResponsesTextBlock({
+                text: "Working...",
+                id: "commentary",
+                phase: "commentary",
+              }),
+              createOpenAiResponsesTextBlock({
+                text: encoded,
+                id: "answer",
+                phase: "final_answer",
+              }),
+            ],
+          }
+        : {}),
+    };
+
+    try {
+      emit({ type: "message_start", message });
+      emit({ type: "message_end", message });
+      await subscription.waitForPendingEvents();
+
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(
+        scenario.expected ? [scenario.expected] : [],
+      );
+      for (const [payload] of onBlockReply.mock.calls) {
+        expect(payload.replyToId).toBeUndefined();
+        expect(payload.replyToCurrent).toBeFalsy();
+        expect(payload.replyToTag).toBeFalsy();
+      }
+    } finally {
+      subscription.unsubscribe();
+    }
+  });
+
+  it.each(["text_end", "message_end"] as const)(
+    "retains silent terminal evidence with %s block replies",
+    async (blockReplyBreak) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "run-silent-final",
+        onBlockReply,
+        blockReplyBreak,
+        blockReplyChunking: { minChars: 64, maxChars: 128, breakPreference: "paragraph" },
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta({ emit, delta: "NO_REPLY" });
+      emitAssistantTextEnd({ emit, content: "NO_REPLY" });
+      emit({ type: "message_end", message: textAssistant("NO_REPLY") });
+      await subscription.waitForPendingEvents();
+
+      expect(subscription.assistantTexts).toEqual(["NO_REPLY"]);
+      expect(onBlockReply).not.toHaveBeenCalled();
+      subscription.unsubscribe();
+    },
+  );
+
   it("emits block replies on text_end and does not duplicate on message_end", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
@@ -441,10 +568,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Hello block"]);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Hello block") as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
 
@@ -464,10 +588,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final visible reply." }],
-      } as AssistantMessage,
+      message: textAssistant("Final visible reply.") as AssistantMessage,
     });
     await Promise.resolve();
 
@@ -486,10 +607,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emitAssistantTextDelta({ emit, delta: "Hello block" });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Hello block") as AssistantMessage;
 
     // Simulate a provider that ends the message without emitting text_end.
     emit({ type: "message_end", message: assistantMessage });
@@ -521,10 +639,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Legacy answer" }],
-      } as AssistantMessage,
+      message: textAssistant("Legacy answer") as AssistantMessage,
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);

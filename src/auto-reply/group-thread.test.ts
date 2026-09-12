@@ -219,6 +219,61 @@ describe("agent group thread dispatch", () => {
     expect(keys.size).toBe(8);
   });
 
+  it("preserves resolved DM account and chat-qualified topic namespaces", async () => {
+    const keys = new Set<string>();
+    for (const accountId of ["work", "personal"]) {
+      for (const peerId of ["42", "43"]) {
+        const sessionSuffix = `telegram:${accountId}:direct:${peerId}:thread:${peerId}:7`;
+        const run = dispatch({
+          cfg: { agents: roster, broadcast: { [`telegram:${peerId}`]: ["alice", "bob"] } },
+          context: {
+            ChatType: "direct",
+            DmScope: "main",
+            AccountId: accountId,
+            NativeChannelId: peerId,
+            MessageThreadId: 7,
+            SessionKey: `agent:routed:${sessionSuffix}`,
+          },
+        });
+        await run.done;
+        for (const { ctx } of run.turns) {
+          expect(ctx.SessionKey).toBe(`agent:${ctx.AgentId}:${sessionSuffix}`);
+          expect(ctx.RuntimePolicySessionKey).toBe(ctx.SessionKey);
+          keys.add(expectDefined(ctx.SessionKey, "expected participant session"));
+        }
+      }
+    }
+    expect(keys.size).toBe(8);
+    const shared = dispatch({
+      context: { ChatType: "direct", DmScope: "main", SessionKey: "agent:routed:main" },
+    });
+    await shared.done;
+    expect(shared.turns.map(({ ctx }) => ctx.SessionKey)).toEqual([
+      "agent:alice:main",
+      "agent:bob:main",
+    ]);
+  });
+
+  it("continues from delivered streamed answers without sharing supplemental blocks", async () => {
+    const run = dispatch({
+      cfg: config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 }),
+      reply: (turn, index) => {
+        if (index === 0) {
+          turn.dispatcher.sendBlockReply({ text: "Private reasoning", isReasoning: true });
+          turn.dispatcher.sendBlockReply({ text: "Working on it", isCommentary: true });
+          turn.dispatcher.sendBlockReply({ text: "Bob, the streamed answer is ready." });
+        }
+        return [];
+      },
+    });
+    await run.done;
+    expect(run.turns).toHaveLength(4);
+    const digest = run.turns[3]?.ctx.BodyForAgent;
+    expect(digest).toContain("Bob, the streamed answer is ready.");
+    expect(digest).not.toContain("Private reasoning");
+    expect(digest).not.toContain("Working on it");
+  });
+
   it("continues responders and addressed siblings with bounded attributed finals, then stops on all-pass", async () => {
     const aliceReply = `Bob, check this analysis. ${"a".repeat(6_000)}`;
     const run = dispatch({

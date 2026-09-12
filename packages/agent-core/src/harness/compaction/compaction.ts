@@ -5,7 +5,6 @@ import {
   type StreamFn,
   type Usage,
 } from "@openclaw/llm-core";
-// Agent Core module implements compaction behavior.
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -728,7 +727,7 @@ async function runSummarizationCompletion(params: {
     params.thinkingLevel,
   );
   const response = params.streamFn
-    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
+    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options), params.runtime)
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
   // Usage belongs to the completed provider request even when its summary is invalid.
   params.runtime?.internalUsageSink?.(response.usage);

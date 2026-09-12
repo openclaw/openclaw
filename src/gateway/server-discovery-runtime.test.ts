@@ -1,7 +1,14 @@
 // Gateway discovery runtime tests cover plugin discovery advertisements,
 // wide-area DNS records, Bonjour naming, and shutdown cleanup.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
+import { createUnavailableRuntime } from "../plugins/api-builder.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { projectPluginContributions } from "../plugins/registry-contributions.js";
+import { adoptPluginRegistryRecords } from "../plugins/registry-lifecycle.js";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
+import { createEmptyPluginRegistry, createPluginRegistry } from "../plugins/registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureFullEnv } from "../test-utils/env.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
@@ -136,6 +143,68 @@ describe("startGatewayDiscovery", () => {
     mocks.resolveTailnetDnsHint.mockReset();
     mocks.resolveTailnetDnsHint.mockResolvedValue("gateway.tailnet.example.ts.net");
   });
+
+  it.each(["direct", "projected"])(
+    "runs native-backed advertisements and cleanup in their %s registration scope",
+    async (registration) => {
+      useDevelopmentDiscoveryEnv();
+      const builder = createPluginRegistry({
+        logger: { ...makeLogs(), error() {} },
+        runtime: createUnavailableRuntime("setup-only", "native-discovery"),
+        activateGlobalSideEffects: false,
+      });
+      const record = createPluginRecord({
+        id: "native-discovery",
+        source: "test",
+        origin: "workspace",
+        enabled: true,
+        configSchema: false,
+      });
+      builder.registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry: builder.registry });
+      const store = createPluginRuntimeStore<object>("discovery runtime missing");
+      const runtime = {};
+      const calls: Array<{ phase: string; value: number; runtime: object | null }> = [];
+      class NativeAdvertisement extends Date {
+        readonly id = "native-discovery";
+        async advertise() {
+          calls.push({ phase: "advertise", value: this.getTime(), runtime: store.tryGetRuntime() });
+          return this;
+        }
+        stop() {
+          calls.push({ phase: "stop", value: this.getTime(), runtime: store.tryGetRuntime() });
+        }
+      }
+      instance.run(() => {
+        store.setRuntime(runtime);
+        builder
+          .createApi(record, { config: {} })
+          .registerGatewayDiscoveryService(new NativeAdvertisement(37));
+      });
+      const registry =
+        registration === "projected" ? createEmptyPluginRegistry() : builder.registry;
+      if (registration === "projected") {
+        registry.plugins.push(record);
+        projectPluginContributions(builder.registry, record, registry);
+        adoptPluginRegistryRecords(registry);
+      }
+      let discovery: Awaited<ReturnType<typeof startDiscovery>> | undefined;
+      try {
+        discovery = await startDiscovery({
+          gatewayDiscoveryServices: registry.gatewayDiscoveryServices,
+        });
+        await discovery.stop();
+        expect(calls).toEqual([
+          { phase: "advertise", value: 37, runtime },
+          { phase: "stop", value: 37, runtime },
+        ]);
+        expect(calls.every((call) => call.runtime === runtime)).toBe(true);
+      } finally {
+        await discovery?.stop();
+        await instance.dispose();
+      }
+    },
+  );
 
   it("starts registered local discovery services with gateway advertisement context", async () => {
     process.env.NODE_ENV = "development";

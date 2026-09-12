@@ -711,7 +711,7 @@ describe("refreshSenderAgentAvatars", () => {
     },
   );
 
-  it("bounds sender loads without revoking the current agent's blob", async () => {
+  it("bounds first-seen eligible sender loads without revoking the current agent's blob", async () => {
     const host = senderHost();
     const agents = Array.from({ length: 30 }, (_, i) => ({ id: `sender-${i}` }));
     host.agentsList.agents.push(...agents);
@@ -727,9 +727,30 @@ describe("refreshSenderAgentAvatars", () => {
     await refreshChatAvatar(host);
     const current = host.chatAvatarUrl;
     expect(current).toBe("blob:avatar-0");
-    host.chatMessages = forwardedMessages(...agents.map((agent) => agent.id));
+    const agentIds = agents.map((agent) => agent.id).toReversed();
+    const expectedIds = agentIds.slice(0, 23);
+    host.chatMessages = [
+      null,
+      ...forwardedMessages("main", "unknown"),
+      { role: "user", senderSession: { agentId: "sender-0" } },
+      { role: "Assistant", senderSession: { agentId: "sender-1" } },
+      { role: "assistant", toolName: "read", senderSession: { agentId: "sender-2" } },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read" }],
+        senderSession: { agentId: "sender-3" },
+      },
+      { role: "assistant", senderSession: { sessionKey: "agent:sender-4:source" } },
+      { role: "assistant", senderSession: { agentId: 42 } },
+      { role: "assistant", senderSession: { agentId: " " } },
+      ...agentIds.flatMap((id) => forwardedMessages(` ${id} `, ` ${id} `, "main", "unknown")),
+    ];
     await refreshSenderAgentAvatars(host);
-    expect(host.senderAgentAvatars?.size).toBe(23);
+    expect([...(host.senderAgentAvatars?.keys() ?? [])]).toEqual(expectedIds);
+    expect(host.request.mock.calls).toEqual([
+      ["agent.identity.get", { agentId: "main" }],
+      ...expectedIds.map((agentId) => ["agent.identity.get", { agentId }]),
+    ]);
     expect(
       [...host.senderAgentAvatars!.values()].every((url) => url?.startsWith("blob:avatar-")),
     ).toBe(true);

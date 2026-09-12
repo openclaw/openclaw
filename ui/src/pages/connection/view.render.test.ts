@@ -10,8 +10,9 @@ type ConnectionProps = Parameters<typeof renderConnection>[0];
 
 function createConnectionProps(overrides: Partial<ConnectionProps> = {}): ConnectionProps {
   return {
-    connected: false,
+    phase: "offline",
     hello: null,
+    liveGatewayUrl: "ws://127.0.0.1:18789",
     settings: {
       gatewayUrl: "ws://127.0.0.1:18789",
       token: "tok",
@@ -26,20 +27,24 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
       sidebarEntries: [],
       locale: "en",
     },
-    password: "",
+    secret: "tok",
     lastError: null,
-    lastChannelsRefresh: null,
     systemInfo: null,
     systemInfoUnavailable: false,
-    showGatewayToken: false,
-    showGatewayPassword: false,
+    systemInfoLoading: false,
+    dirty: false,
+    sessionDirty: false,
+    sessionSaved: false,
+    showGatewaySecret: false,
     onConnectionChange: () => undefined,
-    onPasswordChange: () => undefined,
+    onSecretChange: () => undefined,
     onSessionKeyChange: () => undefined,
-    onToggleGatewayTokenVisibility: () => undefined,
-    onToggleGatewayPasswordVisibility: () => undefined,
+    onToggleGatewaySecretVisibility: () => undefined,
     onConnect: () => undefined,
-    onRefresh: () => undefined,
+    onDiscardConnection: () => undefined,
+    onReconnect: () => undefined,
+    onSaveSession: () => undefined,
+    onDiscardSession: () => undefined,
     ...overrides,
   };
 }
@@ -66,55 +71,123 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 }
 
 describe("connection view rendering", () => {
-  it("renders the gateway access form with credential fields", async () => {
+  it.each([
+    ["connected", null, null],
+    ["connecting", null, "Connecting…"],
+    ["starting", null, "Connecting…"],
+    ["reconnecting", null, "Reconnecting…"],
+    ["offline", null, "Connect"],
+    ["stopped", null, "Connect"],
+    ["offline", "Connection refused", "Retry connection"],
+    ["reload-required", null, null],
+  ] as const)("offers the appropriate action in %s with error %s", (phase, lastError, label) => {
+    const container = document.createElement("div");
+    render(renderConnection(createConnectionProps({ phase, lastError })), container);
+    const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
+    expect(action?.textContent?.trim() ?? null).toBe(label);
+    if (action) {
+      expect(action.disabled).toBe(["connecting", "starting", "reconnecting"].includes(phase));
+    }
+    expect(container.querySelector<HTMLButtonElement>("details button")?.disabled).toBe(
+      phase !== "connected",
+    );
+  });
+
+  it.each(["connecting", "starting", "reconnecting"] as const)(
+    "lets a corrected draft replace a connection stuck in %s",
+    (phase) => {
+      const container = document.createElement("div");
+      render(renderConnection(createConnectionProps({ phase, dirty: true })), container);
+      const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
+      expect(action?.textContent?.trim()).toBe("Apply and reconnect");
+      expect(action?.disabled).toBe(false);
+    },
+  );
+
+  it("shows a secret for a new target even when the live Gateway uses trusted proxy auth", () => {
+    const props = createConnectionProps({
+      phase: "connected",
+      hello: { snapshot: { authMode: "trusted-proxy" } } as unknown as GatewayHelloOk,
+    });
+    props.settings.gatewayUrl = "wss://other.example";
+    const container = document.createElement("div");
+    render(renderConnection(props), container);
+    expect(container.querySelector('input[aria-label="Gateway secret"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Authenticated via trusted proxy.");
+  });
+
+  it("shows setup-code guidance beneath the secret before connecting", () => {
+    const container = document.createElement("div");
+    const secret = btoa(
+      JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
+    ).replace(/=+$/g, "");
+    render(renderConnection(createConnectionProps({ secret })), container);
+    const control = container
+      .querySelector('input[aria-label="Gateway secret"]')
+      ?.closest(".settings-row__control");
+    expect(control?.querySelector('[role="status"]')?.textContent).toContain(
+      "device setup code for the OpenClaw mobile app",
+    );
+    expect(control?.textContent).toContain("openclaw gateway auth-token --show");
+    render(renderConnection(createConnectionProps()), container);
+    expect(control?.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("names the live Gateway in the summary, not the edited draft", () => {
+    const props = createConnectionProps({
+      phase: "connected",
+      liveGatewayUrl: "wss://live.example:443/",
+      settings: { ...createConnectionProps().settings, gatewayUrl: "wss://draft.example:443/" },
+    });
+    const container = document.createElement("div");
+    render(renderConnection(props), container);
+
+    const summary = container.querySelector(".settings-section__desc")?.textContent ?? "";
+    expect(summary).toContain("Connected to live.example");
+    expect(summary).not.toContain("draft.example");
+  });
+
+  it("renders the connection form with a single credential field and offline status", async () => {
     const container = document.createElement("div");
     render(renderConnection(createConnectionProps()), container);
     await Promise.resolve();
 
-    expect(accessRowTitles(container)).toEqual([
-      "WebSocket URL",
-      "Gateway Token",
-      "Password (not stored)",
-      "Default Session Key",
-    ]);
+    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Not connected.",
+    );
+    expect(container.querySelector(".settings-section__actions")?.textContent?.trim()).toBe(
+      "Offline",
+    );
+    expect(container.querySelectorAll(".settings-secret input")).toHaveLength(1);
     expect(container.textContent).not.toContain("Last error");
   });
 
-  it("keeps every gateway access input labeled when credentials are revealed", () => {
-    const container = document.createElement("div");
-    const props = createConnectionProps({ password: "password" });
-    const labels = [
-      "WebSocket URL",
-      "Gateway Token",
-      "Password (not stored)",
-      "Default Session Key",
-    ];
-    const inputLabels = () =>
-      Array.from(container.querySelectorAll<HTMLInputElement>(".settings-group input")).map(
-        (input) => input.getAttribute("aria-label"),
-      );
+  it.each(["token", "password"] as const)(
+    "keeps the secret labeled when revealed in %s mode",
+    (authMode) => {
+      const container = document.createElement("div");
+      const props = createConnectionProps({
+        hello: { snapshot: { authMode } } as unknown as GatewayHelloOk,
+      });
+      const input = () =>
+        container.querySelector<HTMLInputElement>('input[aria-label="Gateway secret"]');
 
-    render(renderConnection(props), container);
-    expect(inputLabels()).toEqual(labels);
-    expect(
-      container.querySelector<HTMLInputElement>('input[aria-label="Gateway Token"]')?.type,
-    ).toBe("password");
-    expect(
-      container.querySelector<HTMLInputElement>('input[aria-label="Password (not stored)"]')?.type,
-    ).toBe("password");
+      render(renderConnection(props), container);
+      expect(input()?.type).toBe("password");
+      expect(input()?.value).toBe("tok");
+      expect(input()?.placeholder).toBe("Paste the token or type the password");
+      expect(container.textContent).toContain(`This Gateway expects its ${authMode}.`);
+      expect(container.querySelector('[role="radiogroup"]')).toBeNull();
+      expect(
+        container.querySelector('button[aria-label="Toggle secret visibility"]'),
+      ).not.toBeNull();
 
-    render(
-      renderConnection({ ...props, showGatewayToken: true, showGatewayPassword: true }),
-      container,
-    );
-    expect(inputLabels()).toEqual(labels);
-    expect(
-      container.querySelector<HTMLInputElement>('input[aria-label="Gateway Token"]')?.type,
-    ).toBe("text");
-    expect(
-      container.querySelector<HTMLInputElement>('input[aria-label="Password (not stored)"]')?.type,
-    ).toBe("text");
-  });
+      render(renderConnection({ ...props, showGatewaySecret: true }), container);
+      expect(input()?.type).toBe("text");
+      expect(input()?.value).toBe("tok");
+    },
+  );
 
   it("hides token and password fields for trusted-proxy auth", async () => {
     const container = document.createElement("div");
@@ -122,16 +195,26 @@ describe("connection view rendering", () => {
       snapshot: { authMode: "trusted-proxy", uptimeMs: 90_000 },
       policy: { tickIntervalMs: 30_000 },
     } as unknown as GatewayHelloOk;
-    render(renderConnection(createConnectionProps({ connected: true, hello })), container);
+    render(renderConnection(createConnectionProps({ phase: "connected", hello })), container);
     await Promise.resolve();
 
-    expect(accessRowTitles(container)).toEqual(["WebSocket URL", "Default Session Key"]);
+    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
+    expect(container.querySelector('input[aria-label="Gateway secret"]')).toBeNull();
+    expect(container.querySelector('[role="radiogroup"]')).toBeNull();
+    expect(container.querySelector(".settings-row .settings-status")?.textContent?.trim()).toBe(
+      "Trusted proxy",
+    );
     expect(container.textContent).toContain("Authenticated via trusted proxy.");
-    expect(container.textContent).toContain("30s");
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Connected to 127.0.0.1:18789",
+    );
+    expect(container.querySelector(".settings-section__actions")?.textContent?.trim()).toBe(
+      "Connected",
+    );
     expect(container.textContent).not.toContain("Uptime");
   });
 
-  it("renders Gateway host identity and resources between access and snapshot", async () => {
+  it("renders Gateway host identity and resources after Connection", async () => {
     const container = document.createElement("div");
     const systemInfo = {
       machineName: "Gateway Mac",
@@ -172,7 +255,7 @@ describe("connection view rendering", () => {
     const sections = [...container.querySelectorAll(".settings-section__heading")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(sections).toEqual(["Gateway Access", "Gateway Host", "Snapshot"]);
+    expect(sections).toEqual(["Connection", "Session", "Gateway Host"]);
     expect(container.querySelector("#settings-connection-host")).not.toBeNull();
     const name = container.querySelector(".config-host__name");
     expect(name?.textContent?.trim()).toBe("Gateway Mac");
@@ -213,7 +296,7 @@ describe("connection view rendering", () => {
     expect(disk.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
       "463 GB free of 926 GB",
     );
-    expect(disk.getAttribute("title")).toBe("/");
+    expect(disk.hasAttribute("title")).toBe(false);
     expect(disk.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe("Disk / usage");
     const archive = expectStatByLabel(container, "Disk /Volumes/Archive");
     expect(archive.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
@@ -301,7 +384,7 @@ describe("connection view rendering", () => {
     }
   });
 
-  it("surfaces the last connection error as a snapshot row", async () => {
+  it("surfaces the last connection error only while disconnected", async () => {
     const container = document.createElement("div");
     render(
       renderConnection(createConnectionProps({ lastError: "connect failed: unauthorized" })),
@@ -314,5 +397,17 @@ describe("connection view rendering", () => {
     expect(errorStatus?.closest(".settings-row")?.textContent).toContain(
       "connect failed: unauthorized",
     );
+    expect(
+      errorStatus?.closest(".settings-section")?.querySelector("h2")?.textContent?.trim(),
+    ).toBe("Connection");
+
+    render(
+      renderConnection(
+        createConnectionProps({ phase: "connected", lastError: "connect failed: unauthorized" }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".settings-status--danger")).toBeNull();
+    expect(container.textContent).not.toContain("connect failed: unauthorized");
   });
 });

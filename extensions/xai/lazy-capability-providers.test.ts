@@ -39,7 +39,8 @@ const runtimeMocks = vi.hoisted(() => {
   const voiceAcknowledgeMark = vi.fn();
   const voiceClose = vi.fn();
   const voiceIsConnected = vi.fn();
-  const createVoiceBridge = vi.fn();
+  const createVoiceBridge =
+    vi.fn<(request: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge>();
   const buildImageProvider = vi.fn();
   const buildMediaProvider = vi.fn();
   const buildVideoProvider = vi.fn();
@@ -114,6 +115,15 @@ async function loadLazyProviders(): Promise<
   typeof import("./lazy-capability-provider-factories.js")
 > {
   return await import(`${lazyProvidersUrl}?testCase=${lazyProviderCase}`);
+}
+
+async function createLazyVoiceBridge(
+  overrides: Partial<RealtimeVoiceBridgeCreateRequest> = {},
+): Promise<RealtimeVoiceBridge> {
+  const lazy = await loadLazyProviders();
+  return lazy
+    .createLazyXaiRealtimeVoiceProvider(capabilityHost)
+    .createBridge(createVoiceRequest(overrides));
 }
 
 function createVoiceRequest(
@@ -361,10 +371,7 @@ describe("xAI lazy capability providers", () => {
     runtimeMocks.voiceTriggerGreeting.mockImplementation((instructions?: string) => {
       forwarded.push(`greeting:${instructions ?? ""}`);
     });
-    const lazy = await loadLazyProviders();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest());
+    const bridge = await createLazyVoiceBridge();
     const first = Buffer.from([0x01]);
     const second = Buffer.from([0x02]);
 
@@ -418,10 +425,7 @@ describe("xAI lazy capability providers", () => {
     runtimeMocks.voiceTriggerGreeting.mockImplementation((instructions?: string) => {
       forwarded.push(`greeting:${String(instructions)}`);
     });
-    const lazy = await loadLazyProviders();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest());
+    const bridge = await createLazyVoiceBridge();
 
     bridge.setMediaTimestamp(1);
     bridge.sendUserMessage?.("middle");
@@ -440,11 +444,8 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("bounds pending voice user messages by aggregate bytes", async () => {
-    const lazy = await loadLazyProviders();
     const onError = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError }));
+    const bridge = await createLazyVoiceBridge({ onError });
     const accepted = "a".repeat(200 * 1024);
 
     bridge.sendUserMessage?.(accepted);
@@ -476,11 +477,8 @@ describe("xAI lazy capability providers", () => {
   ] as const)(
     "rejects %s voice tool results before lazy queue admission",
     async (_label, create) => {
-      const lazy = await loadLazyProviders();
       const onError = vi.fn();
-      const bridge = lazy
-        .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-        .createBridge(createVoiceRequest({ onError }));
+      const bridge = await createLazyVoiceBridge({ onError });
 
       expect(() => bridge.submitToolResult("call-1", create())).toThrow(/serializ/i);
       expect(onError).toHaveBeenCalledOnce();
@@ -497,10 +495,7 @@ describe("xAI lazy capability providers", () => {
   );
 
   it("snapshots lazy voice tool results with one canonical serialization", async () => {
-    const lazy = await loadLazyProviders();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest());
+    const bridge = await createLazyVoiceBridge();
     const toJSON = vi.fn((key: string) => ({ key, ok: true }));
 
     await bridge.submitToolResult("call-1", { toJSON });
@@ -515,11 +510,8 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("ignores unsupported interim voice results before lazy queue admission", async () => {
-    const lazy = await loadLazyProviders();
     const onError = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError }));
+    const bridge = await createLazyVoiceBridge({ onError });
 
     expect(() =>
       bridge.submitToolResult("call-1", undefined, { willContinue: true }),
@@ -531,11 +523,8 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("bounds pending voice tool results by aggregate serialized bytes", async () => {
-    const lazy = await loadLazyProviders();
     const onError = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError }));
+    const bridge = await createLazyVoiceBridge({ onError });
     const accepted = { text: "a".repeat(200 * 1024) };
 
     await bridge.submitToolResult("call-1", accepted);
@@ -555,11 +544,8 @@ describe("xAI lazy capability providers", () => {
   it("keeps voice payloads byte-bounded until the underlying connect resolves", async () => {
     const connecting = createDeferred<void>();
     runtimeMocks.voiceConnect.mockReturnValue(connecting.promise);
-    const lazy = await loadLazyProviders();
     const onError = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError }));
+    const bridge = await createLazyVoiceBridge({ onError });
     const acceptedMessage = "a".repeat(200 * 1024);
     const acceptedResult = { text: "b".repeat(200 * 1024) };
 
@@ -609,10 +595,7 @@ describe("xAI lazy capability providers", () => {
     runtimeMocks.voiceSetMediaTimestamp.mockImplementation((timestamp: number) => {
       forwarded.push(`timestamp:${timestamp}`);
     });
-    const lazy = await loadLazyProviders();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest());
+    const bridge = await createLazyVoiceBridge();
 
     await bridge.submitToolResult("call-1", { text: "first" });
     const connectPromise = bridge.connect();
@@ -642,11 +625,8 @@ describe("xAI lazy capability providers", () => {
   it("keeps an in-flight voice tool result charged against the startup byte cap", async () => {
     const submitting = createDeferred<void>();
     runtimeMocks.voiceSubmitToolResult.mockReturnValueOnce(submitting.promise);
-    const lazy = await loadLazyProviders();
     const onError = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError }));
+    const bridge = await createLazyVoiceBridge({ onError });
 
     await bridge.submitToolResult("call-1", { text: "a".repeat(200 * 1024) });
     const connectPromise = bridge.connect();
@@ -670,10 +650,7 @@ describe("xAI lazy capability providers", () => {
     const connecting = createDeferred<void>();
     runtimeMocks.voiceConnect.mockReturnValue(connecting.promise);
     runtimeMocks.voiceIsConnected.mockReturnValue(true);
-    const lazy = await loadLazyProviders();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest());
+    const bridge = await createLazyVoiceBridge();
     const audio = Buffer.from([0x01]);
 
     const firstConnect = bridge.connect();
@@ -706,16 +683,13 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("clears pending voice byte budgets when closed before connect", async () => {
-    const lazy = await loadLazyProviders();
     const onError = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError }));
+    const bridge = await createLazyVoiceBridge({ onError });
 
     bridge.sendUserMessage?.("stale".repeat(40 * 1024));
     bridge.setMediaTimestamp(42);
     await bridge.submitToolResult("stale-call", { text: "x".repeat(200 * 1024) });
-    bridge.close();
+    expect(bridge.close()).toBeUndefined();
 
     const connectPromise = bridge.connect();
     bridge.sendUserMessage?.("fresh".repeat(40 * 1024));
@@ -735,15 +709,12 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("closes a voice bridge that finishes loading after the wrapper closes", async () => {
-    const lazy = await loadLazyProviders();
     const onClose = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onClose }));
+    const bridge = await createLazyVoiceBridge({ onClose });
 
     const connectPromise = bridge.connect();
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
     await connectPromise;
 
     expect(runtimeMocks.createVoiceBridge).toHaveBeenCalledOnce();
@@ -754,19 +725,16 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("reopens voice after close without replaying discarded input", async () => {
-    const lazy = await loadLazyProviders();
     const onClose = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onClose }));
+    const bridge = await createLazyVoiceBridge({ onClose });
     const first = Buffer.from([0x01]);
     const discarded = Buffer.from([0x02]);
     const second = Buffer.from([0x03]);
 
     bridge.sendAudio(first);
     await bridge.connect();
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
     bridge.sendAudio(discarded);
 
     const reconnectPromise = bridge.connect();
@@ -786,20 +754,15 @@ describe("xAI lazy capability providers", () => {
     runtimeMocks.voiceConnect
       .mockReturnValueOnce(firstConnect.promise)
       .mockResolvedValueOnce(undefined);
-    const lazy = await loadLazyProviders();
     const onError = vi.fn();
     const onClose = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError, onClose }));
+    const bridge = await createLazyVoiceBridge({ onError, onClose });
 
     const staleConnect = bridge.connect();
     const staleConnectResult = expect(staleConnect).rejects.toBe(failure);
     await vi.waitFor(() => expect(runtimeMocks.voiceConnect).toHaveBeenCalledOnce());
-    const staleRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0] as
-      | RealtimeVoiceBridgeCreateRequest
-      | undefined;
-    bridge.close();
+    const staleRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
+    void bridge.close();
     const replacementConnect = bridge.connect();
     await replacementConnect;
     staleRequest?.onClose?.("error");
@@ -827,30 +790,23 @@ describe("xAI lazy capability providers", () => {
     const onToolCall = vi.fn();
     const onReady = vi.fn();
     const onError = vi.fn();
-    const lazy = await loadLazyProviders();
-    const bridge = lazy.createLazyXaiRealtimeVoiceProvider(capabilityHost).createBridge(
-      createVoiceRequest({
-        onAudio,
-        getPlaybackState,
-        onClearAudio,
-        onMark,
-        onTranscript,
-        onEvent,
-        onToolCall,
-        onReady,
-        onError,
-      }),
-    );
+    const bridge = await createLazyVoiceBridge({
+      onAudio,
+      getPlaybackState,
+      onClearAudio,
+      onMark,
+      onTranscript,
+      onEvent,
+      onToolCall,
+      onReady,
+      onError,
+    });
 
     await bridge.connect();
-    const staleRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0] as
-      | RealtimeVoiceBridgeCreateRequest
-      | undefined;
-    bridge.close();
+    const staleRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
+    void bridge.close();
     await bridge.connect();
-    const currentRequest = runtimeMocks.createVoiceBridge.mock.calls[1]?.[0] as
-      | RealtimeVoiceBridgeCreateRequest
-      | undefined;
+    const currentRequest = runtimeMocks.createVoiceBridge.mock.calls[1]?.[0];
     const staleAudio = Buffer.from([0x01]);
     const staleError = new Error("stale");
     const staleEvent = { direction: "server" as const, type: "stale" };
@@ -914,19 +870,14 @@ describe("xAI lazy capability providers", () => {
     const failure = new Error("tool result rejected");
     const callbackFailure = new Error("voice close callback rejected");
     runtimeMocks.voiceSubmitToolResult.mockRejectedValueOnce(failure);
-    const lazy = await loadLazyProviders();
     const onClose = vi.fn(() => {
       throw callbackFailure;
     });
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onClose }));
+    const bridge = await createLazyVoiceBridge({ onClose });
 
     await bridge.submitToolResult("call-1", { text: "queued" });
     await expect(bridge.connect()).rejects.toBe(failure);
-    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0] as
-      | RealtimeVoiceBridgeCreateRequest
-      | undefined;
+    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
     loadedRequest?.onClose?.("completed");
     bridge.sendAudio(Buffer.from([0x01]));
 
@@ -936,58 +887,95 @@ describe("xAI lazy capability providers", () => {
     expect(onClose).toHaveBeenCalledWith("error");
   });
 
-  it("reports voice connect failure as a terminal error", async () => {
-    const failure = new Error("voice connect rejected");
-    const errorCallbackFailure = new Error("voice error callback rejected");
-    const closeCallbackFailure = new Error("voice close callback rejected");
-    const cleanupFailure = new Error("voice cleanup rejected");
-    const callbackOrder: string[] = [];
-    runtimeMocks.voiceConnect.mockRejectedValueOnce(failure);
-    runtimeMocks.voiceClose.mockImplementationOnce(() => {
-      throw cleanupFailure;
-    });
-    const lazy = await loadLazyProviders();
-    const onError = vi.fn((error: Error) => {
-      callbackOrder.push(`error:${error.message}`);
-      throw errorCallbackFailure;
-    });
-    const onClose = vi.fn(() => {
-      callbackOrder.push("close:error");
-      throw closeCallbackFailure;
-    });
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onError, onClose }));
-
-    await expect(bridge.connect()).rejects.toBe(failure);
-    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0] as
-      | RealtimeVoiceBridgeCreateRequest
-      | undefined;
-    loadedRequest?.onClose?.("completed");
-    bridge.sendAudio(Buffer.from([0x01]));
-
-    expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError).toHaveBeenCalledWith(failure);
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("error");
-    expect(callbackOrder).toEqual(["error:voice connect rejected", "close:error"]);
-  });
+  it.each(
+    ["sync", "resolve", "reject"].flatMap((cleanup) =>
+      [false, true].map((reenter) => ({ cleanup, reenter })),
+    ),
+  )(
+    "drains connect-failure disposal before terminal notification (cleanup=$cleanup, reenter=$reenter)",
+    async ({ cleanup, reenter }) => {
+      const failure = new Error("provider connect rejected");
+      const cleanupFailure = new Error("provider cleanup rejected");
+      const disposed = createDeferred<void>();
+      runtimeMocks.voiceConnect.mockRejectedValueOnce(failure);
+      let collectorSealed = false;
+      const callbackOrder: string[] = [];
+      const callbacks = {
+        onTranscript: vi.fn((_role: unknown, text: string) => {
+          if (!collectorSealed) {
+            callbackOrder.push(text);
+          }
+        }),
+        onAudio: vi.fn(),
+        onToolCall: vi.fn(),
+      };
+      const observerCloses: Promise<unknown>[] = [];
+      const observer = (value: unknown) => {
+        callbackOrder.push(value instanceof Error ? "error" : "close");
+        if (reenter) {
+          observerCloses.push(
+            Promise.resolve(bridge.close())
+              .catch(() => undefined)
+              .then(() => {
+                collectorSealed = true;
+              }),
+          );
+        }
+        throw new Error("terminal observer rejected");
+      };
+      const onError = vi.fn(observer);
+      const onClose = vi.fn(observer);
+      const bridge = await createLazyVoiceBridge({ onError, onClose, ...callbacks });
+      const emitTail = () => {
+        const request = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
+        request?.onTranscript?.("assistant", "partial tail", false);
+        request?.onAudio(Buffer.from([0x01]));
+        request?.onToolCall?.({ itemId: "item", callId: "call", name: "probe", args: {} });
+        request?.onTranscript?.("assistant", "final tail", true);
+      };
+      runtimeMocks.voiceClose.mockImplementationOnce(() => {
+        if (cleanup === "sync") {
+          emitTail();
+          throw cleanupFailure;
+        }
+        return disposed.promise;
+      });
+      const failedConnect = expect(bridge.connect()).rejects.toBe(failure);
+      try {
+        await vi.waitFor(() => expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce());
+        if (cleanup !== "sync") {
+          expect(onClose).not.toHaveBeenCalled();
+          emitTail();
+        }
+        expect(callbacks.onAudio).not.toHaveBeenCalled();
+        expect(callbacks.onToolCall).not.toHaveBeenCalled();
+        if (cleanup === "reject") {
+          disposed.reject(cleanupFailure);
+        } else {
+          disposed.resolve();
+        }
+        await failedConnect;
+        expect(onError).toHaveBeenCalledExactlyOnceWith(failure);
+        expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
+        expect(callbackOrder).toEqual(["final tail", "error", "close"]);
+        bridge.sendAudio(Buffer.from([0x01]));
+        expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
+      } finally {
+        disposed.resolve();
+        await failedConnect;
+        await Promise.all(observerCloses);
+      }
+    },
+  );
 
   it("reopens voice only after an explicit connect following provider termination", async () => {
-    const lazy = await loadLazyProviders();
     const onClose = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onClose }));
+    const bridge = await createLazyVoiceBridge({ onClose });
     const discarded = Buffer.from([0x01]);
     const accepted = Buffer.from([0x02]);
 
     await bridge.connect();
-    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0] as
-      | RealtimeVoiceBridgeCreateRequest
-      | undefined;
+    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
     loadedRequest?.onClose?.("error");
     bridge.sendAudio(discarded);
 
@@ -1003,24 +991,107 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("reports explicit voice close once when the provider also reports completion", async () => {
-    const lazy = await loadLazyProviders();
     const onClose = vi.fn();
-    const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
-      .createBridge(createVoiceRequest({ onClose }));
+    const bridge = await createLazyVoiceBridge({ onClose });
 
     await bridge.connect();
-    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0] as
-      | RealtimeVoiceBridgeCreateRequest
-      | undefined;
+    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
     runtimeMocks.voiceClose.mockImplementation(() => loadedRequest?.onClose?.("completed"));
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
 
     expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("completed");
   });
+
+  it.each([
+    { reconnect: false, closeDuringLoad: false },
+    { reconnect: true, closeDuringLoad: false },
+    { reconnect: false, closeDuringLoad: true },
+  ])(
+    "joins disposal and final transcripts (reconnect=$reconnect, closeDuringLoad=$closeDuringLoad)",
+    async ({ reconnect, closeDuringLoad }) => {
+      const disposed = createDeferred<void>();
+      runtimeMocks.voiceClose.mockReturnValueOnce(disposed.promise);
+      const onClose = vi.fn();
+      const onTranscript = vi.fn();
+      const bridge = await createLazyVoiceBridge({ onClose, onTranscript });
+      const connecting = bridge.connect();
+      if (!closeDuringLoad) {
+        await connecting;
+      }
+
+      const closing = bridge.close();
+      try {
+        expect(bridge.close()).toBe(closing);
+        await vi.waitFor(() => expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce());
+        const firstRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
+        if (closeDuringLoad) {
+          expect(runtimeMocks.voiceConnect).not.toHaveBeenCalled();
+        }
+        firstRequest?.onTranscript?.("assistant", "partial tail", false);
+        firstRequest?.onTranscript?.("assistant", "final tail", true);
+        expect(onTranscript).toHaveBeenCalledExactlyOnceWith("assistant", "final tail", true);
+        let settled = false;
+        const completion = Promise.resolve(closing).then(() => {
+          settled = true;
+        });
+        bridge.sendAudio(Buffer.from([0x01]));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
+        expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+
+        if (reconnect) {
+          await bridge.connect();
+          firstRequest?.onTranscript?.("assistant", "stale after reconnect", true);
+        }
+        disposed.resolve();
+        await Promise.all([completion, connecting]);
+        firstRequest?.onTranscript?.("assistant", "late after disposal", true);
+        expect(onTranscript).toHaveBeenCalledExactlyOnceWith("assistant", "final tail", true);
+        if (reconnect) {
+          expect(onClose).not.toHaveBeenCalled();
+          bridge.sendAudio(Buffer.from([0x02]));
+          expect(runtimeMocks.voiceSendAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x02]));
+          await bridge.close();
+        }
+        expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      } finally {
+        disposed.resolve();
+        await Promise.all([closing, connecting]);
+        await bridge.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "reports rejected voice disposal once without replacing its error (throwing observer=%s)",
+    async (throwingObserver) => {
+      const disposed = createDeferred<void>();
+      const failure = new Error("voice disposal rejected");
+      runtimeMocks.voiceClose.mockReturnValueOnce(disposed.promise);
+      const onClose = vi.fn(() => {
+        if (throwingObserver) {
+          throw new Error("close observer rejected");
+        }
+      });
+      const bridge = await createLazyVoiceBridge({ onClose });
+      await bridge.connect();
+
+      const closing = bridge.close();
+      const rejection = expect(closing).rejects.toBe(failure);
+      disposed.reject(failure);
+      await rejection;
+      await expect(bridge.close()).rejects.toBe(failure);
+      expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
+      bridge.sendAudio(Buffer.from([0x01]));
+      expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps realtime voice request validation synchronous", async () => {
     const lazy = await loadLazyProviders();

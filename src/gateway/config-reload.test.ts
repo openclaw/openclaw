@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -35,6 +36,7 @@ import {
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
 } from "../plugins/current-plugin-metadata-state.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
@@ -1259,6 +1261,76 @@ describe("buildGatewayReloadPlan", () => {
     expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
+  it.each([
+    {
+      label: "inspects unresolved account secrets",
+      inspection: "available",
+      resolves: false,
+      scoped: true,
+    },
+    {
+      label: "promotes failed inspection without falling back to resolution",
+      inspection: "throws",
+      resolves: true,
+      scoped: false,
+    },
+    {
+      label: "resolves accounts when inspection is unavailable",
+      inspection: "absent",
+      resolves: true,
+      scoped: true,
+    },
+    {
+      label: "promotes failed resolution when inspection is unavailable",
+      inspection: "absent",
+      resolves: false,
+      scoped: false,
+    },
+  ])("$label", ({ inspection, resolves, scoped }) => {
+    const plugin: ChannelPlugin = {
+      ...mattermostPlugin,
+      config: {
+        ...mattermostPlugin.config,
+        resolveAccount: () => {
+          if (!resolves) {
+            throw new Error("SecretRef has not been activated");
+          }
+          return {};
+        },
+        ...(inspection === "absent"
+          ? {}
+          : {
+              inspectAccount: () => {
+                if (inspection === "throws") {
+                  throw new Error("Account cannot be inspected");
+                }
+                return { configured: true, botTokenStatus: "configured_unavailable" };
+              },
+            }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "mattermost", plugin, source: "test" }]),
+    );
+    const candidateConfig = {
+      channels: {
+        mattermost: {
+          accounts: {
+            alpha: { botToken: { source: "env", provider: "default", id: "BOT_TOKEN" } },
+            beta: { enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.alpha.botToken"], {
+      candidateConfig,
+    });
+    expect(plan.restartChannels).toEqual(new Set(scoped ? [] : ["mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(
+      new Map(scoped ? [["mattermost", new Set(["alpha"])]] : []),
+    );
+  });
+
   it("restarts every channel whose config prefix matches", () => {
     const plan = buildGatewayReloadPlan(["web.enabled", "channels.telegram.botToken"]);
 
@@ -1557,11 +1629,11 @@ function createReloaderHarness(
       runtimeConfig: OpenClawConfig;
       sourceConfig: OpenClawConfig;
       previousSourceConfig: OpenClawConfig;
-    }) => {
+    }) => Promise<{
       runtimeConfig: OpenClawConfig;
       compareConfig: OpenClawConfig;
       runtimeEnv?: ReturnType<typeof prepareConfigRuntimeEnv>;
-    };
+    }>;
     initialInternalWriteHash?: string | null;
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
@@ -1650,11 +1722,7 @@ function createReloaderHarness(
       }
     };
   });
-  const log = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  const log = createInfoWarnErrorLogger();
   const initialConfig = options.initialConfig ?? { gateway: { reload: {} } };
   const reloader = startGatewayConfigReloader({
     testDebounceMs: 0,
@@ -1791,6 +1859,7 @@ describe("startGatewayConfigReloader include files", () => {
       log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       watchPath: configPath,
     });
+    await reloader.ready;
 
     try {
       expect(initialSnapshot.includedPaths).toEqual(
@@ -1866,6 +1935,249 @@ describe("startGatewayConfigReloader", () => {
     vi.restoreAllMocks();
   });
 
+  it("captures writes while initial candidate preparation is pending", async () => {
+    const gate = createDeferred();
+    const write = makeZeroDebounceHookWrite("during-initialization");
+    let initial = true;
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({
+          config: write.runtimeConfig,
+          sourceConfig: write.sourceConfig,
+          hash: write.persistedHash,
+        }),
+      {
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
+          if (initial) {
+            initial = false;
+            await gate.promise;
+          }
+          return { runtimeConfig, compareConfig: sourceConfig };
+        },
+      },
+    );
+    try {
+      expect(harness.reloader.isReady()).toBe(false);
+      expect(harness.reloader.hotReloadStatus()).toBeUndefined();
+      harness.emitWrite(write);
+      await vi.runAllTimersAsync();
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(chokidar.watch).not.toHaveBeenCalled();
+      gate.resolve();
+      await harness.reloader.ready;
+      await vi.runAllTimersAsync();
+      expect(getOnlyHotReloadCall(harness)[1]).toEqual(write.runtimeConfig);
+      expect(harness.reloader.isReady()).toBe(true);
+      expect(
+        configAuditMocks.upsertSnapshot.mock.calls.map(([snapshot]) => snapshot.rawHash),
+      ).not.toContain("initial-raw-hash");
+    } finally {
+      gate.resolve();
+      await harness.reloader.stop();
+    }
+  });
+
+  it.each([true, false])(
+    "keeps unchanged initial watch scans out of config candidate ownership (exists: %s)",
+    async (exists) => {
+      const gate = createDeferred<ConfigFileSnapshot>();
+      const observed = vi.fn();
+      const harness = createReloaderHarness(() => gate.promise, {
+        initialSnapshotRawHash: exists ? "initial-raw-hash" : null,
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+          runtimeConfig,
+          compareConfig: sourceConfig,
+        }),
+        onConfigCandidateObserved: observed,
+      });
+      try {
+        await harness.reloader.ready;
+        harness.watcher.emit("ready");
+        expect(observed).not.toHaveBeenCalled();
+        gate.resolve(makeSnapshot({ exists, hash: exists ? "initial-raw-hash" : undefined }));
+        await vi.runAllTimersAsync();
+        expect(observed).not.toHaveBeenCalled();
+        expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+        expect(harness.onRestart).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve(makeSnapshot());
+        await harness.reloader.stop();
+      }
+    },
+  );
+
+  it.each(["root", "include", "created root"] as const)(
+    "reconciles %s changes made during initial candidate preparation",
+    async (changedFile) => {
+      const gate = createDeferred();
+      let initial = true;
+      let disk = makeSnapshot({ config: { gateway: { reload: {} } }, hash: "initial-raw-hash" });
+      const includedPaths = changedFile === "include" ? ["/tmp/hooks.json5"] : [];
+      const harness = createReloaderHarness(async () => disk, {
+        initialSnapshotRawHash: changedFile === "created root" ? null : "initial-raw-hash",
+        initialIncludedPaths: includedPaths,
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
+          if (initial) {
+            initial = false;
+            await gate.promise;
+          }
+          return { runtimeConfig, compareConfig: sourceConfig };
+        },
+      });
+      try {
+        const nextConfig = { gateway: { reload: {} }, hooks: { enabled: true } };
+        disk = makeSnapshot({
+          config: nextConfig,
+          hash: changedFile === "include" ? "initial-raw-hash" : "written-during-preparation",
+          includedPaths,
+        });
+        gate.resolve();
+        await harness.reloader.ready;
+        expect(harness.onHotReload).not.toHaveBeenCalled();
+        harness.watcher.emit("ready");
+        await vi.runAllTimersAsync();
+        expect(getOnlyHotReloadCall(harness)[1]).toEqual(nextConfig);
+      } finally {
+        gate.resolve();
+        await harness.reloader.stop();
+      }
+    },
+  );
+
+  it("updates watch dependencies when an initial include resolves to unchanged config", async () => {
+    const config = { gateway: { reload: {} } };
+    const harness = createReloaderHarness(
+      async () =>
+        makeSnapshot({ config, hash: "initial-raw-hash", includedPaths: ["/tmp/new.json5"] }),
+      {
+        initialIncludedPaths: ["/tmp/old.json5"],
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+          runtimeConfig,
+          compareConfig: sourceConfig,
+        }),
+      },
+    );
+    try {
+      await harness.reloader.ready;
+      harness.watcher.emit("ready");
+      await vi.runAllTimersAsync();
+      expect(chokidar.watch).toHaveBeenLastCalledWith(
+        ["/tmp/openclaw.json", "/tmp/new.json5"],
+        expect.any(Object),
+      );
+      expect(harness.onConfigAccepted).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  it("reconciles through the reload owner after an initial watch read rejects", async () => {
+    const nextConfig = { gateway: { reload: {} }, hooks: { enabled: true } };
+    const readSnapshot = vi
+      .fn(async () => makeSnapshot({ config: nextConfig, hash: "new-disk-config" }))
+      .mockRejectedValueOnce(new Error("initial read failed"));
+    const harness = createReloaderHarness(readSnapshot, {
+      prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+        runtimeConfig,
+        compareConfig: sourceConfig,
+      }),
+    });
+    try {
+      await harness.reloader.ready;
+      harness.watcher.emit("ready");
+      await vi.runAllTimersAsync();
+      expect(getOnlyHotReloadCall(harness)[1]).toEqual(nextConfig);
+      expect(harness.log.warn).toHaveBeenCalledWith(expect.stringContaining("initial read failed"));
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  it.each(["write", "stop", "replace"] as const)(
+    "discards an initial watch read superseded by %s",
+    async (supersededBy) => {
+      const gate = createDeferred<ConfigFileSnapshot>();
+      const observed = vi.fn();
+      const harness = createReloaderHarness(() => gate.promise, {
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => ({
+          runtimeConfig,
+          compareConfig: sourceConfig,
+        }),
+        onConfigCandidateObserved: observed,
+      });
+      let stopFinished = false;
+      let stopping: Promise<void> | undefined;
+      try {
+        await harness.reloader.ready;
+        harness.watcher.emit("ready");
+        expect(observed).not.toHaveBeenCalled();
+        if (supersededBy === "write") {
+          harness.emitWrite(makeZeroDebounceHookWrite("newer-write"));
+          await vi.runAllTimersAsync();
+          expect(getOnlyHotReloadCall(harness)[1].hooks?.enabled).toBe(true);
+        } else if (supersededBy === "stop") {
+          stopping = harness.reloader.stop().then(() => {
+            stopFinished = true;
+          });
+          await Promise.resolve();
+          expect(stopFinished).toBe(false);
+        } else {
+          harness.watcher.emit("error", new Error("watch failed"));
+        }
+        observed.mockClear();
+        gate.resolve(makeSnapshot({ config: { hooks: { enabled: false } }, hash: "stale-read" }));
+        await stopping;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(observed).not.toHaveBeenCalled();
+        expect(harness.onRestart).not.toHaveBeenCalled();
+        if (supersededBy === "stop") {
+          expect(stopFinished).toBe(true);
+        }
+      } finally {
+        gate.resolve(makeSnapshot());
+        await harness.reloader.stop();
+      }
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "owns shutdown while initial candidate preparation is pending: %s",
+    async (settlement) => {
+      const gate = createDeferred();
+      const failure = new Error("candidate load failed");
+      const harness = createReloaderHarness(vi.fn(), {
+        prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
+          await gate.promise;
+          if (settlement === "reject") {
+            throw failure;
+          }
+          return { runtimeConfig, compareConfig: sourceConfig };
+        },
+      });
+      let stopFinished = false;
+      const stopping = harness.reloader.stop().then(() => {
+        stopFinished = true;
+      });
+      try {
+        await Promise.resolve();
+        expect(stopFinished).toBe(false);
+        harness.emitWrite(makeZeroDebounceHookWrite("after-stop"));
+        gate.resolve();
+        await expect(harness.reloader.ready).rejects.toThrow(
+          settlement === "reject" ? failure : GatewayConfigReloadSupersededError,
+        );
+        await stopping;
+        await vi.runAllTimersAsync();
+        expect(chokidar.watch).not.toHaveBeenCalled();
+        expect(harness.onHotReload).not.toHaveBeenCalled();
+        expect(configAuditMocks.upsertSnapshot).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve();
+        await stopping;
+      }
+    },
+  );
+
   it("watches resolved includes and reconciles them after an accepted reload", async () => {
     const initialConfig = makeGatewayPortConfig(18789);
     const nextConfig = makeGatewayPortConfig(18790);
@@ -1886,6 +2198,7 @@ describe("startGatewayConfigReloader", () => {
         initialIncludedPaths: [initialIncludePath, retainedIncludePath],
       },
     );
+    await harness.reloader.ready;
 
     expect(chokidar.watch).toHaveBeenCalledWith(
       ["/tmp/openclaw.json", initialIncludePath, retainedIncludePath],
@@ -1929,6 +2242,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(readSnapshot, {
       initialIncludedPaths: [acceptedIncludePath],
     });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
     expect(harness.watcher.close).toHaveBeenCalledOnce();
@@ -1959,6 +2273,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(readSnapshot, {
       initialIncludedPaths: [rejectedIncludeDir],
     });
+    await harness.reloader.ready;
 
     expect(chokidar.watch).toHaveBeenCalledWith(
       ["/tmp/openclaw.json", rejectedIncludeDir],
@@ -1982,6 +2297,7 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: nextConfig, parsed: nextConfig, hash: "next-raw-hash" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -2014,6 +2330,7 @@ describe("startGatewayConfigReloader", () => {
       ),
       { initialConfig },
     );
+    await harness.reloader.ready;
     configAuditMocks.readSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: "other-write",
@@ -2045,6 +2362,7 @@ describe("startGatewayConfigReloader", () => {
       vi.fn(async () => invalid),
       { initialConfig },
     );
+    await harness.reloader.ready;
     configAuditMocks.upsertSnapshot.mockClear();
 
     await flushWatcherChange(harness);
@@ -2074,6 +2392,7 @@ describe("startGatewayConfigReloader", () => {
     });
     let activeSnapshot = firstInvalid;
     const harness = createReloaderHarness(vi.fn(async () => activeSnapshot));
+    await harness.reloader.ready;
     configAuditMocks.append.mockClear();
 
     await flushWatcherChange(harness);
@@ -2106,6 +2425,7 @@ describe("startGatewayConfigReloader", () => {
       vi.fn(async () => activeSnapshot),
       { initialConfig },
     );
+    await harness.reloader.ready;
     configAuditMocks.append.mockClear();
 
     await flushWatcherChange(harness);
@@ -2138,6 +2458,7 @@ describe("startGatewayConfigReloader", () => {
       vi.fn(async () => activeSnapshot),
       { initialConfig },
     );
+    await harness.reloader.ready;
     configAuditMocks.append.mockClear();
 
     await flushWatcherChange(harness);
@@ -2181,6 +2502,7 @@ describe("startGatewayConfigReloader", () => {
         initialSnapshotValid: false,
       },
     );
+    await harness.reloader.ready;
     configAuditMocks.append.mockClear();
 
     await flushWatcherChange(harness);
@@ -2213,6 +2535,7 @@ describe("startGatewayConfigReloader", () => {
       initialSnapshotRawHash: "current-raw-hash",
       initialAuthoredConfig: initialConfig,
     });
+    await harness.reloader.ready;
 
     expect(configAuditMocks.append.mock.calls[0]?.[0]?.record).toMatchObject({
       event: "config.external",
@@ -2245,6 +2568,7 @@ describe("startGatewayConfigReloader", () => {
       initialSnapshotValid: false,
       initialSnapshotIssues: [{ path: "gateway.port", message: "expected number" }],
     });
+    await harness.reloader.ready;
 
     expect(configAuditMocks.append.mock.calls[0]?.[0]?.record).toMatchObject({
       event: "config.external",
@@ -2277,6 +2601,7 @@ describe("startGatewayConfigReloader", () => {
       initialSnapshotRawHash: "current-raw-hash",
       initialAuthoredConfig: initialConfig,
     });
+    await harness.reloader.ready;
 
     expect(configAuditMocks.append.mock.calls[0]?.[0]?.record).toMatchObject({
       event: "config.external",
@@ -2299,6 +2624,7 @@ describe("startGatewayConfigReloader", () => {
       initialSnapshotRawHash: null,
       initialAuthoredConfig: {},
     });
+    await harness.reloader.ready;
 
     expect(configAuditMocks.append).toHaveBeenCalledOnce();
     expect(configAuditMocks.append.mock.calls[0]?.[0]?.record).toMatchObject({
@@ -2333,6 +2659,7 @@ describe("startGatewayConfigReloader", () => {
       initialSnapshotRawHash: "path-b-raw-hash",
       initialAuthoredConfig: initialConfig,
     });
+    await harness.reloader.ready;
 
     expect(configAuditMocks.append).not.toHaveBeenCalled();
     expect(configAuditMocks.upsertSnapshot).toHaveBeenCalledWith(
@@ -2350,6 +2677,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(
       vi.fn(async () => makeZeroDebounceHookSnapshot("internal-write")),
     );
+    await harness.reloader.ready;
     configAuditMocks.append.mockClear();
 
     harness.emitWrite(makeZeroDebounceHookWrite("internal-write"));
@@ -2390,6 +2718,7 @@ describe("startGatewayConfigReloader", () => {
         },
         onRestart: finishReload,
       });
+      await harness.reloader.ready;
       const settled = vi.fn();
       void application.result.then(settled);
       const write = makeZeroDebounceHookWrite("application-settlement");
@@ -2502,6 +2831,7 @@ describe("startGatewayConfigReloader", () => {
           log,
           watchPath: configPath,
         });
+        await reloader.ready;
 
         try {
           const request = tryBeginGatewayRootWorkAdmission();
@@ -2552,6 +2882,7 @@ describe("startGatewayConfigReloader", () => {
       initialAuthoredConfig: {},
       onHotReload: async () => "applied-restart-required",
     });
+    await harness.reloader.ready;
 
     harness.emitWrite(
       attachRuntimeConfigWriteApplication(
@@ -2572,6 +2903,7 @@ describe("startGatewayConfigReloader", () => {
       initialSnapshotRawHash: null,
       initialAuthoredConfig: {},
     });
+    await harness.reloader.ready;
 
     harness.emitWrite(
       attachRuntimeConfigWriteApplication(
@@ -2603,6 +2935,7 @@ describe("startGatewayConfigReloader", () => {
         initialAuthoredConfig: snapshot.parsed,
       },
     );
+    await harness.reloader.ready;
     configAuditMocks.append.mockClear();
 
     await flushWatcherChange(harness);
@@ -2627,6 +2960,7 @@ describe("startGatewayConfigReloader", () => {
         initialAuthoredConfig: initialConfig,
       },
     );
+    await harness.reloader.ready;
     configAuditMocks.append.mockClear();
 
     await flushWatcherChange(harness);
@@ -2659,6 +2993,7 @@ describe("startGatewayConfigReloader", () => {
       const onConfigCandidateObserved = vi.fn();
       const readSnapshot = vi.fn(async () => snapshot);
       const harness = createReloaderHarness(readSnapshot, { onConfigCandidateObserved });
+      await harness.reloader.ready;
 
       harness.watcher.emit("change");
 
@@ -2685,6 +3020,7 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: nextConfig, hash: "external-prefs-write" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -2714,6 +3050,7 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: nextConfig, hash: "mode-off-write" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -2729,6 +3066,7 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: initialConfig, hash: "reverted-restart-edit" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -2755,6 +3093,7 @@ describe("startGatewayConfigReloader", () => {
       initialInternalWriteHash: "accepted-write",
       onConfigCandidateObserved,
     });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -2805,6 +3144,7 @@ describe("startGatewayConfigReloader", () => {
       initialCompareConfig: initialConfig,
       onRestart,
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -2876,6 +3216,7 @@ describe("startGatewayConfigReloader", () => {
         terminalPolicy.acceptConfig({ retireRejectedRestart: false });
       },
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -2932,6 +3273,7 @@ describe("startGatewayConfigReloader", () => {
           onConfigApplied: () => terminalPolicy.commitConfig(),
         },
       );
+      await harness.reloader.ready;
 
       harness.emitWrite({
         configPath: "/tmp/openclaw.json",
@@ -3006,6 +3348,7 @@ describe("startGatewayConfigReloader", () => {
         terminalPolicy.acceptConfig({ retireRejectedRestart: false });
       },
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -3039,6 +3382,7 @@ describe("startGatewayConfigReloader", () => {
       initialConfig,
       initialInternalWriteHash: "accepted-write",
     });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -3101,6 +3445,7 @@ describe("startGatewayConfigReloader", () => {
         initialConfig,
         ...(kind === "noop" ? { onNoopConfigCommit: publishA } : { onHotReload: hotReloadA }),
       });
+      await harness.reloader.ready;
 
       harness.watcher.emit("change");
       await vi.advanceTimersByTimeAsync(0);
@@ -3165,6 +3510,7 @@ describe("startGatewayConfigReloader", () => {
       onHotReload,
       promoteSnapshot,
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.advanceTimersByTimeAsync(0);
@@ -3210,7 +3556,7 @@ describe("startGatewayConfigReloader", () => {
     const preparedEnvValues: Array<string | undefined> = [];
     const harness = createReloaderHarness(vi.fn(), {
       initialConfig,
-      prepareConfigCandidate: ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
+      prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
         compareConfig: { ...sourceConfig, env: initialConfig.env },
         runtimeEnv: prepareConfigRuntimeEnv({
@@ -3232,6 +3578,7 @@ describe("startGatewayConfigReloader", () => {
         return "applied";
       },
     });
+    await harness.reloader.ready;
     const emitWrite = (config: OpenClawConfig, hash: string, revision: number) => {
       harness.emitWrite({
         configPath: "/tmp/openclaw.json",
@@ -3272,6 +3619,7 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -3353,6 +3701,7 @@ describe("startGatewayConfigReloader", () => {
         restartRequests.push(nextConfig);
       },
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.advanceTimersByTimeAsync(0);
@@ -3414,6 +3763,7 @@ describe("startGatewayConfigReloader", () => {
         return "applied";
       },
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.advanceTimersByTimeAsync(0);
@@ -3475,6 +3825,7 @@ describe("startGatewayConfigReloader", () => {
         pausedRestartDebt = false;
       },
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.advanceTimersByTimeAsync(0);
@@ -3506,6 +3857,7 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: nextConfig, hash: "active-reload" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
     const { promise: reloadStarted, resolve: markReloadStarted } = createDeferred();
     const { promise: reloadBlocked, resolve: finishReload } = createDeferred();
     harness.onHotReload.mockImplementationOnce(async () => {
@@ -3547,6 +3899,7 @@ describe("startGatewayConfigReloader", () => {
     };
     const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "sandbox" }));
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -3574,6 +3927,7 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: nextConfig, hash: "visible-replies" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -3625,6 +3979,7 @@ describe("startGatewayConfigReloader", () => {
       vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "account-reload" })),
       { initialConfig },
     );
+    await harness.reloader.ready;
 
     setActivePluginRegistry(channelRegistry);
     try {
@@ -3646,7 +4001,7 @@ describe("startGatewayConfigReloader", () => {
       messages: { visibleReplies: "automatic" },
     };
     let visibleRepliesOverride: "message_tool" | undefined;
-    const prepareConfigCandidate = vi.fn(({ runtimeConfig, sourceConfig }) => {
+    const prepareConfigCandidate = vi.fn(async ({ runtimeConfig, sourceConfig }) => {
       const override = visibleRepliesOverride;
       const applyCapturedOverride = (config: OpenClawConfig): OpenClawConfig =>
         override
@@ -3662,6 +4017,7 @@ describe("startGatewayConfigReloader", () => {
       initialConfig,
       prepareConfigCandidate,
     });
+    await harness.reloader.ready;
     const makeOverrideWrite = (
       config: OpenClawConfig,
       persistedHash: string,
@@ -3721,6 +4077,7 @@ describe("startGatewayConfigReloader", () => {
     };
     const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "hot" }));
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -3749,6 +4106,7 @@ describe("startGatewayConfigReloader", () => {
         makeSnapshot({ config: nextConfig, hash: "terminal" }),
       );
       const harness = createReloaderHarness(readSnapshot, { initialConfig });
+      await harness.reloader.ready;
 
       await flushWatcherChange(harness);
       await Promise.resolve();
@@ -3790,6 +4148,7 @@ describe("startGatewayConfigReloader", () => {
         },
       },
     );
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
@@ -3810,6 +4169,7 @@ describe("startGatewayConfigReloader", () => {
     };
     const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "off" }));
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -3828,6 +4188,7 @@ describe("startGatewayConfigReloader", () => {
     };
     const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "hot" }));
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
 
@@ -3851,6 +4212,7 @@ describe("startGatewayConfigReloader", () => {
         }),
       );
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    await reloader.ready;
 
     watcher.emit("unlink");
     await vi.runOnlyPendingTimersAsync();
@@ -3870,6 +4232,7 @@ describe("startGatewayConfigReloader", () => {
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValue(makeSnapshot({ exists: false, raw: null, hash: "missing" }));
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    await reloader.ready;
 
     watcher.emit("unlink");
     await vi.runAllTimersAsync();
@@ -3897,6 +4260,7 @@ describe("startGatewayConfigReloader", () => {
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
       promoteSnapshot,
     });
+    await reloader.ready;
     onRestart.mockRejectedValueOnce(new Error("restart-check failed"));
     onRestart.mockResolvedValueOnce(undefined);
 
@@ -3939,6 +4303,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
     const { watcher, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    await reloader.ready;
     onRestart.mockRejectedValueOnce(new GatewayConfigReloadSupersededError());
 
     watcher.emit("change");
@@ -3968,6 +4333,7 @@ describe("startGatewayConfigReloader", () => {
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
       promoteSnapshot,
     });
+    await reloader.ready;
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
@@ -4030,6 +4396,7 @@ describe("startGatewayConfigReloader", () => {
       initialCompareConfig: previousConfig,
       promoteSnapshot,
     });
+    await reloader.ready;
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
@@ -4064,6 +4431,7 @@ describe("startGatewayConfigReloader", () => {
     const { watcher, onHotReload, reloader } = createReloaderHarness(readSnapshot, {
       promoteSnapshot,
     });
+    await reloader.ready;
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
@@ -4090,6 +4458,7 @@ describe("startGatewayConfigReloader", () => {
       readSnapshot,
       { promoteSnapshot },
     );
+    await reloader.ready;
     onHotReload.mockRejectedValueOnce(new Error("reload refused"));
 
     watcher.emit("change");
@@ -4107,6 +4476,7 @@ describe("startGatewayConfigReloader", () => {
     const snapshot = makeZeroDebounceHookSnapshot("external-retry-1");
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
     const { watcher, onConfigApplied, onHotReload, reloader } = createReloaderHarness(readSnapshot);
+    await reloader.ready;
     onHotReload.mockRejectedValueOnce(new Error("reload refused"));
 
     watcher.emit("change");
@@ -4123,6 +4493,7 @@ describe("startGatewayConfigReloader", () => {
     const snapshot = makeZeroDebounceHookSnapshot("internal-retry-1");
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
     harness.onHotReload.mockRejectedValueOnce(new Error("reload refused"));
 
     harness.emitWrite(makeZeroDebounceHookWrite("internal-retry-1"));
@@ -4151,6 +4522,7 @@ describe("startGatewayConfigReloader", () => {
     const { watcher, onHotReload, log, reloader } = createReloaderHarness(readSnapshot, {
       promoteSnapshot,
     });
+    await reloader.ready;
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
@@ -4185,6 +4557,7 @@ describe("startGatewayConfigReloader", () => {
       );
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
     const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
+    await harness.reloader.ready;
 
     harness.emitWrite(makeZeroDebounceHookWrite("internal-1"));
     await vi.runOnlyPendingTimersAsync();
@@ -4218,6 +4591,7 @@ describe("startGatewayConfigReloader", () => {
       .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-none"));
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
     const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("internal-none"),
@@ -4273,6 +4647,7 @@ describe("startGatewayConfigReloader", () => {
         previousOwnedEnv: { [envKey]: "old" },
       });
       const harness = createReloaderHarness(vi.fn(), { initialConfig });
+      await harness.reloader.ready;
 
       harness.emitWrite({
         configPath: "/tmp/openclaw.json",
@@ -4331,6 +4706,7 @@ describe("startGatewayConfigReloader", () => {
         throw new Error("hot reload failed");
       },
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -4375,6 +4751,7 @@ describe("startGatewayConfigReloader", () => {
         onRestart: async () => await restartGate,
       },
     );
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -4424,7 +4801,7 @@ describe("startGatewayConfigReloader", () => {
     );
     const harness = createReloaderHarness(readSnapshot, {
       initialConfig: configA,
-      prepareConfigCandidate: ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
+      prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
         compareConfig: sourceConfig,
         runtimeEnv: prepareConfigRuntimeEnv({
@@ -4437,6 +4814,7 @@ describe("startGatewayConfigReloader", () => {
         }),
       }),
     });
+    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
     expect(targetEnv[envKey]).toBe("c");
@@ -4467,6 +4845,7 @@ describe("startGatewayConfigReloader", () => {
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-restart"));
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("internal-restart"),
@@ -4510,6 +4889,7 @@ describe("startGatewayConfigReloader", () => {
       promoteSnapshot,
       readPluginInstallRecords,
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite(hash),
@@ -4560,6 +4940,7 @@ describe("startGatewayConfigReloader", () => {
       initialConfig,
       readPluginInstallRecords,
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("slow-restart-a"),
@@ -4595,6 +4976,7 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("same-root-hash"),
@@ -4644,6 +5026,7 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -4683,6 +5066,7 @@ describe("startGatewayConfigReloader", () => {
       logging: { level: "debug" as const },
     } satisfies OpenClawConfig;
     const harness = createReloaderHarness(vi.fn(), { initialConfig });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -4726,6 +5110,7 @@ describe("startGatewayConfigReloader", () => {
         throw new Error("restart debt admission failed");
       },
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -4788,6 +5173,7 @@ describe("startGatewayConfigReloader", () => {
         },
       },
     );
+    await harness.reloader.ready;
     emitSupersedingChange = () => {
       emitSupersedingChange = () => {};
       harness.watcher.emit("change");
@@ -4829,6 +5215,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("overlay-echo"));
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("overlay-echo"),
@@ -4856,6 +5243,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("source-only-echo"));
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("source-only-echo"),
@@ -4903,6 +5291,7 @@ describe("startGatewayConfigReloader", () => {
       },
     } satisfies OpenClawConfig;
     const harness = createReloaderHarness(vi.fn());
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -4958,6 +5347,7 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -4991,6 +5381,7 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("same-invalid-root-hash"),
@@ -5015,6 +5406,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("newer-b"));
     const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("older-a"),
@@ -5055,6 +5447,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("latest-c"));
     const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("active-a"),
@@ -5133,6 +5526,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn(async () => makeSnapshot({ exists: false, valid: false }));
     const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("active-a"),
@@ -5176,6 +5570,7 @@ describe("startGatewayConfigReloader", () => {
       .mockResolvedValueOnce(makeSnapshot({ exists: false, valid: false }))
       .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("missing-retry"));
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("missing-retry"),
@@ -5198,6 +5593,7 @@ describe("startGatewayConfigReloader", () => {
   it("retries failed watcher-replayed intent with the same persisted hash", async () => {
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("replay-retry"));
     const harness = createReloaderHarness(readSnapshot);
+    await harness.reloader.ready;
     harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
 
     harness.emitWrite({
@@ -5221,6 +5617,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(readSnapshot, {
       runTransaction: runWithGatewayIndependentRootWorkAdmission,
     });
+    await harness.reloader.ready;
     harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
     const request = tryBeginGatewayRootWorkAdmission();
     if (!request) {
@@ -5293,6 +5690,7 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: sourceConfig });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -5381,6 +5779,7 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: sourceConfig });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -5441,6 +5840,7 @@ describe("startGatewayConfigReloader", () => {
       initialPluginInstallRecords: {},
       readPluginInstallRecords,
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
@@ -5481,6 +5881,7 @@ describe("startGatewayConfigReloader", () => {
       initialPluginInstallRecords: {},
       readPluginInstallRecords,
     });
+    await harness.reloader.ready;
 
     harness.reloader.notifyPluginMetadataChanged();
     await vi.runOnlyPendingTimersAsync();
@@ -5523,7 +5924,8 @@ describe("startGatewayConfigReloader", () => {
         initialPluginInstallRecords: installRecords,
         readPluginInstallRecords,
       });
-      const startupMetadata = { plugins: [] };
+      await harness.reloader.ready;
+      const startupMetadata = createPluginMetadataSnapshotFixture();
       setCurrentPluginMetadataSnapshotState(startupMetadata, "startup-metadata");
 
       harness.reloader.notifyPluginMetadataChanged();
@@ -5596,6 +5998,7 @@ describe("startGatewayConfigReloader", () => {
       initialPluginInstallRecords: installRecords,
       readPluginInstallRecords,
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
@@ -5648,6 +6051,7 @@ describe("startGatewayConfigReloader", () => {
       initialPluginInstallRecords: {},
       readPluginInstallRecords,
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
@@ -5682,6 +6086,7 @@ describe("startGatewayConfigReloader", () => {
     );
     const promoteSnapshot = vi.fn(async () => true);
     const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
+    await harness.reloader.ready;
 
     harness.emitWrite(makeZeroDebounceHookWrite("internal-1"));
     await vi.runOnlyPendingTimersAsync();
@@ -5718,6 +6123,7 @@ describe("startGatewayConfigReloader", () => {
       initialConfig: startupConfig,
       initialInternalWriteHash: "startup-internal-1",
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
@@ -5740,6 +6146,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(readSnapshot, {
       initialInternalWriteHash: "startup-internal-1",
     });
+    await harness.reloader.ready;
 
     harness.emitWrite({
       ...makeZeroDebounceHookWrite("startup-internal-1"),
@@ -5767,6 +6174,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(readSnapshot, {
       initialInternalWriteHash: null,
     });
+    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
@@ -5792,7 +6200,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     vi.restoreAllMocks();
   });
 
-  function startReloaderWithWatchers(watchers: ReturnType<typeof createWatcherMock>[]) {
+  async function startReloaderWithWatchers(watchers: ReturnType<typeof createWatcherMock>[]) {
     const watchSpy = vi.spyOn(chokidar, "watch");
     let watcherIndex = 0;
     watchSpy.mockImplementation((_path, options) => {
@@ -5820,13 +6228,17 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       log,
       watchPath: "/tmp/openclaw.json",
     });
+    await reloader.ready;
     return { watchSpy, readSnapshot, log, reloader };
   }
 
   it("re-creates the watcher with backoff and reconciles after it is ready", async () => {
     const first = createWatcherMock();
     const second = createWatcherMock();
-    const { watchSpy, readSnapshot, log, reloader } = startReloaderWithWatchers([first, second]);
+    const { watchSpy, readSnapshot, log, reloader } = await startReloaderWithWatchers([
+      first,
+      second,
+    ]);
 
     expect(watchSpy).toHaveBeenCalledTimes(1);
     first.emit("ready");
@@ -5858,7 +6270,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     const first = createWatcherMock();
     const failedReplacement = createWatcherMock();
     const recoveredReplacement = createWatcherMock();
-    const { readSnapshot, reloader } = startReloaderWithWatchers([
+    const { readSnapshot, reloader } = await startReloaderWithWatchers([
       first,
       failedReplacement,
       recoveredReplacement,
@@ -5884,11 +6296,11 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
     delete process.env.VITEST;
     delete process.env.CHOKIDAR_USEPOLLING;
-    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    let reloader: ReturnType<typeof startGatewayConfigReloader> | undefined;
     try {
       // One initial watcher plus one re-create per error/recovery round.
       const watchers = Array.from({ length: 5 }, () => createWatcherMock());
-      const started = startReloaderWithWatchers(watchers);
+      const started = await startReloaderWithWatchers(watchers);
       const { watchSpy, log } = started;
       reloader = started.reloader;
       const watchOptions = (index: number) =>
@@ -5941,12 +6353,12 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
     delete process.env.VITEST;
     delete process.env.CHOKIDAR_USEPOLLING;
-    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    let reloader: ReturnType<typeof startGatewayConfigReloader> | undefined;
     try {
       // Native phase: initial watcher + 3 re-creates = 4 watchers.
       // Polling phase: 1 polling re-create + 3 re-creates = 4 watchers.
       const watchers = Array.from({ length: 8 }, () => createWatcherMock());
-      const started = startReloaderWithWatchers(watchers);
+      const started = await startReloaderWithWatchers(watchers);
       const { watchSpy, readSnapshot, log } = started;
       reloader = started.reloader;
       const watchOptions = (index: number) =>
@@ -6022,10 +6434,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
     delete process.env.VITEST;
     process.env.CHOKIDAR_USEPOLLING = "1";
-    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    let reloader: ReturnType<typeof startGatewayConfigReloader> | undefined;
     try {
       const watchers = Array.from({ length: 4 }, () => createWatcherMock());
-      const started = startReloaderWithWatchers(watchers);
+      const started = await startReloaderWithWatchers(watchers);
       const { watchSpy, log } = started;
       reloader = started.reloader;
       const watchOptions = (index: number) =>
@@ -6072,10 +6484,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
     delete process.env.VITEST;
     delete process.env.CHOKIDAR_USEPOLLING;
-    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    let reloader: ReturnType<typeof startGatewayConfigReloader> | undefined;
     try {
       const watchers = Array.from({ length: 4 }, () => createWatcherMock(true));
-      const started = startReloaderWithWatchers(watchers);
+      const started = await startReloaderWithWatchers(watchers);
       const { log } = started;
       reloader = started.reloader;
       const backoffs = [500, 2000, 5000] as const;
@@ -6111,10 +6523,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
     delete process.env.VITEST;
     process.env.CHOKIDAR_USEPOLLING = "0";
-    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    let reloader: ReturnType<typeof startGatewayConfigReloader> | undefined;
     try {
       const watchers = Array.from({ length: 4 }, () => createWatcherMock());
-      const started = startReloaderWithWatchers(watchers);
+      const started = await startReloaderWithWatchers(watchers);
       const { watchSpy, log } = started;
       reloader = started.reloader;
       const watchOptions = (index: number) =>
@@ -6181,6 +6593,7 @@ describe("startGatewayConfigReloader skills invalidation", () => {
       }),
     );
     const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+    await reloader.ready;
 
     watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
@@ -6205,6 +6618,7 @@ describe("startGatewayConfigReloader skills invalidation", () => {
       }),
     );
     const { watcher, reloader } = createReloaderHarness(readSnapshot);
+    await reloader.ready;
 
     watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();

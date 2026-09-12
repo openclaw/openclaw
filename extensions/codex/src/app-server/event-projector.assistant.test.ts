@@ -97,7 +97,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       forCurrentTurn("model/rerouted", {
         fromModel: "gpt-5.4-codex",
         toModel: "gpt-5.4-codex-mini",
-        reason: "high_risk_cyber_activity",
+        reason: "highRiskCyberActivity",
       }),
     );
     await projector.handleNotification(
@@ -116,7 +116,18 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       data: {
         fromModel: "gpt-5.4-codex",
         toModel: "gpt-5.4-codex-mini",
-        reason: "high_risk_cyber_activity",
+        reason: "highRiskCyberActivity",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "notice",
+      data: {
+        phase: "provider_policy",
+        category: "cyber",
+        state: "fallback",
+        provider: "openai",
+        model: "gpt-5.4-codex",
+        fallbackModel: "gpt-5.4-codex-mini",
       },
     });
   });

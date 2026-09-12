@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
@@ -11,6 +12,13 @@ const root = process.env.HOME!;
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
+const blockedChildSource = `
+const fs = require('node:fs');
+process.title = 'node fixture-private-argument';
+fs.writeFileSync(${JSON.stringify(path.join(root, "blocked-child.pid"))}, String(process.pid));
+process.stdin.resume();
+process.stdin.on('end', () => process.exit(0));
+`;
 if (scenario === "completion-hang") {
   await fs.writeFile(
     path.join(root, "openclaw.mjs"),
@@ -39,6 +47,18 @@ export async function doctorCommand() {
   if (!process.argv.includes('--no-workspace-suggestions')) note('Doctor workspace diagnostic', 'Workspace');
   console.log('Doctor console diagnostic');
   process.stderr.write('Doctor stderr diagnostic\\n');
+  ${
+    scenario === "doctor-hang" || scenario === "doctor-progress"
+      ? `
+  console.log('STEP completed fixture-schema');
+  console.error('STEP active fixture-validation');
+  process.on('SIGTERM', () => {});
+  ${scenario === "doctor-progress" ? "setInterval(() => console.error('PROGRESS fixture-validation'), 40);" : ""}
+  setTimeout(() => process.exit(0), 8_000);
+  await new Promise(() => {});
+  `
+      : ""
+  }
   outro('Doctor complete.');
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
 }
@@ -92,7 +112,8 @@ const stubs = new Map<string, string>([
   // place that URL in a shared chunk. Workers still execute their real compiled code.
   [
     sourceUrl("../infra/runtime-process-entrypoints.ts"),
-    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};`,
+    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};
+export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)};`,
   ],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
@@ -107,20 +128,33 @@ const stubs = new Map<string, string>([
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
     scenario === "phase-hang"
-      ? 'export const createUpdateConfigSnapshot = async () => { console.error("fixture configSnapshot entered"); setInterval(() => {}, 1000); await new Promise(() => {}); };'
+      ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
+export const createUpdateConfigSnapshot = async () => {
+  const child = spawnCommand([process.execPath, '-e', ${JSON.stringify(blockedChildSource)}, '--', 'fixture-private-argument'], {stdin:'pipe', stdout:'ignore', stderr:'ignore'});
+  console.error('fixture configSnapshot entered');
+  await child;
+};`
       : scenario === "borrowed-phase"
         ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
         : "export const createUpdateConfigSnapshot = async () => {};",
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    `export const readPostCorePreUpdateSourceConfig = async () => {
-      ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
-      return undefined;
-    };
-    export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot;
-    export const persistValidatedDowngradeConfig = async () => {};
-    export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});`,
+    `
+import { readConfigFileSnapshot } from ${JSON.stringify(sourceUrl("../config/config.ts"))};
+export const readPostCorePreUpdateSourceConfig = async () => {
+  ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
+  return undefined;
+};
+export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot;
+export const persistValidatedDowngradeConfig = async () => {};
+export const preparePostCorePluginConfig = async () => ({
+  configSnapshot: await readConfigFileSnapshot(),
+  configWriteOptions: {},
+  configChanged: false,
+  restoredAuthoredChannels: undefined,
+});
+`,
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
@@ -132,11 +166,13 @@ const stubs = new Map<string, string>([
   ],
 ]);
 const blockedPhase =
-  scenario === "phase-hang"
-    ? "configSnapshot"
-    : scenario === "completion-hang"
-      ? "completionCache"
-      : undefined;
+  scenario === "doctor-hang" || scenario === "doctor-progress"
+    ? "doctor"
+    : scenario === "phase-hang"
+      ? "configSnapshot"
+      : scenario === "completion-hang"
+        ? "completionCache"
+        : undefined;
 if (blockedPhase) {
   const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
   // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
@@ -195,7 +231,22 @@ const run = () =>
       registerUpdateCli(program);
       await program.parseAsync(process.argv);
       if (scenario === "handle-hang") {
-        setInterval(() => {}, 1000);
+        const { spawn } = await import("node:child_process");
+        const { runCliDisposer } = await import("./runtime-cleanup.js");
+        const child = spawn(
+          process.execPath,
+          ["-e", blockedChildSource, "--", "fixture-private-argument"],
+          {
+            stdio: ["pipe", "ignore", "ignore"],
+          },
+        );
+        await runCliDisposer(
+          "fixture-stdin-child",
+          () =>
+            new Promise<void>((resolve) => {
+              child.once("exit", () => resolve());
+            }),
+        );
       }
       if (borrowed) {
         if (scenario === "borrowed-output") {

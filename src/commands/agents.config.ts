@@ -20,9 +20,15 @@ import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import {
+  readAgentDatabaseAdmissionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 
 export type AgentSummary = {
   id: string;
+  status?: "degraded";
+  admissionRefusal?: AgentDatabaseAdmissionRefusal;
   name?: string;
   identityName?: string;
   identityEmoji?: string;
@@ -97,6 +103,11 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
     };
     if (identityAvatarUrl) {
       summary.identityAvatarUrl = identityAvatarUrl;
+    }
+    const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
+    if (admissionRefusal) {
+      summary.status = "degraded";
+      summary.admissionRefusal = admissionRefusal;
     }
     return summary;
   });

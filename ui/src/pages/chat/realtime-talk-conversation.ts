@@ -68,6 +68,17 @@ export function updateRealtimeTalkConversation(
     });
   }
   const nowMs = update.nowMs ?? Date.now();
+  if (update.textMode === "verbatim") {
+    return upsertRealtimeConversationEntry(
+      state,
+      update.role,
+      update.role === "user" ? state.userEntryId : state.assistantEntryId,
+      text,
+      update.final,
+      nowMs,
+      update.textMode,
+    );
+  }
   if (update.role === "assistant") {
     const preparedState = finishRealtimeConversationEntry(state, "user", nowMs);
     return upsertRealtimeConversationEntry(
@@ -126,6 +137,7 @@ function upsertRealtimeConversationEntry(
   text: string,
   isFinal: boolean,
   nowMs: number,
+  textMode?: RealtimeTalkTranscript["textMode"],
 ): RealtimeTalkConversationState {
   if (entryId === null) {
     const id = `rt-${state.nextEntryId}`;
@@ -134,7 +146,7 @@ function upsertRealtimeConversationEntry(
       {
         id,
         role,
-        text: boundRealtimeConversationText(text.trimStart()),
+        text: boundRealtimeConversationText(textMode === "verbatim" ? text : text.trimStart()),
         isStreaming: !isFinal,
       },
     ].slice(-MAX_CONVERSATION_ENTRIES);
@@ -149,16 +161,18 @@ function upsertRealtimeConversationEntry(
 
   const targetIndex = state.entries.findIndex((entry) => entry.id === entryId);
   if (targetIndex === -1) {
-    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
+    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs, textMode);
   }
   const entry = state.entries[targetIndex];
   if (!entry) {
-    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
+    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs, textMode);
   }
   const mergedText =
-    role === "assistant"
-      ? mergeAssistantTranscriptText(entry.text, text, isFinal)
-      : mergeRealtimeTranscriptText(entry.text, text, isFinal);
+    textMode === "verbatim"
+      ? entry.text + text
+      : role === "assistant"
+        ? mergeAssistantTranscriptText(entry.text, text, isFinal)
+        : mergeRealtimeTranscriptText(entry.text, text, isFinal);
   const updatedText = boundRealtimeConversationText(mergedText);
   const entries =
     entry.text === updatedText && entry.isStreaming === !isFinal

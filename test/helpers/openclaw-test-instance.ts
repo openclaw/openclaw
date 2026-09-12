@@ -544,6 +544,8 @@ function createInstanceEnv(params: {
     ...params.stateEnv,
     OPENCLAW_GATEWAY_TOKEN: "",
     OPENCLAW_GATEWAY_PASSWORD: "",
+    OPENCLAW_GATEWAY_PORT: "",
+    OPENCLAW_GATEWAY_URL: "",
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_SKIP_PROVIDERS: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawConfig,
@@ -6,6 +8,7 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as configRuntime from "./src/config.js";
 import { createTeamReportsStore } from "./src/store.js";
@@ -18,6 +21,8 @@ vi.mock("./src/store.js", () => ({
 
 import plugin from "./index.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const pluginConfig = {
   basePath: "/team/activity/",
   github: { token: "fixture-github-token", orgs: ["sample"] },
@@ -28,7 +33,7 @@ const config: OpenClawConfig = {
   plugins: { entries: { "team-reports": { enabled: true, config: pluginConfig } } },
 };
 
-function captureReports() {
+function captureReports(runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url))) {
   const services: OpenClawPluginService[] = [];
   const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
   const methods: Array<Parameters<OpenClawPluginApi["registerGatewayMethod"]>> = [];
@@ -39,6 +44,7 @@ function captureReports() {
     register(api) {
       plugin.register({
         ...api,
+        runtimeSource,
         pluginConfig: api.config.plugins?.entries?.["team-reports"]?.config,
         registerService(service) {
           services.push(service);
@@ -62,6 +68,92 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
 describe("Team Reports registration", () => {
+  it.each([
+    ["source", "extensions/team-reports/index.ts", "extensions/team-reports/src/store.worker.ts"],
+    [
+      "standalone",
+      "plugins/team-reports/dist/index.js",
+      "plugins/team-reports/dist/src/store.worker.js",
+    ],
+    [
+      "bundled",
+      "dist/extensions/team-reports/index.js",
+      "dist/extensions/team-reports/src/store.worker.js",
+    ],
+  ] as const)(
+    "locates its %s worker from the selected runtime entry",
+    async (_layout, entry, worker) => {
+      const runtimeSource = path.resolve(entry);
+      const { services } = captureReports(runtimeSource);
+      const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
+      vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
+        github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
+        people: [],
+      });
+      const stopBeforeOpening = new Error("worker location captured");
+      vi.mocked(createTeamReportsStore).mockRejectedValueOnce(stopBeforeOpening);
+      await expect(
+        services[0]!.start({ config, stateDir: "/unused", logger: console }),
+      ).rejects.toBe(stopBeforeOpening);
+      expect(createTeamReportsStore).toHaveBeenCalledWith({
+        stateDir: "/unused",
+        workerModuleUrl: pathToFileURL(path.resolve(worker)),
+      });
+    },
+  );
+
+  it("drains storage that opens after retirement without publishing the service", async () => {
+    const directory = tempDirs.make("team-reports-retired-open-");
+    const { createTeamReportsStore: openStore } =
+      await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
+    const store = await openStore({
+      stateDir: directory,
+      workerModuleUrl: new URL("./src/store.worker.ts", import.meta.url),
+    });
+    const opened = createDeferred<void>();
+    const releaseOpen = createDeferred<void>();
+    const releaseClose = createDeferred<void>();
+    const closeStore = store.close.bind(store);
+    const close = vi.spyOn(store, "close").mockImplementation(async () => {
+      await releaseClose.promise;
+      await closeStore();
+    });
+    vi.mocked(createTeamReportsStore).mockImplementationOnce(async () => {
+      opened.resolve();
+      await releaseOpen.promise;
+      return store;
+    });
+    const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
+    vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
+      github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
+      people: [],
+    });
+    const { captured, services } = captureReports();
+    const service = services[0]!;
+    const lifecycle = captured.runtimeLifecycles[0]!;
+    const starting = service.start({
+      config,
+      stateDir: directory,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    await opened.promise;
+    const stopped = vi.fn();
+    const cleanup = Promise.resolve(lifecycle.cleanup?.({ reason: "disable" })).then(stopped);
+    try {
+      releaseOpen.resolve();
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      expect(stopped).not.toHaveBeenCalled();
+    } finally {
+      releaseOpen.resolve();
+      releaseClose.resolve();
+      await Promise.all([starting, cleanup]);
+    }
+    await expect(store.listRuns()).rejects.toThrow("store is closed");
+    await expect(service.start({ config, stateDir: directory, logger: console })).rejects.toThrow(
+      "runtime has been retired",
+    );
+  });
+
   it("exposes reports through the authenticated tab, read methods, and admin generation method", () => {
     const { captured, services, routes, methods } = captureReports();
     expect(captured.controlUiDescriptors).toEqual([
@@ -69,6 +161,7 @@ describe("Team Reports registration", () => {
         surface: "tab",
         id: "team-reports",
         label: "Reports",
+        slug: "reports",
         description: "Team activity reports from GitHub and Discord.",
         icon: "chart",
         group: "control",

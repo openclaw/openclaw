@@ -116,6 +116,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     userDate,
   } = await resolveAgentRuntimePrompt({
     config: attempt.config,
+    preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
     agentId: params.setup.sessionAgentId,
     workspaceDir: params.setup.effectiveWorkspace,
     cwd: params.setup.effectiveCwd,
@@ -128,11 +129,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     channel: attempt.messageChannel ?? attempt.messageProvider,
     accountId: attempt.agentAccountId,
     chatType: attempt.chatType,
-    currentChannelId: attempt.currentChannelId,
-    currentThreadTs: attempt.currentThreadTs,
-    currentMessageId: attempt.currentMessageId,
-    senderId: attempt.senderId,
-    senderIsOwner: attempt.senderIsOwner,
   });
   const promptMode =
     attempt.promptMode ??

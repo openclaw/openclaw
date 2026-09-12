@@ -846,7 +846,12 @@ async function collectDailyIngestionBatches(params: {
     .toSorted(compareDailyMemoryFilesByNewestDay);
 
   const batches: DailyIngestionBatch[] = [];
-  const nextFiles: Record<string, DailyIngestionFileState> = {};
+  const currentPaths = new Set(files.map((file) => `memory/${file.fileName}`));
+  // A bounded sweep must retain checkpoints for current files it never reaches.
+  // Files absent from the current lookback remain pruned from the next state.
+  const nextFiles: Record<string, DailyIngestionFileState> = Object.fromEntries(
+    Object.entries(params.state.files).filter(([relativePath]) => currentPaths.has(relativePath)),
+  );
   let changed = false;
   const totalCap = Math.max(20, params.limit * 4);
   const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, Math.max(files.length, 1))));
@@ -861,6 +866,7 @@ async function collectDailyIngestionBatches(params: {
       throw err;
     });
     if (!stat) {
+      delete nextFiles[relativePath];
       continue;
     }
     const fingerprint: DailyIngestionFileState = {
@@ -1128,6 +1134,10 @@ function dedupeEntries(
       duplicate.totalScore = Math.max(duplicate.totalScore, entry.totalScore);
       duplicate.maxScore = Math.max(duplicate.maxScore, entry.maxScore);
       duplicate.queryHashes = uniqueStrings([...duplicate.queryHashes, ...entry.queryHashes]);
+      duplicate.userQueryHashes = uniqueStrings([
+        ...(duplicate.userQueryHashes ?? []),
+        ...(entry.userQueryHashes ?? []),
+      ]);
       duplicate.recallDays = [
         ...new Set([...duplicate.recallDays, ...entry.recallDays]),
       ].toSorted();
@@ -1403,6 +1413,7 @@ async function runLightDreaming(
       workspaceDir: params.workspaceDir,
       phase: "light",
       bodyLines,
+      hasContent: capped.length > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,
@@ -1480,6 +1491,7 @@ async function runRemDreaming(
       workspaceDir: params.workspaceDir,
       phase: "rem",
       bodyLines: preview.bodyLines,
+      hasContent: entries.length > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,

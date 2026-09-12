@@ -1,4 +1,4 @@
-// Display-metadata mutations for sessions.patch: label, icon, color, category, boardFace.
+// Display-metadata mutations for sessions.patch.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -17,6 +17,19 @@ export function applySessionsPatchDisplayMetadata(params: {
   isLabelInUse: (label: string) => boolean;
 }): string | undefined {
   const { patch, next } = params;
+
+  if ("autoLabel" in patch) {
+    if (patch.autoLabel === null) {
+      delete next.autoLabel;
+    } else if (patch.autoLabel !== undefined) {
+      const parsed = parseSessionLabel(patch.autoLabel);
+      if (!parsed.ok) {
+        return parsed.error;
+      }
+      // Device names are presentation metadata, not unique custom-label claims.
+      next.autoLabel = parsed.label;
+    }
+  }
 
   if ("label" in patch) {
     const raw = patch.label;

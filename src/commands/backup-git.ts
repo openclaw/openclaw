@@ -3,6 +3,7 @@ import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-co
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { GitBackupIdentity } from "../snapshot/git-backup-codec.js";
@@ -71,14 +72,17 @@ async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCre
     identity: GitBackupIdentity;
   }> = [];
   if (options.all || options.global) {
+    const selectedPath = resolveOpenClawStateSqlitePath();
+    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
     databases.push({
-      path: await fs.realpath(resolveOpenClawStateSqlitePath()),
+      path: await fs.realpath(selectedPath),
       identity: { role: "global" },
     });
   }
   // Config owns both the current roster and each agent root; durable registry
   // rows can retain stale paths after an agent moves or is removed.
   for (const { agentId, databasePath } of agents) {
+    assertNotUpdateCapturePath(databasePath, resolveStateDir());
     let resolvedPath: string;
     try {
       resolvedPath = await fs.realpath(databasePath);
@@ -143,7 +147,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     });
     // A completed local backup remains successful even when requested remote replication fails;
     // pushFailed records that durable degradation without discarding the recoverable local commit.
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "git",
       archivePath: repositoryPath,
       status: "ok",
@@ -163,7 +167,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     }
     return result;
   } catch (error) {
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "git",
       archivePath: repositoryPath,
       status: "failed",

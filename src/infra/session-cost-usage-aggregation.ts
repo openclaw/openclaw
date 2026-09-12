@@ -492,6 +492,9 @@ async function scanSqliteUsageRollup(params: {
     sessionId: marker.sessionId,
     storePath: marker.storePath,
   };
+  const { restoreSessionColdTranscript } =
+    await import("../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(scope);
   const snapshotLastRow = maxSeq > 0 ? readTranscriptEventAtSeqSync(scope, maxSeq) : undefined;
   if (maxSeq > 0 && !snapshotLastRow) {
     throw new Error(`SQLite transcript checkpoint unavailable: ${params.file.filePath}`);
@@ -584,8 +587,11 @@ export async function refreshCostUsageCacheForAgent(params: {
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  const databasePath = params.databasePath ?? resolveUsageCostCacheDatabasePath(params.agentId);
-  const lock = acquireSessionCostUsageRefreshLock(params.agentId, databasePath);
+  const databasePath = resolveOpenClawAgentSqlitePath({
+    agentId: normalizeAgentId(params.agentId),
+    path: params.databasePath,
+  });
+  const lock = await acquireSessionCostUsageRefreshLock(params.agentId, databasePath);
   if (!lock.acquired) {
     return "busy";
   }
@@ -613,7 +619,7 @@ export async function refreshCostUsageCacheForAgent(params: {
       filesByPath.set(file.filePath, file);
     }
     const files = [...filesByPath.values()];
-    deleteSessionCostUsageRollupsExcept({
+    await deleteSessionCostUsageRollupsExcept({
       agentId: params.agentId,
       databasePath,
       liveKeys: new Set(files.map((file) => file.filePath)),
@@ -648,7 +654,7 @@ export async function refreshCostUsageCacheForAgent(params: {
         resolveCost,
       });
       const valueJson = JSON.stringify(entry);
-      const written = writeSessionCostUsageRollup({
+      const written = await writeSessionCostUsageRollup({
         agentId: params.agentId,
         databasePath,
         rollupId: file.filePath,
@@ -664,6 +670,6 @@ export async function refreshCostUsageCacheForAgent(params: {
     }
     return "refreshed";
   } finally {
-    lock.release();
+    await lock.release();
   }
 }

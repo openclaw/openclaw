@@ -17,7 +17,8 @@ Team Reports is an official external package: it is not part of the core
 `openclaw` npm package and is installed on demand from ClawHub or npm. Source
 checkouts of the repository load it directly from `extensions/team-reports`.
 It stays disabled until you enable it. Report pages use Gateway
-authentication. They are not public just because their default path is `/reports`.
+authentication. Their default HTTP route is `/plugins/team-reports/`; the Control UI
+tab opens at `/reports`, prefixed by any configured Control UI base path.
 
 ## Before you begin
 
@@ -96,7 +97,7 @@ To request a report immediately, use:
 openclaw team-reports generate --intraday
 ```
 
-Generation returns a run ID before collection and summarization finish. Check
+Generation returns a run ID after recording the run, before collection and summarization finish. Check
 `status` for the result, then open **Reports** in the Control UI.
 
 ## Read reports in the Control UI
@@ -120,13 +121,28 @@ page includes **Open in a new window** with that page's own URL. If the browser
 blocks that action too, copy the link into a new tab. Gateway authentication
 still applies there.
 
-Pages render on the server and work without JavaScript. They use the Carapace
-visual contract, with a dark default and a light palette when your operating
-system prefers light mode. The embedded page follows that preference independently
-of the Control UI theme. The index shows recent reports and a 28-day activity
-trend; people pages show each member's recent daily history. Closed and partial
-periods have distinct status badges, and coverage and summary warnings remain
-visible alongside the report.
+Pages mirror the maintainer report site layout: a banner and activity dateline,
+latest-period quick cards, day/week/month history, people timelines, and a
+per-person calendar. The generation panel shows scheduler and source health.
+Closed and partial periods remain distinct, with coverage and summary warnings
+alongside the report.
+
+The theme choice follows you through in-tab navigation via the page fragment
+(`#theme=light` or `#theme=dark`). Inside the sandboxed Reports tab, it lasts for
+that visit. It persists per browser only where storage is available, such as in
+a separate window. Pages choose the theme from the fragment first, then browser
+storage when available, then the operating system's light or dark preference,
+independently of the Control UI theme.
+
+Relative times and open-day countdowns refresh with a small
+inline script that the Content Security Policy allows by nonce. The same script
+enables history toggles, member filtering, and the quiet-member switch. Pages
+still work without JavaScript: all history rows and members remain available,
+and timestamps have server-rendered fallbacks.
+
+The crab artwork and icon are served from the plugin's own `assets` route under
+the same authentication and scope checks as report pages. Those assets use a
+private one-day cache; report pages and exports remain uncached.
 
 Roster members and other GitHub actors show GitHub avatars from
 `avatars.githubusercontent.com`, using the primary GitHub login. Images load
@@ -141,17 +157,17 @@ All keys below live under `plugins.entries.team-reports.config`. Unknown keys
 are rejected. Configuration and secret changes require a Gateway restart;
 secrets resolve once when the report service starts.
 
-| Key               | Default        | Behavior                                                                                                                                                                                                                                                               |
-| ----------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `basePath`        | `"/reports"`   | Absolute route root with nonempty path segments using letters, digits, `.`, `_`, and `-`. It must not use `.` or `..` segments, the `/api/channels` prefix, or equal or sit below an explicitly configured Control UI base path. Trailing slashes are normalized away. |
-| `displayTimezone` | `"UTC"`        | IANA timezone for displayed timestamps. Report windows always use UTC.                                                                                                                                                                                                 |
-| `github`          | required       | GitHub collection configuration, described below.                                                                                                                                                                                                                      |
-| `discord`         | unset          | Optional Discord collection configuration. Omit it to collect GitHub only.                                                                                                                                                                                             |
-| `people`          | unset          | Inline identity entries. Mutually exclusive with `peopleFile`.                                                                                                                                                                                                         |
-| `peopleFile`      | unset          | Absolute path to a regular JSON file of at most 2 MiB, shaped as `{ "people": [...] }` and using the identity fields below.                                                                                                                                            |
-| `summaries`       | defaults below | Model selection and summary enablement.                                                                                                                                                                                                                                |
-| `schedule`        | defaults below | UTC collection times and aggregate refreshes.                                                                                                                                                                                                                          |
-| `retention.days`  | `400`          | Remove stored reports older than this many days after closed-day runs; `0` keeps all history.                                                                                                                                                                          |
+| Key               | Default                   | Behavior                                                                                                                                                                                                                                                               |
+| ----------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `basePath`        | `"/plugins/team-reports"` | Absolute route root with nonempty path segments using letters, digits, `.`, `_`, and `-`. It must not use `.` or `..` segments, the `/api/channels` prefix, or equal or sit below an explicitly configured Control UI base path. Trailing slashes are normalized away. |
+| `displayTimezone` | `"UTC"`                   | IANA timezone for displayed timestamps. Report windows always use UTC.                                                                                                                                                                                                 |
+| `github`          | required                  | GitHub collection configuration, described below.                                                                                                                                                                                                                      |
+| `discord`         | unset                     | Optional Discord collection configuration. Omit it to collect GitHub only.                                                                                                                                                                                             |
+| `people`          | unset                     | Inline identity entries. Mutually exclusive with `peopleFile`.                                                                                                                                                                                                         |
+| `peopleFile`      | unset                     | Absolute path to a regular JSON file of at most 2 MiB, shaped as `{ "people": [...] }` and using the identity fields below.                                                                                                                                            |
+| `summaries`       | defaults below            | Model selection and summary enablement.                                                                                                                                                                                                                                |
+| `schedule`        | defaults below            | UTC collection times and aggregate refreshes.                                                                                                                                                                                                                          |
+| `retention.days`  | `400`                     | Remove stored reports older than this many days after closed-day runs; `0` keeps all history.                                                                                                                                                                          |
 
 ### GitHub
 
@@ -287,7 +303,9 @@ call. Collection is stored before summarization, which may take several minutes.
 Only one run executes at a time. Scheduled work waits for an active run;
 manual generation is rejected while another run is active. Runs have a
 45-minute deadline. Stopping the service cancels its timers and waits up to
-30 seconds for active work before closing storage.
+30 seconds for active work, then cancels remote collection and summarization.
+Any database operation already in progress and the final run outcome finish
+before storage closes.
 
 ## Understand report windows and counts
 
@@ -342,21 +360,26 @@ With no date or `--intraday`, generation selects yesterday. `--intraday`
 selects today; `--date` accepts a past day or today. Today's report remains
 partial. Future dates, or combining `--intraday` with a past date, are rejected.
 
+The **Reports** sidebar tab opens `/reports` inside the Control UI shell, with any
+configured Control UI base path prepended. Pinning `basePath: "/reports"` shadows
+the root-mounted Control UI `/reports` page, so the sidebar falls back to the
+generic `/plugin?plugin=team-reports&id=team-reports` tab URL.
+
 With the default `basePath`, authenticated readers can use:
 
-| Path                           | Result                                                                  |
-| ------------------------------ | ----------------------------------------------------------------------- |
-| `/reports/`                    | Report index and recent activity trend.                                 |
-| `/reports/latest/`             | Redirect to the latest closed daily report.                             |
-| `/reports/day/<key>/`          | Daily HTML report; replace `day` with `week` or `month` for aggregates. |
-| `/reports/day/<key>/report.md` | Markdown export; also available for weeks and months.                   |
-| `/reports/day/<key>/data.json` | Structured report; also available for weeks and months.                 |
-| `/reports/people/`             | Roster index.                                                           |
-| `/reports/people/<login>/`     | Per-person history and 28-day trend.                                    |
-| `/reports/index.json`          | Latest keys and stored-period index.                                    |
-| `/reports/status`              | Run status, schedule, and source warnings as JSON.                      |
+| Path                                        | Result                                                                  |
+| ------------------------------------------- | ----------------------------------------------------------------------- |
+| `/plugins/team-reports/`                    | Report index and recent activity trend.                                 |
+| `/plugins/team-reports/latest/`             | Redirect to the latest closed daily report.                             |
+| `/plugins/team-reports/day/<key>/`          | Daily HTML report; replace `day` with `week` or `month` for aggregates. |
+| `/plugins/team-reports/day/<key>/report.md` | Markdown export; also available for weeks and months.                   |
+| `/plugins/team-reports/day/<key>/data.json` | Structured report; also available for weeks and months.                 |
+| `/plugins/team-reports/people/`             | Roster index.                                                           |
+| `/plugins/team-reports/people/<login>/`     | Per-person history, calendar, and 30-day trend.                         |
+| `/plugins/team-reports/index.json`          | Latest keys and stored-period index.                                    |
+| `/plugins/team-reports/status`              | Run status, schedule, and source warnings as JSON.                      |
 
-These routes accept only `GET` and `HEAD` and send `Cache-Control: private,
+Report and export routes accept only `GET` and `HEAD` and send `Cache-Control: private,
 no-store`. Use the CLI or authenticated Gateway method to generate reports;
 reading a report page does not trigger collection.
 

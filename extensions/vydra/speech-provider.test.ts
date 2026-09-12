@@ -2,6 +2,7 @@ import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw
 // Vydra tests cover speech provider plugin behavior.
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { binaryResponse, jsonResponse, stubFetch } from "./provider-test-helpers.js";
 import { buildVydraSpeechProvider } from "./speech-provider.js";
 
 describe("vydra speech provider", () => {
@@ -32,26 +33,10 @@ describe("vydra speech provider", () => {
   });
 
   it("posts to the tts endpoint and downloads the audio", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            audioUrl: "https://www.vydra.ai/generated/test.mp3",
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("mp3-data"), {
-          status: 200,
-          headers: { "Content-Type": "audio/mpeg" },
-        }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch(
+      jsonResponse({ audioUrl: "https://www.vydra.ai/generated/test.mp3" }),
+      binaryResponse("mp3-data", "audio/mpeg"),
+    );
 
     const result = await provider.synthesize({
       text: "OpenClaw test",
@@ -105,26 +90,10 @@ describe("vydra speech provider", () => {
   });
 
   it("rejects generated audio downloads that exceed the configured media cap", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            audioUrl: "https://cdn.vydra.ai/generated/test.mp3",
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("too-large"), {
-          status: 200,
-          headers: { "Content-Type": "audio/mpeg" },
-        }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(
+      jsonResponse({ audioUrl: "https://cdn.vydra.ai/generated/test.mp3" }),
+      binaryResponse("too-large", "audio/mpeg"),
+    );
 
     await expect(
       provider.synthesize({

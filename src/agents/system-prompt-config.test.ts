@@ -2,6 +2,7 @@
 // the canonical agent prompt facade.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as ttsSettings from "../tts/tts-settings.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import * as systemPrompt from "./system-prompt.js";
 
@@ -22,6 +23,45 @@ function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: stri
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each(["minimal", "none"] as const)(
+    "skips full-only preparation in %s mode and refreshes the next full prompt",
+    (promptMode) => {
+      const hint = vi
+        .spyOn(ttsSettings, "buildTtsSystemPromptHint")
+        .mockReturnValue("Fixture first voice guidance.");
+      const models = { "fixture/model": { alias: "Before" } };
+      const params = {
+        config: { agents: { defaults: { models } } },
+        workspaceDir: "/tmp/openclaw",
+        includeMemorySection: false,
+      };
+      try {
+        const full = buildConfiguredAgentSystemPrompt(params);
+        expect(full).toContain("- Before: fixture/model");
+        expect(full).toContain("Fixture first voice guidance.");
+        hint.mockClear();
+        const reduced = buildConfiguredAgentSystemPrompt({ ...params, promptMode });
+        expect(hint).not.toHaveBeenCalled();
+        expect(reduced).not.toContain("## Model Aliases");
+        expect(reduced).not.toContain("## Voice (TTS)");
+        expect(buildConfiguredAgentSystemPrompt(params)).toBe(full);
+
+        models["fixture/model"].alias = "After";
+        hint.mockReturnValue("Fixture current voice guidance.");
+        hint.mockClear();
+        expect(buildConfiguredAgentSystemPrompt({ ...params, promptMode })).toBe(reduced);
+        expect(hint).not.toHaveBeenCalled();
+        const refreshed = buildConfiguredAgentSystemPrompt(params);
+        expect(refreshed).toContain("- After: fixture/model");
+        expect(refreshed).not.toContain("- Before: fixture/model");
+        expect(refreshed).toContain("Fixture current voice guidance.");
+        expect(refreshed).not.toContain("Fixture first voice guidance.");
+      } finally {
+        hint.mockRestore();
+      }
+    },
+  );
+
   it.each([
     { name: "absent", config: undefined },
     { name: "empty", config: {} },

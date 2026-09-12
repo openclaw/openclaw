@@ -57,6 +57,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const config = options.getConfig();
     const url = await resolvePairingGatewayUrl(config, {
       env: process.env,
+      useLocalGateway: config.gateway?.mode === "remote",
       publicUrl: resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
       networkInterfaces: os.networkInterfaces,
       runCommandWithTimeout: commandRunner,
@@ -241,6 +242,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const config = options.getConfig();
           const resolved = await resolvePairingSetupFromConfig(config, {
             env: process.env,
+            useLocalGateway: config.gateway?.mode === "remote",
             publicUrl:
               resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
             bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -360,7 +362,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
       const preflight = new AbortController();
       try {
-        await prepare(
+        const prepared = await prepare(
           record,
           AbortSignal.any([
             signal,
@@ -368,6 +370,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             ...(operationSignal ? [operationSignal] : []),
           ]),
         );
+        return prepared.artifact.tarballSha256;
       } finally {
         // Preflight creates no transfer grant; release its artifact pin even on success.
         preflight.abort();

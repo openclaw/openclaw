@@ -343,7 +343,7 @@ describe("gateway plugin instance bindings", () => {
       clearPluginMetadataLifecycleCaches();
       expect(getGatewayPluginMetadataSnapshot()).toBe(sharedMetadata);
       await expect(requestInstanceBindingProbe(secondRuntime)).rejects.toThrow(
-        "In-process gateway dispatch requires a gateway request scope or instance binding",
+        "runtime is no longer active",
       );
       await expect(requestInstanceBindingProbe(firstRuntime)).resolves.toEqual(firstProbe);
       await expect(
@@ -470,6 +470,7 @@ describe("gateway plugin instance bindings", () => {
       proof.events.push({ event: "first-close-request" });
       await first.close({ reason: "close first Gateway while second remains active" });
       started.splice(started.indexOf(first), 1);
+      expect(coordinator.gatewayStops).toEqual([firstProbes[0]!.registryId]);
       const afterFirstClose = {
         first: snapshot(firstMonitors),
         second: snapshot(secondMonitors),
@@ -477,7 +478,7 @@ describe("gateway plugin instance bindings", () => {
       proof.observations.push({ phase: "first-close-completed", ...afterFirstClose });
       for (const { runtime } of firstMonitors) {
         await expect(requestInstanceBindingProbe(runtime)).rejects.toThrow(
-          "In-process gateway dispatch requires a gateway request scope or instance binding",
+          "runtime is no longer active",
         );
       }
       const survivingProbes = await Promise.all(
@@ -493,13 +494,17 @@ describe("gateway plugin instance bindings", () => {
       proof.events.push({ event: "second-close-request" });
       await second.close({ reason: "close remaining channel Gateway" });
       started.splice(started.indexOf(second), 1);
+      expect(coordinator.gatewayStops).toEqual([
+        firstProbes[0]!.registryId,
+        secondProbes[0]!.registryId,
+      ]);
       const afterBothClose = snapshot([...firstMonitors, ...secondMonitors]);
       proof.observations.push({ phase: "both-closes-completed", channels: afterBothClose });
       expect(afterBothClose).toEqual(expected([...firstMonitors, ...secondMonitors], true));
       expect(proof.monitors).toHaveLength(4);
       for (const { runtime } of secondMonitors) {
         await expect(requestInstanceBindingProbe(runtime)).rejects.toThrow(
-          "In-process gateway dispatch requires a gateway request scope or instance binding",
+          "runtime is no longer active",
         );
       }
     },
@@ -558,7 +563,7 @@ describe("gateway plugin instance bindings", () => {
       ).toBe("Startup plugin");
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       await expect(requestInstanceBindingProbe(initialRuntime)).rejects.toThrow(
-        "In-process gateway dispatch requires a gateway request scope or instance binding",
+        "runtime is no longer active",
       );
       await expect(
         reloadedRuntime.subagent.getSessionMessages({
@@ -655,7 +660,7 @@ describe("gateway plugin instance bindings", () => {
       proof.events.push({ event: "reload-settled" });
       for (const monitor of initialMonitors) {
         await expect(requestInstanceBindingProbe(monitor.runtime)).rejects.toThrow(
-          "In-process gateway dispatch requires a gateway request scope or instance binding",
+          "runtime is no longer active",
         );
         proof.observations.push({
           phase: "retired-binding-rejected",

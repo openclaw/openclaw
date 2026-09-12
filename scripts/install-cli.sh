@@ -1,5 +1,31 @@
 #!/usr/bin/env bash
+
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  if (return 0 2>/dev/null); then
+    printf '%s\n' 'Run this installer with /bin/bash on macOS instead of sourcing it.' >&2
+    return 1
+  fi
+  case "${BASH_SOURCE[0]:-}" in
+    ""|bash|-bash|/dev/stdin)
+      # Bash reads piped scripts unbuffered; stdin now starts after this guard.
+      OPENCLAW_INSTALLER_REEXEC_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer.XXXXXX")" || exit 1
+      export OPENCLAW_INSTALLER_REEXEC_FILE
+      trap 'rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"' EXIT
+      { printf '#!/bin/bash\n'; cat; } > "$OPENCLAW_INSTALLER_REEXEC_FILE" || exit 1
+      exec /bin/bash "$OPENCLAW_INSTALLER_REEXEC_FILE" "$@"
+      ;;
+    *) exec /bin/bash "$0" "$@" ;;
+  esac
+fi
+
 set -euo pipefail
+
+# The re-executed shell has the script open, so unlink its private copy now.
+if [[ -n "${OPENCLAW_INSTALLER_REEXEC_FILE:-}" && "${BASH_SOURCE[0]:-}" == "$OPENCLAW_INSTALLER_REEXEC_FILE" ]]; then
+  rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"
+fi
+unset OPENCLAW_INSTALLER_REEXEC_FILE
 
 # OpenClaw CLI installer (non-interactive, no onboarding)
 # Usage: curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- [--json] [--prefix <path>] [--version <ver>] [--node-version <ver>] [--onboard]
@@ -88,6 +114,7 @@ GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
 RUN_ONBOARD=0
+NODE_ONLY=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
 GIT_REF_KIND=""
@@ -105,6 +132,7 @@ Usage: install-cli.sh [options]
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.19.0)
+  --node-only                         Install only a private Node runtime (no system package changes)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -403,6 +431,10 @@ parse_args() {
         NODE_VERSION_REQUESTED=1
         shift 2
         ;;
+      --node-only)
+        NODE_ONLY=1
+        shift
+        ;;
       --install-method|--method)
         if [[ $# -lt 2 || "${2:-}" == --* ]]; then
           fail "Missing value for $1"
@@ -587,11 +619,27 @@ linked_node_is_usable() {
             (minor === 51 && patch >= 3) ||
             (minor === 50 && patch >= 7) ||
             (minor === 44 && patch >= 6)));
-      if (!safe) process.exitCode = 1;
+      const text = "a\u0000b\u0000";
+      const bytes = Buffer.from(text, "utf8");
+      const json = JSON.stringify({ value: text });
+      db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+      db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+      const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+      const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+      const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+      const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
+      if (!textSafe) {
+        console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+      } else if (!blobSafe || !jsonSafe) {
+        console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+      } else if (!safe) {
+        console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
+      }
+      if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
     } finally {
       db.close();
     }
-  ' >/dev/null 2>&1
+  ' --no-warnings >/dev/null
 }
 
 linked_node_sqlite_version() {
@@ -642,7 +690,7 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
-node_release_version_is_supported() {
+parse_node_release_version() {
   local version="$1"
   local major minor patch
 
@@ -662,6 +710,10 @@ node_release_version_is_supported() {
   done
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
+}
+
+node_release_version_is_supported() {
+  parse_node_release_version "$1" || return 1
   node_version_is_supported "$NODE_RELEASE_VERSION_CORE"
 }
 
@@ -1663,7 +1715,7 @@ install_openclaw_from_git() {
     pnpm_prefer_offline_args=(--prefer-offline)
   fi
   emit_json step name dependencies status start
-  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"
   emit_json step name dependencies status ok
 
   emit_json step name control-ui status start
@@ -1738,7 +1790,8 @@ refresh_gateway_service_if_loaded() {
   emit_json step name gateway-service status start
   log "Refreshing loaded gateway service..."
 
-  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/^Replacing unsupported Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/^Replacing missing Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+    refresh_output="$(printf '%s\n' "$refresh_output" | sed '/^node-runtime-replaced$/d')"
     if [[ -n "$refresh_output" ]]; then
       emit_json step name gateway-service status warn reason definition-mutation-denied
       printf '%s\n' "Code installed; gateway service definition left unchanged; ${refresh_output}." >&2
@@ -1748,6 +1801,9 @@ refresh_gateway_service_if_loaded() {
     emit_json step name gateway-service status warn reason install-failed
     log "Warning: gateway service refresh failed; continuing."
     return 0
+  fi
+  if [[ "$refresh_output" == *node-runtime-replaced* ]]; then
+    printf '%s\n' "Gateway service Node runtime replaced." >&2
   fi
 
   # `gateway install --force` activates the replacement service. A second
@@ -1759,6 +1815,13 @@ refresh_gateway_service_if_loaded() {
 main() {
   parse_args "$@"
   PREFIX="$(resolve_installer_path "$PREFIX")"
+  if [[ "$NODE_ONLY" -eq 1 ]]; then
+    if is_musl_linux; then
+      fail "Private Node.js recovery is unavailable on musl Linux; update Node.js with your system package manager."
+    fi
+    install_node "$(os_detect)" "$(arch_detect)"
+    return
+  fi
   GIT_DIR="$(resolve_installer_path "$GIT_DIR")"
 
   if [[ "${OPENCLAW_NO_ONBOARD:-0}" == "1" ]]; then

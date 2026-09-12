@@ -262,7 +262,7 @@ final class QuickChatController: NSObject {
         let wasVisible = self.isVisible
         self.isVisible = true
         self.installDismissMonitors()
-        guard self.enableUI, !ProcessInfo.processInfo.isRunningTests else { return }
+        guard self.enableUI else { return }
 
         self.visibleFrame = self.cursorScreen()?.visibleFrame ?? .zero
         self.ensurePanel()

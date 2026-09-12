@@ -4,14 +4,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
-  resolveThinkingProfile,
+  type ThinkingCatalogResolver,
 } from "../auto-reply/thinking.js";
-import {
-  resolveThinkingDefaultForModelCore,
-  type ThinkLevel,
-} from "../auto-reply/thinking.shared.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderThinkingPolicySource } from "../plugins/provider-thinking.types.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -68,6 +64,7 @@ export function resolveConfiguredThinkingDefaultCore(params: {
 export function resolveThinkingDefaultCore(
   params: ThinkingDefaultParams & {
     providerPolicySource?: ProviderThinkingPolicySource;
+    catalogResolver?: ThinkingCatalogResolver;
   },
 ): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
@@ -124,29 +121,12 @@ export function resolveThinkingDefaultCore(
   ) {
     return "adaptive";
   }
-  const fallbackParams = {
+  return resolveThinkingDefaultForModel({
     provider: params.provider,
     model: params.model,
     catalog,
+    catalogResolver: params.catalogResolver,
     agentRuntime: params.agentRuntime,
-  };
-  if (!params.providerPolicySource) {
-    return resolveThinkingDefaultForModel(fallbackParams);
-  }
-  const profile = resolveThinkingProfile({
-    ...fallbackParams,
-    providerPolicySource: params.providerPolicySource,
-  });
-  if (profile.defaultLevel) {
-    return profile.defaultLevel;
-  }
-  const fallback = resolveThinkingDefaultForModelCore(fallbackParams);
-  if (fallback === "off") {
-    return "off";
-  }
-  return resolveSupportedThinkingLevel({
-    ...fallbackParams,
-    level: "medium",
     providerPolicySource: params.providerPolicySource,
   });
 }

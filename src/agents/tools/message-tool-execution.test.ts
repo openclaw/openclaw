@@ -10,7 +10,7 @@ import type {
   MessageActionInput,
   MessageActionResult,
 } from "../../infra/outbound/message-action-contracts.js";
-import type { PluginHookMessageSendingResult } from "../../plugins/hook-types.js";
+import type { PluginHookMessageSendingResult } from "../../plugins/hook-message.types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";

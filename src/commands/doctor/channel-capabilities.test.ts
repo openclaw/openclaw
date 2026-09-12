@@ -51,13 +51,31 @@ describe("doctor channel capabilities", () => {
           },
         },
       },
-      { dmAllowFromModes: new Map([["googlechat", dmAllowFromMode]]) },
+      { dmPolicyMetadata: new Map([["googlechat", { id: "googlechat", dmAllowFromMode }]]) },
     );
 
     expect(warnings.map(({ path }) => path)).toEqual([
       "channels.googlechat.allowFrom",
       "channels.googlechat.accounts.work.allowFrom",
     ]);
+  });
+
+  it("retains empty allowlist warnings when open DMs do not require a wildcard", () => {
+    const warnings = collectChannelDmPolicyDependencyWarnings(
+      { channels: { qqbot: { dmPolicy: "allowlist", allowFrom: [] } } },
+      {
+        dmPolicyMetadata: new Map([
+          ["qqbot", { id: "qqbot", openDmRequiresAllowFromWildcard: false }],
+        ]),
+      },
+    );
+
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.qqbot.allowFrom",
+        message: expect.stringContaining('channels.qqbot.dmPolicy="allowlist"'),
+      }),
+    );
   });
 
   it("returns Slack route semantics without loading its channel plugin", () => {

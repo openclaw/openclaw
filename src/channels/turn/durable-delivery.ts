@@ -1,6 +1,7 @@
 // Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -151,12 +152,22 @@ function resolveAcceptedVisibleContent(
 
 /** Delivers final inbound replies through the durable message-send context when supported. */
 export async function deliverInboundReplyWithMessageSendContextCore(
-  params: DurableInboundReplyDeliveryParams,
+  input: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
-  if (params.info.kind !== "final") {
+  if (input.info.kind !== "final") {
     return { status: "not_applicable", reason: "non_final" };
   }
 
+  const group = getGroupThreadDispatchContext();
+  const params = group
+    ? {
+        ...input,
+        agentId: group.ctx.AgentId ?? input.agentId,
+        ctxPayload: group.ctx,
+        runId: group.runState.runId,
+        executionIdentityToken: group.runState.executionIdentityToken,
+      }
+    : input;
   const channel = normalizeDeliverableOutboundChannel(params.channel);
   const to = resolveDeliveryTarget(params);
   if (!channel) {

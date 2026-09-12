@@ -86,7 +86,10 @@ import {
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
-import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
+import {
+  resolveBedrockClaudeThinkingProfile,
+  supportsBedrockNativeMaxEffort,
+} from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
   index?: number;
@@ -494,16 +497,12 @@ function resolveSimpleBedrockOptions(
     return {
       ...base,
       maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-      reasoning: options?.reasoning === "off" ? "low" : (options?.reasoning ?? "high"),
+      reasoning: options?.reasoning,
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
   }
   if (!options?.reasoning) {
-    const reasoning =
-      usesClaudeOpus5BedrockContract(model) ||
-      (isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model))
-        ? "high"
-        : undefined;
+    const reasoning = usesClaudeOpus5BedrockContract(model) ? "high" : undefined;
     return {
       ...base,
       ...(reasoning !== undefined || supportsAdaptiveThinking(model)
@@ -833,6 +832,25 @@ function requiresMandatoryAdaptiveThinking(model: Model<"bedrock-converse-stream
   );
 }
 
+function resolveMandatoryAdaptiveDefault(model: Model<"bedrock-converse-stream">): ThinkingLevel {
+  const defaultLevel =
+    resolveBedrockClaudeThinkingProfile(model.id, model.params).defaultLevel ??
+    resolveBedrockClaudeThinkingProfile(resolveClaudeProfileNameModelId(model.name) ?? "")
+      .defaultLevel;
+  switch (defaultLevel) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return defaultLevel;
+    default:
+      // Adaptive is a picker mode; the Bedrock payload needs a scalar effort.
+      return "high";
+  }
+}
+
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
   const profileModelId = resolveClaudeProfileNameModelId(model.name);
   return (
@@ -904,9 +922,6 @@ function resolveCacheRetention(
  * whose ARNs don't contain the model name.
  */
 function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolean {
-  if (usesClaudeFable5BedrockContract(model)) {
-    return true;
-  }
   if (resolveClaudeModelIdentity(model).startsWith("claude-")) {
     return true;
   }
@@ -948,7 +963,7 @@ function buildSystemPrompt(
   const split = splitSystemPromptCacheBoundary(systemPrompt);
   const stablePrefix = split?.stablePrefix ?? systemPrompt;
   const blocks: SystemContentBlock[] = stablePrefix
-    ? [{ text: sanitizeSurrogates(stablePrefix) }]
+    ? [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(stablePrefix)) }]
     : [];
 
   if (stablePrefix && cachePoint) {
@@ -1310,14 +1325,15 @@ function buildAdditionalModelRequestFields(
   options: BedrockOptions,
 ): DocumentType | undefined {
   // Mandatory-adaptive Claude routes preserve the public `off` control by
-  // lowering effort instead of silently falling back to the route's high default.
+  // lowering effort instead of silently falling back to the route's default.
   const mandatoryAdaptiveThinking = requiresMandatoryAdaptiveThinking(model);
   const reasoning =
     options.reasoning === "off"
       ? mandatoryAdaptiveThinking
         ? "low"
         : "off"
-      : (options.reasoning ?? (mandatoryAdaptiveThinking ? "high" : undefined));
+      : (options.reasoning ??
+        (mandatoryAdaptiveThinking ? resolveMandatoryAdaptiveDefault(model) : undefined));
   if (reasoning === "off") {
     return undefined;
   }

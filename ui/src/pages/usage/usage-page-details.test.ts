@@ -13,6 +13,7 @@ import {
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWithClient,
+  contextWeight,
   createPage,
   deferred,
   focusDocument,
@@ -23,18 +24,53 @@ import type { UsageRouteData } from "./usage-page.ts";
 
 afterEach(cleanupUsagePageTest);
 
-function contextWeight(name: string): NonNullable<UsageSessionEntry["contextWeight"]> {
-  return {
-    source: "run",
-    generatedAt: 1,
-    systemPrompt: { chars: 80, projectContextChars: 20, nonProjectContextChars: 60 },
-    skills: { promptChars: 10, entries: [{ name, blockChars: 10 }] },
-    tools: { listChars: 0, schemaChars: 0, entries: [] },
-    injectedWorkspaceFiles: [],
-  };
-}
-
 describe("UsagePage detail requests", () => {
+  it.each([
+    { key: "global", agentId: "opus", needsOwnerHint: true },
+    { key: "agent:openclaw:usage", agentId: "openclaw", needsOwnerHint: false },
+  ])(
+    "routes every selected $key detail through its listed agent",
+    async ({ key, agentId, needsOwnerHint }) => {
+      const snapshot = cacheSnapshot("sessions", "fresh");
+      const session = {
+        key,
+        agentId,
+        sessionId: `${agentId}-instance`,
+        hasContextWeight: true,
+        usage: snapshot.result.totals,
+      };
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "sessions.usage") {
+          return {
+            ...snapshot.result,
+            sessions: [
+              { ...session, ...(params?.key ? { contextWeight: contextWeight(agentId) } : {}) },
+            ],
+          };
+        }
+        if (method === "sessions.usage.logs") {
+          return { logs: [{ timestamp: 1, role: "user", content: `${agentId} turn` }] };
+        }
+        return method === "usage.cost" ? snapshot.costSummary : { providers: [], points: [] };
+      });
+      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      await preloadUsage(page);
+      page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+      await vi.waitFor(() => expect(page.textContent).toContain(`${agentId} turn`));
+
+      for (const method of ["sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]) {
+        const detail = request.mock.calls.find(([name, params]) => name === method && params?.key);
+        expect.soft(detail?.[1], method).toMatchObject({ key });
+        expect.soft(detail?.[1], method).not.toHaveProperty("sessionId");
+        if (needsOwnerHint) {
+          expect.soft(detail?.[1], method).toHaveProperty("agentId", agentId);
+        } else {
+          expect.soft(detail?.[1], method).not.toHaveProperty("agentId");
+        }
+      }
+    },
+  );
+
   it("releases hydrated export reports after download while the page stays mounted", async () => {
     class ExportReport {
       name = "exported-context";
@@ -371,7 +407,6 @@ describe("UsagePage detail requests", () => {
     delete contextParams.agentScope;
     expect(firstContext[1]).toEqual({
       ...contextParams,
-      agentId: "main",
       key: keys[0],
       limit: 1,
       includeContextWeight: true,
@@ -433,27 +468,55 @@ describe("UsagePage detail requests", () => {
     );
   });
 
-  it("refreshes the selected context and clears it when its report disappears", async () => {
+  it("refreshes selected details and clears context when its report disappears", async () => {
     const snapshot = cacheSnapshot("sessions", "fresh");
+    const timestamp = new Date().setHours(12, 0, 0, 0);
+    let turns = 2;
     let available = true;
     let report = "original-context";
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      const totals = {
+        ...snapshot.result.totals,
+        input: turns * 100,
+        totalTokens: turns * 100,
+        totalCost: turns * 0.1,
+        inputCost: turns * 0.1,
+      };
       if (method === "sessions.usage") {
         const session = {
           key: "agent:main:context",
           label: "Context session",
           agentId: "main",
           hasContextWeight: available,
-          usage: snapshot.result.totals,
+          usage: totals,
         };
         return {
           ...snapshot.result,
+          totals,
           sessions: [params?.key ? { ...session, contextWeight: contextWeight(report) } : session],
         };
       }
-      return method === "usage.cost"
-        ? snapshot.costSummary
-        : { providers: [], logs: [], points: [] };
+      if (method === "sessions.usage.timeseries") {
+        return {
+          points: Array.from({ length: turns }, (_, index) => ({
+            timestamp: timestamp + index * 1_000,
+            input: 100,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 100,
+            cost: 0.1,
+            cumulativeTokens: (index + 1) * 100,
+            cumulativeCost: (index + 1) * 0.1,
+          })),
+        };
+      }
+      if (method === "sessions.usage.logs") {
+        return {
+          logs: [{ timestamp, role: "assistant", content: `${turns} completed turns` }],
+        };
+      }
+      return method === "usage.cost" ? { ...snapshot.costSummary, totals } : { providers: [] };
     });
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
@@ -461,12 +524,18 @@ describe("UsagePage detail requests", () => {
     await vi.waitFor(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
     );
+    expect(page.querySelector(".timeseries-summary")?.textContent).toContain("200");
+    expect(page.querySelector(".session-log-content")?.textContent).toBe("2 completed turns");
 
+    turns = 3;
     report = "refreshed-context";
     refreshButton(page).click();
     await vi.waitFor(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
     );
+    expect(page.querySelector(".session-detail-stats")?.textContent).toContain("300");
+    expect.soft(page.querySelector(".timeseries-summary")?.textContent).toContain("300");
+    expect.soft(page.querySelector(".session-log-content")?.textContent).toBe("3 completed turns");
     const contextRequests = request.mock.calls.filter(
       ([method, params]) => method === "sessions.usage" && params?.key,
     ).length;

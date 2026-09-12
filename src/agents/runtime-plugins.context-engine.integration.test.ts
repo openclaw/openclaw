@@ -9,29 +9,15 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { clearActivePluginRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
-import { getSandboxBackendFactory, registerSandboxBackend } from "./sandbox/backend.js";
+import { getSandboxBackendFactory } from "./sandbox/backend.js";
 
 const SANDBOX_PROBE_ID = "scoped-load-probe";
-const REGISTER_SANDBOX_BACKEND = Symbol.for("openclaw.test.registerSandboxBackend");
-const REGISTRATION_MODES = Symbol.for("openclaw.test.pluginRegistrationModes");
-
-type ProbeGlobal = typeof globalThis & {
-  [REGISTER_SANDBOX_BACKEND]?: typeof registerSandboxBackend;
-  [REGISTRATION_MODES]?: Array<{ id: string; mode: string }>;
-};
-
-const restoreSandboxBackends: Array<() => void> = [];
-
-afterEach(() => {
-  while (restoreSandboxBackends.length > 0) {
-    restoreSandboxBackends.pop()?.();
-  }
-  delete (globalThis as ProbeGlobal)[REGISTER_SANDBOX_BACKEND];
-  delete (globalThis as ProbeGlobal)[REGISTRATION_MODES];
+afterEach(async () => {
+  await clearActivePluginRegistry();
   resetContextEngineRuntimeQuarantineForTests();
   resetPluginLoaderTestStateForTest();
 });
@@ -97,20 +83,12 @@ it("keeps the configured context engine active in a prepared agent registry", as
 
 it("selects a full-mode-only context engine on caller-owned handles without full-only global setup", async () => {
   useNoBundledPlugins();
-  const probe = globalThis as ProbeGlobal;
-  probe[REGISTRATION_MODES] = [];
-  probe[REGISTER_SANDBOX_BACKEND] = (id, registration) => {
-    const restore = registerSandboxBackend(id, registration);
-    restoreSandboxBackends.push(restore);
-    return restore;
-  };
+  const previousSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
   const contextEngine = writePlugin({
     id: "ce-probe",
     body: `module.exports = {
   id: "ce-probe",
   register(api) {
-    const seen = globalThis[Symbol.for("openclaw.test.pluginRegistrationModes")];
-    seen.push({ id: "ce-probe", mode: api.registrationMode });
     if (api.registrationMode === "full") {
       api.registerContextEngine("ce-probe", async () => ({
         info: { id: "ce-probe", name: "CE Probe" },
@@ -128,15 +106,13 @@ it("selects a full-mode-only context engine on caller-owned handles without full
     body: `module.exports = {
   id: "sandbox-probe",
   register(api) {
-    const seen = globalThis[Symbol.for("openclaw.test.pluginRegistrationModes")];
-    seen.push({ id: "sandbox-probe", mode: api.registrationMode });
     if (api.registrationMode !== "full") {
       return;
     }
-    const registerSandboxBackend = globalThis[Symbol.for("openclaw.test.registerSandboxBackend")];
-    registerSandboxBackend(${JSON.stringify(SANDBOX_PROBE_ID)}, async () => {
+    const { registerSandboxBackend } = require("openclaw/plugin-sdk/sandbox");
+    api.lifecycle.onDispose(registerSandboxBackend(${JSON.stringify(SANDBOX_PROBE_ID)}, async () => {
       throw new Error("sandbox probe backend should not run");
-    });
+    }));
   },
 };`,
   });
@@ -158,12 +134,15 @@ it("selects a full-mode-only context engine on caller-owned handles without full
     onlyPluginIds: ["ce-probe", "sandbox-probe"],
   });
   const rootSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
-  const sandboxRegistrationsAfterRoot = restoreSandboxBackends.length;
 
   expect(getActivePluginRegistry()).toBe(root);
+  expect(root.plugins, JSON.stringify(root.diagnostics)).toEqual([
+    expect.objectContaining({ id: "ce-probe", status: "loaded" }),
+    expect.objectContaining({ id: "sandbox-probe", status: "loaded" }),
+  ]);
   expect(root.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
   expect(rootSandboxFactory).not.toBeNull();
-  expect(sandboxRegistrationsAfterRoot).toBe(1);
+  expect(rootSandboxFactory).not.toBe(previousSandboxFactory);
 
   const handle = loadAgentRuntimePluginRegistryHandle({
     basePluginIds: ["ce-probe", "sandbox-probe"],
@@ -180,20 +159,8 @@ it("selects a full-mode-only context engine on caller-owned handles without full
   expect(getActivePluginRegistry()).toBe(root);
   expect(handle.plugins.find((plugin) => plugin.id === "sandbox-probe")?.status).toBe("loaded");
   expect(getSandboxBackendFactory(SANDBOX_PROBE_ID)).toBe(rootSandboxFactory);
-  expect(restoreSandboxBackends.length).toBe(sandboxRegistrationsAfterRoot);
   expect(discovery.contextEngines.get("ce-probe")).toBeUndefined();
   expect(handle.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
-  const registrationModes = probe[REGISTRATION_MODES] ?? [];
-  expect(registrationModes.filter((entry) => entry.mode === "full")).toHaveLength(2);
-  expect(
-    new Set(registrationModes.filter((entry) => entry.mode === "full").map((entry) => entry.id)),
-  ).toEqual(new Set(["ce-probe", "sandbox-probe"]));
-  expect(
-    registrationModes.every((entry) => entry.mode === "full" || entry.mode === "discovery"),
-  ).toBe(true);
-  expect(
-    registrationModes.some((entry) => entry.id === "sandbox-probe" && entry.mode === "discovery"),
-  ).toBe(true);
 
   const warn = (message: string) => {
     throw new Error(`unexpected context-engine degrade: ${message}`);
@@ -213,4 +180,6 @@ it("selects a full-mode-only context engine on caller-owned handles without full
   } finally {
     await lease.dispose();
   }
+  await clearActivePluginRegistry();
+  expect(getSandboxBackendFactory(SANDBOX_PROBE_ID)).toBe(previousSandboxFactory);
 });

@@ -83,6 +83,7 @@ export async function activateGatewaySetupInference(
 ): Promise<ActivateSetupInferenceResult> {
   let application: ReturnType<typeof createRuntimeConfigWriteApplication> | undefined;
   let applied: RuntimeConfigWriteApplicationStatus | undefined;
+  let activateCredential: (() => Promise<void>) | undefined;
   let result: ActivateSetupInferenceResult;
   try {
     result = await runSystemAgentGatewayTask(async () => {
@@ -91,6 +92,9 @@ export async function activateGatewaySetupInference(
         ...params,
         onRuntimeApplication: (receipt) => {
           application = receipt;
+        },
+        onCredentialActivation: (activate) => {
+          activateCredential = activate;
         },
       });
     });
@@ -102,6 +106,9 @@ export async function activateGatewaySetupInference(
     }
   }
   if (!result.ok || applied === undefined || applied === "applied") {
+    if (result.ok) {
+      await activateCredential?.();
+    }
     return result;
   }
   if (applied === "applied-restart-required" || applied === "restart-pending") {

@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../commands/doctor/shared/update-phase.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  getUpdateDoctorConfigWriteAuthority,
+  recordUpdateDoctorConfigMigration,
+  recordUpdateDoctorConfigWriteRefusal,
+  runUpdateDoctorIncludeWrite,
+} from "../infra/update-doctor-result.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
@@ -35,7 +42,7 @@ export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext)
   }
   const { removeAuthProfilesAcrossOwnerStores } = await import("../agents/auth-profiles.js");
   for (const plan of retiredAuthProfileCleanupPlans) {
-    if (!(await removeAuthProfilesAcrossOwnerStores(plan))) {
+    if (!(await removeAuthProfilesAcrossOwnerStores({ ...plan, cfg: ctx.cfg }))) {
       throw new Error(`Failed to remove retired auth profile "${plan.profileIds.join(", ")}".`);
     }
   }
@@ -52,11 +59,22 @@ export async function runWriteConfigHealth(
     return;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { transformConfigFile } = await import("../config/config.js");
+  const { ConfigMutationConflictError, readConfigFileSnapshot, transformConfigFile } =
+    await import("../config/config.js");
+  const { collectChangedConfigPaths } = await import("../config/include-write-boundary.js");
+  const { hashConfigRaw } = await import("../config/io.read-helpers.js");
+  const { resolveConfigIncludeWriteBoundary } = await import("../config/mutate.js");
+  const { getConfigValueAtPath } = await import("../config/config-paths.js");
+  const { isDeepStrictEqual } = await import("node:util");
+  const { createSubsystemLogger } = await import("../logging/subsystem.js");
+  const { recordDoctorHealthWarnings } = await import("./doctor-health-contribution.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const configResultWritePending =
     ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
+  const confirmedConfigSource = configResultWritePending
+    ? ctx.configResult.confirmedConfigSource
+    : undefined;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
@@ -78,35 +96,121 @@ export async function runWriteConfigHealth(
     const { assertShippedPluginInstallConfigImportCurrent } =
       await import("../commands/doctor/shared/plugin-registry-migration.js");
     try {
-      await transformConfigFile({
-        transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
-          // Revalidate the copied source under the config lock; never import after plugin repair.
-          assertShippedPluginInstallConfigImportCurrent(
-            snapshot,
-            ctx.configResult.pluginInstallConfigImport,
-          );
-          const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
-          return { nextConfig };
-        },
-        afterWrite: { mode: "auto" },
-        writeOptions: {
-          auditOrigin: "doctor",
-          allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-          skipPluginValidation:
-            ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-          ...(ctx.configResult.explicitSetPaths
-            ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
-            : {}),
+      const authority = getUpdateDoctorConfigWriteAuthority(ctx.configPath);
+      const includeSnapshot = authority
+        ? await readConfigFileSnapshot({ skipPluginValidation: updateDoctorRun, observe: false })
+        : undefined;
+      const includeBoundary =
+        includeSnapshot &&
+        resolveConfigIncludeWriteBoundary({
+          snapshot: includeSnapshot,
+          nextConfig: ctx.cfg,
           persistCanonicalAgentRoster: configResultWritePending
             ? ctx.configResult.persistCanonicalAgentRoster
             : undefined,
-          preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-          ...(legacyParentVersionOverride
-            ? { lastTouchedVersionOverride: legacyParentVersionOverride }
-            : {}),
-        },
-      });
+          explicitSetPaths: ctx.configResult.explicitSetPaths,
+        });
+      const includeWrite = includeBoundary ? includeSnapshot : undefined;
+      const writeSource =
+        confirmedConfigSource ??
+        (includeWrite
+          ? { path: includeWrite.path, hash: hashConfigRaw(includeWrite.raw) }
+          : undefined);
+      const writeConfig = () =>
+        transformConfigFile({
+          ...(writeSource ? { baseHash: writeSource.hash } : {}),
+          transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
+            authority?.assertCurrent();
+            // Revalidate the copied source under the config lock; never import after plugin repair.
+            assertShippedPluginInstallConfigImportCurrent(
+              snapshot,
+              ctx.configResult.pluginInstallConfigImport,
+            );
+            const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
+            if (includeBoundary) {
+              const currentBoundary = resolveConfigIncludeWriteBoundary({
+                snapshot,
+                nextConfig,
+                persistCanonicalAgentRoster: configResultWritePending
+                  ? ctx.configResult.persistCanonicalAgentRoster
+                  : undefined,
+                explicitSetPaths: ctx.configResult.explicitSetPaths,
+              });
+              const source = ctx.configResult.sourceConfigForWrite ?? ctx.cfgForPersistence;
+              if (
+                !isDeepStrictEqual(currentBoundary, includeBoundary) ||
+                !isDeepStrictEqual(
+                  getConfigValueAtPath(snapshot.sourceConfig, [...includeBoundary.boundaryPath]),
+                  getConfigValueAtPath(source, [...includeBoundary.boundaryPath]),
+                )
+              ) {
+                throw new ConfigMutationConflictError(
+                  "included config changed after Doctor prepared its repairs",
+                  { retryable: false },
+                );
+              }
+            }
+            return { nextConfig };
+          },
+          afterWrite: { mode: "auto" },
+          writeOptions: {
+            ...(writeSource ? { expectedConfigPath: writeSource.path } : {}),
+            auditOrigin: "doctor",
+            allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
+            skipPluginValidation:
+              ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+            ...(ctx.configResult.explicitSetPaths
+              ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
+              : {}),
+            persistCanonicalAgentRoster: configResultWritePending
+              ? ctx.configResult.persistCanonicalAgentRoster
+              : undefined,
+            preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+            ...(legacyParentVersionOverride
+              ? { lastTouchedVersionOverride: legacyParentVersionOverride }
+              : {}),
+          },
+        });
+      if (includeWrite) {
+        const keys = [
+          ...new Set(
+            collectChangedConfigPaths(includeWrite.sourceConfig, ctx.cfg).paths.flatMap(([key]) =>
+              key === undefined ? [] : [key],
+            ),
+          ),
+        ].toSorted();
+        await runUpdateDoctorIncludeWrite(
+          includeWrite.path,
+          hashConfigRaw(includeWrite.raw),
+          async () => {
+            const warning = `Doctor include-owned keys ${keys.join(", ")}: promotion unavailable for include-owned configuration.`;
+            recordDoctorHealthWarnings(ctx, [], [warning]);
+            createSubsystemLogger("update").warn(warning);
+            ctx.runtime.log(warning);
+            return await writeConfig();
+          },
+        );
+      } else {
+        await writeConfig();
+      }
     } catch (error) {
+      recordUpdateDoctorConfigWriteRefusal({
+        reason: "config-write-refused",
+        message: formatErrorMessage(error),
+        keys: [],
+      });
+      if (confirmedConfigSource && error instanceof ConfigMutationConflictError) {
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        note(
+          [
+            "The config changed after Doctor prepared these repairs.",
+            'These config fixes were not written. Rerun "openclaw doctor" to review repairs for the current config.',
+          ].join("\n"),
+          "Doctor warnings",
+        );
+        ctx.configWriteRefusal = "config-conflict";
+        return;
+      }
       const { isConfigIncludeOwnershipError, isConfigValidationFailedError } =
         await import("../config/io.write-errors.js");
       // A refused write persisted nothing. Queued "Doctor changes" panels stay
@@ -177,14 +281,19 @@ export async function runWriteConfigHealth(
       const { note } = await import("../../packages/terminal-core/src/note.js");
       for (const panel of pendingChangePanels) {
         note(panel, "Doctor changes");
+        for (const message of panel.split("\n")) {
+          recordUpdateDoctorConfigMigration(message);
+        }
       }
       delete ctx.configResult.pendingChangePanels;
     }
     // The final writer runs again after health repairs. Advance its baseline only
     // after the atomic write succeeds so later failures cannot mark volatile state durable.
     ctx.cfgForPersistence = structuredClone(ctx.cfg);
+    delete ctx.configResult.sourceConfigForWrite;
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;
+      delete ctx.configResult.confirmedConfigSource;
     }
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);
@@ -213,6 +322,7 @@ export async function runWriteConfigHealth(
   }
   if (
     (!ctx.prompter.shouldRepair &&
+      !ctx.configResult.openAICodexAuthProfileIdMap?.size &&
       ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
@@ -224,10 +334,14 @@ export async function runWriteConfigHealth(
     await import("../commands/doctor/cron/legacy-repair.js");
   const result = await repairCronCodexModelRefsAfterConfigWrite({
     cfg: ctx.cfg,
+    migrateCodexModelRefs:
+      ctx.prompter.shouldRepair ||
+      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite === true,
     ...(ctx.configResult.retiredModelRefConfig
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     repairRetiredModelRefs: ctx.prompter.shouldRepair,
+    authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
@@ -255,15 +369,19 @@ export async function collectWriteConfigHealthFindings(
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const configPath = ctx.configPath;
-  if (resolveIsNixMode(process.env)) {
+  const isNixMode = resolveIsNixMode(process.env);
+  if (resolveIsConfigReadOnly(process.env)) {
     findings.push({
       checkId: "core/doctor/write-config",
       severity: "warning",
-      message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+      message: isNixMode
+        ? "Doctor config writes are disabled because OpenClaw is running in Nix mode."
+        : "Doctor config writes are disabled because config is externally managed.",
       ...(configPath ? { path: configPath } : {}),
       requirement: "mutable-config-write-path",
-      fixHint:
-        "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file.",
+      fixHint: isNixMode
+        ? "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file."
+        : "Edit the config in your external deployment source and redeploy; do not run doctor --fix against this config file.",
     });
   }
   if (!configPath) {

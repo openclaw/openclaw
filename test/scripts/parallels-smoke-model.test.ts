@@ -403,7 +403,7 @@ async function runFailingHostServer(fakePythonSource: string) {
   chmodSync(fakePython, 0o755);
   const port = await unusedLoopbackPort();
   return spawnNodeEvalSync(
-    `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, artifactPath: "artifact.tgz", label: "artifact" });`,
+    `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, label: "artifact" });`,
     {
       env: { ...process.env, PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}` },
       imports: ["tsx"],
@@ -494,11 +494,11 @@ describe("Parallels smoke model selection", () => {
   it("extracts the last OpenClaw version from a bounded log tail", async () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-parallels-log-tail-");
     const logPath = join(tempDir, "phase.log");
-    writeFileSync(logPath, ["OpenClaw 0.0.1", "x".repeat(4096), "OpenClaw 2026.6.7"].join("\n"));
+    writeFileSync(logPath, ["OpenClaw 0.0.1", "x".repeat(4 * 1024 * 1024)].join("\n"));
+    await expect(extractLastOpenClawVersionFromLog(logPath)).resolves.toBe("");
 
-    await expect(extractLastOpenClawVersionFromLog(logPath, undefined, 128)).resolves.toBe(
-      "2026.6.7",
-    );
+    writeFileSync(logPath, "\nOpenClaw 2026.6.6\nOpenClaw 2026.6.7", { flag: "a" });
+    await expect(extractLastOpenClawVersionFromLog(logPath)).resolves.toBe("2026.6.7");
   });
 
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {
@@ -1093,10 +1093,10 @@ ${adapterLine}DHCPv4 server:
     vi.useFakeTimers();
     try {
       const child = new FakeHostServerChild();
-      const stop = hostServerTesting.stopHostServerChild(child as never, 100, 100);
+      const stop = hostServerTesting.stopHostServerChild(child as never);
       expect(child.signals).toEqual(["SIGTERM"]);
 
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
 
       let resolved = false;
@@ -1118,9 +1118,7 @@ ${adapterLine}DHCPv4 server:
     const child = new FakeHostServerChild();
     child.exitWithSignal("SIGTERM");
 
-    await expect(hostServerTesting.stopHostServerChild(child as never, 100, 100)).resolves.toBe(
-      true,
-    );
+    await expect(hostServerTesting.stopHostServerChild(child as never)).resolves.toBe(true);
     expect(child.signals).toEqual([]);
   });
 

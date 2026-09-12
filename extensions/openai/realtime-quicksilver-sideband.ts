@@ -1,4 +1,4 @@
-import { sleepWithAbort } from "openclaw/plugin-sdk/realtime-voice-provider";
+import { sleepWithAbort, toErrorObject } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { ClientOptions, RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
@@ -146,7 +146,7 @@ export async function connectOpenAIQuicksilverSideband(
       throw params.signal.reason;
     }
     const socket = params.createSocket(params.url, {
-      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds, runtime),
+      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds, runtime, params.url),
       maxPayload: SIDEBAND_MAX_PAYLOAD_BYTES,
     });
     const bufferedFrames: OpenAIQuicksilverBufferedFrame[] = [];
@@ -213,4 +213,36 @@ export async function connectOpenAIQuicksilverSideband(
     }
   }
   throw lastError;
+}
+
+export function openAIQuicksilverConnectAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("GPT-Live gateway relay startup stopped", { cause: signal.reason });
+}
+
+export function waitForOpenAIQuicksilverConnectStep<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(openAIQuicksilverConnectAbortError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(openAIQuicksilverConnectAbortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toErrorObject(error, "OpenAI GPT-Live gateway relay failed"));
+      },
+    );
+  });
 }

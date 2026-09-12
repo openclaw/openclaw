@@ -94,7 +94,13 @@ describe("resolveStreamingReply", () => {
         appendDelta: delta,
         parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
       }),
-    ).toEqual({ text: delta, delta, replace: false, hasText: true });
+    ).toEqual({
+      text: delta,
+      delta,
+      replace: false,
+      hasText: true,
+      replyDirectives: { text: delta, replyToTag: false, isSilent: false },
+    });
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

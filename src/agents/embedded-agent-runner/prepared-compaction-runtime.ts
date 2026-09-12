@@ -26,12 +26,16 @@ import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
+  buildBootstrapBudgetState,
+  buildBootstrapInjectionStats,
+  buildBootstrapPromptWarningNotice,
+} from "../bootstrap-budget.js";
+import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
 import {
-  listChannelSupportedActions,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../channel-tools.js";
@@ -69,7 +73,6 @@ import { resolveCompactionContextTokenBudget } from "./compaction-runtime-contex
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { log } from "./logger.js";
-import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { resolvePromptModeForSession } from "./run/attempt-prompt-helpers.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
 import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
@@ -79,7 +82,15 @@ import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
-export async function buildPreparedCompactionRuntime(prepared: DirectCompactionPreparation) {
+export type PreparedCompactionCleanup = {
+  disposeToolRuntimes: () => Promise<void>;
+  restoreSkillEnvironment: () => void;
+};
+
+export async function buildPreparedCompactionRuntime(
+  prepared: DirectCompactionPreparation,
+  onCleanupReady: (cleanup: PreparedCompactionCleanup) => void,
+) {
   const {
     params,
     runId,
@@ -139,10 +150,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     skillEnvironmentRestored = true;
     restoreSkillEnv?.();
   };
-  const dispose = async () => {
-    await disposeToolRuntimes();
-    restoreSkillEnvironment();
-  };
+  onCleanupReady({ disposeToolRuntimes, restoreSkillEnvironment });
 
   try {
     const preparedSkills = prepareEmbeddedSkills({
@@ -162,9 +170,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
     const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
-    const { contextFiles } =
+    const { bootstrapFiles, contextFiles } =
       contextInjectionMode === "never"
-        ? { contextFiles: [] }
+        ? { bootstrapFiles: [], contextFiles: [] }
         : await resolveBootstrapContextForRun({
             workspaceDir: effectiveWorkspace,
             config: params.config,
@@ -177,6 +185,22 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
               warn: (message) => log.warn(message),
             }),
           });
+    // Mirror ordinary-turn bootstrap disclosure so compaction summaries do not
+    // silently omit later workspace files when the aggregate budget is spent.
+    // Resolved once per prepared attempt so thinking-level retries reuse the same
+    // admitted files and notice.
+    const bootstrapInjectionStats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: contextFiles,
+    });
+    const bootstrapBudget = buildBootstrapBudgetState({
+      config: params.config,
+      agentId: sessionAgentId,
+      files: bootstrapInjectionStats,
+    });
+    const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
+      bootstrapBudget.bootstrapPromptWarning.lines,
+    );
     // Apply contextTokens cap to model so session runtime's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
@@ -414,24 +438,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             accountId: params.agentAccountId,
           })
         : undefined;
-    // Resolve channel-specific message actions for system prompt
-    const channelActions = runtimeChannel
-      ? listChannelSupportedActions(
-          buildEmbeddedMessageActionDiscoveryInput({
-            cfg: params.config,
-            channel: runtimeChannel,
-            chatType: params.chatType,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            accountId: params.agentAccountId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            agentId: sessionAgentId,
-            senderId: params.senderId,
-          }),
-        )
-      : undefined;
     const messageToolHints = runtimeChannel
       ? resolveChannelMessageToolHints({
           cfg: params.config,
@@ -453,7 +459,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
-      channelActions,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,
@@ -561,6 +566,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         userTimezone,
         userDate,
         contextFiles,
+        bootstrapTruncationNotice,
         activeProjectKeys,
         preparedMemoryPrompt,
         preparedWatchedSessions,
@@ -598,12 +604,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       buildSystemPromptText,
       resolvedMessageProvider,
       sessionAgentId,
-      disposeToolRuntimes,
-      restoreSkillEnvironment,
-      dispose,
     };
   } catch (err) {
-    await dispose();
+    restoreSkillEnvironment();
     throw err;
   }
 }

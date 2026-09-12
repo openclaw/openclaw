@@ -1,5 +1,6 @@
 {
   "id": "linux-node",
+  "categories": ["infrastructure"],
   "activation": {
     "onStartup": true
   },

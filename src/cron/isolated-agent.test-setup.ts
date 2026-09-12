@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Isolated agent test setup centralizes common mocks for cron agent tests.
 import { vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { runSubagentAnnounceFlow } from "../agents/subagents/announce/subagent-announce.js";
 import type {
   ChannelOutboundAdapter,
@@ -168,7 +168,7 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   }
   vi.mocked(runEmbeddedAgent).mockReset();
-  vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+  vi.mocked(readPreparedModelCatalog).mockResolvedValue([]);
   vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue("delivered");
   vi.mocked(callGateway).mockReset().mockResolvedValue({ ok: true, deleted: true });
   setActivePluginRegistry(

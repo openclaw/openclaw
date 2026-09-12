@@ -583,6 +583,51 @@ describe("reply run registry", () => {
     await expect(settlement).resolves.toBe(true);
   });
 
+  it.each(["finalization expiry", "forced clear", "terminal expiry"] as const)(
+    "keeps late delivery ownership pending after %s reclaims the slot",
+    async (release) => {
+      await withFakeReplyTimers(async () => {
+        const operation = createTestReplyOperation();
+        const delivery = createDeferred();
+        const settled = vi.fn();
+        void operation.ownerSettlement?.then(settled);
+        operation.setPhase("running");
+        operation.retainFailureUntilComplete();
+        operation.freezeAbort();
+        try {
+          if (release === "finalization expiry") {
+            await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+          } else if (release === "forced clear") {
+            expect(forceClearReplyOperation(operation)).toBe(true);
+          } else {
+            operation.fail("run_failed");
+            await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+          }
+          expect(replyRunRegistry.isActive(operation.key)).toBe(false);
+          await Promise.resolve();
+          expect(settled).not.toHaveBeenCalled();
+          const ownerWait = waitForReplyOperationOwnerSettlement(operation, 100);
+          await vi.advanceTimersByTimeAsync(100);
+          await expect(ownerWait).resolves.toBe(false);
+          expect(settled).not.toHaveBeenCalled();
+
+          const successor = createTestReplyOperation({ sessionId: "successor" });
+          operation.completeWithAfterClearBarrier(delivery.promise);
+          operation.complete();
+          await Promise.resolve();
+          expect(settled).not.toHaveBeenCalled();
+          expect(replyRunRegistry.get(operation.key)).toBe(successor);
+          successor.complete();
+        } finally {
+          delivery.resolve();
+          operation.completeWithAfterClearBarrier(delivery.promise);
+          await operation.ownerSettlement;
+        }
+        expect(settled).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
   it("does not settle the delivery owner when complete is called again before its barrier settles", async () => {
     const operation = createTestReplyOperation({ sessionId: "session-late-complete" });
     const delivery = createDeferred();
@@ -2132,54 +2177,59 @@ describe("reply run registry", () => {
     ).resolves.toEqual({ status: "accepted" });
   });
 
-  it("projects inbound authority before backend admission without forwarding the overlay", async () => {
-    const run = createQueueTestRun({ prompt: "projected inbound" });
-    const route = { provider: "openai", model: "gpt-primary" };
-    const overlay = toolAuthorityOverlay(run);
-    const queueMessage = vi.fn(
-      async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
-    );
-    const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-    operation.bindToolAuthorityRoute(route);
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: vi.fn(),
-      isStreaming: () => true,
-      queueMessage,
-    });
-    operation.setPhase("running");
+  it.each(["device-a", "device-b", undefined])(
+    "projects inbound authority from reviewer %s without forwarding its approval destination",
+    async (approvalReviewerDeviceId) => {
+      const run = createQueueTestRun({ prompt: "projected inbound" });
+      run.run.approvalReviewerDeviceId = "device-a";
+      run.run.permissionMode = "full";
+      const route = { provider: "openai", model: "gpt-primary" };
+      const overlay = { ...toolAuthorityOverlay(run), approvalReviewerDeviceId };
+      const queueMessage = vi.fn(
+        async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+      );
+      const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+      operation.bindToolAuthorityRoute(route);
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        isStreaming: () => true,
+        queueMessage,
+      });
+      operation.setPhase("running");
 
-    await expect(
-      queueCurrentReplyRunMessage("session-projected-authority", "same authority", {
+      await expect(
+        queueCurrentReplyRunMessage("session-projected-authority", "same authority", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: "caller-cannot-override-projection",
+          toolAuthorityOverlay: overlay,
+        }),
+      ).resolves.toEqual({ status: "accepted" });
+      const forwardedOptions = queueMessage.mock.calls[0]?.[1];
+      expect(forwardedOptions).toMatchObject({
         isInboundUserMessage: true,
-        toolAuthorityFingerprint: "caller-cannot-override-projection",
-        toolAuthorityOverlay: overlay,
-      }),
-    ).resolves.toEqual({ status: "accepted" });
-    const forwardedOptions = queueMessage.mock.calls[0]?.[1];
-    expect(forwardedOptions).toMatchObject({
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(run, route),
-    });
-    expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
+        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(run, route),
+      });
+      expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
+      expect(forwardedOptions).not.toHaveProperty("approvalReviewerDeviceId");
+      expect(queueMessage).toHaveBeenCalledOnce();
 
-    await expect(
-      queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
-        isInboundUserMessage: true,
-        toolAuthorityOverlay: { ...overlay, clientCaps: ["changed-capability"] },
-      }),
-    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-    expect(queueMessage).toHaveBeenCalledOnce();
-
-    await expect(
-      queueCurrentReplyRunMessage("session-projected-authority", "restricted authority", {
-        isInboundUserMessage: true,
-        toolAuthorityOverlay: { ...overlay, permissionMode: "guarded" },
-      }),
-    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-    expect(queueMessage).toHaveBeenCalledOnce();
-  });
+      for (const restricted of [
+        { clientCaps: ["changed-capability"] },
+        { toolBindings: { browser: { clientId: "different-browser" } } },
+        { permissionMode: "guarded" },
+      ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
+        await expect(
+          queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: { ...overlay, ...restricted },
+          }),
+        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+        expect(queueMessage).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("refuses stale injectable owners for admission and delivery until activity resumes", async () => {
     vi.useFakeTimers();

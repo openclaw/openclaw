@@ -1,6 +1,7 @@
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createNativeSessionCatalogGate } from "./native-session-catalog-registration.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginRecord, PluginRegistryParams } from "./registry-types.js";
@@ -11,10 +12,6 @@ export type PluginTypedHookPolicy = {
   allowConversationAccess?: boolean;
   timeoutMs?: number;
   timeouts?: Record<string, number>;
-};
-
-export type PluginSideEffectGuard = {
-  active: boolean;
 };
 
 type PluginRegistrationCapabilities = {
@@ -55,6 +52,27 @@ export function resolveTypedHookTimeoutMs(params: {
     normalizeHookTimeoutMs(params.policy?.timeoutMs) ??
     normalizeHookTimeoutMs(params.opts?.timeoutMs)
   );
+}
+
+function createRegistration<T extends object>(record: PluginRecord, contribution: T) {
+  return {
+    pluginId: record.id,
+    pluginName: record.name,
+    // Normalizers and host gates create new callables after API argument wrapping.
+    ...(getPluginInstance(record)?.wrap(contribution) ?? contribution),
+    source: record.source,
+    rootDir: record.rootDir,
+  };
+}
+
+function createIdentityRegistration<T extends object>(record: PluginRecord, contribution: T) {
+  return {
+    pluginId: record.id,
+    pluginName: record.name,
+    ...(getPluginInstance(record)?.adopt(contribution) ?? contribution),
+    source: record.source,
+    rootDir: record.rootDir,
+  };
 }
 
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
@@ -107,7 +125,8 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     coreGatewayMethods,
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
-    pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
+    createRegistration,
+    createIdentityRegistration,
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,

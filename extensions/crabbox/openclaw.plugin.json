@@ -1,10 +1,11 @@
 {
   "id": "crabbox",
+  "categories": ["infrastructure"],
   "doctorContract": {
-    "stateMigrations": [{ "id": "crabbox-warm-profile-v2", "doctorOnly": true }]
+    "stateMigrations": [{ "id": "crabbox-warm-profile-v3", "doctorOnly": true }]
   },
   "name": "Crabbox Worker Provider",
-  "description": "Cloud worker provider backed by the Crabbox CLI.",
+  "description": "Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI.",
   "cliCommands": [
     {
       "name": "crabbox",
@@ -14,7 +15,8 @@
   ],
   "activation": {
     "onStartup": false,
-    "onCommands": ["crabbox"]
+    "onCommands": ["crabbox"],
+    "onConfigPaths": ["plugins.entries.crabbox.config.sandbox"]
   },
   "commandAliases": [{ "name": "crabbox", "kind": "cli" }],
   "contracts": {
@@ -23,6 +25,65 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "sandbox": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Lease a Crabbox box for tool-call isolation with agents.defaults.sandbox.backend=crabbox. Requires a direct provider with fixed lease IDs.",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Crabbox provider for sandbox leases; defaults to the configured Crabbox selection."
+          },
+          "class": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Crabbox machine class for sandbox leases."
+          },
+          "ttl": {
+            "type": "string",
+            "pattern": "^\\d+(?:ms|s|m|h)$",
+            "description": "Maximum lease lifetime passed to crabbox warmup --ttl."
+          },
+          "idleTimeout": {
+            "type": "string",
+            "pattern": "^\\d+(?:ms|s|m|h)$",
+            "description": "Idle release passed to crabbox warmup --idle-timeout."
+          },
+          "binary": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Explicit crabbox executable; defaults to the discovered binary."
+          }
+        }
+      },
+      "warmImages": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "refreshAfter": {
+            "type": "string",
+            "default": "24h",
+            "maxLength": 9,
+            "pattern": "^(?:[1-9][0-9]*[hd]|(?:[6-9][0-9]|[1-9][0-9]{2,})m)(?![\\s\\S])",
+            "description": "Refresh age, at least 1h. Use 1–8 whole digits followed by m, h, or d. Pinned checkpoints are exempt. Requires Gateway restart."
+          },
+          "retainUnused": {
+            "type": "string",
+            "default": "14d",
+            "maxLength": 9,
+            "pattern": "^(?:[1-9][0-9]*d|(?:2[4-9]|[3-9][0-9]|[1-9][0-9]{2,})h|(?:14[4-9][0-9]|1[5-9][0-9]{2}|[2-9][0-9]{3}|[1-9][0-9]{4,})m)(?![\\s\\S])",
+            "description": "Unused retention, at least 1d (24h or 1440m). Use 1–8 whole digits followed by m, h, or d. Pinned checkpoints are exempt. Requires Gateway restart."
+          },
+          "keepPrevious": {
+            "type": "integer",
+            "enum": [0, 1],
+            "default": 0,
+            "description": "Retain one previous checkpoint generation for rollback. Pinned predecessors are always retained. Requires Gateway restart."
+          }
+        }
+      }
+    }
   }
 }

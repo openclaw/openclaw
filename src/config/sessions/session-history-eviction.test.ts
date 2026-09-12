@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   prepareSystemAgentRunAdmission,
@@ -26,6 +27,7 @@ vi.mock("../../logging/subsystem.js", async () => {
 });
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -66,6 +68,7 @@ describe("SQLite historical session disk budget", () => {
       prefix: "openclaw-session-history-budget-",
       layout: "state-only",
     });
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(testState.root);
     tempDir = testState.sessionsDir();
     fs.mkdirSync(tempDir, { recursive: true });
     storePath = path.join(tempDir, "sessions.json");
@@ -214,14 +217,23 @@ describe("SQLite historical session disk budget", () => {
     },
   );
 
-  it.each([
-    { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: false },
-    { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: true },
-    { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: false },
-    { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: true },
-  ])(
-    "evicts oldest history before the entry tier and reclaims $reclaimBytes bytes (cap archive: $capArchive)",
-    async ({ oldestBytes, reclaimBytes, capArchive }) => {
+  it.each(
+    [
+      { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: false },
+      { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: true },
+      { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: false },
+      { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: true },
+    ].flatMap(({ oldestBytes, reclaimBytes, capArchive }) =>
+      (["worker", "in-process"] as const).map((execution) => ({
+        oldestBytes,
+        reclaimBytes,
+        capArchive,
+        execution,
+      })),
+    ),
+  )(
+    "evicts oldest history before the entry tier and reclaims $reclaimBytes bytes (cap archive: $capArchive, execution: $execution)",
+    async ({ oldestBytes, reclaimBytes, capArchive, execution }) => {
       const sessionKey = "agent:main:history-order";
       await createHistoricalTranscript({
         content: "oldest " + "x".repeat(oldestBytes),
@@ -265,15 +277,31 @@ describe("SQLite historical session disk budget", () => {
       const before = await measureSessionPhysicalDiskUsage(storePath);
       const highWaterBytes = before.totalBytes - reclaimBytes;
 
-      const result = await enforceSqliteSessionHistoryDiskBudget({
-        storePath,
-        mode: "enforce",
-        maintenance: {
-          maxDiskBytes: before.totalBytes - 1,
-          highWaterBytes,
-        },
-      });
+      let reclamationWorkers = 0;
+      const observeWorker = (worker: Worker) => {
+        worker.on("message", (message: { type: string }) => {
+          if (message.type === "reclaimed") {
+            reclamationWorkers += 1;
+          }
+        });
+      };
+      process.on("worker", observeWorker);
+      let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
+      try {
+        result = await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          ...(execution === "in-process" ? { reclamationMode: execution } : {}),
+          maintenance: {
+            maxDiskBytes: before.totalBytes - 1,
+            highWaterBytes,
+          },
+        });
+      } finally {
+        process.off("worker", observeWorker);
+      }
 
+      expect(reclamationWorkers).toBe(execution === "in-process" ? 0 : 1);
       expect(result?.removedEntries).toBe(1);
       expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
       expect(result?.totalBytesAfter).toBe(

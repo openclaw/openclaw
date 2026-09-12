@@ -1,3 +1,4 @@
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
@@ -302,7 +303,10 @@ export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTria
     id: run.runId,
     reconciledRecord: { id: run.runId, timestampMs: run.finishedAtMs ?? run.updatedAtMs },
     outcome: "failed",
-    banner: { tone: "danger", text: renderUpdateRunReport(run).markdown },
+    banner: {
+      tone: run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON ? "warn" : "danger",
+      text: renderUpdateRunReport(run).markdown,
+    },
     attempt: {
       timestampMs: run.finishedAtMs ?? run.updatedAtMs,
       status: run.status,

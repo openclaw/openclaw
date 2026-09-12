@@ -91,9 +91,7 @@ describe("doctor managed npm generation repair", () => {
       await withPluginCache(createPluginCache(), () =>
         writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, candidates: [] }),
       );
-      expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty(
-        "stale",
-      );
+      expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty("stale");
 
       await maybeRepairPluginRegistryState({
         config: {},
@@ -103,7 +101,7 @@ describe("doctor managed npm generation repair", () => {
       });
     });
 
-    expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({});
+    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({});
   });
 
   it("retires the stale flat install and prunes it after gateway shutdown", async () => {
@@ -169,7 +167,7 @@ describe("doctor managed npm generation repair", () => {
       stateDir,
     });
 
-    const persisted = await readPersistedInstalledPluginIndexInstallRecords({ stateDir });
+    const persisted = readPersistedInstalledPluginIndexInstallRecords({ stateDir });
     expect(persisted?.[PLUGIN_ID]?.installPath).toBe(activePackageDir);
     expect(hasRetainedManagedNpmInstallMarker(stalePackageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);

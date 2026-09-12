@@ -534,19 +534,15 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         ? await declaredDurable(preparedPayload, info)
                         : declaredDurable;
                     if (durableOptions) {
-                      const group = getGroupThreadDispatchContext();
                       const durable = await deliverInboundReplyWithMessageSendContextCore({
                         cfg: params.cfg,
                         channel: params.channel,
                         accountId: params.accountId,
-                        agentId: group?.ctx.AgentId ?? params.agentId,
-                        ctxPayload: group?.ctx ?? params.ctxPayload,
+                        agentId: params.agentId,
+                        ctxPayload: params.ctxPayload,
                         payload: preparedPayload,
                         info,
-                        ...(group ? { runId: group.runState.runId } : {}),
-                        executionIdentityToken: group
-                          ? group.runState.executionIdentityToken
-                          : agentRun[1],
+                        executionIdentityToken: agentRun[1],
                         ...durableOptions,
                       });
                       throwIfDurableInboundReplyDeliveryFailed(durable);

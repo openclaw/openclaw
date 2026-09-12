@@ -367,7 +367,7 @@ different visible skill set per agent.
   and weekly Workshop maintenance, without proposal scanning or automatic rollback
   snapshots. Immediate foreground repairs still use scanner-gated proposal apply.
   User-prompted skill creation,
-  `/learn`, and manual history scan continue to work in every mode.
+  `/learn`, and manual learning sessions continue to work in every mode.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Build and bundle OpenClaw with its matching private worker runtime.
@@ -55,7 +55,7 @@ if [[ "$BUILD_CONFIG" == "release" ]]; then
 fi
 BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
-  bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
+  /bin/bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
     --root "$ROOT_DIR" \
     --expected-commit "$BUILD_GIT_COMMIT"
 fi
@@ -371,6 +371,18 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
+echo "🚚 Copying macOS control CLI"
+cp "$(mac_cli_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/openclaw-mac"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  MAC_CLI_BIN_INPUTS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    MAC_CLI_BIN_INPUTS+=("$(mac_cli_bin_for_arch "$arch")")
+  done
+  /usr/bin/lipo -create "${MAC_CLI_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/openclaw-mac"
+fi
+chmod +x "$APP_ROOT/Contents/MacOS/openclaw-mac"
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/openclaw-mac" 2>/dev/null || true
+
 if [[ "$SKIP_MLX_TTS" == "1" ]]; then
   echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1) — bundle omits Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
 else
@@ -450,7 +462,7 @@ fi
 
 echo "📦 Staging browser sign-in helper"
 for arch in "${BUILD_ARCHS[@]}"; do
-  bash "$ROOT_DIR/scripts/stage-cloudflared-macos.sh" "$arch" "$APP_ROOT/Contents/Resources/cloudflared"
+  /bin/bash "$ROOT_DIR/scripts/stage-cloudflared-macos.sh" "$arch" "$APP_ROOT/Contents/Resources/cloudflared"
 done
 
 echo "📦 Copying CLI installer"
@@ -463,7 +475,7 @@ cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
 chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
 
 echo "📦 Provisioning the matching private node worker [${BUILD_ARCHS[*]}]"
-bash "$ROOT_DIR/scripts/stage-mac-node-worker.sh" "$APP_ROOT/Contents/Resources/node-worker" "${BUILD_ARCHS[@]}"
+/bin/bash "$ROOT_DIR/scripts/stage-mac-node-worker.sh" "$APP_ROOT/Contents/Resources/node-worker" "${BUILD_ARCHS[@]}"
 
 echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \

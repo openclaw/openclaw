@@ -83,14 +83,14 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
 const SEARCH_CORPUS_OUTCOME_GUIDANCE =
   "Corpus outcomes cover each requested corpus; a corpus warning means results are partial and must be surfaced to the user.";
 const GET_READ_OUTCOME_GUIDANCE =
-  "status=ok means the requested excerpt was read; status=not_found means every requested available corpus missed.";
+  "status=ok means the requested excerpt was read; status=not_found means every requested available corpus missed; status=error means the requested read failed, not that memory is disabled.";
 
 export const MEMORY_SEARCH_TOOL_CONTRACT = {
   label: "Memory Search",
   name: "memory_search",
   parameters: MemorySearchSchema,
   describe: ({ search }: MemorySourceContract) =>
-    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` restricts hits to the session corpus under the same visibility rules as session history tools. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` restricts hits to the session corpus under the same visibility rules as session history tools. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
@@ -98,7 +98,7 @@ export const MEMORY_GET_TOOL_CONTRACT = {
   name: "memory_get",
   parameters: MemoryGetSchema,
   describe: ({ files }: MemorySourceContract) =>
-    `Safe exact excerpt read from ${files}. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
+    `Safe exact excerpt read from ${files}. Session transcript paths are unsupported; use the available session-history workflow for session hits. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
 } as const;
 
 export type MemoryToolContract =
@@ -118,14 +118,28 @@ export function buildMemoryPromptSection({
   // Code mode may defer tool descriptions; recall and disclosure policy must stay here.
   const guidance = hasMemorySearch
     ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search${
-        hasMemoryGet ? "; then use memory_get to pull only the needed lines" : ""
+        hasMemoryGet ? "; for memory-file hits, use memory_get to pull only the needed lines" : ""
       }. If low confidence after search, say you checked.`
     : "Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific memory file: run memory_get to pull only the needed lines. If low confidence after reading, say you checked.";
+  const sessionGuidance = !hasMemorySearch
+    ? []
+    : [
+        availableTools.has("sessions_search")
+          ? `For session hits, use sessions_search with distinctive snippet text (and sessionKey set to the transcript ID when known)${
+              availableTools.has("sessions_history")
+                ? ", then sessions_history with the returned sessionKey, messageId, and sessionId for a bounded sanitized excerpt"
+                : "; exact session history is unavailable with the enabled tools"
+            }.`
+          : availableTools.has("sessions_history")
+            ? "For session hits, use sessions_history with a known session key or transcript ID and a small limit; paginate its returned history metadata to locate the excerpt."
+            : "Session hits are search snippets only; exact session history is unavailable with the enabled tools.",
+        "Session search line numbers are not history offsets. Never read raw transcript files to expand session hits.",
+      ];
   const outcomeGuidance =
     "Report partial, unavailable, or stale recall to the user, including returned warning and action guidance.";
   const citationGuidance =
     citationsMode === "off"
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."
       : "Citations: include Source: <path#line> when it helps the user verify memory snippets.";
-  return ["## Memory Recall", guidance, outcomeGuidance, citationGuidance, ""];
+  return ["## Memory Recall", guidance, ...sessionGuidance, outcomeGuidance, citationGuidance, ""];
 }

@@ -5,6 +5,10 @@ import chutesPlugin from "../extensions/chutes/index.js";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import xaiPlugin from "../extensions/xai/index.js";
 import {
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "../src/agents/auth-profiles/oauth-refresh-marker.js";
+import {
   createExpiredOauthStore,
   readAuthProfileStoreForTest,
 } from "../src/agents/auth-profiles/oauth-test-utils.js";
@@ -19,6 +23,8 @@ import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
 import type { ProviderCatalogOutcome } from "../src/plugins/provider-catalog.types.js";
 import * as providerDiscovery from "../src/plugins/provider-discovery.js";
 import * as providerRuntime from "../src/plugins/provider-runtime.runtime.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import type { ProviderPlugin } from "../src/plugins/types.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 import {
@@ -34,6 +40,63 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
+  const { createProviderHookRuntime } =
+    await import("../src/plugins/provider-hook-runtime-core.js");
+  const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
+  const selectProviders = (params: {
+    onlyPluginIds?: string[];
+    providerRefs?: readonly string[];
+  }) =>
+    discovery.providers.filter(
+      (provider) =>
+        (!params.onlyPluginIds || params.onlyPluginIds.includes(provider.id)) &&
+        (!params.providerRefs?.length ||
+          params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
+    );
+  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
+  return createProviderHookRuntime({
+    isPluginProvidersLoadInFlight: () => false,
+    resolvePluginProviderRegistryCore: (params) => {
+      const providers = selectProviders(params);
+      if (providers.length === 0) {
+        return undefined;
+      }
+      return {
+        registry: createCatalogProviderRegistry(providers),
+        workspaceDir: params.workspaceDir,
+        onlyPluginIds: params.onlyPluginIds,
+        isProviderOwnerEligible: (pluginId, providerRef) =>
+          providers.some(
+            (provider) =>
+              provider.id === pluginId && matchesProviderPluginRef(provider, providerRef),
+          ),
+      };
+    },
+    resolvePluginProvidersCore: (params, onSelectedRegistry) => {
+      const providers = selectProviders(params);
+      if (providers.length) {
+        onSelectedRegistry?.(createCatalogProviderRegistry(providers));
+      }
+      return providers.map((provider) => Object.assign({}, provider, { pluginId: provider.id }));
+    },
+  });
+});
+
+function createCatalogProviderRegistry(providers = discovery.providers) {
+  const registry = createEmptyPluginRegistry();
+  registry.providers = providers.map((provider) => ({
+    pluginId: provider.id,
+    provider,
+    source: "test",
+  }));
+  return registry;
+}
+
+function withCatalogProviders<T>(run: () => T): T {
+  return withPluginRuntimeRegistryScope(createCatalogProviderRegistry(), run);
+}
+
 describe("Provider model discovery auth preparation", () => {
   let state: OpenClawTestState;
   let agentDir: string;
@@ -42,10 +105,11 @@ describe("Provider model discovery auth preparation", () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
-    vi.spyOn(providerRuntime, "formatProviderAuthProfileApiKeyWithPlugin").mockImplementation(
-      async ({ provider, context }) =>
-        discovery.providers.find((candidate) => candidate.id === provider)?.formatApiKey?.(context),
-    );
+    // These fixtures supply refreshable providers and mock their refresh operation.
+    // Keep capability discovery at the same boundary instead of loading the full runtime.
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
   });
 
   afterEach(async () => {
@@ -66,22 +130,24 @@ describe("Provider model discovery auth preparation", () => {
       env?: NodeJS.ProcessEnv;
     } = {},
   ) {
-    return planOpenClawModelsJson({
-      context: {
-        cfg: config,
-        discoveryAuthConfig: config,
-        sourceConfigForSecrets: config,
-        agentDir,
-        env: options.env ?? {},
-        envFingerprint: {},
-        providerDiscoveryProviderIds: [options.providerId ?? "openai"],
-        providerDiscoveryTimeoutMs: options.timeoutMs,
-        onProviderCatalogOutcome: (outcome) => options.outcomes?.push(outcome),
-      },
-      authStore: store,
-      existingRaw: "",
-      existingParsed: null,
-    });
+    return withCatalogProviders(() =>
+      planOpenClawModelsJson({
+        context: {
+          cfg: config,
+          discoveryAuthConfig: config,
+          sourceConfigForSecrets: config,
+          agentDir,
+          env: options.env ?? {},
+          envFingerprint: {},
+          providerDiscoveryProviderIds: [options.providerId ?? "openai"],
+          providerDiscoveryTimeoutMs: options.timeoutMs,
+          onProviderCatalogOutcome: (outcome) => options.outcomes?.push(outcome),
+        },
+        authStore: store,
+        existingRaw: "",
+        existingParsed: null,
+      }),
+    );
   }
 
   async function createChutesCatalogFixture() {
@@ -249,6 +315,12 @@ describe("Provider model discovery auth preparation", () => {
         ...(source === "env" ? { env: { XAI_API_KEY: keyB } } : {}),
       });
 
+      expect(
+        providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin,
+      ).toHaveBeenCalledOnce();
+      expect(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: providerId }),
+      );
       expect(refresh).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -455,6 +527,7 @@ describe("Provider model discovery auth preparation", () => {
       }
       const auth = {
         authStore: store,
+        providerAuthLabels: new Map(),
         authModes: { [providerId]: "oauth" as const },
         credentials: { [providerId]: previousCredential },
       };
@@ -528,11 +601,6 @@ describe("Provider model discovery auth preparation", () => {
       config.auth = { order: { chutes: [profileId, fallbackProfileId] } };
       store.profiles[fallbackProfileId] = fallbackCredential;
       await state.writeAuthProfiles(store);
-      const persistedBefore = readAuthProfileStoreForTest(agentDir);
-      const persistedFirstProfile = persistedBefore.profiles[profileId];
-      if (!persistedFirstProfile) {
-        throw new Error("missing persisted first-profile fixture");
-      }
       const refreshStarted = createDeferredCore();
       const refreshResult =
         createDeferredCore<
@@ -604,9 +672,17 @@ describe("Provider model discovery auth preparation", () => {
         timedOut ? [capturedCredential] : [capturedCredential, fallbackCredential],
       );
       const persisted = readAuthProfileStoreForTest(agentDir);
-      expect(persisted.profiles[profileId]).toMatchObject(
-        completion === "success" ? refreshedCredential : persistedFirstProfile,
-      );
+      const persistedProfile = persisted.profiles[profileId];
+      if (completion === "success") {
+        expect(persistedProfile).toMatchObject(refreshedCredential);
+      } else {
+        expect(persistedProfile?.type === "oauth" && isOAuthRefreshFence(persistedProfile)).toBe(
+          true,
+        );
+        expect(
+          persistedProfile?.type === "oauth" && isPendingOAuthRefreshFence(persistedProfile),
+        ).toBe(false);
+      }
       expect(persisted.profiles[fallbackProfileId]).toMatchObject(
         timedOut ? fallbackCredential : refreshedFallback,
       );
@@ -746,6 +822,9 @@ describe("provider catalog late-result finalization", () => {
     };
     await state.writeAuthProfiles(store);
     vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
     vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
       new Error("fixture refresh failed"),
     );
@@ -831,14 +910,16 @@ describe("provider catalog late-result finalization", () => {
       ];
       const outcomes: ProviderCatalogOutcome[] = [];
       const discover = (timeoutMs?: number) =>
-        resolveImplicitProviders({
-          config: { auth: { order: { [providerId]: [profileId] } } },
-          agentDir: state.agentDir(),
-          authStore: store,
-          env: {},
-          providerDiscoveryTimeoutMs: timeoutMs,
-          onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-        });
+        withCatalogProviders(() =>
+          resolveImplicitProviders({
+            config: { auth: { order: { [providerId]: [profileId] } } },
+            agentDir: state.agentDir(),
+            authStore: store,
+            env: {},
+            providerDiscoveryTimeoutMs: timeoutMs,
+            onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+          }),
+        );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const pending = discover(timedOut ? 25 : undefined);
       try {

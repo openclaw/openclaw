@@ -255,6 +255,13 @@ export async function* readTranscriptRecords(
 ): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
   if (marker) {
+    const { restoreSessionColdTranscript } =
+      await import("../config/sessions/session-cold-storage.js");
+    await restoreSessionColdTranscript({
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      storePath: marker.storePath,
+    });
     for (const event of loadSqliteUsageTranscriptEvents(marker)) {
       yield event;
     }
@@ -280,7 +287,10 @@ export async function* readTranscriptRecordsBestEffort(
 ): AsyncGenerator<Record<string, unknown>> {
   try {
     yield* readTranscriptRecords(filePath);
-  } catch {
+  } catch (error) {
+    if (parseSqliteSessionFileMarker(filePath)) {
+      throw error;
+    }
     // Diagnostic readers return the records available before a stream failure.
     // Durable cache scans use the strict reader so partial data is never marked fresh.
   }

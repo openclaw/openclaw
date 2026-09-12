@@ -6,6 +6,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
 import {
   createApplicationContextProvider,
@@ -57,7 +58,6 @@ async function mount(client: GatewayBrowserClient) {
     sessionObserverModels: ModelCatalogEntry[];
     sessionObserverModelsUnavailable: boolean;
     sessionObserverModelsTask: {
-      run: () => Promise<void>;
       taskComplete: Promise<unknown>;
     };
   };
@@ -140,7 +140,6 @@ describe("ConfigPage session observer models", () => {
     await writerLoad;
     expect(state.sessionObserverModels).toEqual(writerModels);
 
-    modelCatalogStore.invalidateModelCatalogCache(client);
     selection.selectedId = "main";
     page.requestUpdate();
     await settleLitElement(page);
@@ -178,23 +177,35 @@ describe("ConfigPage session observer models", () => {
         return Promise.resolve({});
       }
       signals.push(options.signal);
-      return signals.length === 2
-        ? stale.promise
-        : Promise.resolve({ models: signals.length === 1 ? original : fresh });
+      if (signals.length !== 2) {
+        return Promise.resolve({ models: signals.length === 1 ? original : fresh });
+      }
+      return new Promise<ModelCatalogResult>((resolve, reject) => {
+        options.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Page retired", "AbortError")),
+          { once: true },
+        );
+        void stale.promise.then(resolve, reject);
+      });
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { page, state, provider } = await mount(client);
-    modelCatalogStore.invalidateModelCatalogCache(client);
-    const pending = state.sessionObserverModelsTask.run();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(signals).toHaveLength(1);
+
+    // The application retires catalogs on publication; the next status poll reads that generation.
+    invalidateChatMetadataStore(client);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(state.sessionObserverModels).toEqual(original);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(4);
+    expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(6);
     expect(signals).toHaveLength(2);
     expect(signals[1]?.aborted).toBe(false);
     page.remove();
     expect(signals[1]?.aborted).toBe(true);
     expect(state.sessionObserverModels).toEqual([]);
-    await pending;
+    await settleLitElement(page);
 
     provider.append(page);
     await settleLitElement(page);

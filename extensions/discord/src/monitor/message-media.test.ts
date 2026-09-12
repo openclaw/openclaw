@@ -49,12 +49,16 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 
 let resolveForwardedMediaList: typeof import("./message-media.js").resolveForwardedMediaList;
 let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
+const DISCORD_API_URL_ENV = "DISCORD_API_URL";
 
 beforeAll(async () => {
   ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-media.js"));
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  delete process.env[DISCORD_API_URL_ENV];
+  vi.restoreAllMocks();
+});
 beforeEach(() => vi.resetAllMocks());
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -89,6 +93,10 @@ function mockDownload(path: string, options: { buffer?: string; contentType?: st
     contentType,
   });
   saveMediaBuffer.mockResolvedValueOnce({ path, contentType });
+}
+
+function installMediaEndpoint(): void {
+  process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
 }
 
 const DISCORD_CDN_HOSTNAMES = [
@@ -304,6 +312,68 @@ describe("resolveForwardedMediaList", () => {
 });
 
 describe("resolveMediaList", () => {
+  it("downloads media from the configured endpoint origin without redirects", async () => {
+    installMediaEndpoint();
+    mockDownload("/tmp/provider-media.png");
+    const attachment = attachmentFixture("provider-media", "provider-media.png", {
+      url: "http://127.0.0.1:43210/media/provider-media.png",
+    });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result[0]?.path).toBe("/tmp/provider-media.png");
+    expect(fetchParams()).toEqual(
+      expect.objectContaining({
+        url: "http://127.0.0.1:43210/media/provider-media.png",
+        maxRedirects: 0,
+        ssrfPolicy: expect.objectContaining({
+          allowedOrigins: ["http://127.0.0.1:43210"],
+        }),
+      }),
+    );
+  });
+
+  it("rejects public Discord CDN media before the downloader is called", async () => {
+    installMediaEndpoint();
+    const attachment = attachmentFixture("public-media", "public-media.png");
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([{ contentType: "image/png" }]);
+  });
+
+  it("keeps the whole media batch bound to its originating environment value", async () => {
+    installMediaEndpoint();
+    readRemoteMediaBuffer.mockImplementationOnce(async () => {
+      process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43211/api/v10";
+      return { buffer: Buffer.from("provider"), contentType: "image/png" };
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/provider-media.png",
+      contentType: "image/png",
+    });
+    const providerAttachment = attachmentFixture("provider", "provider.png", {
+      url: "http://127.0.0.1:43210/media/provider.png",
+    });
+    const publicAttachment = attachmentFixture("public", "public.png");
+
+    const result = await resolveMediaList(
+      asMessage({ attachments: [providerAttachment, publicAttachment] }),
+      512,
+    );
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalledOnce();
+    expect(result).toEqual([
+      {
+        path: "/tmp/provider-media.png",
+        contentType: "image/png",
+        fileName: "provider.png",
+      },
+      { contentType: "image/png" },
+    ]);
+  });
+
   it("downloads stickers", async () => {
     const sticker = stickerFixture("sticker-2", "hello");
     mockDownload("/tmp/sticker-2.png", { buffer: "sticker" });

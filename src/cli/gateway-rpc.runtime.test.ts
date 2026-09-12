@@ -84,7 +84,7 @@ describe("callGatewayFromCliRuntime", () => {
     const config = { gateway: { mode: "local" as const } };
     await callGatewayFromCliRuntime(
       "node.list",
-      { config, localPortOverride: 19_083 },
+      { config, localPortOverride: 19_083, expectUrl: "ws://127.0.0.1:19083" },
       {},
       {
         timeoutMs: null,
@@ -99,6 +99,7 @@ describe("callGatewayFromCliRuntime", () => {
       expect.objectContaining({
         config,
         localPortOverride: 19_083,
+        expectUrl: "ws://127.0.0.1:19083",
         timeoutMs: null,
         scopes: ["operator.read", "operator.pairing"],
         useStoredDeviceAuth: true,

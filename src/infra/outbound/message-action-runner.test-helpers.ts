@@ -13,7 +13,10 @@ import {
 } from "../../interactive/payload.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
@@ -119,6 +122,39 @@ export function setMessageActionTestPlugin(plugin: unknown, pluginId: string, or
   setActivePluginRegistry(
     createTestRegistry([{ pluginId, source: "test", ...(origin ? { origin } : {}), plugin }]),
   );
+}
+
+export function createWorkspaceMediaTestPlugin(): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({
+      id: "workspace",
+      label: "Workspace",
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
+        isConfigured: async (account) =>
+          typeof (account as { botToken?: unknown }).botToken === "string" &&
+          (account as { botToken?: string }).botToken!.trim() !== "" &&
+          typeof (account as { appToken?: unknown }).appToken === "string" &&
+          (account as { appToken?: string }).appToken!.trim() !== "",
+      },
+    }),
+    outbound: {
+      deliveryMode: "direct",
+      resolveTarget: ({ to }) => {
+        const trimmed = to?.trim() ?? "";
+        if (!trimmed) {
+          return {
+            ok: false,
+            error: new Error("missing target for workspace"),
+          };
+        }
+        return { ok: true, to: trimmed };
+      },
+      sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
+      sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
+    },
+  };
 }
 
 export function createAlwaysConfiguredPluginConfig(

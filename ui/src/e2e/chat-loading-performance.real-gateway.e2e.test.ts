@@ -309,7 +309,7 @@ suite.define(() => {
                 .some(
                   (metric) =>
                     metric.method === "chat.startup" &&
-                    (metric.sessionKey === sessionKey || metric.resolvedKey === sessionKey) &&
+                    metric.sessionKey === sessionKey &&
                     metric.receivedMs !== undefined,
                 ),
             )
@@ -384,8 +384,8 @@ suite.define(() => {
               metric.messages = body.messages.length;
               metric.historyBytes = Buffer.byteLength(JSON.stringify(body.messages));
             }
-            if (isRecord(body.resolution) && typeof body.resolution.key === "string") {
-              metric.resolvedKey = body.resolution.key;
+            if (metric.method === "sessions.resolve" && typeof body.key === "string") {
+              metric.resolvedKey = body.key;
             }
             metric.inlineAvatar = JSON.stringify(body).includes("data:image/");
           });
@@ -633,12 +633,15 @@ suite.define(() => {
 
         // Save measurements before asserting budgets so failures retain their evidence.
         const selectedStartup = startupMetrics.find(
-          (metric) => metric.method === "chat.startup" && metric.resolvedKey === selectedKey,
+          (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );
         expect(selectedStartup).toBeDefined();
-        expect(
-          startupMetrics.filter((metric) => metric.method === "sessions.resolve"),
-        ).toHaveLength(0);
+        const resolutions = startupMetrics.filter((metric) => metric.method === "sessions.resolve");
+        expect(resolutions).toHaveLength(1);
+        expect(resolutions[0]?.resolvedKey).toBe(selectedKey);
+        expect(selectedStartup?.sentMs).toBeGreaterThanOrEqual(
+          resolutions[0]?.receivedMs ?? Infinity,
+        );
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
         const homeStartup = startupMetrics.find(

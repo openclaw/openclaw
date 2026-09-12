@@ -32,6 +32,7 @@ Use a key in the form `"<channel>:<peerId>"`, such as
 ```json5
 {
   agents: {
+    ownership: "explicit",
     entries: {
       reviewer: {
         name: "Reviewer",

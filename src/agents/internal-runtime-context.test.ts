@@ -12,7 +12,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-  OPENCLAW_RUNTIME_EVENT_HEADER,
   relocateCurrentRuntimeContextCarrierToTail,
   stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
@@ -92,6 +91,21 @@ describe("internal runtime context codec", () => {
     expect(stripInternalRuntimeContext(input)).toBe("Visible intro");
   });
 
+  it("withholds trailing marker prefixes only in cumulative previews", () => {
+    for (const marker of [INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END]) {
+      for (let length = 1; length < marker.length; length += 1) {
+        const prefix = marker.slice(0, length);
+        expect(stripInternalRuntimeContext(`Visible\n  ${prefix}`, { streaming: true })).toBe(
+          "Visible",
+        );
+        expect(stripInternalRuntimeContext(prefix)).toBe(prefix);
+      }
+    }
+    expect(stripInternalRuntimeContext("Visible\n<ordinary", { streaming: true })).toBe(
+      "Visible\n<ordinary",
+    );
+  });
+
   it("detects canonical runtime context and ignores inline marker mentions", () => {
     expect(
       hasInternalRuntimeContext(
@@ -111,7 +125,7 @@ describe("internal runtime context codec", () => {
       "previous current turn",
       "OpenClaw runtime context for the immediately preceding user message.",
     ],
-    ["runtime event", OPENCLAW_RUNTIME_EVENT_HEADER],
+    ["runtime event", "OpenClaw runtime event."],
   ])("detects and strips the %s prompt preface", (_name, header) => {
     const preface = [header, OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n");
     const input = [

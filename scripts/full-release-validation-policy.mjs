@@ -4,6 +4,7 @@ import {
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 import { hasRequiredLinuxCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
+import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 // Full profiles carry over 500 job records. Keep complete evidence under one
@@ -26,6 +27,59 @@ const MAX_MESSAGE_LENGTH = 500;
 const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
+export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
+
+// A split-layout receipt is bound to one selected release, never the directory.
+// Historical root-file receipts retain their original exact-path contract.
+export function isSplitChangelogEvidenceDelta(paths, version) {
+  if (typeof version !== "string" || !version || version === "Unreleased") {
+    return false;
+  }
+  try {
+    const targetVersion = version.replace(/^v/u, "");
+    const parsedVersion = parseReleaseVersion(targetVersion);
+    // Beta release notes and contribution records use the stable base section.
+    const sectionVersion =
+      parsedVersion?.channel === "beta" && parsedVersion.version === targetVersion
+        ? parsedVersion.baseVersion
+        : version;
+    return (
+      Array.isArray(paths) &&
+      paths.length > 0 &&
+      new Set(paths).size === paths.length &&
+      paths.includes(changelogEntryPath(sectionVersion)) &&
+      paths.every((name) => isReleaseChangelogPath(name, { version: sectionVersion }))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function classifyReleaseChangelogEvidenceComparison(comparison, { baseSha, version }) {
+  const files = Array.isArray(comparison?.files) ? comparison.files : [];
+  const changedPaths = files.map((file) => file.filename);
+  const legacy = changedPaths.length === 1 && changedPaths[0] === "CHANGELOG.md";
+  const split = isSplitChangelogEvidenceDelta(changedPaths, version);
+  if (
+    comparison?.status !== "ahead" ||
+    comparison?.merge_base_commit?.sha !== baseSha ||
+    (!legacy && !split) ||
+    new Set(changedPaths).size !== changedPaths.length ||
+    files.some(
+      (file) =>
+        file.previous_filename ||
+        !(
+          split && file.filename !== "CHANGELOG.md" ? ["added", "modified"] : ["modified"]
+        ).includes(file.status),
+    )
+  ) {
+    throw new Error("changelog-only release evidence reuse failed commit comparison");
+  }
+  return {
+    changedPaths,
+    policy: split ? SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY : CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
+  };
+}
 const REVIEWED_TELEGRAM_WAIVERS = new Set(["2026.8.1-owner-approved", "2026.9.1-owner-approved"]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
@@ -805,7 +859,13 @@ function validEvidenceReuseIdentity(evidenceReuse) {
       evidenceReuse.changedPaths.length === 0) ||
     (evidenceReuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&
       evidenceReuse.changedPaths.length === 1 &&
-      evidenceReuse.changedPaths[0] === "CHANGELOG.md");
+      evidenceReuse.changedPaths[0] === "CHANGELOG.md") ||
+    (evidenceReuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY &&
+      isSplitChangelogEvidenceDelta(
+        evidenceReuse.changedPaths,
+        evidenceReuse.sourceManifest?.candidateBinding?.package?.version ??
+          evidenceReuse.sourceManifest?.validationInputs?.targetVersion,
+      ));
   return (
     /^[a-f0-9]{40}$/u.test(evidenceReuse.evidenceSha) &&
     /^[1-9][0-9]*$/u.test(evidenceReuse.rootRunId) &&
@@ -2002,7 +2062,13 @@ function verifyStateTransition(decision, drain, executionPlan) {
     (decision.state === "passed" && drain.state === "blocked_complete") ||
     (decision.state.startsWith("blocked_") && drain.state === "passed" && !reuseRecovery)
   ) {
-    throw new Error("release decision and diagnostic drain transition is invalid");
+    throw new Error(
+      "release decision and diagnostic drain transition is invalid: " +
+        `decision(parentRunAttempt=${decision.parentRunAttempt}, state=${decision.state}), ` +
+        `drain(parentRunAttempt=${drain.parentRunAttempt}, state=${drain.state}); ` +
+        `executionPlan(originalParentRunAttempt=${executionPlan.parentRunAttempt}, sha256=${executionPlan.sha256}); ` +
+        "compatible collector evidence for the same execution plan is required",
+    );
   }
   if (
     decision.state.startsWith("blocked_") &&

@@ -67,6 +67,7 @@ import {
   sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
@@ -536,6 +537,17 @@ export function createCodexDynamicToolBridge(params: {
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
   );
   const availableTools = finalized.tools;
+  const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
+  for (const { name, tool } of availableTools) {
+    const pluginMeta = getPluginToolMeta(tool);
+    if (pluginMeta) {
+      // Bind path trust to the concrete plugin tool so core-name collisions fail closed.
+      pluginLocalMediaTrustByToolName.set(
+        name,
+        new Set(pluginMeta.trustedLocalMedia === true ? [name] : []),
+      );
+    }
+  }
   availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
   const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
   const quarantinedAvailableToolNames = new Set(
@@ -596,6 +608,14 @@ export function createCodexDynamicToolBridge(params: {
   };
   const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
   const directToolNames = params.directToolNames;
+  const specs =
+    inheritedSpecs ??
+    createCodexDynamicToolSpecs({
+      entries: registeredSpecTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    });
+  const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
@@ -612,13 +632,7 @@ export function createCodexDynamicToolBridge(params: {
           loading: params.loading ?? "searchable",
           directToolNames,
         }),
-    specs:
-      inheritedSpecs ??
-      createCodexDynamicToolSpecs({
-        entries: registeredSpecTools,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
+    specs,
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
     sideEffectOwnerKeyForTool: (toolName) => {
       const tool = toolMap.get(toolName)?.tool;
@@ -664,7 +678,8 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      const rawArguments = call.arguments;
+      const rawArguments =
+        toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
       const args = asNonArrayRecord(rawArguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
@@ -907,6 +922,7 @@ export function createCodexDynamicToolBridge(params: {
           coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
+          trustedLocalMediaToolNames: pluginLocalMediaTrustByToolName.get(toolName),
         });
         if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
@@ -1182,6 +1198,7 @@ function collectToolTelemetry(params: {
   coreTtsToolResult?: object;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
   if (params.isError) {
     return undefined;
@@ -1202,7 +1219,8 @@ function collectToolTelemetry(params: {
       const mediaUrls = filterToolResultMediaUrls(
         params.toolName,
         media.mediaUrls,
-        params.mediaTrustResult ?? params.result,
+        params.coreTtsToolResult ?? params.mediaTrustResult ?? params.result,
+        params.trustedLocalMediaToolNames,
       );
       const seen = new Set(params.telemetry.toolMediaUrls);
       const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);

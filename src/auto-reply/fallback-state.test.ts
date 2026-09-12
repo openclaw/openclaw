@@ -1,11 +1,16 @@
 /** Tests model fallback notice formatting and transition state tracking. */
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import {
   resolveActiveFallbackState,
   type FallbackNoticeState,
 } from "../status/fallback-notice-state.js";
-import { buildFallbackNotice, resolveFallbackTransition } from "./fallback-state.js";
+import {
+  buildFallbackClearedNotice,
+  buildFallbackNotice,
+  resolveFallbackTransition,
+} from "./fallback-state.js";
 
 const baseAttempt = {
   provider: "demo-primary",
@@ -150,6 +155,45 @@ describe("fallback-state", () => {
     expect(resolved.reasonSummary).toBe("rate limit");
     expect(resolved.nextState.selectedModel).toBe("demo-primary/model-a");
     expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
+  });
+
+  it("preserves provider-local model prefixes through fallback and recovery", () => {
+    const refs = {
+      selectedProvider: "custom",
+      selectedModel: "custom/model",
+      activeProvider: "custom",
+      activeModel: "model",
+      attempts: [{ ...baseAttempt, provider: "custom", model: "custom/model" }],
+    };
+    const activated = resolveDemoFallbackTransition(refs);
+    expect(activated).toMatchObject({
+      fallbackActive: true,
+      fallbackTransitioned: true,
+      nextState: { selectedModel: "custom/custom/model", activeModel: "custom/model" },
+      attemptSummaries: ["custom/custom/model rate limit"],
+    });
+    const state: FallbackNoticeState = {
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: activated.selectedModelRef,
+        activeModel: activated.activeModelRef,
+        reason: activated.reasonSummary,
+      },
+    };
+    expect(resolveDemoFallbackTransition({ ...refs, state })).toMatchObject({
+      fallbackTransitioned: false,
+      stateChanged: false,
+    });
+    expect(
+      resolveDemoFallbackTransition({ ...refs, activeModel: refs.selectedModel, state }),
+    ).toMatchObject({
+      fallbackCleared: true,
+      nextState: { selectedModel: undefined, activeModel: undefined, reason: undefined },
+    });
+    expect(buildFallbackNotice(refs)).toContain("selected custom/custom/model");
+    expect(
+      buildFallbackClearedNotice({ ...refs, previousActiveModel: activated.activeModelRef }),
+    ).toBe("↪️ Model Fallback cleared: custom/custom/model (was custom/model)");
   });
 
   it("prefers formatted transient error details over generic rate-limit labels", () => {
@@ -345,5 +389,118 @@ describe("fallback-state", () => {
         attempts: [],
       }),
     ).toContain("selected openai/gpt-5.5");
+  });
+
+  describe("Arcee wire identity", () => {
+    it.each([
+      {
+        name: "fresh state",
+        state: {} satisfies FallbackNoticeState,
+        expectedStateChanged: false,
+      },
+      {
+        name: "captured alias-only state",
+        state: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "arcee/trinity-large-preview",
+            activeModel: "arcee/arcee-ai/trinity-large-preview",
+            reason: "selected model unavailable",
+          },
+        } satisfies FallbackNoticeState,
+        expectedStateChanged: true,
+      },
+    ])("keeps $name out of fallback state", ({ state, expectedStateChanged }) => {
+      const params = {
+        selectedProvider: "arcee",
+        selectedModel: "trinity-large-preview",
+        activeProvider: "arcee",
+        activeModel: "arcee-ai/trinity-large-preview",
+        attempts: [],
+        cfg: {},
+        state,
+      };
+
+      expect(canonicalizeProviderModelId("arcee", "arcee-ai/trinity-large-preview")).toBe(
+        "trinity-large-preview",
+      );
+
+      const resolved = resolveFallbackTransition(params);
+
+      expect(resolved).toMatchObject({
+        fallbackActive: false,
+        fallbackTransitioned: false,
+        fallbackCleared: false,
+        stateChanged: expectedStateChanged,
+      });
+      expect(resolved.nextState).toEqual({
+        selectedModel: undefined,
+        activeModel: undefined,
+        reason: undefined,
+      });
+      expect(buildFallbackNotice(params)).toBeNull();
+      expect(
+        resolveActiveFallbackState({
+          selectedModelRef: "arcee/trinity-large-preview",
+          activeModelRef: "arcee/arcee-ai/trinity-large-preview",
+          config: {},
+          state,
+        }),
+      ).toEqual({ active: false, reason: undefined });
+    });
+
+    it.each([
+      {
+        name: "different model",
+        activeProvider: "arcee",
+        activeModel: "arcee-ai/trinity-large-thinking",
+        activeRef: "arcee/arcee-ai/trinity-large-thinking",
+      },
+      {
+        name: "different provider",
+        activeProvider: "openrouter",
+        activeModel: "arcee-ai/trinity-large-preview",
+        activeRef: "openrouter/arcee-ai/trinity-large-preview",
+      },
+    ])("keeps a $name as a real fallback", ({ activeProvider, activeModel, activeRef }) => {
+      const params = {
+        selectedProvider: "arcee",
+        selectedModel: "trinity-large-preview",
+        activeProvider,
+        activeModel,
+        attempts: [],
+        cfg: {},
+        state: {},
+      };
+
+      const resolved = resolveFallbackTransition(params);
+
+      expect(resolved).toMatchObject({
+        fallbackActive: true,
+        fallbackTransitioned: true,
+        fallbackCleared: false,
+        stateChanged: true,
+        nextState: {
+          selectedModel: "arcee/trinity-large-preview",
+          activeModel: activeRef,
+        },
+      });
+      expect(buildFallbackNotice(params)).toContain(activeRef);
+      expect(
+        resolveActiveFallbackState({
+          selectedModelRef: "arcee/trinity-large-preview",
+          activeModelRef: activeRef,
+          config: {},
+          state: {
+            fallbackNotice: {
+              kind: "active",
+              selectedModel: "arcee/trinity-large-preview",
+              activeModel: activeRef,
+              reason: "selected model unavailable",
+            },
+          },
+        }),
+      ).toEqual({ active: true, reason: "selected model unavailable" });
+    });
   });
 });

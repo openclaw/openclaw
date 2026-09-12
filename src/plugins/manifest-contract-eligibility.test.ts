@@ -35,10 +35,12 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
 }));
 
 let isManifestPluginAvailableForControlPlane: typeof import("./manifest-contract-eligibility.js").isManifestPluginAvailableForControlPlane;
+let listAvailableManifestContractPlugins: typeof import("./manifest-contract-eligibility.js").listAvailableManifestContractPlugins;
 let listAvailableManifestContractValues: typeof import("./manifest-contract-eligibility.js").listAvailableManifestContractValues;
 let loadManifestContractSnapshot: typeof import("./manifest-contract-eligibility.js").loadManifestContractSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 let makePluginMetadataIndex: typeof import("./current-plugin-metadata.test-support.js").makePluginMetadataIndex;
+let makePluginMetadataManifestRegistry: typeof import("./current-plugin-metadata.test-support.js").makePluginMetadataManifestRegistry;
 let createInstalledPluginEnabledPredicate: typeof import("./installed-plugin-index.js").createInstalledPluginEnabledPredicate;
 
 beforeAll(async () => {
@@ -47,11 +49,13 @@ beforeAll(async () => {
   vi.resetModules();
   ({
     isManifestPluginAvailableForControlPlane,
+    listAvailableManifestContractPlugins,
     listAvailableManifestContractValues,
     loadManifestContractSnapshot,
   } = await import("./manifest-contract-eligibility.js"));
   ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-  ({ makePluginMetadataIndex } = await import("./current-plugin-metadata.test-support.js"));
+  ({ makePluginMetadataIndex, makePluginMetadataManifestRegistry } =
+    await import("./current-plugin-metadata.test-support.js"));
   ({ createInstalledPluginEnabledPredicate } = await import("./installed-plugin-index.js"));
 });
 
@@ -335,6 +339,8 @@ describe("prepared installed-plugin eligibility", () => {
       expected: [false, false, false, false, true, false],
     },
   ])("preserves policy and first-record selection for $config", ({ config, expected }) => {
+    clearPluginMetadataLifecycleCaches();
+    mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
     const index = makePluginMetadataIndex();
     index.plugins = [
       ...makePluginMetadataIndex("provider").plugins.map((record) =>
@@ -392,6 +398,19 @@ describe("prepared installed-plugin eligibility", () => {
         isManifestPluginAvailableForControlPlane({ ...params, plugin, isInstalledPluginEnabled }),
       ),
     ).toEqual(expected);
+    const manifestPlugins = plugins.flatMap(({ id, origin }) =>
+      makePluginMetadataManifestRegistry(id).plugins.map((plugin) =>
+        Object.assign({}, plugin, { origin, contracts: { imageGenerationProviders: [id] } }),
+      ),
+    );
+    const expectedPlugins = manifestPlugins.filter((_plugin, position) => expected[position]);
+    const available = listAvailableManifestContractPlugins({
+      snapshot: { index, plugins: manifestPlugins },
+      config,
+      contract: "imageGenerationProviders",
+    });
+    expect(available).toHaveLength(expectedPlugins.length);
+    available.forEach((plugin, position) => expect(plugin).toBe(expectedPlugins[position]));
   });
 });
 
@@ -401,6 +420,7 @@ describe("loadManifestContractSnapshot", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
       plugins: [],
+      byPluginId: new Map(),
     });
     mocks.resolvePluginMetadataSnapshot.mockImplementation(
       (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
@@ -413,12 +433,14 @@ describe("loadManifestContractSnapshot", () => {
     const snapshot = {
       index: { plugins: [] },
       plugins: [],
+      byPluginId: new Map(),
     };
     mocks.resolvePluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ config: {}, workspaceDir: "/workspace", env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
@@ -435,12 +457,14 @@ describe("loadManifestContractSnapshot", () => {
     const snapshot = {
       index: { plugins: [] },
       plugins: [],
+      byPluginId: new Map(),
     };
     mocks.resolvePluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ config: {}, env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
@@ -453,15 +477,18 @@ describe("loadManifestContractSnapshot", () => {
 
   it("preserves configless default-discovery snapshot compatibility", () => {
     const env = { HOME: "/home/default-config" } as NodeJS.ProcessEnv;
+    const plugin = { id: "demo" };
     const snapshot = {
       index: { plugins: [{ pluginId: "demo" }] },
-      plugins: [{ id: "demo" }],
+      plugins: [plugin],
+      byPluginId: new Map([[plugin.id, plugin]]),
     };
     mocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
@@ -478,15 +505,18 @@ describe("loadManifestContractSnapshot", () => {
 
   it("falls back to the shared metadata snapshot loader", () => {
     const env = { HOME: "/home/fallback" } as NodeJS.ProcessEnv;
+    const plugin = { id: "demo" };
     const snapshot = {
       index: { plugins: [{ pluginId: "demo" }] },
-      plugins: [{ id: "demo" }],
+      plugins: [plugin],
+      byPluginId: new Map([[plugin.id, plugin]]),
     };
     mocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ config: {}, env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({

@@ -75,6 +75,7 @@ describe("private node policy transport", () => {
       command: DEMO_COMMAND,
       params: DEMO_PARAMS,
       privateTransport,
+      deadlineAtMs: performance.now() + 5_000,
       onNodeCommandDispatched,
     });
 
@@ -85,6 +86,7 @@ describe("private node policy transport", () => {
     expect(registration.policy.classifyRisk).toHaveBeenCalledOnce();
     expect(handle).toHaveBeenCalledOnce();
     expect(privateTransport.invoke).toHaveBeenCalledOnce();
+    expect(privateTransport.invoke.mock.calls[0]?.[0]).not.toHaveProperty("deadlineAtMs");
     expect(onNodeCommandDispatched).toHaveBeenCalledOnce();
     expect(manager.getSnapshot(approval.id)?.consumedDecision).toBe("allow-once");
     expect(node.commands).toEqual([]);
