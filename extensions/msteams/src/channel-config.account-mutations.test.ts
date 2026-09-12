@@ -70,8 +70,29 @@ describe("msteams account config mutations", () => {
     expect(updated.channels?.msteams?.accounts).toEqual({
       backup: expect.objectContaining({ appId: "backup-app" }),
     });
-    expect(updated.channels?.msteams?.defaultAccount).toBe("backup");
+    expect(updated.channels?.msteams?.defaultAccount).toBeUndefined();
     expect(resolveMSTeamsAccount({ cfg: updated }).accountId).toBe("backup");
+  });
+
+  it("selects the sorted eligible account after deleting the configured default", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          defaultAccount: "support",
+          accounts: {
+            support: { appId: "support-app", appPassword: "support-secret" },
+            zeta: { appId: "zeta-app", appPassword: "zeta-secret" },
+            alpha: { appId: "alpha-app", appPassword: "alpha-secret" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const updated = msteamsConfigAdapter.deleteAccount({ cfg, accountId: "support" });
+
+    expect(updated.channels?.msteams?.defaultAccount).toBeUndefined();
+    expect(resolveMSTeamsAccount({ cfg: updated }).accountId).toBe("alpha");
   });
 
   it("falls back to a legacy root identity after deleting the last named default", () => {
@@ -92,7 +113,7 @@ describe("msteams account config mutations", () => {
     const updated = msteamsConfigAdapter.deleteAccount({ cfg, accountId: "support" });
 
     expect(updated.channels?.msteams?.accounts).toBeUndefined();
-    expect(updated.channels?.msteams?.defaultAccount).toBe("default");
+    expect(updated.channels?.msteams?.defaultAccount).toBeUndefined();
     expect(resolveMSTeamsAccount({ cfg: updated })).toMatchObject({
       accountId: "default",
       configured: true,

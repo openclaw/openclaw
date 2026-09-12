@@ -136,13 +136,6 @@ function updateExplicitMSTeamsAccount(params: {
   }
   const deletedDefault =
     !updated && normalizeAccountId(channel.defaultAccount) === normalizeAccountId(rawKey);
-  const remainingAccountKey = Object.keys(nextAccounts)[0];
-  const hasLegacyDefaultIdentity = Boolean(
-    channel.appId || channel.appPassword || channel.webhook?.port,
-  );
-  const nextDefaultAccount = deletedDefault
-    ? (remainingAccountKey ?? (hasLegacyDefaultIdentity ? DEFAULT_ACCOUNT_ID : undefined))
-    : channel.defaultAccount;
   return {
     ...params.cfg,
     channels: {
@@ -150,7 +143,9 @@ function updateExplicitMSTeamsAccount(params: {
       msteams: {
         ...channel,
         accounts: Object.keys(nextAccounts).length > 0 ? nextAccounts : undefined,
-        defaultAccount: nextDefaultAccount,
+        // Clearing a deleted preference lets the canonical resolver select the implicit
+        // default identity or the first sorted configured account deterministically.
+        defaultAccount: deletedDefault ? undefined : channel.defaultAccount,
       },
     },
   };
