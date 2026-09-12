@@ -9,6 +9,7 @@ import {
   captureEnvironmentMetadataUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  openEnvironmentPicker,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -249,17 +250,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      const openPicker = async () => {
-        const afterShow = place.evaluate(
-          (element) =>
-            new Promise<void>((resolve) => {
-              element.addEventListener("wa-after-show", () => resolve(), { once: true });
-            }),
-        );
-        await page.locator("#new-session-where-trigger").click();
-        await afterShow;
-      };
-      await openPicker();
+      await openEnvironmentPicker(page);
       const row = (id: string) => place.locator(`[data-value="device:${id}"]`);
       await row("alpha-device").waitFor();
       await captureEnvironmentMetadataUiProof(suite, page);
@@ -313,7 +304,7 @@ suite.define(() => {
       expect(await selectedRow.locator(".session-menu__check svg").count()).toBe(0);
       await selectedRow.click();
       await selectedRow.waitFor({ state: "hidden" });
-      await openPicker();
+      await openEnvironmentPicker(page);
       await selectedRow.hover();
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       expect(await details("alpha-device").textContent()).toContain("2 of 4 session slots in use");

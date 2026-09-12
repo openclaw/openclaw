@@ -36,6 +36,19 @@ export function installMockGateway(
   });
 }
 
+// The scale-in animation moves inventory rows after they first become visible.
+// Wait for its public completion event before hovering a nested details card.
+export async function openEnvironmentPicker(page: Page) {
+  const afterShow = page.locator("wa-popover.new-session-page__where-popover").evaluate(
+    (element) =>
+      new Promise<void>((resolve) => {
+        element.addEventListener("wa-after-show", () => resolve(), { once: true });
+      }),
+  );
+  await page.locator("#new-session-where-trigger").click();
+  await afterShow;
+}
+
 export const NEW_SESSION_MODEL_CATALOG = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },

@@ -52,6 +52,7 @@ import {
   rejectConfigNonFiniteNumbers,
   resolveManagedRuntimeEnvBaseline,
 } from "./io.read-helpers.js";
+import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import { injectExplicitlySetPaths, projectConfigWriteSource } from "./io.write-prepare.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import {
@@ -727,12 +728,30 @@ async function writeRootBoundJsonFile(params: {
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
     params.assertConfigPathForWrite();
   } catch (error) {
-    await rollbackJsonFileWriteIfUnchanged({
-      target: targetAtCommit,
-      previousRaw: currentRaw,
-      committedHash: hashConfigIncludeRaw(content),
+    let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
+    try {
+      const rolledBack = await rollbackJsonFileWriteIfUnchanged({
+        target: targetAtCommit,
+        previousRaw: currentRaw,
+        committedHash: hashConfigIncludeRaw(content),
+      });
+      rollbackStatus = rolledBack ? "restored" : "not-restored";
+    } catch (rollbackError) {
+      throw new ConfigWritePostCommitError({
+        configPath: targetAtCommit.absolutePath,
+        rollbackStatus,
+        cause: new AggregateError(
+          [error, rollbackError],
+          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+          { cause: rollbackError },
+        ),
+      });
+    }
+    throw new ConfigWritePostCommitError({
+      configPath: targetAtCommit.absolutePath,
+      rollbackStatus,
+      cause: error,
     });
-    throw error;
   }
 }
 
@@ -968,7 +987,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
         }
         if (!persistedHash) {
           throw new Error(
-            `Config was written to ${params.snapshot.path}, but no persisted hash was available.`,
+            `No persisted config hash was available after rereading ${params.snapshot.path}.`,
           );
         }
 
@@ -1022,19 +1041,18 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           deferRuntimeActivation,
           formatRefreshError: (error) => formatErrorMessage(error),
           createRefreshError: (detail, cause) =>
-            new Error(
-              `Config was written to ${params.snapshot.path}, but runtime snapshot refresh failed: ${detail}`,
-              { cause },
-            ),
+            new Error(`runtime snapshot refresh failed: ${detail}`, { cause }),
         });
         return { persistedHash, persistedConfig: refreshedSnapshot.sourceConfig };
       } catch (error) {
+        let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
         try {
           const rolledBack = await rollbackJsonFileWriteIfUnchanged({
             target: includeTarget,
             previousRaw: previousIncludeRaw,
             committedHash: committedIncludeHash,
           });
+          rollbackStatus = rolledBack ? "restored" : "not-restored";
           if (rolledBack) {
             restoreEnvChangesIfUnchanged({
               env: writeEnv,
@@ -1043,12 +1061,21 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             });
           }
         } catch (rollbackError) {
-          throw new Error(
-            `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
-            { cause: rollbackError },
-          );
+          throw new ConfigWritePostCommitError({
+            configPath: includeTarget.absolutePath,
+            rollbackStatus,
+            cause: new AggregateError(
+              [error, rollbackError],
+              `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+              { cause: rollbackError },
+            ),
+          });
         }
-        throw error;
+        throw new ConfigWritePostCommitError({
+          configPath: includeTarget.absolutePath,
+          rollbackStatus,
+          cause: error,
+        });
       }
     },
     writeEnv,

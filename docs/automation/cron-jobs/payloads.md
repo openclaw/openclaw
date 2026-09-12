@@ -136,6 +136,10 @@ The script may return an object with these optional fields:
 
 Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
 
+Changing a running job's script payload or saved state protects that edit from
+the old script's returned state, including when completion is recovered after a
+Gateway restart. The completed run still retains its history.
+
 ## Execution styles
 
 ### Codex apps in scheduled automations

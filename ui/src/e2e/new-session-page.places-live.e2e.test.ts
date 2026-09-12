@@ -4,6 +4,7 @@ import {
   WORKSPACE,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  openEnvironmentPicker,
   pollLocatorText,
 } from "./new-session-page.test-support.ts";
 
@@ -28,7 +29,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       const trigger = page.locator("#new-session-where-trigger");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
-      await trigger.click();
+      await openEnvironmentPicker(page);
       await page.locator('[data-value="gateway"]').waitFor();
     } finally {
       await context.close();
@@ -63,20 +64,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const where = page.locator("#new-session-where-trigger");
-      await where.click();
+      await openEnvironmentPicker(page);
       const picker = page.locator("wa-popover.new-session-page__where-popover");
-      await expect
-        .poll(() =>
-          picker.locator('input[type="search"]').evaluate((input) => {
-            const root = input.getRootNode();
-            return (
-              (root instanceof Document || root instanceof ShadowRoot) &&
-              root.activeElement === input
-            );
-          }),
-        )
-        .toBe(true);
       const profile = picker.locator('[data-value="cloud:aws"]');
       await profile.hover();
       await picker.locator('[data-value="machine:fast"]').waitFor();
@@ -144,10 +133,9 @@ suite.define(() => {
       const where = page.locator("#new-session-where-trigger");
       const model = page.locator('[data-chat-model-select="true"]');
       const start = page.getByRole("button", { name: "Start session" });
-      await where.click();
+      await openEnvironmentPicker(page);
 
       const profile = page.locator('[data-value="cloud:aws"]');
-      await profile.click();
       await profile.hover();
       await page.locator('[data-value="machine:fast"]').click();
       await page.keyboard.press("Escape");
@@ -163,7 +151,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
 
-      await where.click();
+      await openEnvironmentPicker(page);
 
       await profile.waitFor();
       await expect.poll(() => profile.isDisabled()).toBe(true);
@@ -228,7 +216,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await gateway.waitForRequest("models.list");
-        await page.locator("#new-session-where-trigger").click();
+        await openEnvironmentPicker(page);
 
         const profile = page.locator('[data-value="cloud:aws"]');
         await profile.waitFor();
@@ -268,7 +256,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await openEnvironmentPicker(page);
       const runner = page.locator('[data-value="device:runner"]');
       await runner.waitFor();
       expect(await runner.isEnabled()).toBe(true);

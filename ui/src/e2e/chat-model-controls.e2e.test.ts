@@ -343,12 +343,20 @@ suite.define(() => {
           pageRequests.length + 1,
         );
         expect(page.url()).toBe(beforeLastPageUrl);
+        const manage = picker.locator('[data-chat-account-option="manage"]');
+        if (input === "keyboard") {
+          await manage.focus();
+        }
         await gateway.resolveDeferred("users.listModelAccounts", {
           profileId: "test-person",
           accounts: [],
           links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
         });
+        await expect.poll(() => loading.isVisible()).toBe(false);
         await expect.poll(() => more.isVisible()).toBe(false);
+        if (input === "keyboard") {
+          expect(await manage.evaluate((button) => button === document.activeElement)).toBe(true);
+        }
         const workOption = picker.locator(
           `[data-chat-account-option="account:${work.authProfileId}"]`,
         );

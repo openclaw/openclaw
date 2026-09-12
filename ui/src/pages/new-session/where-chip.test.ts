@@ -523,9 +523,9 @@ describe("Where chip", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onEnvironmentQueryInput).toHaveBeenCalledExactlyOnceWith("cloud");
 
-    const connect = container.querySelector<HTMLButtonElement>('[data-action="connect-machine"]');
-    expect(connect?.disabled).toBe(false);
-    connect?.click();
+    const connect = container.querySelector<HTMLButtonElement>('[data-action="connect-machine"]')!;
+    expect(connect.disabled).toBe(false);
+    connect.click();
     expect(onConnectMachine).toHaveBeenCalledOnce();
   });
 
@@ -812,6 +812,8 @@ describe("Where chip", () => {
         },
       ],
       cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
       deviceDisabledReason: "This runtime does not support paired devices",
     });
 
@@ -827,6 +829,8 @@ describe("Where chip", () => {
     const emptyContainer = renderPicker(false, undefined, {
       environments: [],
       cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
     });
     expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });
@@ -863,6 +867,8 @@ describe("Where chip", () => {
         },
       ],
       cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
     });
 
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
@@ -953,6 +959,8 @@ describe("Where chip", () => {
           },
         ],
         cloudProfiles: [],
+        cloudProfileId: "",
+        deviceId: "",
         devicePlacement,
       });
 

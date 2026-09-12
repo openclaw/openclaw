@@ -154,7 +154,7 @@ describe("cloud target menu", () => {
     const container = document.createElement("div");
     render(
       renderCloudProfileMenuItems({
-        profiles: [{ id: "aws", providerId: "aws", operatingSystems: [], machines: [machine] }],
+        profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
         selectedId: "aws",
         compact: true,
         selectedOs: "",
@@ -251,7 +251,6 @@ describe("cloud target menu", () => {
               { id: "linux", label: "Linux" },
               { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
             ],
-            machines: [],
           },
         ],
         selectedId: "aws",
@@ -265,13 +264,14 @@ describe("cloud target menu", () => {
       }),
       container,
     );
-    const configuration = container.querySelector(".new-session-page__cloud-configuration")!;
-    const fixedOs = configuration.querySelector('[data-value="os:linux"]');
+    const fixedOs = container.querySelector('[data-value="os:linux"]');
     expect(fixedOs?.textContent).toBe("Linux");
     expect(fixedOs?.tagName).toBe("SPAN");
     expect(fixedOs?.hasAttribute("aria-pressed")).toBe(false);
-    expect(configuration.querySelector('[data-value="os:windows"]')).toBeNull();
-    expect(configuration.querySelector('[aria-pressed="true"]')).toBeNull();
+    expect(container.querySelector('[data-value="os:windows"]')).toBeNull();
+    expect(
+      container.querySelector('.new-session-page__cloud-configuration [aria-pressed="true"]'),
+    ).toBeNull();
   });
 
   it("disables cloud profiles with the runtime preflight reason", () => {
