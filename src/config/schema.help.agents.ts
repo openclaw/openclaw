@@ -25,7 +25,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
   "plugins.slots.contextEngine":
-    "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
+    "Selects the registered context engine ID. Plugins with different plugin and engine IDs declare contextEngineIds in their manifest so OpenClaw can load the owner.",
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":

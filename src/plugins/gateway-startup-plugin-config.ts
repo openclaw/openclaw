@@ -221,18 +221,21 @@ export function resolveMemorySlotStartupPluginId(params: {
 }
 
 export function resolveContextEngineSlotStartupPluginId(params: {
+  records: readonly { id: string; contextEngineIds?: readonly string[] }[];
   activationSourceConfig: OpenClawConfig;
   activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
-  const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourceConfig.plugins?.slots?.contextEngine?.trim();
+  const { activationSourcePlugins, normalizePluginId } = params;
+  const configuredSlot = activationSourcePlugins.slots.contextEngine;
   if (!configuredSlot) {
     return undefined;
   }
   return resolveSelectedContextEnginePluginIdFromConfig(
     activationSourcePlugins,
-    normalizePluginId(configuredSlot),
+    configuredSlot,
+    params.records,
+    normalizePluginId,
   );
 }
 
@@ -323,6 +326,7 @@ export function addConfiguredSlotPluginIds(
     activationSourceConfig: OpenClawConfig;
     activationSourcePlugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
     lookup: InstalledPluginIndexScopeLookup;
+    index: InstalledPluginIndex;
   },
 ): void {
   const memorySlot = resolveMemorySlotStartupPluginId({
@@ -334,6 +338,10 @@ export function addConfiguredSlotPluginIds(
     target.add(memorySlot);
   }
   const contextEngineSlot = resolveContextEngineSlotStartupPluginId({
+    records: params.index.plugins.map((plugin) => ({
+      id: plugin.pluginId,
+      contextEngineIds: plugin.contextEngineIds,
+    })),
     activationSourceConfig: params.activationSourceConfig,
     activationSourcePlugins: params.activationSourcePlugins,
     normalizePluginId: params.lookup.normalizePluginId,

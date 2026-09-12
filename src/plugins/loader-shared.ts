@@ -310,6 +310,7 @@ function createManifestPluginRecord(params: {
     syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
+    declaredContextEngineIds: manifestRecord.contextEngineIds,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,

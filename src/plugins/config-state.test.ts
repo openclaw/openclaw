@@ -9,6 +9,8 @@ import {
   resolveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
+  resolveSelectedContextEnginePluginId,
+  withContextEngineOwner,
 } from "./config-state.js";
 import * as discovery from "./discovery.js";
 import * as manifest from "./manifest.js";
@@ -795,5 +797,117 @@ describe("resolveMemorySlotDecision", () => {
       selectedId: null,
     });
     expect(result.enabled).toBe(false);
+  });
+});
+
+describe("context engine ownership", () => {
+  const records = [
+    { id: "vendor-plugin", contextEngineIds: ["Canonical-Engine", "second-engine"] },
+    { id: "legacy-plugin" },
+  ];
+  it("resolves exact declared engine IDs and preserves legacy equal-ID selection", () => {
+    const resolve = (contextEngine: string) =>
+      resolveSelectedContextEnginePluginId(
+        {
+          plugins: {
+            ...(contextEngine !== "legacy-plugin" ? { allow: ["vendor-plugin"] } : {}),
+            slots: { contextEngine },
+          },
+        },
+        records,
+      );
+    expect(resolve("Canonical-Engine")).toBe("vendor-plugin");
+    expect(resolve("second-engine")).toBe("vendor-plugin");
+    expect(resolve("legacy-plugin")).toBe("legacy-plugin");
+    expect(resolve("vendor-plugin")).toBeUndefined();
+  });
+  it("carries ownership into activation without changing the engine slot", () => {
+    const config = withContextEngineOwner(
+      normalizePluginsConfig({
+        allow: ["vendor-plugin"],
+        slots: { contextEngine: "Canonical-Engine" },
+      }),
+      records,
+    );
+    expect(config.slots.contextEngine).toBe("Canonical-Engine");
+    expect(
+      resolveEffectivePluginActivationState({ id: "vendor-plugin", origin: "workspace", config })
+        .explicitlyEnabled,
+    ).toBe(true);
+    expect(
+      resolveEffectivePluginActivationState({ id: "Canonical-Engine", origin: "workspace", config })
+        .enabled,
+    ).toBe(false);
+  });
+  it("does not choose a first owner or a same-named plugin over declared ownership", () => {
+    const config = {
+      plugins: { allow: ["vendor-plugin"], slots: { contextEngine: "Canonical-Engine" } },
+    };
+    expect(
+      resolveSelectedContextEnginePluginId(config, [...records, { id: "canonical-engine" }]),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(config, [
+        ...records,
+        { id: "other", contextEngineIds: ["Canonical-Engine"] },
+      ]),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { ...config.plugins, allow: ["vendor-plugin", "other"] } },
+        [...records, { id: "other", contextEngineIds: ["Canonical-Engine"] }],
+      ),
+    ).toBeUndefined();
+  });
+  it("does not fall back to an incidental equal-ID plugin when declared owners are ineligible", () => {
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { slots: { contextEngine: "Canonical-Engine" } } },
+        [...records, { id: "canonical-engine" }],
+      ),
+    ).toBeUndefined();
+  });
+  it("requires independent trust for a differently named declared owner", () => {
+    const config = { plugins: { slots: { contextEngine: "Canonical-Engine" } } };
+    expect(resolveSelectedContextEnginePluginId(config, records)).toBeUndefined();
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { entries: { "vendor-plugin": { enabled: true } }, ...config.plugins } },
+        records,
+      ),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { allow: ["vendor-plugin"], ...config.plugins } },
+        records,
+      ),
+    ).toBe("vendor-plugin");
+  });
+  it.each([false, true])(
+    "preserves equal-ID slot authorization outside an unrelated allowlist: declared=%s",
+    (declared) => {
+      const config = withContextEngineOwner(
+        normalizePluginsConfig({ allow: ["unrelated"], slots: { contextEngine: "legacy-plugin" } }),
+        declared ? [{ id: "legacy-plugin", contextEngineIds: ["legacy-plugin"] }] : records,
+      );
+      expect(config.contextEngineOwnerId).toBe("legacy-plugin");
+      expect(
+        resolveEffectivePluginActivationState({ id: "legacy-plugin", origin: "workspace", config })
+          .enabled,
+      ).toBe(true);
+    },
+  );
+  it.each([
+    { enabled: false },
+    { deny: ["vendor-plugin"] },
+    { entries: { "vendor-plugin": { enabled: false } } },
+    { allow: ["Canonical-Engine"] },
+  ])("applies owner policy %j", (policy) => {
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { ...policy, slots: { contextEngine: "Canonical-Engine" } } },
+        records,
+      ),
+    ).toBeUndefined();
   });
 });

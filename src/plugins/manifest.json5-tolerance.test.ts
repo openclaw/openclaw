@@ -24,6 +24,37 @@ afterEach(() => {
 });
 
 describe("loadPluginManifest JSON5 tolerance", () => {
+  it.each([
+    {
+      ids: ["canonical-engine", " other-engine ", "canonical-engine"],
+      kind: "context-engine",
+      expected: ["canonical-engine", "other-engine"],
+    },
+    { ids: [], kind: "context-engine" },
+    { ids: ["legacy"], kind: "context-engine" },
+    { ids: ["none"], kind: "context-engine" },
+    { ids: [42], kind: "context-engine" },
+    { ids: [""], kind: "context-engine" },
+    { ids: "canonical-engine", kind: "context-engine" },
+    { ids: ["canonical-engine"], kind: "memory" },
+  ])("validates manifest engine ownership: $ids / $kind", ({ ids, kind, expected }) => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "vendor-plugin",
+        kind,
+        contextEngineIds: ids,
+        configSchema: {},
+      }),
+    );
+    const result = loadPluginManifest(dir, false);
+    expect(result.ok).toBe(Boolean(expected));
+    if (result.ok) {
+      expect(result.manifest.contextEngineIds).toEqual(expected);
+    }
+  });
+
   it("parses a standard JSON manifest without issues", () => {
     const dir = makeTempDir();
     const manifest = {

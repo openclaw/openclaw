@@ -27,6 +27,61 @@ describe("resetPluginSlotsToDefaults", () => {
 });
 
 describe("applyExclusiveSlotSelection", () => {
+  it("selects the declared engine rather than its plugin ID", () => {
+    const result = applyExclusiveSlotSelection({
+      config: {},
+      selectedId: "vendor-plugin",
+      selectedKind: "context-engine",
+      contextEngineIds: ["CanonicalEngine"],
+    });
+    expect(result.config.plugins?.slots?.contextEngine).toBe("CanonicalEngine");
+    expect(result.warnings.join(" ")).toContain("CanonicalEngine");
+  });
+
+  it.each(["other-engine", "none", "second-engine"])("preserves explicit choice %s", (choice) => {
+    const config: OpenClawConfig = { plugins: { slots: { contextEngine: choice } } };
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "vendor-plugin",
+      selectedKind: "context-engine",
+      contextEngineIds: ["second-engine"],
+    });
+    expect(result.config).toBe(config);
+  });
+
+  it("does not guess a multi-engine default while still selecting a memory slot", () => {
+    const result = applyExclusiveSlotSelection({
+      config: {},
+      selectedId: "vendor-plugin",
+      selectedKind: ["memory", "context-engine"],
+      contextEngineIds: ["first", "second"],
+    });
+    expect(result.config.plugins?.slots).toEqual({ memory: "vendor-plugin" });
+    expect(result.warnings.join(" ")).toContain("explicitly");
+  });
+
+  it("returns the multi-engine warning even when no config changes", () => {
+    const config: OpenClawConfig = {};
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "vendor-plugin",
+      selectedKind: "context-engine",
+      contextEngineIds: ["first", "second"],
+    });
+    expect(result.config).toBe(config);
+    expect(result.warnings).toHaveLength(1);
+  });
+
+  it("repairs the old plugin-ID selection for a uniquely declared engine", () => {
+    const result = applyExclusiveSlotSelection({
+      config: { plugins: { slots: { contextEngine: "vendor-plugin" } } },
+      selectedId: "vendor-plugin",
+      selectedKind: "context-engine",
+      contextEngineIds: ["canonical-engine"],
+    });
+    expect(result.config.plugins?.slots?.contextEngine).toBe("canonical-engine");
+  });
+
   const createMemoryConfig = (plugins?: OpenClawConfig["plugins"]): OpenClawConfig => ({
     plugins: {
       ...plugins,

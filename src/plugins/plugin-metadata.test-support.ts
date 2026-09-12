@@ -40,6 +40,7 @@ export function createPluginMetadataSnapshotFixture(
     installRecords: {},
     plugins: plugins.map((plugin) => ({
       pluginId: plugin.id,
+      contextEngineIds: plugin.contextEngineIds,
       origin: plugin.origin,
       manifestPath: plugin.manifestPath,
       manifestHash: "test-manifest",

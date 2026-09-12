@@ -63,6 +63,7 @@ const InstalledPluginIndexRecordSchema = z.object({
       bundledDist: z.boolean().optional(),
     })
     .optional(),
+  contextEngineIds: StringArraySchema.optional(),
   manifestPath: z.string(),
   manifestHash: z.string(),
   doctorContractHash: z.string().optional(),

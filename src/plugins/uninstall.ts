@@ -365,7 +365,12 @@ type UninstallPluginParams = {
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
   const packagePlan = resolvePluginPackageUninstallPlan(params);
-  const runtimePluginIds = packagePlan?.runtimePluginIds ?? [pluginId];
+  const retainedEnginePluginIds = Object.keys(
+    config.plugins?.installs?.[pluginId]?.contextEngineIdsByPlugin ?? {},
+  );
+  const runtimePluginIds = [
+    ...new Set([...(packagePlan?.runtimePluginIds ?? [pluginId]), ...retainedEnginePluginIds]),
+  ];
 
   const entries = config.plugins?.entries ?? {};
   const installs = config.plugins?.installs ?? {};

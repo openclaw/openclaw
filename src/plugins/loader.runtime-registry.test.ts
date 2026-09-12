@@ -1012,3 +1012,31 @@ describe("clearPluginRegistryLoadCache", () => {
     expect(loadOpenClawPlugins(loadOptions)).not.toBe(registry);
   });
 });
+
+it("refuses two enabled declared owners before importing the selected context engine", () => {
+  useNoBundledPlugins();
+  const plugins = ["context-owner-a", "context-owner-b"].map((id) => {
+    const plugin = writePlugin({ id, body: `throw new Error("runtime must not import");` });
+    const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifest, kind: "context-engine", contextEngineIds: ["Shared-Engine"] }),
+    );
+    return plugin;
+  });
+  expect(() =>
+    loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: plugins.map((plugin) => plugin.file) },
+          entries: Object.fromEntries(plugins.map((plugin) => [plugin.id, { enabled: true }])),
+          slots: { contextEngine: "Shared-Engine" },
+        },
+      },
+    }),
+  ).toThrow(
+    'Context engine "Shared-Engine" has ambiguous declared owners: context-owner-a, context-owner-b',
+  );
+});

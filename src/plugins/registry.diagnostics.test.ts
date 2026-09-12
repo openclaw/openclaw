@@ -44,6 +44,31 @@ function createDiagnosticFixture() {
 }
 
 describe("plugin registration diagnostics", () => {
+  it("rejects undeclared engines without registering them and preserves legacy registration", () => {
+    const { builder, createRecord } = createDiagnosticFixture();
+    const record = createRecord("vendor-plugin");
+    record.declaredContextEngineIds = ["canonical-engine"];
+    const api = builder.createApi(record, { config: {} });
+    const factory = () => {
+      throw new Error("registration must not instantiate engines");
+    };
+    api.registerContextEngine("wrong-engine", factory);
+    expect(builder.registry.contextEngines.size).toBe(0);
+    expect(builder.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "vendor-plugin",
+        message: 'context engine "wrong-engine" is not declared in manifest contextEngineIds',
+      }),
+    );
+    api.registerContextEngine("canonical-engine", factory);
+    expect(record.contextEngineIds).toEqual(["canonical-engine"]);
+    expect(builder.registry.contextEngines.has("canonical-engine")).toBe(true);
+    const legacy = createRecord("legacy-plugin");
+    builder.createApi(legacy, { config: {} }).registerContextEngine("legacy-plugin", factory);
+    expect(builder.registry.contextEngines.has("legacy-plugin")).toBe(true);
+  });
+
   it("preserves ordered severity and call-time provenance across registrars and rollback", () => {
     const { builder, createRecord } = createDiagnosticFixture();
     const alpha = createRecord("alpha");

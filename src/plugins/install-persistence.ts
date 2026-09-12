@@ -280,6 +280,22 @@ export async function persistPluginInstall(params: {
           `Plugin package "${params.pluginId}" has no authoritative runtime child list. Refresh the plugin registry, then reinstall the package or run openclaw doctor before retrying.`,
         );
       }
+      // Retain ownership with the install record, so uninstall does not need to
+      // execute or even read a plugin whose files are missing or broken.
+      const contextEngineIdsByPlugin = Object.fromEntries(
+        manifests.flatMap((manifest) =>
+          manifest.contextEngineIds ? [[manifest.id, [...manifest.contextEngineIds]]] : [],
+        ),
+      );
+      const nextInstallRecord = nextInstallRecords[params.pluginId];
+      if (!nextInstallRecord) {
+        throw new Error(`Missing install record for "${params.pluginId}".`);
+      }
+      if (Object.keys(contextEngineIdsByPlugin).length > 0) {
+        nextInstallRecord.contextEngineIdsByPlugin = contextEngineIdsByPlugin;
+      } else {
+        delete nextInstallRecord.contextEngineIdsByPlugin;
+      }
       const ownedPluginIds = manifests.map((plugin) => plugin.id).toSorted();
       const manifestByPluginId = new Map(manifests.map((plugin) => [plugin.id, plugin]));
       const enablementByPluginId = new Map(

@@ -187,6 +187,22 @@ function createRichPluginFixture(
 }
 
 describe("installed plugin index", () => {
+  it("projects engine ownership from manifests without importing runtime code", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "vendor-plugin",
+      kind: "context-engine",
+      contextEngineIds: ["canonical-engine"],
+      configSchema: {},
+    });
+    const index = loadInstalledPluginIndex({
+      candidates: [createPluginCandidate({ rootDir, idHint: "vendor-plugin" })],
+      env: hermeticEnv(),
+    });
+    expect(index.plugins[0]?.contextEngineIds).toEqual(["canonical-engine"]);
+  });
+
   it("builds a runtime-free installed plugin snapshot from manifest and package metadata", () => {
     const fixture = createRichPluginFixture();
 

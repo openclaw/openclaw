@@ -49,6 +49,7 @@ export function createPluginRecord(params: {
   syntheticAuthRefs?: string[];
   channelIds?: readonly string[];
   providerIds?: readonly string[];
+  declaredContextEngineIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
@@ -100,6 +101,7 @@ export function createPluginRecord(params: {
     webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
     migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
     contextEngineIds: [],
+    declaredContextEngineIds: params.declaredContextEngineIds,
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

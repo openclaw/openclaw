@@ -364,6 +364,7 @@ export type PluginRecord = {
   webSearchProviderIds: string[];
   migrationProviderIds: string[];
   contextEngineIds?: string[];
+  declaredContextEngineIds?: readonly string[];
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];

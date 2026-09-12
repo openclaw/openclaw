@@ -98,6 +98,12 @@ export function reconcilePluginPackageUpdateConfig(params: {
         .map(resolveComparableUninstallPathInternal),
     );
     const retainedContributionKeys = contributionKeys(params.afterIndex, afterPluginIds);
+    const retainedEngineIds = new Set([
+      ...params.afterIndex.plugins.flatMap((plugin) => plugin.contextEngineIds ?? []),
+      ...Object.values(params.afterIndex.installRecords).flatMap((record) =>
+        Object.values(record.contextEngineIdsByPlugin ?? {}).flat(),
+      ),
+    ]);
     for (const pluginId of removedPluginIds) {
       const oldRecord = params.beforeIndex.plugins.find((plugin) => plugin.pluginId === pluginId);
       const channelIds = [
@@ -106,6 +112,10 @@ export function reconcilePluginPackageUpdateConfig(params: {
       ].filter((channelId) => !retainedContributionKeys.has(channelId));
       config = removePluginRuntimePolicyFromConfig(config, pluginId, {
         channelIds,
+        contextEngineIds: (
+          before.installRecord.contextEngineIdsByPlugin?.[pluginId] ??
+          oldRecord?.contextEngineIds ?? [pluginId]
+        ).filter((id) => !retainedEngineIds.has(id)),
         loadPaths: [
           oldRecord?.source,
           before.installRecord.installPath,
@@ -146,7 +156,10 @@ export function pluginPackageUpdateMayMutateConfig(params: {
         plugins?.deny?.includes(pluginId) ||
         Object.hasOwn(plugins?.entries ?? {}, pluginId) ||
         plugins?.slots?.memory === pluginId ||
-        plugins?.slots?.contextEngine === pluginId
+        plugins?.slots?.contextEngine === pluginId ||
+        ownership.installRecord.contextEngineIdsByPlugin?.[pluginId]?.includes(
+          plugins?.slots?.contextEngine ?? "",
+        )
       ) {
         return true;
       }

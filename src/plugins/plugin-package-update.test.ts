@@ -57,6 +57,51 @@ function index(rootDir: string, plugins: InstalledPluginIndexRecord[]): Installe
 }
 
 describe("plugin package update policy reconciliation", () => {
+  it.each([false, true])(
+    "cleans a retired engine unless ownership transferred: %s",
+    (transferred) => {
+      const beforeRoot = "/packages/pack-v1";
+      const afterRoot = "/packages/pack-v2";
+      const before = index(beforeRoot, [
+        record("pack/retained", beforeRoot),
+        record("pack/retired", beforeRoot),
+      ]);
+      before.installRecords.pack!.contextEngineIdsByPlugin = { "pack/retired": ["engine"] };
+      const retained = record("pack/retained", afterRoot);
+      if (transferred) {
+        retained.contextEngineIds = ["engine"];
+      }
+      const after = index(afterRoot, [retained]);
+      if (transferred) {
+        after.installRecords.pack!.contextEngineIdsByPlugin = { "pack/retained": ["engine"] };
+      }
+      const snapshot = capturePluginPackageUpdateSnapshot({
+        index: before,
+        installOwners: ["pack"],
+      });
+      if (!snapshot.ok) {
+        throw new Error(snapshot.error);
+      }
+      const result = reconcilePluginPackageUpdateConfig({
+        config: {
+          plugins: {
+            installs: { ...after.installRecords },
+            slots: { contextEngine: "engine" },
+            entries: { "pack/retired": { enabled: true } },
+          },
+        },
+        beforeIndex: before,
+        afterIndex: after,
+        snapshot: snapshot.value,
+      });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(result.config.plugins?.entries?.["pack/retired"]).toBeUndefined();
+      expect(result.config.plugins?.slots?.contextEngine).toBe(transferred ? "engine" : undefined);
+    },
+  );
+
   it("removes retired child policy while preserving retained, new, and unrelated state", () => {
     const beforeRoot = "/packages/pack-v1";
     const afterRoot = "/packages/pack-v2";
