@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
-import * as snapshots from "../infra/sqlite-readonly-location.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import {
   closeOpenClawAgentDatabasesForTest,
