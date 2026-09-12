@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_INVALID_TOKEN_USER_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderFormatErrorCopy,
   renderBillingReplyCopy,
@@ -9,6 +10,7 @@ import {
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
+  renderSanitizedUserFacingText,
 } from "./user-copy.js";
 
 describe("failover user copy", () => {
@@ -143,5 +145,34 @@ describe("failover user copy", () => {
     ).toBe(
       "⚠️ CLI turn (routing openai/gpt-5.6-sol): timed out after 90s (overall turn limit). The gateway is unaffected. It also stopped 2 CLI background tasks and 1 active CLI tool call; that work shares the parent CLI process. Effects may be partial; check before retrying. OpenClaw did not replay this turn automatically. For long work, use a detached OpenClaw sub-agent (no run timeout by default), or raise `agents.defaults.timeoutSeconds`.",
     );
+  });
+
+  // Session transcripts, run status, and the TUI render failed turns through this
+  // renderer; the channel reply path renders the same reason-level copy from failover
+  // facts, so every error grammar the harnesses emit must agree across surfaces.
+  it.each([
+    "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a38749741971a37b-SEA, request id: req_21723077dbef46fc8a554a7f511bcb2f",
+    "status code 401: Incorrect API key provided",
+    "401 Unauthorized: invalid api key",
+  ])("renders the provider authentication copy for %j", (raw) => {
+    expect(renderSanitizedUserFacingText(raw, { errorContext: true })).toBe(
+      `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`,
+    );
+  });
+
+  it("renders the unavailable-model copy for provider model-not-found errors", () => {
+    expect(
+      renderSanitizedUserFacingText(
+        "unexpected status 404 Not Found: The model `gpt-x` does not exist",
+        { errorContext: true },
+      ),
+    ).toMatch(/^⚠️ The configured model is unavailable from the provider/);
+  });
+
+  it("keeps non-401 auth text and non-error context out of the provider copy", () => {
+    const forbidden = "unexpected status 403 Forbidden: insufficient permissions for this key";
+    expect(renderSanitizedUserFacingText(forbidden, { errorContext: true })).toBe(forbidden);
+    const unauthorized = "status code 401: Incorrect API key provided";
+    expect(renderSanitizedUserFacingText(unauthorized)).toBe(unauthorized);
   });
 });

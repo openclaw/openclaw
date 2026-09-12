@@ -2,6 +2,7 @@
 // hook emission, thread bindings, and browser/MCP cleanup side effects.
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -301,14 +302,8 @@ test("sessions.reset keeps watching a replacement registered after waiter settle
 test("sessions.reset reuses the watcher while prior MCP retirement is still disposing", async () => {
   await seedActiveMainSession();
   embeddedRunMock.waitResults.set("sess-main", false);
-  let releaseFirstRetirement = () => {};
-  const firstRetirementReleased = new Promise<void>((resolve) => {
-    releaseFirstRetirement = resolve;
-  });
-  let markFirstRetirementStarted = () => {};
-  const firstRetirementStarted = new Promise<void>((resolve) => {
-    markFirstRetirementStarted = resolve;
-  });
+  const { promise: firstRetirementReleased, resolve: releaseFirstRetirement } = createDeferred();
+  const { promise: firstRetirementStarted, resolve: markFirstRetirementStarted } = createDeferred();
   let heldFirstRetirement = false;
   bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async (params) => {
     if (params.retainAcrossReuse === false && !heldFirstRetirement) {
@@ -422,10 +417,7 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     },
   });
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const blocker = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
@@ -604,14 +596,8 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
       [sessionKey]: sessionStoreEntry("sess-archive-race"),
     },
   });
-  let releaseHook = () => {};
-  const hookReleased = new Promise<void>((resolve) => {
-    releaseHook = resolve;
-  });
-  let markHookStarted = () => {};
-  const hookStarted = new Promise<void>((resolve) => {
-    markHookStarted = resolve;
-  });
+  const { promise: hookReleased, resolve: releaseHook } = createDeferred();
+  const { promise: hookStarted, resolve: markHookStarted } = createDeferred();
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
     markHookStarted();
     await hookReleased;
@@ -654,10 +640,7 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   // Resolve the lazy handler/config imports before queue ordering begins.
   await Promise.all([getSessionsHandlers(), getGatewayConfigModule()]);
   let releaseBlocker = () => {};
-  let markBlockerStarted = () => {};
-  const blockerStarted = new Promise<void>((resolve) => {
-    markBlockerStarted = resolve;
-  });
+  const { promise: blockerStarted, resolve: markBlockerStarted } = createDeferred();
   const blocker = runExclusiveSessionLifecycle({
     scope: storePath,
     identities: [sessionKey, initialSessionId],

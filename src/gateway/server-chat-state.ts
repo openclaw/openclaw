@@ -2,6 +2,7 @@ import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   normalizeLiveAssistantBufferedText,
@@ -115,7 +116,7 @@ type ChatRunRecord = {
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
-  assistantScope?: { itemId: string; prefix: string };
+  assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
   agentText?: Partial<
@@ -235,6 +236,7 @@ export type ChatRunState = {
     runId: string,
     options?: { final?: boolean },
   ) => { text: string; suppress: boolean };
+  flushPendingText: (runId: string) => void;
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
   recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
@@ -336,6 +338,17 @@ export function createChatRunState(): ChatRunState {
     toolEventRecipients,
     getOrCreate: store.getOrCreate,
     resolveBuffer,
+    flushPendingText: (runId) => {
+      const record = store.runs.get(runId);
+      if (!record) {
+        return;
+      }
+      const pending = Object.values(record.pendingTextFlushes ?? {});
+      clearPendingLiveTextFlushes(record);
+      for (const flush of pending) {
+        flush.flush();
+      }
+    },
     hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
     deleteAbortMarker: (runId) => {
       const record = store.runs.get(runId);

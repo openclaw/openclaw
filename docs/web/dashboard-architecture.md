@@ -10,7 +10,7 @@ doc-schema-version: 1
 Session dashboards are persistent widget boards attached to a session. This
 reference covers their ownership, sandbox and capability boundaries, storage,
 and Gateway protocol. For the operator workflow, see
-[Session Dashboards](/web/dashboards); for the widget authoring API, see
+[Session Dashboards](/web/dashboards). For the widget authoring API, see
 [Show widget](/tools/show-widget).
 
 ## Vision
@@ -22,7 +22,7 @@ it the full task area. The board and conversation remain part of the same sessio
 
 Principles:
 
-- **A board belongs to a session; it is not a new workspace.** A session with no
+- **A board belongs to a session. It is not a new workspace.** A session with no
   pinned widgets is plain chat. Pin one widget and the board exists in that
   session's Dashboard view. Boards inherit the session's identity, agent
   ownership, naming, pinning, and lifecycle. There is no `dashboard_create`, no
@@ -31,10 +31,10 @@ Principles:
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
   visible tab, and request split or expanded presentation.
 - **Native, not embedded.** The board is Lit components in the Control UI shell
-  (the same design system as the rest of the app). Data reports render directly;
-  executable widget content is sandboxed in iframes. No URL bar, no browser chrome.
+  (the same design system as the rest of the app). Data reports render directly.
+  Executable widget content is sandboxed in iframes. No URL bar, no browser chrome.
 - **Small agent surface.** Widgets are addressed by stable name and updated in
-  place. Layout is a fluid auto-compacting grid; the agent speaks sizes and
+  place. Layout is a fluid auto-compacting grid. The agent speaks sizes and
   anchors, never pixels or coordinates.
 - **Capabilities over trust.** Widget code is arbitrary agent-authored HTML/JS
   in a hard sandbox. Reach (gateway data, actions, network) exists only through
@@ -42,15 +42,15 @@ Principles:
 
 ## Concepts
 
-| Concept             | Definition                                                                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                         |
-| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript). |
-| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                           |
-| Widget              | Named content cell owned by the session: a native report, HTML/JS, MCP App, or plugin widget. Addressed as `sessionKey` + `name`.                  |
-| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).       |
-| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                          |
-| Pin (session)       | Existing sidebar pinning of sessions. Opening a pinned session restores that browser's saved task layout.                                          |
+| Concept             | Definition                                                                                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                                                         |
+| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript).                                 |
+| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                                                           |
+| Widget              | Named content cell owned by the session: a native report, HTML/JS, MCP App, or plugin widget. Addressed as `sessionKey` + `name`.                                                  |
+| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).                                       |
+| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                                                          |
+| Pin (session)       | Only root sessions can be pinned. Child/subagent sessions live in their parent's tree and reject pin requests. Opening a pinned session restores that browser's saved task layout. |
 
 ## UX flows
 
@@ -66,10 +66,10 @@ Principles:
   active side-panel content, including Chat, Dashboard, Browser, Terminal,
   Files, and Review. Its tooltip names the two views. The same toolbar's
   **Layout** menu positions the side panel left, right, or below. **Focus** in
-  the same toolbar gives the main view the full task area; **Restore split**
+  the same toolbar gives the main view the full task area. **Restore split**
   restores the side panel.
   Later board updates preserve the user's current layout. Closing the Dashboard
-  tab removes only its view; closing the whole side panel hides it without
+  tab removes only its view. Closing the whole side panel hides it without
   changing the main view.
 - **Layout ownership:** the browser stores the arrangement per session, including
   the main view, active side tab, dock position, dimensions, and focus state.
@@ -77,8 +77,14 @@ Principles:
   make Dashboard main and focus it. Placement changes reuse the mounted content
   so widget frames, browser views, terminals, and chat drafts survive a swap.
   The task toolbar and side-panel tab header align above their respective panes
-  in left/right layouts; stacked layouts keep each header above its own pane.
-- **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
+  in left/right layouts. Stacked layouts keep each header above its own pane.
+- **Navigation retention:** one connected session-page owner retains up to three
+  recent sessions per pane across task navigation and visits to other routes.
+  Hidden pages relinquish foreground activity, viewer presence, focus, and commands.
+  Chat and dashboard route loaders share the same Gateway/authentication scope as
+  the mounted views. Connection-owner changes retire both, while ordinary reconnects
+  preserve them. Cached successful routes render during background refresh.
+- **Drag:** user drags widgets. Grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.
 - **Reset warning:** `/new` / `/reset` on a board-bearing session asks for
@@ -94,10 +100,10 @@ Principles:
 1. **State events (default).** Widget UI interactions the model should know
    about but not respond to. `bridge.emitState({...})` appends a structured
    session notice (same mechanism as group-activity notices). No agent turn is
-   started; the model sees accumulated notices on its next run.
+   started. The model sees accumulated notices on its next run.
 2. **Prompts (explicit talk).** `bridge.sendPrompt(text)` — requires user
-   activation; sends a visible user message into the owning session. Rate-limited;
-   each send is user-confirmed unless the widget holds
+   activation, and sends a visible user message into the owning session.
+   Rate-limited. Each send is user-confirmed unless the widget holds
    the `prompt` capability grant.
 3. **Automation.** `bridge.runAction(name, args)` — fires a manifest-declared
    action. Initial verb set: `cron.trigger` (run an existing cron job now) and
@@ -127,7 +133,7 @@ sandbox proxy described below.
   8KB per native widget's JSON props, and 48 widgets per board.
 - **Update in place:** re-emitting a widget with the same `name` and content
   owner replaces its content, bumps `revision`, and broadcasts `board.changed`.
-  Live views update that cell; document widgets reload that iframe only.
+  Live views update that cell. Document widgets reload that iframe only.
   Changing the content owner requires removing the widget before creating its replacement.
 - **Byte freezing:** HTML and registered-source grants bind to the SHA-256
   digest of the approved content. Preserving a grant requires the same content
@@ -142,15 +148,15 @@ session-owned board cell with a grant record. What renders inside it is a
 content kind:
 
 - `session:report` — core-owned native data report, authored through `dashboard`
-  or the structured `report` field of `show_widget`; bounded JSON props in board storage.
+  or the structured `report` field of `show_widget`. Board storage holds its bounded JSON props.
 - `html` — agent-authored via `show_widget`, bytes in board storage.
 - `mcp-app` — a third-party MCP app view (`ui://` resource from a configured
   server) hosted inside the widget cell.
 - Registered plugin kinds — plugin-validated source rendered through the same
-  sandboxed document frame. The Canvas plugin registers `a2ui`; core discovers
+  sandboxed document frame. The Canvas plugin registers `a2ui`. Core discovers
   the active registry and never hardcodes plugin kind names.
 
-MCP apps do not define the widget model; widgets gained the ability to host
+MCP apps do not define the widget model. Widgets gained the ability to host
 them. Identity, placement, pinning, grants, and the author-facing API stay
 OpenClaw's — so `show_widget` code stays as short as it is today and never
 needs to know the MCP Apps spec exists.
@@ -165,8 +171,8 @@ schema-version change. Disabled plugins are absent from the registry, so new
 puts fail with an enable-and-retry error and existing cells render as disabled.
 
 The A2UI implementation composes a small document that references its renderer
-bundle. Ticketed board documents use the capability-scoped Gateway asset route;
-inline documents load the same public static renderer from the sandbox origin.
+bundle. Ticketed board documents use the capability-scoped Gateway asset route.
+Inline documents load the same public static renderer from the sandbox origin.
 Core adds the same CSP, theme bridge, size reporter, and private-port host bridge
 used by HTML widgets. v0.8 and v0.9 use separate renderer bundles because their
 Lit custom elements share tag names but their processors and action contracts
@@ -176,7 +182,7 @@ A registered kind can expose public static renderer bytes through
 `resources.readPublicResource(path)`. The isolated listener serves only exact
 registered `resources.paths`, only for `GET` or `HEAD`, and rechecks the active
 plugin registry after reading. It does not proxy Gateway routes, credentials,
-or data. Canvas opts in its two A2UI bundles; this grants no widget network or
+or data. Canvas opts in its two A2UI bundles. This grants no widget network or
 host-tool capability.
 
 Shared hosting infrastructure:
@@ -192,13 +198,13 @@ Shared hosting infrastructure:
   to the authenticated document route. This avoids a separate iframe login
   redirect to a page that refuses embedding.
 - **One authorization model for executable content.** A widget's reach is a
-  granted allowlist: for `html` widgets, host tools; for `mcp-app` widgets,
-  the server's app-visible tools and same-server resources (via the existing
-  live App-interaction authority, made durable per widget instead of
-  per-minting-run).
+  granted allowlist. For `html` widgets, the allowlist holds host tools. For
+  `mcp-app` widgets, it holds the server's app-visible tools and same-server
+  resources (via the existing live App-interaction authority, made durable per
+  widget instead of per-minting-run).
 - **Host tools for `html` widgets** (exposed over the widget bridge, checked
   against the grant):
-  - `openclaw.prompt.send` — tier 2; routed through the visible composer,
+  - `openclaw.prompt.send` — tier 2, routed through the visible composer,
     user-confirmed unless granted
   - `openclaw.state.emit` — tier 1 session notices (coalesced, size-capped)
   - `openclaw.data.read` — parameterized read-only bindings (existing
@@ -211,21 +217,21 @@ Shared hosting infrastructure:
 - **Grants.** HTML and registered widgets declaring nothing render immediately
   (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
   Declared capabilities and interactive MCP Apps follow an explicit
-  [session permission mode](/gateway/permission-modes): **Full access** grants;
-  **Workspace** uses an AI reviewer and rejects anything it does not allow;
-  **Guarded** shows **Allow**/**Reject**; **Read only** rejects. Without an
+  [session permission mode](/gateway/permission-modes). **Full access** grants.
+  **Workspace** uses an AI reviewer and rejects anything it does not allow.
+  **Guarded** shows **Allow**/**Reject**. **Read only** rejects. Without an
   explicit session mode, the equivalent configured exec approval policy applies.
   Grants are per widget name and content scope. HTML and registered-source
   updates preserve a grant only while the approved digest matches and the
   declaration does not widen. Wrapper-authored board widgets forward user-clicked
-  `http`/`https` new-tab links to the Control UI host; this ordinary navigation
+  `http`/`https` new-tab links to the Control UI host. This ordinary navigation
   needs no grant and never grants iframe popup permissions.
 - **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
   `window.openclaw.state`, `window.openclaw.data`, `window.openclaw.action`,
   `window.openclaw.cron`, and the host-provided
   `window.openclaw.host.controlUiBaseUrl` as the stable author API. Dashboard
   calls and trusted new-tab link clicks share one view-ticket-bound request
-  channel. The host opens links with `noopener,noreferrer`; size reporting and
+  channel. The host opens links with `noopener,noreferrer`. Size reporting and
   theme tokens remain separate host notifications.
 
 The outer proxy runs on a different origin from both the Control UI and the
@@ -234,7 +240,7 @@ proxy messages against that dedicated origin. The proxy puts widget bytes in
 an inner `srcdoc` iframe with `allow-scripts allow-forms`, without
 `allow-same-origin`. Widget code therefore has neither application-origin
 access nor the proxy's origin. Inline views adopt only the wrapper's private
-prompt channel; dashboard views initialize their separate ticket-bound bridge.
+prompt channel. Dashboard views initialize their separate ticket-bound bridge.
 
 The shared loader fetches board HTML while the sandbox proxy starts, then
 delivers it only after that exact proxy reports ready. Dashboard widgets keep a
@@ -246,7 +252,7 @@ session key and agent owner to avoid a second session lookup.
 
 Mounted widgets retain their loaded document across presentation changes and
 ticket renewal. Inline views share concurrent reads of the same document only
-within one client and connection generation; each view still owns its own sandbox
+within one client and connection generation. Each view still owns its own sandbox
 and prompt channel.
 Managed `[embed ref="..."]` previews use that authenticated path whenever their
 effective sandbox policy permits scripts, including the default with no explicit
@@ -261,16 +267,16 @@ results from the previous connection.
 text, metrics, tables, bar or line charts, and HTTP(S) links. The Control UI
 renders these blocks directly from the board snapshot, without a document fetch,
 iframe, capability ticket, or widget bridge. This pure renderer can also appear
-in passive dashboard gallery previews; that exception does not enable arbitrary
+in passive dashboard gallery previews. That exception does not enable arbitrary
 native plugin widgets in previews.
 
 Both authoring paths use the same validator in `src/boards/board-report.ts`:
 
 - `dashboard`: `action: "widget_put"`, `pluginKind: "session:report"`, `props: report`.
-- `show_widget`: `report: { blocks: [...] }`, `pin: true`; omit `kind` and `widget_code`.
+- `show_widget`: `report: { blocks: [...] }`, `pin: true`. Omit `kind` and `widget_code`.
 
-The report uses the existing generic `plugin` descriptor and JSON props storage;
-there is no new storage schema or protocol method. Its complete JSON is capped
+The report uses the existing generic `plugin` descriptor and JSON props storage.
+There is no new storage schema or protocol method. Its complete JSON is capped
 at 8KB and 24 blocks. Reports accept no capabilities, executable actions, HTML,
 CSS, media, network reads, or RPCs. `show_widget` report mode is dashboard-only,
 with no inline, device-panel, or channel presentation. Its structured `report`
@@ -279,7 +285,7 @@ presentation. The existing source-kind enum and plugin registrations are unchang
 
 Same-name report updates retain the `session:report` content owner. Converting an
 HTML widget requires an explicit remove followed by creation, with no automatic
-migration. Prefer reports for pinned data summaries; keep HTML for arbitrary
+migration. Prefer reports for pinned data summaries. Keep HTML for arbitrary
 interactive or inline content. See the [report schema and example](/tools/show-widget#native-dashboard-reports).
 
 ### Plugin capability declarations
@@ -287,11 +293,11 @@ interactive or inline content. See the [report schema and example](/tools/show-w
 Enabled plugins can extend the widget host through `dashboard.dataBindings`
 and `dashboard.actionVerbs` in `openclaw.plugin.json`. Plugin-local ids become
 grant names prefixed by the plugin id, such as `workboard.cards.list` and
-`workboard.dispatch`; `%` and `.` in the plugin-id segment are escaped so a
+`workboard.dispatch`. `%` and `.` in the plugin-id segment are escaped so a
 different plugin/local-id split cannot inherit the same persisted grant. During
 plugin registration, OpenClaw verifies that every binding targets an RPC
 registered by the same plugin with `operator.read` and every action targets one
-with `operator.write`; invalid declarations fail the plugin load. The validated
+with `operator.write`. Invalid declarations fail the plugin load. The validated
 registry is rebuilt only with plugin lifecycle changes, while widget grants
 remain per-widget and byte-and-revision-bound.
 
@@ -304,8 +310,8 @@ It never loads plugins merely to describe their dashboard capabilities.
 Core's existing GitHub identity and HTTP owners serve `github.actions.runs`
 through `board.data.read`. The closed parameter contract constructs only the
 repository or workflow run-list operation at `api.github.com`. Authorization
-requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant;
-network-origin grants never supply GitHub identity authority. Approval discloses
+requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant.
+Network-origin grants never supply GitHub identity authority. Approval discloses
 that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
@@ -315,7 +321,7 @@ identity before saving HTML (including materialized Canvas documents) or
 registered widgets declaring this host capability. The same preparation owner
 serves pinning and reads, including source-config preview-credential scrubbing
 and OAuth refresh. Caller cancellation and session mutation authorization are
-rechecked before persistence; failure leaves existing content and grants intact.
+rechecked before persistence. Failure leaves existing content and grants intact.
 MCP App tool names use their own contract and do not trigger this preflight.
 
 The board capability owner carries the canonical agent/session privately and
@@ -328,12 +334,12 @@ personal publication broker or its admitted credential-snapshot semantics.
 
 Authenticated reads never use preview authentication or anonymous retry.
 Redirects are refused. Only this Actions read permits an upstream body up to
-1 MiB; other GitHub JSON callers retain their 256 KiB default. The owner validates
+1 MiB. Other GitHub JSON callers retain their 256 KiB default. The owner validates
 and projects at most 30 runs into a small response, without raw repository
 objects or secrets. A Gateway-local cache holds at most 32 successful results
-for 30 seconds; at most 32 concurrent callers can prepare or await reads.
+for 30 seconds. At most 32 concurrent callers can prepare or await reads.
 The shared transport caches only validated projections under its captured
-credential scope; this internal cache write is not delivery to a widget.
+credential scope. This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
 own live authority before delivery. Removing one caller does not invalidate
 another authorized caller's result, and failed transport reads are not cached
@@ -356,7 +362,7 @@ blocks camera and microphone access.
 Inline and board widgets enable a DOM API guard before widget code runs. It removes
 same-realm WebRTC constructors and blocks common ways to create descendant
 browsing contexts with fresh constructors. This reduces exposure but remains
-best-effort defense-in-depth, not an isolation or authorization boundary; it
+best-effort defense-in-depth, not an isolation or authorization boundary. It
 does not eliminate the accepted residual. The guard is implemented in
 `src/agents/sandbox-host.ts` and enabled by the Canvas and board view owners.
 
@@ -380,29 +386,29 @@ content is fetched from the server instead of stored: `board_widgets` keeps the
 descriptor (`serverName`, `toolName`, `uiResourceUri`, originating
 `toolCallId` + `sessionKey`) instead of HTML bytes, and the board re-mints the
 view lease past the chat-turn 10-minute TTL (re-fetching the `ui://` resource
-on staleness). Chat inline MCP app views get the same **Pin to dashboard**
-affordance as agent widgets. Re-opened views are read-only today by design;
-pinned apps that should stay interactive get a durable grant over the server's
+on staleness). Chat inline MCP app views have the same **Pin to dashboard**
+affordance as agent widgets. Re-opened views are read-only today by design.
+Pinned apps that should stay interactive get a durable grant over the server's
 app-visible tools (explicit allowlist shown to the operator on pin), decoupled
 from the minting run. Ungranted pins can render their fetched App HTML but
 cannot call tools or access the same-server resource bridge. Pins belong to the
-originating session's board; cross-session pinning is not supported.
+originating session's board. Cross-session pinning is not supported.
 
 ### WorkBoard integration
 
-The WorkBoard integration program keeps cards and boards plugin-owned while stitching dispatched cards back to their session boards through the existing `sessionKey` and `runId`, exposing WorkBoard feeds and dispatch through plugin-declared bindings and actions, and composing those results with the existing `html` and `mcp-app` widget kinds instead of introducing a WorkBoard-specific widget type.
+The WorkBoard integration program keeps cards and boards plugin-owned. It stitches dispatched cards back to their session boards through the existing `sessionKey` and `runId`. It exposes WorkBoard feeds and dispatch through plugin-declared bindings and actions. It composes those results with the existing `html` and `mcp-app` widget kinds instead of introducing a WorkBoard-specific widget type.
 
 ## Layout: fluid grid
 
 12 columns, fixed row height, **auto-compacting** (gravity-up, push-aside on
-drag — gridstack semantics, implemented natively; grid math stays pure and
-DOM-free). Widget layout state per tab: `{ name, w (1-12), h (rows) }` plus
+drag — gridstack semantics, implemented natively). Grid math stays pure and
+DOM-free. Widget layout state per tab: `{ name, w (1-12), h (rows) }` plus
 order. Agent vocabulary:
 
 - `size`: `sm` (3×3) · `md` (6×4) · `lg` (8×6) · `xl` (12×8) · `full`
   (single-widget tab)
-- `after: <widgetName>` optional ordering anchor; omitted = append
-- User drags/resizes freely; the same order+size model round-trips.
+- `after: <widgetName>` optional ordering anchor. Omitted = append
+- User drags/resizes freely. The same order+size model round-trips.
 
 ## Data model (per-agent DB)
 
@@ -414,7 +420,7 @@ Board state lives in `agents/<agentId>/agent/openclaw-agent.sqlite`:
 
 The canonical table definitions, constraints, and indexes are in
 `src/state/openclaw-agent-schema.sql`. The board schema ensure/repair path is
-`src/state/openclaw-agent-board-schema.ts`; runtime reads and writes are owned by
+`src/state/openclaw-agent-board-schema.ts`. Runtime reads and writes are owned by
 `src/boards/sqlite-board-store.ts`. See [Database schemas](/reference/database-schemas)
 for schema versions, migration and downgrade rules, and the review checkpoint for
 material storage changes. Do not use a copied SQL sketch as the schema contract.
@@ -427,7 +433,7 @@ board rows. `/new`/`/reset` does not touch them.
 RPCs (core method table, typebox schemas in `gateway-protocol`):
 
 - `canvas.document.view { docId }` → HTML and sandbox connection metadata —
-  `operator.read`; accepts managed script-enabled Canvas documents up to 2 MiB,
+  `operator.read`. It accepts managed script-enabled Canvas documents up to 2 MiB,
   creates no board state, and returns no capability ticket.
 - `board.get { sessionKey }` → tabs + widget metadata and native props (no document bytes) — `operator.read`
 - `board.update { sessionKey, ops[] }` — tab CRUD/reorder, widget move/resize/
@@ -435,8 +441,8 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 - `board.widget.put { sessionKey, name, content, declared?, placement? }` —
   `operator.write` (agent tool path and pin path)
 - `board.widget.grant { sessionKey, name, decision }` — `operator.approvals`
-- `board.event { ticket, payload }` — ticket-bound tier-1 state event ingest;
-  the legacy trusted-host `{ sessionKey, widget, payload }` shape remains —
+- `board.event { ticket, payload }` — ticket-bound tier-1 state event ingest.
+  The legacy trusted-host `{ sessionKey, widget, payload }` shape remains —
   `operator.write`
 - `board.prompt.authorize { ticket }` — returns whether a visible prompt send
   still needs per-click confirmation — `operator.read`
@@ -448,25 +454,25 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 
 Events (in `EVENT_SCOPE_GUARDS`, read scope):
 
-- `board.changed { sessionKey, revision, widget? }` — persisted state changed;
+- `board.changed { sessionKey, revision, widget? }` — persisted state changed.
   UI refetches (and reloads one iframe when `widget` is present).
 - `board.command { sessionKey, command }` — transient UI drive (agent switches
   the visible tab or dashboard panel presentation) — the `ui.command` pattern.
 
 Board widget bytes use the authenticated HTTP surface. Inline Canvas widget
-bytes use `canvas.document.view`; native clients and direct document opens keep
+bytes use `canvas.document.view`. Native clients and direct document opens keep
 the existing Canvas HTTP routes.
 
 ## Agent tools
 
-Three tools total (core; `show_widget` is exposed for an `inline-widgets`
+Three tools total, in core. `show_widget` is exposed for an `inline-widgets`
 client, one unambiguous matching current-channel presenter, or a persistent-session
-automation whose server-authored tool policy explicitly allows pinned-only authoring):
+automation whose server-authored tool policy explicitly allows pinned-only authoring:
 
 - `show_widget { title, widget_code?, report?, kind?, name?, pin?, size?, tab?, after?,
-presentation?, capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
-  includes active registered kinds. HTML and registered source use `widget_code`;
-  native reports use `report` without `kind` or `widget_code`, require `pin: true`,
+presentation?, capabilities? }` — create/update by name. `kind` defaults to `html` and its enum
+  includes active registered kinds. HTML and registered source use `widget_code`.
+  Native reports use `report` without `kind` or `widget_code`, require `pin: true`,
   and render only on the board. For HTML and registered kinds, `pin` also places the widget on the board.
   Without `name`/`pin` it behaves exactly like today (inline, ephemeral).
   Headless scheduled authoring requires `pin: true`, cannot select a presentation
@@ -474,12 +480,12 @@ presentation?, capabilities? }` — create/update by name; `kind` defaults to `h
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
   `tab_update`, `tab_delete`, `tabs_reorder`, `widget_put`, `widget_move`,
   `widget_resize`, `widget_remove`, `focus_tab`, `set_presentation`.
-  Presentation is `split` or `expanded`; `expanded` makes Dashboard main and
+  Presentation is `split` or `expanded`. `expanded` makes Dashboard main and
   focuses it, while `split` reveals Dashboard using the current arrangement and
   brings chat alongside when Dashboard is main. The Control UI owns the side
   panel's dock position. The tool maps presentation onto the existing
   `set_chat_dock` wire command without changing the Gateway protocol.
-- The existing `automations` tool covers the automation tier; no new tool needed.
+- The existing `automations` tool covers the automation tier. No new tool needed.
 
 Tool descriptions teach the size/anchor vocabulary and the tier model. The
 agent is told about user tier-1 events via session notices, e.g.
@@ -489,11 +495,11 @@ agent is told about user tier-1 events via session notices, e.g.
 
 - **`extensions/workspaces` is deleted.** Experimental, `enabledByDefault:
 false`, never in a stable release (first appeared in 2026.7.2 betas). No
-  migration; a doctor rule removes stale `<stateDir>/workspaces/` if present.
+  migration. A doctor rule removes stale `<stateDir>/workspaces/` if present.
   Harvested ideas: pure grid math, bridge security model (port bootstrap,
   binding gating, rate limits), byte-frozen approval.
 - **Core owns widget hosting.** The canvas doc store, document wrapper, HTTP
-  serving, and the `show_widget` tool live in core (`src/canvas/`); the Canvas
+  serving, and the `show_widget` tool live in core (`src/canvas/`). The Canvas
   plugin owns the macOS node-panel presenter and the A2UI
   dashboard content kind. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
@@ -503,9 +509,9 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
 ## Current boundaries
 
 - Boards do not introduce a separate sharing or ACL model. Session visibility
-  and membership use the existing session-sharing surface; widget capability
+  and membership use the existing session-sharing surface. Widget capability
   grants remain separate from membership.
-- Native macOS/iOS board rendering is through the embedded Control UI; the
+- Native macOS/iOS board rendering is through the embedded Control UI. The
   inline-widget path is unchanged.
 - Enabled plugins extend content kinds, data bindings, and action verbs through
   the existing registries.

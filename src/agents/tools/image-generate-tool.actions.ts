@@ -4,7 +4,6 @@
  * Handles provider listing, task status, and duplicate-guard output for the image generation tool.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listRuntimeImageGenerationProviders } from "../../image-generation/runtime.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -83,14 +82,14 @@ function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider)
 /** Builds the image-generation provider listing result shown to the agent. */
 export function createImageGenerateListActionResult(params: {
   cfg?: OpenClawConfig;
+  providers: ImageGenerationProvider[];
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): ImageGenerateActionResult {
-  const providers = listRuntimeImageGenerationProviders({ config: params.cfg });
   return createMediaGenerateProviderListActionResult({
     kind: "image_generation",
-    providers,
+    providers: params.providers,
     emptyText: "No image-generation providers are registered.",
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,

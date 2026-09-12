@@ -30,7 +30,7 @@ openclaw gateway restart
 
 <Steps>
   <Step title="Create a Baseten account and API key">
-    Baseten's Basic plan has no monthly platform fee; Model API calls are usage-priced. Create a key in [Baseten API key settings](https://app.baseten.co/settings/api_keys) and check current rates on the [pricing page](https://www.baseten.co/pricing).
+    Baseten's Basic plan has no monthly platform fee. Model API calls are usage-priced. Create a key in [Baseten API key settings](https://app.baseten.co/settings/api_keys) and check current rates on the [pricing page](https://www.baseten.co/pricing).
   </Step>
   <Step title="Run onboarding">
     <CodeGroup>
@@ -51,6 +51,8 @@ export BASETEN_API_KEY=...
 
     </CodeGroup>
 
+    Onboarding saves the connection settings without copying the generated catalog into your config. Existing model rows stay unchanged. If you use `models.mode: "replace"`, onboarding also adds the bundled catalog because that mode disables implicit discovery.
+
   </Step>
   <Step title="Verify the live catalog">
     ```bash
@@ -64,7 +66,7 @@ export BASETEN_API_KEY=...
 
 ## Inkling
 
-[Thinking Machines Lab's Inkling](https://thinkingmachines.ai/news/introducing-inkling/) is the default model. In OpenClaw it supports text and image input, tool calling, structured tool schemas, configurable reasoning effort, a 1.048M-token context window, and up to 32k output tokens:
+[Thinking Machines Lab's Inkling](https://thinkingmachines.ai/news/introducing-inkling/) is the default model. In OpenClaw it supports text and image input, tool calling, and structured tool schemas. It also supports configurable reasoning effort, a 1.048M-token context window, and up to 32k output tokens:
 
 ```json5
 {
@@ -98,10 +100,10 @@ The authenticated live catalog is authoritative. These rows keep setup and model
 | `baseten/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B` | text        |    202k |       202k |
 | `baseten/openai/gpt-oss-120b`                      | text        |    128k |       128k |
 
-All bundled models support tool calling and reasoning. OpenClaw maps its thinking levels to models with native `reasoning_effort`. Baseten's opt-in GLM, Kimi, and Nemotron models default to thinking off; most expose a binary off/on control, while GLM 5.2 exposes off, high, and max. OpenClaw sends these choices through Baseten's `chat_template_args.enable_thinking` control and, for GLM 5.2, the validated top-level `reasoning_effort` parameter.
+All bundled models support tool calling and reasoning. OpenClaw maps its thinking levels to models with native `reasoning_effort`. Baseten's opt-in GLM, Kimi, and Nemotron models default to thinking off. Most expose a binary off/on control. GLM 5.2 exposes off, high, and max. OpenClaw sends these choices through Baseten's `chat_template_args.enable_thinking` control and, for GLM 5.2, the validated top-level `reasoning_effort` parameter.
 
 <Note>
-Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API while retaining model-specific OpenClaw transport policy.
+Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API. It retains model-specific OpenClaw transport policy.
 </Note>
 
 ## Manual config
@@ -140,7 +142,7 @@ Most setups only need the API key. To pin the provider explicitly:
 ```
 
 <Note>
-If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `BASETEN_API_KEY` is available to that process. A key exported only in an interactive shell is not visible to an already-running managed service.
+If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `BASETEN_API_KEY` is available to that process. For example, set it in `~/.openclaw/.env` or via `env.shellEnv`. A key exported only in an interactive shell is not visible to an already-running managed service.
 </Note>
 
 ## Related

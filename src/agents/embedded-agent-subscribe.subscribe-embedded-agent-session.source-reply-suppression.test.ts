@@ -85,8 +85,7 @@ async function emitMessageToolLifecycle(params: {
   threadId?: string;
   result: unknown;
 }) {
-  // Message tool sends are modeled as normal tool start/end events because the
-  // subscription records pending send text at start and delivery at end.
+  // Tool start preserves invocation context; completion records confirmed delivery.
   params.emit({
     type: "tool_execution_start",
     toolName: "message",

@@ -16,9 +16,9 @@ import {
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { getSkillProposalRunProgress as getSkillProposalRunProgressImpl } from "./proposal-run-progress.test-support.js";
 import {
   applySkillProposal as applySkillProposalImpl,
-  getSkillProposalRunProgress as getSkillProposalRunProgressImpl,
   inspectSkillProposal as inspectSkillProposalImpl,
   listSkillProposals as listSkillProposalsImpl,
   proposeCreateSkill as proposeCreateSkillImpl,
@@ -1179,7 +1179,7 @@ describe("skill workshop proposals", () => {
         proposalId: proposal.record.id,
         reason: "external target retained",
       }),
-    ).resolves.toMatchObject({ status: "rejected" });
+    ).rejects.toThrow("unfinished apply recovery");
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
@@ -1310,7 +1310,7 @@ describe("skill workshop proposals", () => {
     });
   });
 
-  it("keeps proposal management available when a reconciliation target cannot be read", async () => {
+  it("preserves recovery when a reconciliation target cannot be read", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
       workspaceDir,
@@ -1333,7 +1333,67 @@ describe("skill workshop proposals", () => {
     });
     await expect(
       rejectSkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).resolves.toMatchObject({ status: "rejected" });
+    ).rejects.toThrow("unfinished apply recovery");
+    await expect(readSkillProposalRollback(proposal.record.id)).resolves.not.toBeNull();
+  });
+
+  it.each([
+    ["reject", rejectSkillProposal],
+    ["quarantine", quarantineSkillProposal],
+  ] as const)("preserves missing-draft recovery before %s", async (_action, decide) => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Recoverable Draft",
+      description: "Retain an interrupted support write",
+      content: "# Recoverable Draft\n",
+      supportFiles: [{ path: "references/proof.md", content: "Partial support.\n" }],
+    });
+    const rollback = createSkillProposalRollback({
+      proposalId: proposal.record.id,
+      targetSkillFile: proposal.record.target.skillFile,
+      action: "create",
+      supportFiles: [{ path: "references/proof.md", existed: false }],
+    });
+    await writeSkillProposalRollback({ proposalId: proposal.record.id, rollback });
+    const supportFile = path.join(proposal.record.target.skillDir, "references", "proof.md");
+    await fs.mkdir(path.dirname(supportFile), { recursive: true });
+    await fs.writeFile(supportFile, "Partial support.\n");
+    const draftFile = path.join(
+      stateDir,
+      "skill-workshop",
+      "proposals",
+      proposal.record.id,
+      proposal.record.draftFile,
+    );
+    await fs.rm(draftFile);
+
+    await expect(
+      decide({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("unfinished apply recovery");
+    await expect(readSkillProposalRollback(proposal.record.id)).resolves.toEqual(rollback);
+    await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("Partial support.\n");
+
+    await fs.writeFile(draftFile, proposal.content);
+    closeOpenClawStateDatabaseForTest();
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      record: { status: "pending" },
+    });
+    await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
+    await expect(fs.access(supportFile)).rejects.toThrow();
+    await expect(
+      decide({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).resolves.toMatchObject({
+      status: _action === "reject" ? "rejected" : "quarantined",
+    });
   });
 
   it("enforces configured proposal limits before writing proposal state", async () => {
@@ -1482,6 +1542,115 @@ describe("skill workshop proposals", () => {
         content: "# Long Description Skill\n\nThird updated body.\n",
       }),
     ).rejects.toThrow("proposal description is too large");
+  });
+
+  it("preserves the live skill description when update proposals are applied", async () => {
+    const workspaceDir = await makeWorkspace();
+    const richDescription = `${"y".repeat(200)} plus trigger phrases and keywords`;
+    const skillDir = await createOwnedSkill({
+      workspaceDir,
+      name: "rich-description-skill",
+      description: "Initial description",
+      body: "# Rich Description Skill\n\nExisting body.\n",
+    });
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(
+      skillFile,
+      `---\nname: rich-description-skill\ndescription: ${richDescription}\n---\n\n# Rich Description Skill\n\nExisting body.\n`,
+      "utf8",
+    );
+
+    const updateWithDerivedLabel = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "rich-description-skill",
+      content: "# Rich Description Skill\n\nUpdated body.\n",
+    });
+    expect(
+      Buffer.byteLength(updateWithDerivedLabel.record.description, "utf8"),
+    ).toBeLessThanOrEqual(160);
+    expect(updateWithDerivedLabel.content).toContain(richDescription);
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: updateWithDerivedLabel.record.id,
+    });
+
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(richDescription);
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Updated body.");
+
+    const updateWithSuppliedLabel = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "rich-description-skill",
+      description: "Concise listing label",
+      content: "# Rich Description Skill\n\nSecond updated body.\n",
+    });
+    expect(updateWithSuppliedLabel.record.description).toBe("Concise listing label");
+    expect(updateWithSuppliedLabel.content).toContain(richDescription);
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: updateWithSuppliedLabel.record.id,
+    });
+
+    const applied = await fs.readFile(skillFile, "utf8");
+    expect(applied).toContain(richDescription);
+    expect(applied).toContain("Second updated body.");
+    expect(applied).not.toContain("Concise listing label");
+  });
+
+  it("applies explicitly revised descriptions from description-only create revisions", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Describable Skill",
+      description: "Original label",
+      content: "# Describable\n\nOriginal body.\n",
+    });
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      description: "Revised label",
+    });
+
+    expect(revised.record.description).toBe("Revised label");
+    expect(revised.content).toContain("Revised label");
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await expect(
+      fs.readFile(path.join(workshopSkillsDir(), "describable-skill", "SKILL.md"), "utf8"),
+    ).resolves.toBe(
+      '---\nname: "describable-skill"\ndescription: "Revised label"\n---\n\n# Describable\n\nOriginal body.\n',
+    );
+  });
+
+  it("preserves rich create frontmatter descriptions across body-only revisions", async () => {
+    const workspaceDir = await makeWorkspace();
+    const richDescription = `${"z".repeat(200)} plus trigger phrases and keywords`;
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Rich Create Skill",
+      description: "Short listing label",
+      content: `---\nname: rich-create-skill\ndescription: ${richDescription}\n---\n\n# Rich Create\n\nOriginal body.\n`,
+    });
+    expect(proposal.record.description).toBe("Short listing label");
+    expect(proposal.content).toContain(richDescription);
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Rich Create\n\nRevised body.\n",
+    });
+
+    expect(revised.record.description).toBe("Short listing label");
+    expect(revised.content).toContain(richDescription);
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    const applied = await fs.readFile(
+      path.join(workshopSkillsDir(), "rich-create-skill", "SKILL.md"),
+      "utf8",
+    );
+    expect(applied).toContain(richDescription);
+    expect(applied).toContain("Revised body.");
+    expect(applied).not.toContain("Short listing label");
   });
 
   it("quarantines unsafe proposals during apply", async () => {
@@ -1678,22 +1847,43 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow();
   });
 
-  it("rejects tampered support files during apply", async () => {
-    const workspaceDir = await makeWorkspace();
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      name: "Tamper Guard",
-      description: "Detect changed proposal support files",
-      content: "# Tamper Guard\n",
-      supportFiles: [
-        {
-          path: "references/check.md",
-          content: "Original\n",
-        },
-      ],
-    });
-    await fs.writeFile(
-      path.join(
+  it.each([
+    ["create", "changed"],
+    ["create", "missing"],
+    ["update", "changed"],
+    ["update", "missing"],
+  ] as const)(
+    "lists a %s with %s support files but refuses to inspect or apply it",
+    async (kind, damage) => {
+      const workspaceDir = await makeWorkspace();
+      const name = `Support Guard ${kind} ${damage}`;
+      if (kind === "update") {
+        await createOwnedSkill({
+          workspaceDir,
+          name,
+          description: "Keep the installed procedure",
+          body: "# Original procedure\n",
+        });
+      }
+      const input = {
+        workspaceDir,
+        description: "Detect damaged proposal support files",
+        content: "# Proposed procedure\n",
+        supportFiles: [{ path: "references/check.md", content: "Original\n" }],
+      };
+      const proposal =
+        kind === "create"
+          ? await proposeCreateSkill({ ...input, name })
+          : await proposeUpdateSkill({ ...input, skillName: name });
+      const original =
+        kind === "update" ? await fs.readFile(proposal.record.target.skillFile, "utf8") : undefined;
+      const healthy = await proposeCreateSkill({
+        workspaceDir,
+        name: "Healthy sibling",
+        description: "Keep other suggestions readable",
+        content: "# Healthy procedure\n",
+      });
+      const supportFile = path.join(
         stateDir,
         "skill-workshop",
         "proposals",
@@ -1701,17 +1891,39 @@ describe("skill workshop proposals", () => {
         path.dirname(proposal.record.draftFile),
         "references",
         "check.md",
-      ),
-      "Changed\n",
-      "utf8",
-    );
+      );
+      if (damage === "missing") {
+        await fs.unlink(supportFile);
+      } else {
+        await fs.writeFile(supportFile, "Changed\n", "utf8");
+      }
 
-    await expect(
-      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).rejects.toThrow("changed without updating metadata");
-    await expect(
-      fs.access(path.join(workshopSkillsDir(), "tamper-guard", "SKILL.md")),
-    ).rejects.toThrow();
-  });
+      await expect(listSkillProposals()).resolves.toMatchObject({
+        proposals: expect.arrayContaining([
+          expect.objectContaining({ id: proposal.record.id, status: "pending" }),
+          expect.objectContaining({ id: healthy.record.id, status: "pending" }),
+        ]),
+      });
+      await expect(inspectSkillProposal(healthy.record.id)).resolves.toMatchObject({
+        content: healthy.content,
+      });
+      const failure =
+        damage === "missing"
+          ? { code: "not-found" }
+          : {
+              message:
+                "Proposal support file changed without updating metadata: references/check.md",
+            };
+      await expect(inspectSkillProposal(proposal.record.id)).rejects.toMatchObject(failure);
+      await expect(
+        applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+      ).rejects.toMatchObject(failure);
+      if (kind === "update") {
+        await expect(fs.readFile(proposal.record.target.skillFile, "utf8")).resolves.toBe(original);
+      } else {
+        await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

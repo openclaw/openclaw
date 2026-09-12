@@ -485,9 +485,13 @@ describe("loadWebMedia", () => {
     expect(many.qualities).toEqual([70, 60, 50, 40]);
   });
 
-  it.each(["png", "jpeg", "webp"] as const)(
-    "preserves accepted original %s bytes and metadata with and without hard limits",
-    async (format) => {
+  it.each(
+    (["png", "jpeg", "webp"] as const).flatMap((format) =>
+      [format, "heic", "heif"].map((extension) => ({ format, extension })),
+    ),
+  )(
+    "preserves original $format bytes with .$extension filename and image limits",
+    async ({ format, extension }) => {
       const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
       const sourcePng = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
       let buffer =
@@ -504,11 +508,22 @@ describe("loadWebMedia", () => {
       }
       const original = Buffer.from(buffer);
       const contentType = `image/${format}`;
-      const fileName = `portrait.${format}`;
+      const fileName = `portrait.${extension}`;
+      const filePath = path.join(fixtureRoot, fileName);
+      await fs.writeFile(filePath, buffer);
       for (const imageCompression of [
         undefined,
         { models: [{ maxSidePx: 32, maxPixels: 1024 }] },
       ]) {
+        const loaded = await loadWebMedia(filePath, {
+          localRoots: [fixtureRoot],
+          maxBytes: 1024 * 1024,
+          imageCompression,
+        });
+        expect(loaded.buffer).toEqual(original);
+        expect(loaded.contentType).toBe(contentType);
+        expect(loaded.fileName).toBe(fileName);
+
         const result = await optimizeImageBufferForWebMedia({
           buffer,
           contentType,
@@ -1668,11 +1683,12 @@ describe("loadWebMedia", () => {
     async (swapOpen, expectedCode) => {
       const id = `signal-hardlink-race-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
       const filePath = path.join(stateDir, "media", "inbound", id);
-      const outsidePath = path.join(fixtureRoot, `${id}.outside`);
+      const outsidePath = path.join(stateDir, `${id}.outside`);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, "inside");
       await fs.writeFile(outsidePath, "outside-secret");
       let matchingOpens = 0;
+      let linkCreated = false;
       __setFsSafeTestHooksForTest({
         afterPreOpenLstat: async (openedPath) => {
           if (path.basename(openedPath) !== id) {
@@ -1684,6 +1700,7 @@ describe("loadWebMedia", () => {
           }
           await fs.rm(filePath);
           await fs.link(outsidePath, filePath);
+          linkCreated = true;
         },
       });
 
@@ -1693,6 +1710,7 @@ describe("loadWebMedia", () => {
           expectedCode,
         );
         expect(matchingOpens).toBe(swapOpen);
+        expect(linkCreated).toBe(true);
       } finally {
         await fs.rm(filePath, { force: true });
         await fs.rm(outsidePath, { force: true });

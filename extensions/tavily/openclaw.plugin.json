@@ -1,5 +1,6 @@
 {
   "id": "tavily",
+  "categories": ["web", "tools"],
   "activation": {
     "onStartup": false
   },

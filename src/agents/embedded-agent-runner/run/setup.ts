@@ -268,6 +268,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   runtimeModel: ProviderRuntimeModel;
   nativeModelOwned: boolean;
   contextWindow?: string;
+  contextTokenBudget?: number;
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;
@@ -277,9 +278,25 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
     return { effectiveModel: params.runtimeModel };
   }
   const resolved = resolveEffectiveRuntimeModel(params);
+  const contextTokenBudget = Math.min(
+    resolved.ctxInfo.tokens,
+    params.contextTokenBudget ?? resolved.ctxInfo.tokens,
+  );
+  const contextWindowInfo =
+    contextTokenBudget < resolved.ctxInfo.tokens
+      ? {
+          ...resolved.ctxInfo,
+          tokens: contextTokenBudget,
+          referenceTokens: resolved.ctxInfo.referenceTokens ?? resolved.ctxInfo.tokens,
+        }
+      : resolved.ctxInfo;
+  const effectiveModel =
+    contextTokenBudget < (resolved.effectiveModel.contextWindow ?? Infinity)
+      ? { ...resolved.effectiveModel, contextWindow: contextTokenBudget }
+      : resolved.effectiveModel;
   return {
-    contextWindowInfo: resolved.ctxInfo,
-    contextTokenBudget: resolved.ctxInfo.tokens,
-    effectiveModel: resolved.effectiveModel,
+    contextWindowInfo,
+    contextTokenBudget,
+    effectiveModel,
   };
 }

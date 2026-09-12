@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
-import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { renderControl } from "./model-control.test-support.ts";
 import { patchNewSessionPreference } from "./preferences.ts";
 
 // The closed list of gates allowed to block without a visible reason: the busy
@@ -32,7 +32,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     "blocks new sessions only for actionable $reason model availability",
     async ({ reason, message }) => {
       const { context, flow, place } = createDraftFixture({
-        request: async () => ({
+        modelCatalog: async () => ({
           models: [
             {
               id: "gpt-5.6-luna",
@@ -47,7 +47,12 @@ describe("DraftSubmissionFlow submit gates", () => {
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
         expect(
-          peekChatMetadata(context.gateway.snapshot.client!, { agentId: "main" })?.models,
+          renderControl(
+            place.modelControl,
+            context,
+            "main",
+            place.selectedAgent(),
+          ).querySelectorAll("[data-chat-model-option]"),
         ).toHaveLength(1),
       );
       flow.setMessage("Start this session");
@@ -64,7 +69,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const { context, flow, place } = createDraftFixture({
         methods: ["sessions.create", "sessions.dispatch"],
         scopes: ["operator.admin", "operator.read", "operator.write"],
-        request: async () => ({
+        modelCatalog: async () => ({
           models: [
             {
               id: "gpt-5.6-luna",

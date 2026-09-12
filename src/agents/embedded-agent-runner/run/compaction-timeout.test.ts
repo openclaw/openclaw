@@ -1,5 +1,6 @@
 // Coverage for timeout decisions and snapshots during compaction.
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   resolveRunTimeoutDuringCompaction,
@@ -127,14 +128,7 @@ describe("compaction-timeout helpers", () => {
   });
 
   it("keeps tool-result tails continuable after compaction timeout", () => {
-    const toolResult = castAgentMessage({
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "lookup",
-      content: [{ type: "text", text: "result" }],
-      isError: false,
-      timestamp: 1,
-    });
+    const toolResult = castAgentMessage(makeTextToolResult("call-1", "lookup", "result", false, 1));
     const pre = [
       castAgentMessage({ role: "user", content: "pre-user" }),
       castAgentMessage({ role: "assistant", content: "tool call" }),
@@ -257,14 +251,7 @@ describe("compaction-timeout helpers", () => {
     },
     {
       name: "tool result tail",
-      tail: castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "lookup",
-        content: [{ type: "text", text: "result" }],
-        isError: false,
-        timestamp: 2,
-      }),
+      tail: castAgentMessage(makeTextToolResult("call-1", "lookup", "result", false, 2)),
       expectedLength: 2,
     },
     {

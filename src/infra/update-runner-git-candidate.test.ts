@@ -155,7 +155,7 @@ describe("Git candidate activation", () => {
     );
     await fs.writeFile(
       path.join(remote, ".gitignore"),
-      "node_modules/\ndist/\n.artifacts\n.pnpm\ncache/\n*.tmp\n",
+      "node_modules/\ndist/\n.artifacts\n.pnpm\ncache/\n",
     );
     await git(remote, "add", ".");
     await git(remote, "commit", "-m", "base");
@@ -233,6 +233,15 @@ describe("Git candidate activation", () => {
     });
   }
 
+  async function expectNoRuntimeStagingPaths() {
+    const entries = await fs.readdir(root, { recursive: true });
+    expect(
+      entries.filter((entry) =>
+        /\.openclaw-update-[0-9a-f]{8}-[0-9a-f-]{27}\.tmp(?:\/|$)/u.test(entry),
+      ),
+    ).toEqual([]);
+  }
+
   it.each(["dev", "stable", "beta"] as const)(
     "does not stop or build an already-current %s checkout",
     async (channel) => {
@@ -245,6 +254,119 @@ describe("Git candidate activation", () => {
     },
   );
 
+  it("falls back when only the latest dev candidate requires an incompatible Node runtime", async () => {
+    const requiredMajor = Number.parseInt(process.versions.node.split(".")[0]!, 10) + 1;
+    const requiredEngine = `>=${requiredMajor}.0.0`;
+    const olderCandidate = await advanceRemote();
+    await fs.writeFile(
+      path.join(remote, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        packageManager: "pnpm@12.0.0",
+        engines: { node: requiredEngine },
+      }),
+    );
+    await git(remote, "add", "package.json");
+    await git(remote, "commit", "-m", "require newer node");
+    const incompatibleCandidate = await git(remote, "rev-parse", "HEAD");
+
+    const packageManagerCommands: string[][] = [];
+    const command = runCommand;
+    runCommand = async (argv, options) => {
+      if (["pnpm", "npm", "corepack", "bun"].includes(argv[0]!)) {
+        packageManagerCommands.push([...argv]);
+      }
+      return command(argv, options);
+    };
+
+    const result = await update();
+
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    const runtimeSteps = result.steps.filter((step) =>
+      step.name.startsWith("preflight node runtime ("),
+    );
+    expect(runtimeSteps).toHaveLength(1);
+    expect(runtimeSteps[0]).toMatchObject({
+      name: `preflight node runtime (${incompatibleCandidate.slice(0, 8)})`,
+      exitCode: 1,
+    });
+    const runtimeOutput = `${runtimeSteps[0]?.stdoutTail ?? ""}\n${runtimeSteps[0]?.stderrTail ?? ""}`;
+    expect(runtimeOutput).toContain(requiredEngine);
+    expect(runtimeOutput).toContain(process.execPath);
+    expect(runtimeOutput).toContain(process.versions.node);
+    expect(packageManagerCommands).toContainEqual(["pnpm", "build"]);
+    expect(
+      result.steps.some(
+        (step) => step.name === `preflight checkout (${olderCandidate.slice(0, 8)})`,
+      ),
+    ).toBe(true);
+    expect(events).toEqual(["build", "validate", "stop", "migrate"]);
+    expect(await git(root, "rev-parse", "HEAD")).toBe(olderCandidate);
+    await expectRuntime(root, olderCandidate);
+  });
+
+  it("rejects after all bounded rebased dev candidates require an incompatible Node runtime", async () => {
+    const upstreamBase = beforeSha;
+    const requiredMajor = Number.parseInt(process.versions.node.split(".")[0]!, 10) + 1;
+    const requiredEngine = `>=${requiredMajor}.0.0`;
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        packageManager: "pnpm@12.0.0",
+        engines: { node: requiredEngine },
+      }),
+    );
+    await git(root, "add", "package.json");
+    await git(root, "commit", "-m", "local change");
+    beforeSha = await git(root, "rev-parse", "HEAD");
+    await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), virtualStoreLayout);
+
+    const olderCandidate = await advanceRemote();
+    await fs.writeFile(path.join(remote, "latest.txt"), "latest\n");
+    await git(remote, "add", "latest.txt");
+    await git(remote, "commit", "-m", "latest candidate");
+    const latestCandidate = await git(remote, "rev-parse", "HEAD");
+
+    const packageManagerCommands: string[][] = [];
+    const command = runCommand;
+    runCommand = async (argv, options) => {
+      if (["pnpm", "npm", "corepack", "bun"].includes(argv[0]!)) {
+        packageManagerCommands.push([...argv]);
+      }
+      return command(argv, options);
+    };
+
+    const result = await update();
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "preflight-node-runtime-incompatible",
+    });
+    const runtimeSteps = result.steps.filter((step) =>
+      step.name.startsWith("preflight node runtime ("),
+    );
+    expect(runtimeSteps).toMatchObject(
+      [latestCandidate, olderCandidate, upstreamBase].map((sha) => ({
+        name: `preflight node runtime (${sha.slice(0, 8)})`,
+        exitCode: 1,
+      })),
+    );
+    for (const step of runtimeSteps) {
+      const output = `${step.stdoutTail ?? ""}\n${step.stderrTail ?? ""}`;
+      expect(output).toContain(requiredEngine);
+      expect(output).toContain(process.execPath);
+      expect(output).toContain(process.versions.node);
+    }
+    expect(packageManagerCommands).toEqual([]);
+    expect(stopped).toBe(false);
+    expect(events).toEqual([]);
+    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expectRuntime(root, beforeSha);
+  });
+
   it("stages an already-current checkout when converting a package install to Git", async () => {
     const result = await update({
       prepareGitExposure: async (candidateRoot, sha) => {
@@ -255,24 +377,70 @@ describe("Git candidate activation", () => {
     });
     expect(result.status, JSON.stringify(result)).toBe("ok");
     expect(events).toEqual(["build", "prepare exposure", "validate", "stop"]);
+    await expectRuntime(root, beforeSha);
+    await expectNoRuntimeStagingPaths();
   });
 
-  it.each([false, true])(
-    "preserves source changes made during validation without stopping the service (database inspection: %s)",
-    async (inspection) => {
+  it("does not exempt stale staging paths during initial admission", async () => {
+    const stale = path.join(root, "dist.openclaw-update-00000000-0000-0000-0000-000000000000.tmp");
+    await fs.mkdir(stale);
+    await fs.writeFile(path.join(stale, "candidate"), "operator-owned");
+    const result = await update();
+    expect(result).toMatchObject({ status: "skipped", reason: "dirty" });
+    expect(events).toEqual([]);
+    expect(await fs.readFile(path.join(stale, "candidate"), "utf8")).toBe("operator-owned");
+  });
+
+  it.each([
+    { mutation: "untracked", inspection: false },
+    { mutation: "untracked", inspection: true },
+    { mutation: "tracked", inspection: false },
+    { mutation: "head", inspection: false },
+    { mutation: "branch", inspection: false },
+  ] as const)(
+    "preserves $mutation source changes made during validation without stopping the service (database inspection: $inspection)",
+    async ({ mutation, inspection }) => {
       await advanceRemote();
       const result = await update({
         ...(inspection ? { inspectGitTarget: async () => undefined } : {}),
         validateCandidate: async () => {
-          await fs.writeFile(path.join(root, "operator-change.txt"), "keep this change");
+          if (mutation === "untracked") {
+            await fs.mkdir(path.join(root, "dist.openclaw-update-operator.tmp"));
+            await fs.writeFile(
+              path.join(root, "dist.openclaw-update-operator.tmp", "keep.txt"),
+              "keep this change",
+            );
+          } else if (mutation === "tracked") {
+            await fs.appendFile(path.join(root, "package.json"), "\n");
+          } else if (mutation === "head") {
+            await fs.writeFile(path.join(root, "operator-change.txt"), "committed change");
+            await git(root, "add", "operator-change.txt");
+            await git(root, "commit", "-m", "operator change");
+          } else {
+            await git(root, "checkout", "-b", "operator-branch");
+          }
         },
       });
       expect(result).toMatchObject({ status: "skipped", reason: "dirty" });
       expect(stopped).toBe(false);
-      expect(await fs.readFile(path.join(root, "operator-change.txt"), "utf8")).toBe(
-        "keep this change",
-      );
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      if (mutation === "untracked") {
+        expect(
+          await fs.readFile(
+            path.join(root, "dist.openclaw-update-operator.tmp", "keep.txt"),
+            "utf8",
+          ),
+        ).toBe("keep this change");
+      } else if (mutation === "tracked") {
+        expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toMatch(/\n$/u);
+      } else if (mutation === "head") {
+        expect(await git(root, "rev-parse", "HEAD")).not.toBe(beforeSha);
+      } else {
+        expect(await git(root, "branch", "--show-current")).toBe("operator-branch");
+      }
+      if (mutation !== "head") {
+        expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      }
+      await expectNoRuntimeStagingPaths();
     },
   );
 

@@ -11,29 +11,25 @@ function canPromptForInstallPolicyWarning(): boolean {
 
 export function resolveInstallPolicyWarningAcknowledgementCliOptions(params: {
   acknowledgeInstallPolicyWarning?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
   allowPrompt?: boolean;
-}): Pick<InstallSafetyOverrides, "dangerouslyForceUnsafeInstall" | "onInstallPolicyWarning"> {
+}): Pick<InstallSafetyOverrides, "onInstallPolicyWarning"> {
   const canPrompt =
     !params.acknowledgeInstallPolicyWarning &&
     params.allowPrompt !== false &&
     canPromptForInstallPolicyWarning();
-  return {
-    ...(params.dangerouslyForceUnsafeInstall ? { dangerouslyForceUnsafeInstall: true } : {}),
-    ...(params.acknowledgeInstallPolicyWarning
+  return params.acknowledgeInstallPolicyWarning
+    ? {
+        onInstallPolicyWarning: async () => ({ status: "approved" as const }),
+      }
+    : canPrompt
       ? {
-          onInstallPolicyWarning: async () => ({ status: "approved" as const }),
+          onInstallPolicyWarning: async (request: InstallPolicyWarningAcknowledgementRequest) => {
+            const targetName = sanitizeTerminalText(request.targetName);
+            const answer = await promptText(
+              `type: '${targetName}' to ${request.requestMode} anyway\n> `,
+            );
+            return answer.trim() === targetName ? { status: "approved" } : { status: "declined" };
+          },
         }
-      : canPrompt
-        ? {
-            onInstallPolicyWarning: async (request: InstallPolicyWarningAcknowledgementRequest) => {
-              const targetName = sanitizeTerminalText(request.targetName);
-              const answer = await promptText(
-                `type: '${targetName}' to ${request.requestMode} anyway\n> `,
-              );
-              return answer.trim() === targetName ? { status: "approved" } : { status: "declined" };
-            },
-          }
-        : {}),
-  };
+      : {};
 }

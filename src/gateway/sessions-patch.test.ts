@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -317,6 +318,31 @@ describe("gateway sessions patch", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  test("keeps manual renames independent of automatic device-label writes and clears", async () => {
+    const key = "agent:main:node-1234567890ab";
+    const autoLabel = "OpenClaw App · Pixel · 1234567890ab";
+    const label = "OpenClaw App · Release planning · 1234567890ab";
+    const store: Record<string, SessionEntry> = {};
+    const patch = async (fields: { label?: string | null; autoLabel?: string | null }) =>
+      expectPatchOk(await runPatch({ store, storeKey: key, patch: { key, ...fields } }));
+
+    expect(await patch({ autoLabel })).toMatchObject({ autoLabel });
+    await patch({ label });
+    // A reconnect can finish after a manual rename; the automatic writer owns a different field.
+    expect(await patch({ autoLabel: "Updated device" })).toMatchObject({
+      label,
+      autoLabel: "Updated device",
+    });
+    const cleared = await patch({ label: null });
+    expect(cleared.label).toBeUndefined();
+    expect(cleared.autoLabel).toBe("Updated device");
+    expect((await patch({ autoLabel: null })).autoLabel).toBeUndefined();
+
+    // Automatic names do not participate in unique custom-label lookup.
+    store.other = { sessionId: "other", updatedAt: 1, label: autoLabel, autoLabel };
+    expect(await patch({ autoLabel })).toMatchObject({ autoLabel });
+  });
+
   test("rejects creating a missing agent harness session through patch", async () => {
     const key = "agent:main:harness:codex:supervision:missing";
     const store: Record<string, SessionEntry> = {};
@@ -457,6 +483,58 @@ describe("gateway sessions patch", () => {
       }),
       "restore it first",
     );
+  });
+
+  test.each([
+    ["agent:main:dashboard:child", { spawnedBy: MAIN_SESSION_KEY }],
+    ["agent:main:dashboard:child", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:main:subagent:child", {}],
+  ] as const)("rejects child pins on %s with %j", async (key, lineage) => {
+    const original: SessionEntry = { sessionId: "child", updatedAt: 1, pinnedAt: 10, ...lineage };
+    expectPatchError(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { ...original } },
+        patch: { key, pinned: true },
+      }),
+      "cannot pin a child session; pin its parent session instead",
+    );
+  });
+
+  test.each([{ pinned: false }, { label: "Child task" }] as const)(
+    "clears stale child pins on a metadata or unpin patch: %j",
+    async (patch) => {
+      const key = "agent:main:dashboard:child";
+      const updated = expectPatchOk(
+        await runPatch({
+          storeKey: key,
+          store: {
+            [key]: { sessionId: "child", updatedAt: 1, pinnedAt: 10, spawnedBy: MAIN_SESSION_KEY },
+          },
+          patch: { key, ...patch },
+        }),
+      );
+      expect(updated.pinnedAt).toBeUndefined();
+    },
+  );
+
+  test.each([
+    ["agent:main:dashboard:root", { spawnedBy: "  ", parentSessionKey: "  " }],
+    ["agent:main:acp:root", {}],
+    ["agent:main:cron:root", {}],
+    [
+      "agent:main:dashboard:fork",
+      { forkSource: { sessionKey: MAIN_SESSION_KEY, sessionId: "parent" } },
+    ],
+  ] as const)("allows root pins on %s", async (key, lineage) => {
+    const pinned = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { sessionId: "root", updatedAt: 1, ...lineage } },
+        patch: { key, pinned: true },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
   });
 
   test("marks archived sessions unread and clears the marker when read", async () => {
@@ -1184,6 +1262,20 @@ describe("gateway sessions patch", () => {
     },
   );
 
+  test("pins a concrete model selection that equals the configured default", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: { agents: { defaults: { model: { primary: OPENAI_GPT_MODEL } } } },
+        patch: { key: MAIN_SESSION_KEY, model: OPENAI_GPT_MODEL },
+        loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL),
+      }),
+    );
+
+    expectModelSelection(entry, "openai", OPENAI_GPT_ID);
+    expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
+  });
+
   test("clears pending live model switches for model reset patches", async () => {
     const store = mainStoreEntry({
       sessionId: "sess-live-reset",
@@ -1205,7 +1297,7 @@ describe("gateway sessions patch", () => {
     );
 
     expectModelSelection(entry, undefined, undefined);
-    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.modelOverrideSource).toBe("default");
     expect(entry.liveModelSwitchPending).toBeUndefined();
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
@@ -1467,12 +1559,14 @@ describe("gateway sessions patch", () => {
               ? undefined
               : mainStoreEntry({
                   sessionId: sessionState === "existing" ? "sess-context" : undefined,
+                  contextBudgetStatus: contextBudgetStatusFixture(),
                 }),
           patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
           loadGatewayModelCatalog,
         }),
       );
       expect(entry.contextWindow).toBe("200k");
+      expect(entry.contextBudgetStatus).toBeUndefined();
       expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
 
       const invalid = await runPatch({
@@ -1995,9 +2089,8 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    // Selected model matches the target agent default, so no override is stored.
-    expect(entry.providerOverride).toBeUndefined();
-    expect(entry.modelOverride).toBeUndefined();
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
+    expect(entry.modelOverrideSource).toBe("user");
   });
 
   test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {

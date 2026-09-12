@@ -87,6 +87,21 @@ describe("parseIMessageNotification", () => {
     });
   });
 
+  it("preserves the provider-resolved sender contact name", () => {
+    const parsed = parseIMessageNotification({
+      message: {
+        sender: "+15551234567",
+        sender_name: "Alice",
+      },
+    });
+
+    expect(parsed?.sender_name).toBe("Alice");
+  });
+
+  it.each([42, true, {}, ["Alice"]])("rejects malformed sender contact names", (senderName) => {
+    expect(parseIMessageNotification({ message: { sender_name: senderName } })).toBeNull();
+  });
+
   it.each([42, true, {}, ["thread-parent"]])(
     "rejects malformed provider thread-originator GUIDs",
     (threadOriginatorGuid) => {

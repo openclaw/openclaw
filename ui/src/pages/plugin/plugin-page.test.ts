@@ -238,6 +238,35 @@ describe("PluginPage", () => {
     }
   });
 
+  it.each(["", "/openclaw"])(
+    "uses the development transport for a plugin frame and its auth probe at base %s",
+    async (basePath) => {
+      const gatewayUrl = `ws://gateway.example${basePath}`;
+      const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
+      vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+      const path = `${basePath}/plugins/external/panel?view=activity#settings`;
+      const refresh = vi.fn(async () =>
+        externalPluginConfig([
+          {
+            pluginId: "external-plugin",
+            path: `${proxyPath}${basePath}/plugins/external`,
+            match: "prefix",
+          },
+        ]),
+      );
+      const page = createExternalPluginPage(refresh, true, path);
+      document.body.append(page);
+      try {
+        await waitForFast(() =>
+          expect(page.querySelector("iframe")?.getAttribute("src")).toBe(`${proxyPath}${path}`),
+        );
+        expect(page.probeCalls).toEqual([`${proxyPath}${path}`]);
+      } finally {
+        page.remove();
+      }
+    },
+  );
+
   it("keeps the frame unmounted when browser policy blocks the sandbox cookie", async () => {
     const refresh = vi.fn(async () => externalPluginConfig());
     const page = createExternalPluginPage(refresh);

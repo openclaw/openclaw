@@ -14,6 +14,7 @@ import {
   executeConfigExternalMutation,
   loadConfig,
   refreshDraft,
+  refreshConfigAfterMutation,
   submitConfigDraft,
   type ConfigSubmission,
   type ConfigSubmissionObserver,
@@ -102,6 +103,7 @@ export function createConfigWriteCoordinator({
   // App-updater interlock: config writes or gateway restarts mid-update can
   // corrupt the install, so all writes pause until the updater settles.
   let writesSuspended = false;
+  let refreshWriteAdmission: (() => Promise<void>) | undefined;
   let writesResumed: (() => void) | null = null;
   let writesResumedPromise: Promise<void> = Promise.resolve();
   const canDispatchConfigMutation = (method: ConfigMethod): boolean => {
@@ -343,7 +345,7 @@ export function createConfigWriteCoordinator({
     unavailable: T,
     options: { flushScheduledDraft?: boolean; canDispatch?: () => boolean } = {},
   ): Promise<T> => {
-    if (writesSuspended) {
+    if (writesSuspended && !refreshWriteAdmission) {
       return Promise.resolve(unavailable);
     }
     const client = state.client;
@@ -357,6 +359,17 @@ export function createConfigWriteCoordinator({
     // to the CURRENT connection epoch; only genuine queuing pays the hop.
     const start = () =>
       run(async () => {
+        if (writesSuspended && refreshWriteAdmission && !isDisposed()) {
+          // The Gateway classifies driver liveness and retained recovery before this interlock can open.
+          await refreshWriteAdmission();
+          if (!writesSuspended) {
+            if (options.flushScheduledDraft) {
+              flushScheduledAutoSave();
+            } else {
+              cancelScheduledAutoSave();
+            }
+          }
+        }
         // Drain before the explicit op — otherwise an apply could race a
         // pending config.set on the same base hash into a CAS failure.
         if (inFlight) {
@@ -568,7 +581,8 @@ export function createConfigWriteCoordinator({
       });
       clearAutoSaveDraftConnection();
     },
-    setWritesSuspended: (suspended) => {
+    setWritesSuspended: (suspended, refreshAdmission) => {
+      refreshWriteAdmission = refreshAdmission;
       if (writesSuspended === suspended) {
         return;
       }
@@ -695,7 +709,10 @@ export function createConfigWriteCoordinator({
       const mutationConnectionEpoch = currentConfigConnectionEpoch(state);
       while (true) {
         if (options.waitForWritesResumed && writesSuspended && !isDisposed()) {
-          await writesResumedPromise;
+          await refreshWriteAdmission?.();
+          if (writesSuspended && !isDisposed()) {
+            await writesResumedPromise;
+          }
         }
         const unavailable: RuntimeConfigExternalMutationResult<T> = {
           ok: false,
@@ -723,8 +740,7 @@ export function createConfigWriteCoordinator({
               task,
               options,
               async () => {
-                // Do not join a config.get that started before the external RPC.
-                const refresh = run(() => loadConfig(state));
+                const refresh = run(() => refreshConfigAfterMutation(state));
                 void trackLoad("config", refresh);
                 return await refresh;
               },

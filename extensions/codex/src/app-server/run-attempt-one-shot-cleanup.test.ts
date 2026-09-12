@@ -23,7 +23,11 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
-import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
+import {
+  createInferenceReadyClientHarness,
+  createCodexInferenceReadResponses,
+  waitForHarnessRequest,
+} from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -69,7 +73,7 @@ describe("Codex one-shot cleanup receipts", () => {
         "thread/start": threadStartResult(),
         "turn/start": turnStartResult(),
       };
-      const harness = createClientHarness({
+      const harness = createInferenceReadyClientHarness({
         onWrite: (line, send) => {
           const request = JSON.parse(line) as { id?: number; method: string };
           if (request.id === undefined) {
@@ -123,7 +127,7 @@ describe("Codex one-shot cleanup receipts", () => {
   it.each(["active lease", "missing entry"] as const)(
     "records uncertain one-shot cleanup when shared retirement is refused: %s",
     async (reason) => {
-      const harness = createClientHarness();
+      const harness = createInferenceReadyClientHarness();
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       let releasePeer: (() => void) | undefined;
       const run = runOneShot(harness.client);
@@ -202,7 +206,7 @@ ${shutdown === "retired-command" ? 'await new Promise(resolve => descendant.once
 descendant.unref();
 const results = ${JSON.stringify({
           initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
-          "config/read": { config: {}, origins: {}, layers: [] },
+          ...createCodexInferenceReadResponses(),
           "configRequirements/read": { requirements: null },
           "thread/start": threadStartResult(),
           "turn/start": turnStartResult(),

@@ -118,6 +118,7 @@ export function assertSlackCodexApprovalModelSupported(modelRef: string) {
 
 export type SlackQaMessageScenarioRun = {
   afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
+  captureBeforeReply?: (messages: readonly SlackObservedMessage[]) => boolean;
   cleanup?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<void>;
   kind?: "message";
   expectReply: boolean;
@@ -199,6 +200,7 @@ export type SlackQaConfigOverrides = {
   messageTool?: boolean;
   progress?: {
     commentary?: boolean;
+    style?: "compact";
     toolProgress: boolean;
     verboseDefault?: "off" | "on" | "full";
   };

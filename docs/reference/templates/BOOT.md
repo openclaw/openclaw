@@ -20,4 +20,4 @@ This hook turns off normal final-response delivery. If a checklist item sends a 
 ## Related
 
 - [Agent workspace](/concepts/agent-workspace)
-- [Hooks](/automation/hooks#boot-md)
+- [Hooks](/automation/hooks/bundled-hooks#boot-md)

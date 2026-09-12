@@ -17,6 +17,7 @@ import {
 } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
@@ -991,11 +992,7 @@ describe("buildSessionEntry", () => {
     const jsonlLines = [
       JSON.stringify({
         type: "message",
-        message: {
-          role: "user",
-          content: "Hello",
-          timestamp: 8_640_000_000_000_001,
-        },
+        message: makeUserMessage("Hello", 8_640_000_000_000_001),
       }),
     ];
     const filePath = path.join(tmpDir, "invalid-timestamp-session.jsonl");

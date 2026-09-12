@@ -1,4 +1,5 @@
 /** Type contracts for plugin-contributed embedding providers. */
+import type { MemorySearchDeadlineControlOptions } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 
@@ -16,7 +17,7 @@ export type EmbeddingInput =
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
-};
+} & MemorySearchDeadlineControlOptions;
 
 /** Runtime metadata returned with a created embedding provider. */
 export type EmbeddingProviderRuntime = {

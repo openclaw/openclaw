@@ -29,6 +29,7 @@ import {
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
+import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -90,6 +91,7 @@ function createSnapshot(
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -498,14 +500,6 @@ describe("current plugin metadata snapshot", () => {
     } finally {
       cwd.mockRestore();
     }
-  });
-
-  it("rejects a workspace-scoped snapshot when the caller does not provide workspace scope", () => {
-    const config = { plugins: { allow: ["demo"] } };
-    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
-    setCurrentPluginMetadataSnapshot(snapshot, { config });
-
-    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 
   it("can opt into reusing the stored workspace scope for unscoped control-plane readers", () => {

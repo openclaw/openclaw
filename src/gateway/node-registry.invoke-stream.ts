@@ -7,6 +7,7 @@ import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
 /** A node may emit this only before invoking a handler or sending any progress. */
@@ -31,7 +32,7 @@ export type PendingInvoke = {
   }) => void;
   reject: (err: Error) => void;
   deadlineAtMs?: number;
-  hardTimer?: ReturnType<typeof setTimeout>;
+  cancelHardDeadline?: () => void;
   idleTimer?: ReturnType<typeof setTimeout>;
   idleTraceContext?: DiagnosticTraceContext;
   idleTimeoutMs?: number;
@@ -158,6 +159,7 @@ export class NodeInvokeStreamController {
     requestId: string;
     pending: PendingInvoke;
     timeoutMs: number;
+    deadlineAtMs?: number;
     idleTimeoutMs: number;
     signal?: AbortSignal;
   }): void {
@@ -165,14 +167,20 @@ export class NodeInvokeStreamController {
     if (continuation) {
       params.pending.admissionContinuation = continuation;
     }
-    if (params.timeoutMs > 0) {
-      params.pending.deadlineAtMs = Date.now() + params.timeoutMs;
-    }
+    params.pending.deadlineAtMs =
+      params.deadlineAtMs ??
+      (params.timeoutMs > 0 ? performance.now() + params.timeoutMs : undefined);
     this.options.pendingInvokes.set(params.requestId, params.pending);
-    if (params.timeoutMs > 0) {
-      params.pending.hardTimer = setTimeout(() => {
-        this.settleTimeout(params.requestId, params.pending);
-      }, params.timeoutMs);
+    if (params.pending.deadlineAtMs !== undefined) {
+      params.pending.cancelHardDeadline = scheduleAbsoluteDeadline(
+        params.pending.deadlineAtMs,
+        () => this.settleTimeout(params.requestId, params.pending),
+        () => performance.now(),
+      );
+      // Arming an already elapsed deadline can settle and release this owner synchronously.
+      if (this.options.pendingInvokes.get(params.requestId) !== params.pending) {
+        return;
+      }
     }
     if (params.pending.onProgress && params.idleTimeoutMs > 0) {
       params.pending.idleTimeoutMs = params.idleTimeoutMs;
@@ -304,9 +312,8 @@ export class NodeInvokeStreamController {
   }
 
   clearTimers(pending: PendingInvoke): void {
-    if (pending.hardTimer) {
-      clearTimeout(pending.hardTimer);
-    }
+    pending.cancelHardDeadline?.();
+    pending.cancelHardDeadline = undefined;
     if (pending.idleTimer) {
       clearTimeout(pending.idleTimer);
     }
@@ -345,7 +352,7 @@ export class NodeInvokeStreamController {
   }
 
   private settleIfExpired(requestId: string, pending: PendingInvoke): boolean {
-    if (pending.deadlineAtMs === undefined || Date.now() < pending.deadlineAtMs) {
+    if (pending.deadlineAtMs === undefined || performance.now() < pending.deadlineAtMs) {
       return false;
     }
     this.settleTimeout(requestId, pending);

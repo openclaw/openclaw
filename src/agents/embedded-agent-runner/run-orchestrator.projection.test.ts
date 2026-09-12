@@ -166,6 +166,7 @@ describe("embedded retry transcript ownership", () => {
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+      vi.spyOn(getAiTransportHost().plugin, "resolveTransportTurnState").mockReturnValue(undefined);
       vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(fetchMock);
       const history = [
         { role: "user", content: "Check the results.", timestamp: 1 },

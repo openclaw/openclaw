@@ -119,16 +119,6 @@ function resolveAllowedExternalCliAuthProfiles(params: {
   );
 }
 
-function resolveExternalCliAuthProfileMap(params: {
-  store: AuthProfileStore;
-  env?: NodeJS.ProcessEnv;
-  externalCli?: ExternalCliOverlayOptions;
-}): ExternalAuthProfileMap {
-  return new Map(
-    resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
-  );
-}
-
 function hasPersistableExternalCliSyncCandidate(
   store: AuthProfileStore,
   params?: ExternalCliOverlayOptions,
@@ -171,7 +161,11 @@ export function syncPersistedExternalCliAuthProfiles(
   for (const profile of persistedProfiles) {
     const target = next ?? store;
     const existing = target.profiles[profile.profileId];
-    if (existing?.type === "oauth" && areOAuthCredentialsEquivalent(existing, profile.credential)) {
+    if (
+      existing?.type === "oauth" &&
+      existing.authFlow === profile.credential.authFlow &&
+      areOAuthCredentialsEquivalent(existing, profile.credential)
+    ) {
       continue;
     }
     next ??= cloneAuthProfileStore(store);
@@ -208,8 +202,9 @@ export function createExternalAuthRuntime(
         store: params.store,
       },
     });
-    const externalCli = params.externalCli;
-    const resolved = resolveExternalCliAuthProfileMap({ ...params, externalCli });
+    const resolved = new Map(
+      resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
+    );
     const runtimeExternalCliProfileIds = new Set(
       [...resolved.values()]
         .filter((profile) => profile.persistence !== "persisted")

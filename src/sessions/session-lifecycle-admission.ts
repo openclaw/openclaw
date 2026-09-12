@@ -14,8 +14,10 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { createLifecycleDiagnosticOperation } from "./session-lifecycle-diagnostics.js";
 import { decodeSessionIdentity, normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import { createSessionIdentityLockRunner } from "./session-lifecycle-locks.js";
 import {
   clearSessionWorkAdmissionHandoffs,
   createSessionWorkAdmissionHandoff,
@@ -88,8 +90,6 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
   }),
 );
 const {
-  lifecycleQueues: SESSION_LIFECYCLE_QUEUES,
-  mutationQueues: SESSION_LIFECYCLE_MUTATION_QUEUES,
   activeAdmissions: ACTIVE_SESSION_WORK_ADMISSIONS,
   activeMutations: ACTIVE_SESSION_LIFECYCLE_MUTATIONS,
   activeMutationKinds: ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS,
@@ -101,25 +101,9 @@ const {
 const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
   (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
 
-async function runWithSessionIdentityLocks<T>(
-  identities: readonly string[],
-  index: number,
-  run: () => Promise<T>,
-  kind: "lifecycle" | "mutation" = "lifecycle",
-): Promise<T> {
-  const identity = identities[index];
-  if (!identity) {
-    return await run();
-  }
-  return await runQueuedStoreWrite({
-    queues: kind === "mutation" ? SESSION_LIFECYCLE_MUTATION_QUEUES : SESSION_LIFECYCLE_QUEUES,
-    storePath: identity,
-    label:
-      kind === "mutation" ? "runExclusiveSessionLifecycleMutation" : "runExclusiveSessionLifecycle",
-    reentrant: true,
-    fn: async () => await runWithSessionIdentityLocks(identities, index + 1, run, kind),
-  });
-}
+const runWithSessionIdentityLocks = createSessionIdentityLockRunner(
+  SESSION_LIFECYCLE_ADMISSION_STATE,
+);
 
 function hasActiveSessionLifecycleMutation(identities: readonly string[]): boolean {
   return identities.some((identity) => (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) > 0);
@@ -198,13 +182,19 @@ async function runExclusiveSessionLifecycle<T>(params: {
       await waitForNormalizedSessionLifecycleMutationIdle(identities, params.signal);
       continue;
     }
-    const attempt = await runWithSessionIdentityLocks(identities, 0, async () => {
-      params.signal?.throwIfAborted();
-      if (hasActiveSessionLifecycleMutation(identities)) {
-        return { blocked: true as const };
-      }
-      return { blocked: false as const, value: await params.run() };
-    });
+    const diagnostic = createLifecycleDiagnosticOperation("lifecycle", params.signal);
+    const attempt = await runWithSessionIdentityLocks(
+      identities,
+      async () => {
+        params.signal?.throwIfAborted();
+        if (hasActiveSessionLifecycleMutation(identities)) {
+          return { blocked: true as const };
+        }
+        return { blocked: false as const, value: await params.run() };
+      },
+      diagnostic,
+      "run",
+    );
     if (!attempt.blocked) {
       return attempt.value;
     }
@@ -231,35 +221,38 @@ export async function runExclusiveSessionLifecycleMutation<T>(
   const signal = params.signal;
   signal?.throwIfAborted();
   const callerAdmissions = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
+  const diagnostic = createLifecycleDiagnosticOperation(params.kind ?? "mutation", signal);
   const mutationRun: SessionLifecycleMutationOwner = { identities };
   let mutationActivated = false;
   let removeAbortListener = () => {};
   let releaseWorkAdmissions: (() => void) | undefined;
   const mutation = runWithSessionIdentityLocks(
     identities,
-    0,
     async () =>
       await CURRENT_SESSION_WORK_ADMISSIONS.run(callerAdmissions, async () => {
-        await runWithSessionIdentityLocks(identities, 0, async () => {
-          signal?.throwIfAborted();
-          mutationActivated = true;
-          removeAbortListener();
-          ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.add(mutationRun);
-          for (const identity of identities) {
-            ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(
-              identity,
-              (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) + 1,
-            );
-            if (params.kind) {
-              const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity) ?? new Map();
-              kinds.set(params.kind, (kinds.get(params.kind) ?? 0) + 1);
-              ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.set(identity, kinds);
+        await runWithSessionIdentityLocks(
+          identities,
+          async () => {
+            signal?.throwIfAborted();
+            mutationActivated = true;
+            removeAbortListener();
+            ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.add(mutationRun);
+            for (const identity of identities) {
+              const activeCount = ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0;
+              ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, activeCount + 1);
+              if (params.kind) {
+                const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity) ?? new Map();
+                kinds.set(params.kind, (kinds.get(params.kind) ?? 0) + 1);
+                ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.set(identity, kinds);
+              }
             }
-          }
-        });
+          },
+          diagnostic,
+        );
         // Cancellation may abandon a queued contender, but never an active
         // mutation whose caller must observe cleanup and completion.
         try {
+          diagnostic?.mark("prepare");
           await params.prepare?.({
             // The same mutation owner fences ingress through every awaited cleanup step.
             // Removing this owner below reopens admission for an explicit later request.
@@ -268,45 +261,54 @@ export async function runExclusiveSessionLifecycleMutation<T>(
               releaseWorkAdmissions = closeNormalizedSessionWorkAdmissions(identities, reason);
             },
           });
-          return await runWithSessionIdentityLocks(identities, 0, params.run);
+          diagnostic?.mark("run-admission");
+          return await runWithSessionIdentityLocks(identities, params.run, diagnostic, "run");
         } finally {
           // Resource finalization is part of the mutation: successors remain
           // fenced until rollback or exact-generation cleanup has completed.
           try {
+            diagnostic?.mark("finalize");
             await params.finalize?.();
           } finally {
-            await runWithSessionIdentityLocks(identities, 0, async () => {
-              for (const identity of identities) {
-                if (params.kind) {
-                  const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity);
-                  const remainingKindCount = (kinds?.get(params.kind) ?? 1) - 1;
-                  if (remainingKindCount > 0) {
-                    kinds?.set(params.kind, remainingKindCount);
-                  } else {
-                    kinds?.delete(params.kind);
-                    if (kinds?.size === 0) {
-                      ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.delete(identity);
+            diagnostic?.mark("release");
+            await runWithSessionIdentityLocks(
+              identities,
+              async () => {
+                for (const identity of identities) {
+                  if (params.kind) {
+                    const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity);
+                    const remainingKindCount = (kinds?.get(params.kind) ?? 1) - 1;
+                    if (remainingKindCount > 0) {
+                      kinds?.set(params.kind, remainingKindCount);
+                    } else {
+                      kinds?.delete(params.kind);
+                      if (kinds?.size === 0) {
+                        ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.delete(identity);
+                      }
                     }
                   }
+                  const remaining = (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 1) - 1;
+                  if (remaining > 0) {
+                    ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, remaining);
+                    continue;
+                  }
+                  ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
+                  const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
+                  SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
+                  for (const resolve of waiters ?? []) {
+                    resolve();
+                  }
                 }
-                const remaining = (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 1) - 1;
-                if (remaining > 0) {
-                  ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, remaining);
-                  continue;
-                }
-                ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
-                const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
-                SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
-                for (const resolve of waiters ?? []) {
-                  resolve();
-                }
-              }
-              ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
-              releaseWorkAdmissions?.();
-            });
+                ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
+                releaseWorkAdmissions?.();
+              },
+              diagnostic,
+            );
           }
         }
       }),
+    diagnostic,
+    "activation",
     "mutation",
   );
   if (!signal) {
@@ -407,10 +409,7 @@ export function isCompetingSessionWorkAdmissionActive(
   );
 }
 
-type SessionWorkAdmissionReleaseParams = {
-  scope: string;
-  identities: Iterable<string | undefined>;
-};
+type SessionWorkAdmissionReleaseParams = SessionLifecycleMutationTarget;
 
 /** Completion of the currently active turns that own a session. */
 export function getSessionWorkAdmissionRelease(
