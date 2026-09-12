@@ -84,7 +84,11 @@ describe("managed Responses transport service-tier pricing", () => {
     const stream = await createOpenAIResponsesTransportStreamFn()(
       model,
       { messages: [], tools: [] },
-      { apiKey: "test-key", sessionId: "session-pricing", transport: "sse" } as never,
+      {
+        apiKey: "test-key",
+        sessionId: "session-pricing",
+        transport: "sse",
+      } as never,
     );
     const result = await stream.result();
     // Base cost 2 + 10 = 12; gpt-5.5 priority is 2.5x = 30 (flat 2x would be 24).

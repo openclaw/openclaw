@@ -1,4 +1,6 @@
 import type { Part } from "@google/genai";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
+import { withRequestImageHistory } from "../internal/request-image-history.js";
 import type { ProviderContext, ProviderModel, VideoContent } from "../provider-types.js";
 import {
   coerceTransportToolCallArguments,
@@ -124,12 +126,18 @@ export function projectGoogleMessages(params: {
               params.videoPart?.(item) ?? { text: "(video omitted: native video slot unavailable)" }
             );
           }
-          return {
-            inlineData: {
-              mimeType: item.mimeType,
-              data: item.data,
+          // Carries the image's origin alongside the encoded part, so a later
+          // boundary can still tell which turn this image came from.
+          return withRequestImageHistory(
+            {
+              inlineData: {
+                mimeType: item.mimeType,
+                data: item.data,
+              },
             },
-          };
+            readRuntimeImageHistory(item),
+            "google",
+          );
         });
         const visibleParts =
           managed && !model.input.includes("image")

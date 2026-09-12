@@ -7,6 +7,7 @@ import type {
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import type { Context, Model, Tool } from "@openclaw/llm-core";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createAnthropicInlineImageBudget,
@@ -14,6 +15,7 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
+import { withRequestImageHistory } from "../internal/request-image-history.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
   bindsClaudeThinkingPrefix,
@@ -185,14 +187,20 @@ export async function convertAnthropicMessages(
               type: "text",
               text: sanitizeTransportPayloadText(item.text),
             }
-          : {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: resolveAnthropicImageMediaType(item.mimeType),
-                data: item.data,
-              },
-            },
+          : // Carries the image's origin alongside the encoded block, so a later
+            // boundary can still tell which turn this image came from.
+            withRequestImageHistory(
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: resolveAnthropicImageMediaType(item.mimeType),
+                  data: item.data,
+                },
+              } satisfies ImageBlockParam,
+              readRuntimeImageHistory(item),
+              "anthropic",
+            ),
       );
       let filteredBlocks =
         !managed || model.input.includes("image")

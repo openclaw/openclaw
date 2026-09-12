@@ -5,8 +5,10 @@ import type {
   MessageParam,
   RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages.js";
+// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import type { AnthropicContextManagementOptions, AnthropicOptions } from "../provider-options.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
@@ -238,11 +240,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         requestOptions,
         directApiKeyBetaHeader,
       );
+      // Captured after the request is shaped, so it holds exactly the images this
+      // call sends and can re-attach their origins once onPayload has run.
+      const imageHistory = createRequestImageHistoryProjector(params, "anthropic");
       const nextParams = await requestOptions?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
+      params = imageHistory.bind(params);
       applyClaudeRequestContract(params, model);
+      params = imageHistory.project(params);
+      // Derived from the projected params so it describes the request actually sent.
       const betaHeader = resolveAnthropicContextManagementBetaHeader(
         params,
         directApiKeyBetaHeader,

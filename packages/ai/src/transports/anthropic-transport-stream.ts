@@ -15,6 +15,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import type { AnthropicOptions } from "../provider-options.js";
 import {
   isAnthropicOAuthApiKey,
@@ -753,11 +754,19 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           transportOptions,
           directApiKeyBetaHeader,
         );
+        // Captured after the request is shaped, so the projector holds exactly the
+        // images this call sends.
+        const imageHistory = createRequestImageHistoryProjector(params, "anthropic");
+
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
         }
+        params = imageHistory.bind(params);
         applyClaudeRequestContract(params, model);
+        params = imageHistory.project(params);
+        // Derived from the projected params so the headers describe the request
+        // that is actually sent.
         const betaHeader = resolveAnthropicContextManagementBetaHeader(
           params,
           directApiKeyBetaHeader,

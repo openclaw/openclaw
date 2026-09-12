@@ -50,7 +50,7 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   /** Explicit human selections bound to UTF-16 offsets in text. */
   mentions?: readonly HumanMention[];
   media?: readonly PersistedUserTurnMediaInput[] | null;
-  /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
+  /** Native placement; persistence retains only slots backed by media facts. */
   mediaImageLayout?: {
     slots: readonly {
       kind: "inline" | "offloaded";
@@ -200,6 +200,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  getRuntimeMediaImageLayout?: () => NonNullable<UserTurnInput["mediaImageLayout"]> | undefined;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: { runId: string; assertCurrent: () => void }) => Promise<boolean>;
   getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;

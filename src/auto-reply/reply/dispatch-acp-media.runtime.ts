@@ -7,3 +7,4 @@ export {
 } from "../../media-understanding/attachments.normalize.js";
 export { isMediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 export { resolveMediaAttachmentLocalRoots } from "../../media-understanding/runner.js";
+export { isImageDecodable } from "../../media/image-ops.js";

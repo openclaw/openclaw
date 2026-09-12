@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import { readRuntimePromptImageProvenance } from "../../media/runtime-prompt-image-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { mergePreparedUserTurnMessageForRuntime } from "../../sessions/user-turn-transcript.message.js";
 import type {
@@ -162,19 +162,28 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     images?: ImageContent[],
     preparedMessage?: PersistedUserTurnMessage,
   ): PersistedUserTurnMessage {
-    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
-    const message = {
+    // One read carries both the fact ownership and the replay placement, so the
+    // metadata is written once and the two cannot disagree about the same images.
+    const provenance = readRuntimePromptImageProvenance(images);
+    const runtimeMessage = {
       role: "user",
       content: this.createUserContent(text, images),
       timestamp: Date.now(),
-      ...(imageFactIndexes ? { __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes } } : {}),
+      ...(provenance
+        ? {
+            __openclaw: {
+              mediaImageBlockFactIndexes: provenance.imageFactIndexes,
+              mediaImageLayout: provenance.mediaImageLayout,
+            },
+          }
+        : {}),
     } satisfies PersistedUserTurnMessage;
     // Admission facts must precede accepted steering input. Keep expanded runtime
     // content separate from the prepared display text used during persistence.
     return Object.assign(
-      message,
-      mergePreparedUserTurnMessageForRuntime({ runtimeMessage: message, preparedMessage }),
-      { content: message.content },
+      runtimeMessage,
+      mergePreparedUserTurnMessageForRuntime({ runtimeMessage, preparedMessage }),
+      { content: runtimeMessage.content },
     );
   }
 

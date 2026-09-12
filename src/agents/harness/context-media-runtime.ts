@@ -6,13 +6,13 @@ import { prepareFileContextFromMedia } from "../../media-understanding/file-cont
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../../media/media-facts.js";
 import {
+  readPersistedImageBlockFactIndexes,
+  readPersistedMediaImageLayout,
+} from "../../sessions/user-turn-transcript.metadata.js";
+import {
   buildPromptImageFailureNotice,
   detectAndLoadPromptImages,
 } from "../embedded-agent-runner/run/images.js";
-import {
-  readPersistedImageBlockFactIndexes,
-  readPersistedMediaImageLayout,
-} from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";

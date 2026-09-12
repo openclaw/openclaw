@@ -1,6 +1,7 @@
 // OpenAI completions provider adapts chat completions to the agent runtime.
 import type OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
 // OpenAI completions provider adapts chat completions to the agent runtime.
@@ -81,10 +82,13 @@ export const streamOpenAICompletions: StreamFunction<
         compat,
         cacheRetention,
       });
+      const imageHistory = createRequestImageHistoryProjector(params, "chat");
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
+      params = imageHistory.bind(params);
+      params = imageHistory.project(params);
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
         signal: firstEventAbort.signal,

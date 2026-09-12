@@ -10,6 +10,7 @@ import {
 /**
  * Shared utilities for Google Generative AI and Google Vertex providers.
  */
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -108,11 +109,15 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
+    const imageHistory = createRequestImageHistoryProjector(requestParams, "google");
     const nextParams = await options?.onPayload?.(requestParams, model);
     if (nextParams !== undefined) {
       requestParams = nextParams as GenerateContentParameters;
     }
-    const googleStream = await client.models.generateContentStream(requestParams);
+    requestParams = imageHistory.bind(requestParams);
+    const googleStream = await client.models.generateContentStream(
+      imageHistory.project(requestParams),
+    );
     const googleIterator = googleStream[Symbol.asyncIterator]();
     await notifyProviderStreamOpened({
       options,

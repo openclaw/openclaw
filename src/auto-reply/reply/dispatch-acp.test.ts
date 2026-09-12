@@ -245,6 +245,7 @@ vi.mock("./dispatch-acp-media.runtime.js", async () => {
     isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
       error instanceof Error && error.name === "MediaUnderstandingSkipError",
     normalizeAttachments: attachmentNormalization.normalizeAttachments,
+    isImageDecodable: async () => true,
     resolveMediaAttachmentLocalRoots: (params: {
       cfg: { channels?: Record<string, { attachmentRoots?: string[] } | undefined> };
       ctx: { Provider?: string; Surface?: string };
@@ -2020,6 +2021,7 @@ describe("tryDispatchAcpReplyCore", () => {
             false,
           isImageAttachment,
           normalizeAttachments: () => [],
+          isImageDecodable: async () => true,
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -2067,6 +2069,7 @@ describe("tryDispatchAcpReplyCore", () => {
           false,
         isImageAttachment,
         normalizeAttachments,
+        isImageDecodable: async () => true,
         resolveMediaAttachmentLocalRoots: () => [],
       },
     });
@@ -2130,6 +2133,7 @@ describe("tryDispatchAcpReplyCore", () => {
           normalizeAttachments: (ctx) => [
             { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
           ],
+          isImageDecodable: async () => true,
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -2186,6 +2190,7 @@ describe("tryDispatchAcpReplyCore", () => {
           normalizeAttachments: (ctx) => [
             { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 1 },
           ],
+          isImageDecodable: async () => true,
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -2240,6 +2245,7 @@ describe("tryDispatchAcpReplyCore", () => {
           normalizeAttachments: (ctx) => [
             { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
           ],
+          isImageDecodable: async () => true,
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -2292,6 +2298,7 @@ describe("tryDispatchAcpReplyCore", () => {
           normalizeAttachments: (ctx) => [
             { url: ctx.media?.[0]?.url, mime: ctx.media?.[0]?.contentType, index: 0 },
           ],
+          isImageDecodable: async () => true,
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });

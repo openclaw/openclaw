@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withRuntimeImageHistory } from "@openclaw/media-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -59,12 +61,13 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
       stop: vi.fn(),
     };
     const input = turn("media-policy");
-    const prepare = async (media: MediaFact[]) =>
+    const prepare = async (media: MediaFact[], extra: Partial<SessionPlacementTurnParams> = {}) =>
       await prepareWorkerTurnMedia({
         turn: {
           ...input,
           prompt: "Inspect the attached files",
           media,
+          ...extra,
           config: {
             tools: { fs: { workspaceOnly } },
             agents: { defaults: { workspace: gatewayWorkspace } },
@@ -106,6 +109,40 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
         await preparation;
         expect(f.staged).toEqual([data]);
       }
+    },
+  );
+
+  // The worker content contract carries no origin field, so a retained image's
+  // source can reach the worker's model only as a note projected at this handoff.
+  it.each([true, false])(
+    "notes a retained image's source only when the worker receives it (vision=%s)",
+    async (modelHasVision) => {
+      const f = await fixture(false);
+      const retained = withRuntimeImageHistory(
+        {
+          type: "image" as const,
+          data: createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }).toString("base64"),
+          mimeType: "image/png",
+        },
+        { key: "m-ada", sourceText: "from Ada, message m-ada" },
+      );
+
+      const prepared = await f.prepare([], {
+        images: [retained],
+        imageOrder: ["inline"],
+        modelHasVision,
+      });
+
+      // A prompt left with one text part is sent as that string.
+      const parts =
+        typeof prepared.prompt === "string"
+          ? [{ type: "text" as const, text: prepared.prompt }]
+          : prepared.prompt;
+      const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+      expect(parts.filter((part) => part.type === "image")).toHaveLength(modelHasVision ? 1 : 0);
+      expect(text.includes("[Recent image 1 from Ada, message m-ada, attached as media.]")).toBe(
+        modelHasVision,
+      );
     },
   );
 

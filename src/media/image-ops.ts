@@ -1,6 +1,7 @@
 // Image operation helpers normalize image transforms and adapter calls.
 import {
   createRastermill,
+  isRastermillError,
   isRastermillUnavailableError,
   RastermillUnavailableError,
   readImageProbeFromHeader as readRastermillImageProbeFromHeader,
@@ -164,6 +165,20 @@ export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
     } catch {
       throw error;
     }
+  }
+}
+
+/**
+ * Proves the pixels decode, not only the header. A header-valid image with no
+ * usable pixel data passes every header-only check, and a runtime that decodes
+ * it later drops it. A processor that cannot run proves nothing either way.
+ */
+export async function isImageDecodable(buffer: Buffer): Promise<boolean> {
+  try {
+    await convertImageToPng(buffer);
+    return true;
+  } catch (error) {
+    return !(isRastermillError(error) && error.code === "RASTERMILL_UNDECODABLE");
   }
 }
 

@@ -3,6 +3,7 @@ import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-c
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
@@ -262,10 +263,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           !responsesOptions?.openclawCodeModeToolSurface;
         const prepareRequest = async (request: ReturnType<typeof config.buildRequest>) => {
           let params = request;
+          const imageHistory = createRequestImageHistoryProjector(params, "responses");
           const nextParams = await options?.onPayload?.(params, model);
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
           }
+          params = imageHistory.bind(params);
           if (!isOpenAICodexResponsesModel(model)) {
             params = mergeTransportMetadata(params, turnState?.metadata);
           }
@@ -300,7 +303,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               tool.type === "function" ? { ...tool, async: true } : tool,
             );
           }
-          return params;
+          // Projected last so the origins ride the request exactly as it is sent.
+          return imageHistory.project(params);
         };
         const buildRequest = (replayMode: OpenAIResponsesReplayMode, requestContext = context) =>
           prepareRequest(

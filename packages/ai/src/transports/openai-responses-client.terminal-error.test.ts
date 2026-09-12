@@ -53,6 +53,33 @@ const model = {
 } satisfies Model<"openai-responses">;
 
 describe("managed Responses transport terminal errors", () => {
+  it("preserves the provider incomplete_reason instead of a generic message", async () => {
+    sseState.outcomes.push({
+      data: (async function* () {
+        yield {
+          type: "response.incomplete",
+          response: {
+            id: "resp_filtered",
+            status: "incomplete",
+            incomplete_details: { reason: "content_filter" },
+          },
+        };
+      })(),
+      response: new Response(null, { status: 200 }),
+    });
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      model,
+      { messages: [], tools: [] },
+      {
+        apiKey: "test-key",
+        sessionId: "session-terminal-error",
+        transport: "sse",
+      } as never,
+    );
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
+  });
   it.each(["incomplete", "completed", "filtered", "failed", "eof", "aborted"] as const)(
     "fences later tool completions after truncated output until %s",
     async (ending) => {

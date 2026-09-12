@@ -57,7 +57,6 @@ export type {
 
 export {
   buildLateMediaAttachedProjection,
-  buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
@@ -210,6 +209,10 @@ export function createUserTurnTranscriptRecorder(
 ): UserTurnTranscriptRecorder {
   const logicalTurnId = randomUUID();
   let message = resolvePersistedUserTurnMessage(params);
+  // Native images need every live slot; persisted input messages contain no inline bytes.
+  let runtimeMediaImageLayout = params.message
+    ? undefined
+    : structuredClone(params.input?.mediaImageLayout ?? undefined);
   let blocked = false;
   let persisted = false;
   let runtimePersisted = false;
@@ -279,12 +282,9 @@ export function createUserTurnTranscriptRecorder(
     if (!params.message && params.resolveInput && !resolvedMessagePromise) {
       resolvedMessagePromise = (async () => {
         try {
-          const resolvedInput = await params.resolveInput?.();
-          const resolvedMessage =
-            resolvePersistedUserTurnMessage({
-              message: params.message,
-              input: resolvedInput ?? params.input,
-            }) ?? message;
+          const input = (await params.resolveInput?.()) ?? params.input;
+          const resolvedMessage = resolvePersistedUserTurnMessage({ input }) ?? message;
+          runtimeMediaImageLayout = structuredClone(input?.mediaImageLayout ?? undefined);
           resolvedBeforeProvider = !sentToProvider;
           return applyMessageOverrides(resolvedMessage);
         } catch (error) {
@@ -531,6 +531,7 @@ export function createUserTurnTranscriptRecorder(
       return message;
     },
     resolveMessage: resolveMessageForPersistence,
+    getRuntimeMediaImageLayout: () => runtimeMediaImageLayout,
     stageApproved: (options) => {
       staging ??= (async () => {
         const candidate = await resolveMessageForPersistence();

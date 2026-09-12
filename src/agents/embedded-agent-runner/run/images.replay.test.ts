@@ -11,7 +11,7 @@ import {
 } from "../../../media/media-facts.js";
 import {
   finalizeRuntimePromptImages,
-  readRuntimePromptImageFactIndexes,
+  readRuntimePromptImageProvenance,
 } from "../../../media/runtime-prompt-image-provenance.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -33,7 +33,7 @@ describe("structured prompt media replay", () => {
       { image: sharedImage, factIndex: 1 },
     ]);
 
-    expect(readRuntimePromptImageFactIndexes(images)).toEqual([0, 1]);
+    expect(readRuntimePromptImageProvenance(images)?.imageFactIndexes).toEqual([0, 1]);
   });
 
   it("retains the runtime fact carrier when queued hydration fails", async () => {
@@ -250,6 +250,69 @@ describe("structured prompt media replay", () => {
     }
   });
 
+  it("keeps image ownership aligned when video presentation reorders hydrated bytes", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-image-order-"));
+    const currentPath = path.join(workspaceDir, "current.png");
+    const currentBytes = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const current = {
+      type: "image" as const,
+      data: currentBytes.toString("base64"),
+      mimeType: "image/png",
+    };
+    const history = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
+    const persisted = buildPersistedUserTurnMessage({
+      text: "compare image and video",
+      media: [
+        { path: currentPath, contentType: "image/png" },
+        { url: "https://example.test/video.mp4", contentType: "video/mp4" },
+      ],
+    });
+    const message = {
+      ...persisted,
+      content: [{ type: "text" as const, text: "compare image and video" }, history],
+      __openclaw: {
+        ...persisted["__openclaw"],
+        mediaImageBlockFactIndexes: [null],
+        mediaImageLayout: { slots: [{ kind: "inline" }, { kind: "offloaded", factIndex: 0 }] },
+      },
+    };
+    const expectedContent = [
+      { type: "text", text: "compare image and video" },
+      current,
+      { type: "text", text: "(video omitted: provider does not support native video)" },
+      history,
+    ];
+    const failures: number[] = [];
+    try {
+      await fs.writeFile(currentPath, currentBytes);
+      const options = {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        localRoots: [workspaceDir],
+        onCurrentTurnImageFailure: (count: number) => {
+          failures.push(count);
+        },
+      };
+      const [first] = await hydratePromptMediaMessages([message], options);
+      if (first?.role !== "user") {
+        throw new Error("Expected the first hydrated user message");
+      }
+      expect(first.content).toEqual(expectedContent);
+      const serialized = JSON.stringify(first);
+      const restored = JSON.parse(serialized) as AgentMessage;
+      await fs.rm(currentPath);
+      const [second] = await hydratePromptMediaMessages([restored], options);
+      if (second?.role !== "user") {
+        throw new Error("Expected the restored hydrated user message");
+      }
+      expect(second.content).toEqual(expectedContent);
+      expect(second).toMatchObject({ __openclaw: { mediaImageBlockFactIndexes: [0, null] } });
+      expect(failures).toEqual([]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers persisted fact-index layout when runtime order is also present", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-layout-authority-"));
     const describedPath = path.join(workspaceDir, "described.png");
@@ -366,7 +429,7 @@ describe("structured prompt media replay", () => {
         { type: "image", data: offloadedBuffer.toString("base64"), mimeType: "image/png" },
       ]);
       expect(result.imageFactIndexes).toEqual([null, 0]);
-      expect(readRuntimePromptImageFactIndexes(result.images)).toEqual([null, 0]);
+      expect(readRuntimePromptImageProvenance(result.images)?.imageFactIndexes).toEqual([null, 0]);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -671,6 +734,102 @@ describe("structured prompt media replay", () => {
       expect((result[0] as unknown as { content?: unknown }).content).toEqual([
         { type: "text", text: "description already present" },
       ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  // Transcripts written before persistence dropped factless layout slots still
+  // carry them. Each record keeps the shape that writer left, and the expected
+  // content is what origin/main's replay produces for the same record.
+  it.each([
+    {
+      record: "a factless inline slot on a text-only record",
+      content: "look at these",
+      meta: { slots: [{ kind: "inline" }, { kind: "offloaded", factIndex: 0 }], facts: ["a"] },
+      expected: ["text", "a"],
+    },
+    {
+      record: "a factless inline slot with its bytes before an offloaded fact",
+      content: [{ type: "text", text: "compare" }, "c"],
+      meta: { slots: [{ kind: "inline" }, { kind: "offloaded", factIndex: 0 }], facts: ["a"] },
+      expected: ["text", "c", "a"],
+    },
+    {
+      record: "a factless inline slot next to a suppressed fact",
+      content: "two photos",
+      meta: {
+        slots: [
+          { kind: "inline" },
+          { kind: "offloaded", factIndex: 0 },
+          { kind: "offloaded", factIndex: 1 },
+        ],
+        facts: ["a", "b"],
+        suppressedFactIndexes: [1],
+      },
+      expected: ["text", "a"],
+    },
+    {
+      record: "an offloaded fact before a factless inline slot",
+      content: [{ type: "text", text: "reversed" }, "c"],
+      meta: { slots: [{ kind: "offloaded", factIndex: 0 }, { kind: "inline" }], facts: ["b"] },
+      expected: ["text", "b", "c"],
+    },
+  ] as const)("replays $record as main does", async ({ content, meta, expected }) => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-layout-"));
+    try {
+      const bytes = {
+        a: createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 }),
+        b: createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 }),
+        c: createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }),
+      };
+      const image = (key: keyof typeof bytes) => ({
+        type: "image" as const,
+        data: bytes[key].toString("base64"),
+        mimeType: "image/png",
+      });
+      const media = await Promise.all(
+        meta.facts.map(async (key) => {
+          const file = path.join(workspaceDir, `${key}.png`);
+          await fs.writeFile(file, bytes[key]);
+          return { path: file, contentType: "image/png", kind: "image" };
+        }),
+      );
+      const record = {
+        role: "user" as const,
+        timestamp: 1,
+        content:
+          typeof content === "string"
+            ? content
+            : content.map((block) => (typeof block === "string" ? image(block) : { ...block })),
+        __openclaw: {
+          media,
+          mediaImageLayout: {
+            slots: meta.slots.map((slot) => ({ ...slot })),
+            ...(meta.suppressedFactIndexes
+              ? { suppressedFactIndexes: [...meta.suppressedFactIndexes] }
+              : {}),
+          },
+        },
+      };
+      const message: AgentMessage = record;
+
+      const [replayed] = await hydratePromptMediaMessages([message], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        localRoots: [workspaceDir],
+      });
+
+      const byData = new Map(
+        Object.entries(bytes).map(([key, value]) => [value.toString("base64"), key]),
+      );
+      const blocks =
+        replayed?.role === "user" && Array.isArray(replayed.content) ? replayed.content : [];
+      expect(
+        blocks.map((block) =>
+          block.type === "image" ? (byData.get(block.data) ?? "unknown") : block.type,
+        ),
+      ).toEqual(expected);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

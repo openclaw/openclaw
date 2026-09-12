@@ -83,6 +83,13 @@ image destinations retain their URL punctuation.
   - Native-vision models can skip the `[Image]` summary block. See [Rules and behavior](/nodes/media-understanding#rules-and-behavior) for the rule and its MiniMax exception.
 - By default only the first matching image/audio/video attachment is processed; use `tools.media.<capability>.attachments` to select multiple attachments.
 
+Channels that retain downloaded images in pending room history can pass up to
+four recent images from the last 30 minutes to a later reply. Source notes
+identify the retained images that reach the model input; images removed by
+runtime validation or model capability checks are not described as attached.
+Collected replies deduplicate retained images while preserving current
+attachments and their order.
+
 ## Limits and errors
 
 **Outbound send caps (WhatsApp web send)**
