@@ -263,6 +263,33 @@ describe("durable agent job terminal receipts", () => {
     });
   });
 
+  it("preserves a chat delivery failure after execution success is durable", async () => {
+    const runId = `run-delivery-after-execution-${runSequence++}`;
+    const dedupe = new Map();
+    startRun(runId);
+    finishRun(runId);
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20,
+    });
+
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: {
+        ts: 30,
+        ok: false,
+        payload: { status: "error", runId, error: "delivery failed", endedAt: 30 },
+      },
+    });
+
+    await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: "delivery failed",
+      endedAt: 30,
+    });
+  });
+
   it.each([
     {
       label: "provider timeout",

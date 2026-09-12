@@ -66,6 +66,37 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it("preserves the exact run ID through the public wait service", async () => {
+    const paddedRunId = " run-public-exact-id ";
+    const plainRunId = paddedRunId.trim();
+    const dedupe = new Map<string, DedupeEntry>();
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${paddedRunId}`,
+      entry: {
+        ts: 100,
+        ok: false,
+        payload: { runId: paddedRunId, status: "error", error: "padded run", endedAt: 100 },
+      },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${plainRunId}`,
+      entry: {
+        ts: 200,
+        ok: true,
+        payload: { runId: plainRunId, status: "ok", endedAt: 200 },
+      },
+    });
+
+    const waiter = waitThroughGateway({ runId: paddedRunId, timeoutMs: 0 });
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId: paddedRunId, status: "error", endedAt: 100 }),
+    );
+  });
+
   it("retains chat input identity when terminal writers replace admission metadata", async () => {
     const runId = "run-chat-request-identity";
     const key = `chat:${runId}`;

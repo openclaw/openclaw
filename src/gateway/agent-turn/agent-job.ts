@@ -558,7 +558,8 @@ function recordAgentRunSnapshot(
   const observation = { ...snapshot, version };
   const owner = agentRunOwners.get(snapshot.runId);
   if (!owner) {
-    const durable = readDurableAgentRunSnapshot(snapshot.runId);
+    const durable =
+      snapshot.source === "chat" ? undefined : readDurableAgentRunSnapshot(snapshot.runId);
     publishAgentRunSnapshot(
       durable ? projectDurableSnapshot(observation, durable) : observation,
       version,

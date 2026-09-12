@@ -621,7 +621,7 @@ export function createAgentTurnService(
   };
 
   const waitForTurn = async (params: AgentWaitParams) => {
-    const runId = (params.runId ?? "").trim();
+    const runId = params.runId ?? "";
     const timeoutMs =
       typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
         ? Math.max(0, Math.floor(params.timeoutMs))
