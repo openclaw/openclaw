@@ -40,6 +40,7 @@ import { listCoreRuntimePostBuildOutputs, runRuntimePostBuild } from "./runtime-
 type RunNodeInjectedChild = {
   kill?: (signal?: NodeJS.Signals) => boolean | void;
   on(event: string, callback: (...args: never[]) => void): unknown;
+  off?(event: string, callback: (...args: never[]) => void): unknown;
   pid?: number;
   stderr?: Pick<NodeJS.ReadableStream, "on">;
   stdout?: Pick<NodeJS.ReadableStream, "on">;
@@ -118,12 +119,12 @@ type RuntimePostBuildRequirement = {
   shouldSync: boolean;
   reason: keyof typeof RUNTIME_POSTBUILD_REASON_LABELS;
 };
+type RunNodeExit = number | NodeJS.Signals;
 type SpawnedProcessResult = {
   exitCode: number | null;
   exitSignal: NodeJS.Signals | null;
   forwardedSignal: NodeJS.Signals | null;
 };
-type RunNodeExit = number | NodeJS.Signals;
 
 function asRunNodeChild(value: unknown): RunNodeChild {
   if (!value || typeof value !== "object" || !("on" in value) || typeof value.on !== "function") {
@@ -135,7 +136,26 @@ function asRunNodeChild(value: unknown): RunNodeChild {
 export { runNodeWatchedPaths };
 
 const runtimeBuildArgs = ["--import", "tsx", "scripts/build-all.mts", "qaRuntime"];
-const RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS = 5_000;
+const RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
+const RUN_NODE_MAX_SHUTDOWN_GRACE_MS = 5 * 60_000;
+const RUN_NODE_SHUTDOWN_GRACE_MESSAGE_TYPE = "openclaw:shutdown-grace";
+
+function resolveRunNodeShutdownGraceMessage(message: unknown): number | undefined {
+  if (
+    !message ||
+    typeof message !== "object" ||
+    !("type" in message) ||
+    message.type !== RUN_NODE_SHUTDOWN_GRACE_MESSAGE_TYPE ||
+    !("graceMs" in message) ||
+    typeof message.graceMs !== "number" ||
+    !Number.isSafeInteger(message.graceMs) ||
+    message.graceMs <= 0 ||
+    message.graceMs > RUN_NODE_MAX_SHUTDOWN_GRACE_MS
+  ) {
+    return undefined;
+  }
+  return Math.max(RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS, message.graceMs);
+}
 
 const runtimePostBuildWatchedPaths = [
   "scripts/check-built-plugin-control-plane-modules.mts",
@@ -1126,11 +1146,28 @@ const signalSpawnedProcess = (
   }
 };
 
-const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDeps) => {
+const waitForSpawnedProcess = async (
+  childProcess: RunNodeChild,
+  deps: RunNodeDeps,
+  acceptShutdownGrace = false,
+) => {
   let forwardedSignal: NodeJS.Signals | null = null;
   let forceKillTimer: NodeJS.Timeout | null = null;
   let cleanedForwardedSignalGroup = false;
+  let shutdownGraceMs = RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS;
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
+
+  const onMessage = (message: unknown) => {
+    // The child declares lifecycle needs before interruption; freezing this at
+    // the first signal prevents late messages from extending shutdown forever.
+    if (forwardedSignal) {
+      return;
+    }
+    const requestedGraceMs = resolveRunNodeShutdownGraceMessage(message);
+    if (requestedGraceMs !== undefined) {
+      shutdownGraceMs = requestedGraceMs;
+    }
+  };
 
   const cleanupSignals = () => {
     if (forceKillTimer) {
@@ -1139,6 +1176,7 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     for (const [signal, handler] of signalHandlers) {
       deps.process.off(signal, handler);
     }
+    childProcess.off?.("message", onMessage);
   };
 
   const forwardSignal = (signal: NodeJS.Signals) => {
@@ -1149,10 +1187,14 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     signalSpawnedProcess(childProcess, signal, useProcessGroup, deps);
     forceKillTimer = setTimeout(() => {
       forceKillTimer = null;
+      cleanedForwardedSignalGroup = true;
       signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
-    }, RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS);
+    }, shutdownGraceMs);
   };
 
+  if (acceptShutdownGrace) {
+    childProcess.on("message", onMessage);
+  }
   const signalHandlers = FORWARDED_SIGNALS.map(
     (signal) => [signal, () => forwardSignal(signal)] as const,
   );
@@ -1181,21 +1223,21 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
         }
         settle({ exitCode, exitSignal, forwardedSignal });
       };
-      childProcess.on("error", handleError);
-      childProcess.on("exit", handleExit);
+      if ("once" in childProcess) {
+        childProcess.on("error", handleError);
+        childProcess.on("exit", handleExit);
+      } else {
+        childProcess.on("error", handleError);
+        childProcess.on("exit", handleExit);
+      }
     });
   } finally {
     cleanupSignals();
   }
 };
 
-const getInterruptedSpawnOutcome = (
-  res: SpawnedProcessResult,
-  platform: NodeJS.Platform,
-): RunNodeExit | null => {
+const getInterruptedSpawnExitCode = (res: SpawnedProcessResult, platform: NodeJS.Platform) => {
   if (res.exitSignal) {
-    // The child did not acknowledge completion. A numeric exit could let the
-    // watch parent retry after the owner of detached workers has disappeared.
     return platform === "win32" ? getSignalExitCode(res.exitSignal) : res.exitSignal;
   }
   if (res.forwardedSignal) {
@@ -1206,19 +1248,28 @@ const getInterruptedSpawnOutcome = (
 
 const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
+  // The parent route grants lifecycle IPC; generic children must not extend
+  // the launcher's five-second force-kill boundary with a shaped message.
+  const acceptShutdownGrace = deps.args.slice(0, 3).join(" ") === "qa mantis run";
   const nodeProcess = asRunNodeChild(
     deps.spawn(deps.execPath, args, {
       cwd: deps.cwd,
       detached: useProcessGroup,
       env: deps.env,
-      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+      stdio: deps.outputTee
+        ? acceptShutdownGrace
+          ? ["inherit", "pipe", "pipe", "ipc"]
+          : ["inherit", "pipe", "pipe"]
+        : acceptShutdownGrace
+          ? ["inherit", "inherit", "inherit", "ipc"]
+          : "inherit",
     }),
   );
   pipeSpawnedOutput(nodeProcess, deps);
-  const res = await waitForSpawnedProcess(nodeProcess, deps);
-  const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
-  if (interrupted !== null) {
-    return interrupted;
+  const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res, deps.platform);
+  if (interruptedExitCode !== null) {
+    return interruptedExitCode;
   }
   return res.exitCode ?? 1;
 };
@@ -1701,7 +1752,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
         );
         pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
         const result = await waitForSpawnedProcess(build, deps);
-        return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
+        return getInterruptedSpawnExitCode(result, deps.platform) ?? result.exitCode ?? 1;
       });
     });
     if (buildExitCode !== 0) {
