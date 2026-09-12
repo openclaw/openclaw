@@ -24,9 +24,16 @@ afterEach(() => {
 });
 
 describe("agent database admission", () => {
-  it.each(["secondary", "registered secondary", "default", "system"] as const)(
-    "isolates a divergent %s agent database at startup",
-    async (role) => {
+  it.each([
+    { role: "secondary", agentId: "cleaner", isolate: true },
+    { role: "registered secondary", agentId: "cleaner", isolate: true },
+    { role: "default", agentId: "cleaner", isolate: false },
+    { role: "configured system", agentId: "cleaner", isolate: false },
+    { role: "reserved system", agentId: "openclaw", isolate: false },
+    { role: "reserved system", agentId: "crestodian", isolate: false },
+  ] as const)(
+    "$role agent ($agentId): divergent database permits startup=$isolate",
+    async ({ role, agentId, isolate }) => {
       const stateDir = tempDirs.make("openclaw-divergent-admission-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -34,21 +41,21 @@ describe("agent database admission", () => {
         agents: {
           entries: {
             main: { default: role !== "default" },
-            cleaner: {
+            [agentId]: {
               default: role === "default",
               sandbox: { mode: "all", workspaceAccess: "none", scope: "session" },
             },
           },
-          ...(role === "system" ? { defaults: { systemAgent: { agentId: "cleaner" } } } : {}),
+          ...(role === "configured system" ? { defaults: { systemAgent: { agentId } } } : {}),
         },
       };
       const source = openOpenClawAgentDatabase({ agentId: "main", env }).path;
       if (role === "registered secondary") {
-        openOpenClawAgentDatabase({ agentId: "cleaner", env });
+        openOpenClawAgentDatabase({ agentId, env });
       }
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
-      const target = path.join(stateDir, "agents", "cleaner", "agent", "openclaw-agent.sqlite");
+      const target = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(
         source,
@@ -65,15 +72,25 @@ describe("agent database admission", () => {
       const copyBytes = fs.readFileSync(target);
       const startup = () =>
         assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config });
-      if (role === "default" || role === "system") {
-        await expect(startup()).rejects.toThrow("belongs to agent main; requested agent cleaner");
+      if (!isolate) {
+        await expect(startup()).rejects.toMatchObject({
+          name: "AgentDatabaseAdmissionError",
+          message: expect.stringContaining(`belongs to agent main; requested agent ${agentId}`),
+          refusal: {
+            agentId,
+            paths: [target],
+            embeddedOwnerId: "main",
+            code: "agent-database-ownership-mismatch",
+          },
+        });
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
         expect(fs.readFileSync(target)).toEqual(copyBytes);
         return;
       }
       await expect(startup()).resolves.toBeUndefined();
-      const refusal = readAgentDatabaseAdmissionRefusal("cleaner", { env });
+      const refusal = readAgentDatabaseAdmissionRefusal(agentId, { env });
       expect(refusal).toMatchObject({
-        agentId: "cleaner",
+        agentId,
         paths: [target],
         embeddedOwnerId: "main",
         code: "agent-database-ownership-mismatch",
@@ -96,12 +113,12 @@ describe("agent database admission", () => {
         ok: true,
         agentId: "main",
       });
-      expect(resolveRequestedSessionAgentId(config, "agent:cleaner:main")).toMatchObject({
+      expect(resolveRequestedSessionAgentId(config, `agent:${agentId}:main`)).toMatchObject({
         ok: false,
         error: { code: "UNAVAILABLE", details: refusal },
       });
       expect(
-        listGatewayAgentsBasic(config).agents.find((agent) => agent.id === "cleaner"),
+        listGatewayAgentsBasic(config).agents.find((agent) => agent.id === agentId),
       ).toMatchObject({
         status: "degraded",
         admissionRefusal: refusal,
@@ -113,21 +130,21 @@ describe("agent database admission", () => {
       await assertConfiguredWorkspaceStateReady({ cfg: config, env });
       await runStartupSessionMigration({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } });
       expect(fs.readFileSync(target)).toEqual(copyBytes);
-      expect(() => openOpenClawAgentDatabase({ agentId: "cleaner", env })).toThrow(refusal?.reason);
+      expect(() => openOpenClawAgentDatabase({ agentId, env })).toThrow(refusal?.reason);
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       fs.renameSync(target, `${target}.operator-backup`);
       const freshDiagnosis = await evaluateAgentDatabaseAdmissions(config, { env });
       expect(freshDiagnosis).toEqual([]);
       recordAgentDatabaseAdmissions(freshDiagnosis, { env });
-      expect(readAgentDatabaseAdmissionRefusal("cleaner", { env })).toBe(refusal);
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBe(refusal);
       await expect(startup()).resolves.toBeUndefined();
-      expect(readAgentDatabaseAdmissionRefusal("cleaner", { env })).toBeUndefined();
-      expect(resolveRequestedSessionAgentId(config, "agent:cleaner:main")).toEqual({
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
+      expect(resolveRequestedSessionAgentId(config, `agent:${agentId}:main`)).toEqual({
         ok: true,
-        agentId: "cleaner",
+        agentId,
       });
-      expect(openOpenClawAgentDatabase({ agentId: "cleaner", env }).agentId).toBe("cleaner");
+      expect(openOpenClawAgentDatabase({ agentId, env }).agentId).toBe(agentId);
       expect(fs.readFileSync(`${target}.operator-backup`)).toEqual(copyBytes);
     },
   );
