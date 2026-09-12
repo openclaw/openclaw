@@ -49,6 +49,7 @@ type StoredBoard = {
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
 const presentBoardDatabases = new WeakSet<DatabaseSync>();
+const BOARD_WRITE_BATCH_SIZE = 64;
 
 // Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
 // no board tables until the first write. Reads must treat that as "no boards",
@@ -143,26 +144,28 @@ function upsertTabs(
 ): void {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
   const createdBy = new Map(previous.tabRows.map((row) => [row.tab_id, row.created_by]));
-  for (const tab of next.tabs) {
+  for (let index = 0; index < next.tabs.length; index += BOARD_WRITE_BATCH_SIZE) {
     executeSqliteQuerySync(
       database.db,
       db
         .insertInto("board_tabs")
-        .values({
-          session_key: next.sessionKey,
-          tab_id: tab.tabId,
-          title: tab.title,
-          position: tab.position,
-          chat_dock: tab.chatDock,
-          created_by: createdBy.get(tab.tabId) ?? "agent",
-          revision: next.revision,
-        })
-        .onConflict((conflict) =>
-          conflict.columns(["session_key", "tab_id"]).doUpdateSet({
+        .values(
+          next.tabs.slice(index, index + BOARD_WRITE_BATCH_SIZE).map((tab) => ({
+            session_key: next.sessionKey,
+            tab_id: tab.tabId,
             title: tab.title,
             position: tab.position,
             chat_dock: tab.chatDock,
+            created_by: createdBy.get(tab.tabId) ?? "agent",
             revision: next.revision,
+          })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["session_key", "tab_id"]).doUpdateSet({
+            title: (eb) => eb.ref("excluded.title"),
+            position: (eb) => eb.ref("excluded.position"),
+            chat_dock: (eb) => eb.ref("excluded.chat_dock"),
+            revision: (eb) => eb.ref("excluded.revision"),
           }),
         ),
     );
@@ -226,16 +229,19 @@ function deleteRemovedWidgets(
 ): void {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
   const widgetNames = new Set(next.widgets.map((widget) => widget.name));
-  for (const row of previous.widgetRows) {
-    if (!widgetNames.has(row.name)) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("board_widgets")
-          .where("session_key", "=", next.sessionKey)
-          .where("name", "=", row.name),
-      );
-    }
+  const removed = previous.widgetRows.filter((row) => !widgetNames.has(row.name));
+  for (let index = 0; index < removed.length; index += BOARD_WRITE_BATCH_SIZE) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("board_widgets")
+        .where("session_key", "=", next.sessionKey)
+        .where(
+          "name",
+          "in",
+          removed.slice(index, index + BOARD_WRITE_BATCH_SIZE).map((row) => row.name),
+        ),
+    );
   }
 }
 
@@ -246,16 +252,19 @@ function deleteRemovedTabs(
 ): void {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
   const tabIds = new Set(next.tabs.map((tab) => tab.tabId));
-  for (const row of previous.tabRows) {
-    if (!tabIds.has(row.tab_id)) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("board_tabs")
-          .where("session_key", "=", next.sessionKey)
-          .where("tab_id", "=", row.tab_id),
-      );
-    }
+  const removed = previous.tabRows.filter((row) => !tabIds.has(row.tab_id));
+  for (let index = 0; index < removed.length; index += BOARD_WRITE_BATCH_SIZE) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("board_tabs")
+        .where("session_key", "=", next.sessionKey)
+        .where(
+          "tab_id",
+          "in",
+          removed.slice(index, index + BOARD_WRITE_BATCH_SIZE).map((row) => row.tab_id),
+        ),
+    );
   }
 }
 
