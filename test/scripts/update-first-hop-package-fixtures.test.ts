@@ -257,7 +257,7 @@ describe("first-hop package fixtures", () => {
       const candidate = path.join(root, "candidate.tgz");
       execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
       const original = fs.readFileSync(candidate);
-      const receipts = [];
+      const receipts: ReturnType<typeof packFirstHopUpdateFixture>[] = [];
       for (const sequence of [0, 1]) {
         const output = path.join(root, `future-${sequence}.tgz`);
         const input = sequence === 0 ? candidate : path.join(root, "future-0.tgz");

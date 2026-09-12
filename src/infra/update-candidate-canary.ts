@@ -349,6 +349,7 @@ export async function validateUpdateCandidateCanary(params: {
       const running = launch(command.entry ?? entry, command.args);
       let code: number | null = null;
       let doctorAdvisory: UpdateStepResult["advisory"];
+      const pluginObservations: string[] = [];
       let timedOut = false;
       try {
         const outcome = await waitBounded(running.closed, remaining(), params.signal);
@@ -402,13 +403,34 @@ export async function validateUpdateCandidateCanary(params: {
             : []),
           ...(Array.isArray(registry?.diagnostics) ? registry.diagnostics : []),
         ];
+        const failedPluginIds = new Set<string>();
         if (
           !plugins ||
-          plugins.some((plugin) => isRecord(plugin) && plugin.status === "error") ||
-          diagnostics.some((diagnostic) => isRecord(diagnostic) && diagnostic.level === "error")
+          plugins.some((plugin) => !isRecord(plugin) || typeof plugin.id !== "string")
         ) {
           code = 1;
-          capture("Candidate plugin resolution reported errors");
+          capture("Candidate plugin resolution returned an invalid inventory");
+        } else {
+          for (const plugin of plugins) {
+            if (isRecord(plugin) && plugin.status === "error" && typeof plugin.id === "string") {
+              failedPluginIds.add(plugin.id);
+            }
+          }
+          for (const diagnostic of diagnostics) {
+            if (isRecord(diagnostic) && diagnostic.level === "error") {
+              if (typeof diagnostic.pluginId !== "string") {
+                code = 1;
+                capture("Candidate plugin registry reported an unattributed error");
+              } else {
+                failedPluginIds.add(diagnostic.pluginId);
+              }
+            }
+          }
+          for (const pluginId of failedPluginIds) {
+            const message = `Plugin "${pluginId}" could not be loaded during the update preview.`;
+            pluginObservations.push(message);
+            capture(message);
+          }
         }
       }
       if (code === 0 && phase === "runtime") {
@@ -429,6 +451,9 @@ export async function validateUpdateCandidateCanary(params: {
         durationMs: Date.now() - commandStart,
         exitCode: code,
         ...(doctorAdvisory ? { advisory: doctorAdvisory } : {}),
+        ...(code === 0 && pluginObservations.length > 0
+          ? { stdoutTail: pluginObservations.join("\n") }
+          : {}),
       };
       steps.push(step);
       if (code !== 0 && !doctorAdvisory) {

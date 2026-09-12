@@ -20,6 +20,10 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
+import {
+  createPluginUpdateWarning,
+  type PluginUpdateWarning,
+} from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   gatewayServiceCommandUsesRoot,
@@ -90,7 +94,10 @@ export function recordUpdateGatewayHealth(
               health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch,
           }
         : {}),
-      pluginErrors: health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
+      pluginErrors: [
+        ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
+        ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
+      ],
       channelsReady: health.healthy && !health.channelProbeErrors?.length,
       settled: health.healthy,
       readyz,
@@ -99,7 +106,7 @@ export function recordUpdateGatewayHealth(
   );
 }
 
-/** The same independent oracles decide ordinary restart and repair outcomes. */
+/** Verify core activation while preserving plugin failures as separate notices. */
 export async function verifyUpdatedGateway(params: {
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
@@ -121,7 +128,7 @@ export async function verifyUpdatedGateway(params: {
     health: GatewayRestartSnapshot;
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
-}): Promise<UpdateRepairValidation> {
+}): Promise<UpdateRepairValidation & { pluginWarnings?: PluginUpdateWarning[] }> {
   // Readiness belongs to the original live executor through every awaited probe.
   const originalRun = params.opts.run;
   const originalExecutor = originalRun?.executorFence;
@@ -154,6 +161,7 @@ export async function verifyUpdatedGateway(params: {
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
+    requirePluginHealth: false,
     env: params.serviceEnv,
     ...(params.signal ? { signal: params.signal } : {}),
   };
@@ -222,6 +230,16 @@ export async function verifyUpdatedGateway(params: {
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
   if (health.healthy && serviceRunning && readyz) {
+    const pluginFailures = new Map<string, string>();
+    for (const failure of health.activatedPluginErrors ?? []) {
+      pluginFailures.set(failure.id, failure.error);
+    }
+    for (const failure of health.unavailablePlugins ?? []) {
+      pluginFailures.set(failure.id, `${failure.reason}: ${failure.detail}`);
+    }
+    const pluginWarnings = Array.from(pluginFailures, ([pluginId, reason]) =>
+      createPluginUpdateWarning({ pluginId, reason, kind: "load", env: params.serviceEnv }),
+    );
     assertCurrent();
     const verifiedAtMs = Date.now();
     recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
@@ -237,11 +255,18 @@ export async function verifyUpdatedGateway(params: {
 
     if (!params.opts.json) {
       defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+      for (const warning of pluginWarnings) {
+        defaultRuntime.log(theme.warn(warning.message));
+      }
     }
     return {
       ok: true,
       score: 7,
-      summary: "Gateway service, version, plugins, channels, and readiness verified.",
+      summary:
+        pluginWarnings.length > 0
+          ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
+          : "Gateway service, version, plugins, channels, and readiness verified.",
+      ...(pluginWarnings.length > 0 ? { pluginWarnings } : {}),
     };
   }
   recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
