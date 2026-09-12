@@ -4,7 +4,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile, appendRegularFileSync } from "../infra/regular-file.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
-import { redactSensitiveText } from "./redact.js";
+import { redactLogRecordForTransport, redactSensitiveText } from "./redact.js";
 import { formatTimestamp } from "./timestamps.js";
 
 // Keep burst memory bounded while one equally bounded batch is in flight.
@@ -103,7 +103,7 @@ function buildDroppedMarker(target: FileLogQueueEntry, count: number): FileLogQu
   };
   return {
     ...target,
-    payload: `${redactSensitiveText(JSON.stringify(record))}\n`,
+    payload: `${JSON.stringify(redactLogRecordForTransport(record))}\n`,
   };
 }
 

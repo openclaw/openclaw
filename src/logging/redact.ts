@@ -1,4 +1,5 @@
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -1014,69 +1015,80 @@ function redactStructuredSecretValue(
   options: RedactOptions,
   path: readonly string[] = key ? [key] : [],
   objectPath = true,
+  redactKeys = false,
 ): unknown {
   if (typeof value === "string") {
     return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath);
   }
-  if (value === null || value === undefined) {
-    return value;
-  }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return shouldRedactStructuredPrimitiveField(key, path) ? "***" : value;
   }
-  if (Array.isArray(value)) {
+  if (value !== null && typeof value === "object") {
     if (seen.has(value)) {
       return "[Circular]";
     }
-    seen.add(value);
-    const out = value.map((entry) =>
-      redactStructuredSecretValue(key, entry, seen, options, path, false),
-    );
-    seen.delete(value);
-    return out;
-  }
-  if (typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    if (!isPlainRedactableObject(value)) {
+    if (!Array.isArray(value) && !isPlainRedactableObject(value)) {
       return value;
     }
     seen.add(value);
-    const entries = Object.entries(value);
-    for (const entry of entries) {
-      const [name, child] = entry;
-      entry[1] = redactStructuredSecretValue(
-        name,
-        child,
-        seen,
-        options,
-        [...path, name],
-        objectPath,
-      );
-    }
-    seen.delete(value);
     // Define own data properties so JSON field names cannot change the output prototype.
-    return Object.fromEntries(entries);
+    const out = Array.isArray(value)
+      ? value.map((entry) =>
+          redactStructuredSecretValue(key, entry, seen, options, path, false, redactKeys),
+        )
+      : Object.fromEntries(
+          Object.entries(value).map(([name, child]) => [
+            redactKeys ? redactSensitiveText(name, options) : name,
+            redactStructuredSecretValue(
+              name,
+              child,
+              seen,
+              options,
+              [...path, name],
+              objectPath,
+              redactKeys,
+            ),
+          ]),
+        );
+    seen.delete(value);
+    return out;
   }
   return value;
 }
 
-function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
-  if (typeof value === "string") {
-    return redactSensitiveText(value, options) as T;
-  }
-  if (value === null || value === undefined) {
-    return value;
-  }
-  if (typeof value !== "object") {
-    return value;
-  }
-  return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
+function redactSecretsWithOptions<T>(value: T, options: RedactOptions, redactKeys = false): T {
+  return (
+    typeof value === "string"
+      ? redactSensitiveText(value, options)
+      : redactStructuredSecretValue("", value, new WeakSet<object>(), options, [], true, redactKeys)
+  ) as T;
 }
 
 export function redactSecrets<T>(value: T): T {
   return redactSecretsWithOptions(value, resolveToolPayloadRedaction());
+}
+
+/** Materializes native JSON values once, then masks the resulting record before encoding. */
+export function redactLogRecordForTransport(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  const ancestors: object[] = [];
+  const json = JSON.stringify(record, function (this: object, _key, value: unknown) {
+    if (typeof value === "bigint") {
+      return String(value);
+    }
+    if (value !== null && typeof value === "object") {
+      while (ancestors.length > 0 && ancestors.at(-1) !== this) {
+        ancestors.pop();
+      }
+      if (ancestors.includes(value)) {
+        return "[Circular]";
+      }
+      ancestors.push(value);
+    }
+    return value;
+  });
+  return redactSecretsWithOptions(JSON.parse(json), resolveConfigRedaction(), true);
 }
 
 export function redactModelVisibleSecrets<T>(value: T): T {
@@ -1087,15 +1099,31 @@ export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_STRING_PATTERNS];
 }
 
-// Applies already-resolved redaction to a batch of lines without re-resolving options.
-// Lines are joined before redacting so multiline patterns (e.g. PEM blocks) can match across
-// line boundaries, then split back. Use this instead of mapping redactSensitiveText when
-// options are resolved once per request.
+// JSONL records use the same structured policy as writers. Contiguous raw lines stay joined
+// so multiline patterns (e.g. PEM blocks) still match legacy and journal log output.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
   if (lines.length === 0 || resolved.mode === "off") {
     return lines;
   }
-  const exactRedactedLines = lines.map((line) => redactRegisteredSecretValues(line, maskToken));
-  return redactText(exactRedactedLines.join("\n"), resolved.patterns).split("\n");
+  const result: string[] = [];
+  let raw: string[] = [];
+  const flushRaw = () => {
+    if (raw.length > 0) {
+      const exact = raw.map((line) => redactRegisteredSecretValues(line, maskToken));
+      result.push(...redactText(exact.join("\n"), resolved.patterns).split("\n"));
+      raw = [];
+    }
+  };
+  for (const line of lines) {
+    const record = safeParseJsonRecord(line);
+    if (record) {
+      flushRaw();
+      result.push(JSON.stringify(redactSecretsWithOptions(record, resolved, true)));
+    } else {
+      raw.push(line);
+    }
+  }
+  flushRaw();
+  return result;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

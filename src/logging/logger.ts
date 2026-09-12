@@ -33,7 +33,7 @@ import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-fil
 import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
-import { redactSecrets, redactSensitiveText } from "./redact.js";
+import { redactLogRecordForTransport, redactSecrets, redactSensitiveText } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -456,17 +456,13 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   };
 }
 
-function redactLogRecordForTransport<T extends LogObj>(record: T): T {
-  return redactSecrets(record);
-}
-
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
   logger.attachTransport((logObj: LogObj) => {
     if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("log.record")) {
       return;
     }
     try {
-      const record = buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord);
+      const record = buildDiagnosticLogRecord(redactSecrets(logObj) as TsLogRecord);
       const emit = record.trustedTraceContext
         ? emitDiagnosticEventWithTrustedTraceContext
         : emitDiagnosticEvent;
@@ -622,7 +618,7 @@ function buildLogger(): TsLogger<LogObj> {
         time,
         ...fields,
       };
-      const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
+      const line = JSON.stringify(redactLogRecordForTransport(record));
       fileLogTransport.enqueue({
         file: activeFile,
         hostname: expectDefined(fields.hostname, "structured log hostname"),
