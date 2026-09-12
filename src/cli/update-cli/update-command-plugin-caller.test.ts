@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -54,6 +55,11 @@ describe("connected in-process plugin finalization authority", () => {
         await fs.writeFile(
           state.path("package.json"),
           JSON.stringify({ name: "openclaw", version: VERSION }),
+        );
+        const resolveInstallKind = updateCheck.resolveUpdateInstallKind;
+        vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementation(
+          async (root, options) =>
+            root === state.root ? "package" : resolveInstallKind(root, options),
         );
         vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
         const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);

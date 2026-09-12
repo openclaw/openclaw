@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mts";
-import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
+import { prepareBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
 
 installProcessWarningFilter();
 
@@ -106,7 +106,21 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
       "utf8",
     );
 
-    stageBundledPluginRuntime({ repoRoot });
+    const runtime = prepareBundledPluginRuntime({ repoRoot });
+    try {
+      await runtime.publish(() => signal.throwIfAborted());
+    } catch (error) {
+      try {
+        await runtime.cleanup();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "Smoke runtime setup and cleanup failed.", {
+          cause: cleanupError,
+        });
+      }
+      throw error;
+    }
+    await runtime.cleanup();
+    signal.throwIfAborted();
 
     const runtimeEntryPath = path.join(runtimePluginDir, "index.js");
     assert.ok(fs.existsSync(runtimeEntryPath), "runtime overlay entry missing");
@@ -436,12 +450,16 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
       mcpMetadata,
       "public agent-harness-runtime SDK did not read the canonical MCP metadata record",
     );
-
-    process.stdout.write("[build-smoke] built plugin singleton smoke passed\n");
   } finally {
     process.off("exit", cleanup);
     cleanup();
   }
+  signal.throwIfAborted();
+  const remaining = prepareBundledPluginRuntime({ repoRoot });
+  const changed = remaining.changed;
+  await remaining.cleanup();
+  assert.equal(changed, false, "singleton smoke left noncanonical runtime artifacts");
+  process.stdout.write("[build-smoke] built plugin singleton smoke passed\n");
 }
 
 const controller = new AbortController();
