@@ -87,7 +87,8 @@ function formatArgs(detail: string | undefined, args: unknown): string {
   if (detail) {
     return tuiFormatters.sanitizeRenderableText(detail);
   }
-  if (!args || typeof args !== "object") {
+  // Recovered tool calls can carry empty args; render nothing rather than "{}".
+  if (!args || typeof args !== "object" || Object.keys(args).length === 0) {
     return "";
   }
   try {
