@@ -17,8 +17,18 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import com.google.android.gms.wearable.ChannelClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -148,6 +158,235 @@ class WearConversationContextTest {
       assertFalse(flow.state.loading)
       assertNull(flow.state.failure)
       assertEquals(listOf("talk-beta"), flow.stoppedAttempts)
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun newPhoneNotificationOpensAfterOldPhoneStopTimeout() =
+    runTest {
+      for (retryUnsettled in listOf(false, true)) {
+        withFlow(testScheduler) { flow ->
+          flow.installControlledTalkChannel()
+          if (retryUnsettled) {
+            flow.rejectStop = true
+            flow.vm.stopRealtimeTalk()
+            flow.idle()
+            flow.rejectStop = false
+          }
+          // The send succeeds but no response is delivered: the real requester owns the deadline.
+          flow.holdStopResponses = true
+          flow.vm.stopRealtimeTalk()
+          flow.idle()
+          flow.changePhone("phone-b")
+          flow.vm.openNotification(WearConversationTarget("agent:alpha:shared", "phone-b"))
+          flow.idle()
+          assertTrue(flow.state.talkBusy)
+          assertTrue(flow.historyKeys.none { it == "agent:alpha:shared" })
+          assertNull(flow.talkClient.talkTestField("activeAttempt"))
+          testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS - 1)
+          flow.idle()
+          assertTrue("New phone must still wait for the original Stop", flow.state.talkBusy)
+          assertTrue(flow.historyKeys.none { it == "agent:alpha:shared" })
+          testScheduler.advanceTimeBy(1)
+          flow.idle()
+          assertEquals("phone-b", flow.state.selectedSession?.phoneNodeId)
+          assertEquals("agent:alpha:shared", flow.state.selectedSession?.key)
+          assertEquals(
+            "Alpha reply",
+            flow.state.messages
+              .single()
+              .text,
+          )
+          assertFalse(flow.state.loading)
+          assertFalse(flow.state.talkBusy)
+          assertFalse(flow.talkClient.isCapturing.value)
+          assertNull(flow.state.failure)
+          assertEquals(List(if (retryUnsettled) 2 else 1) { "talk-beta" }, flow.stoppedAttempts)
+          assertTrue(flow.stoppedPhones.all { it == "phone-a" })
+        }
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun newPhoneNotificationOpensAfterOldPhoneStopTransportFailure() =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        val gate = CompletableDeferred<Unit>()
+        flow.stopGate = gate
+        flow.failStopTransport = true
+        flow.vm.stopRealtimeTalk()
+        flow.idle()
+        val samePhone = async { runCatching { flow.talkClient.stop("phone-a") } }
+        val unknownPhone = async { runCatching { flow.talkClient.stop() } }
+        flow.idle()
+        flow.changePhone("phone-b")
+        flow.vm.openNotification(WearConversationTarget("agent:alpha:shared", "phone-b"))
+        flow.idle()
+        assertFalse(samePhone.isCompleted)
+        assertTrue(flow.state.talkBusy)
+        assertTrue(flow.historyKeys.none { it == "agent:alpha:shared" })
+        gate.complete(Unit)
+        flow.idle()
+        assertEquals("phone_unavailable", (samePhone.getCompleted().exceptionOrNull() as WearProxyException).code)
+        assertEquals("phone_unavailable", (unknownPhone.getCompleted().exceptionOrNull() as WearProxyException).code)
+        assertEquals("phone-b", flow.state.selectedSession?.phoneNodeId)
+        assertEquals("agent:alpha:shared", flow.state.selectedSession?.key)
+        assertNull(flow.state.failure)
+        assertFalse(flow.state.loading)
+        assertFalse(flow.state.talkBusy)
+        assertEquals(listOf("talk-beta"), flow.stoppedAttempts)
+        assertEquals(listOf("phone-a"), flow.stoppedPhones)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun samePhoneAndUnknownRouteRetainSharedStopTimeout() =
+    runTest {
+      for (currentPhone in listOf("phone-a", null)) {
+        withFlow(testScheduler) { flow ->
+          flow.installControlledTalkChannel()
+          flow.holdStopResponses = true
+          val owner = async { runCatching { flow.talkClient.stop("phone-a") } }
+          flow.idle()
+          val joined = async { runCatching { flow.talkClient.stop(currentPhone) } }
+          flow.idle()
+          assertFalse(joined.isCompleted)
+          assertNull(flow.talkClient.talkTestField("activeAttempt"))
+          testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS)
+          flow.idle()
+          assertEquals("timeout", (owner.getCompleted().exceptionOrNull() as WearProxyException).code)
+          assertEquals("timeout", (joined.getCompleted().exceptionOrNull() as WearProxyException).code)
+          assertEquals(listOf("talk-beta"), flow.stoppedAttempts)
+          // Only explicit same-owner cleanup retries the unsettled attempt.
+          flow.holdStopResponses = false
+          val retry = async { flow.talkClient.stop(currentPhone) }
+          flow.idle()
+          assertEquals("talk-beta", retry.getCompleted().attemptId)
+          assertEquals(listOf("talk-beta", "talk-beta"), flow.stoppedAttempts)
+          assertEquals(listOf("phone-a", "phone-a"), flow.stoppedPhones)
+        }
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun sharedStopUsesPhoneResolvedAfterLifecycleLock() =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        flow.holdStopResponses = true
+        val lock = flow.talkClient.talkTestField("lifecycleLock") as Mutex
+        val lockOwner = Any()
+        assertTrue(lock.tryLock(lockOwner))
+        try {
+          // The caller's unknown route is not the eventual Stop target.
+          val owner = async { runCatching { flow.talkClient.stop() } }
+          val joined = async { runCatching { flow.talkClient.stop("phone-b") } }
+          flow.idle()
+          assertTrue(flow.stoppedAttempts.isEmpty())
+          assertFalse(joined.isCompleted)
+          lock.unlock(lockOwner)
+          flow.idle()
+          assertEquals(listOf("phone-a"), flow.stoppedPhones)
+          flow.changePhone("phone-b")
+          testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS)
+          flow.idle()
+          assertEquals("timeout", (owner.getCompleted().exceptionOrNull() as WearProxyException).code)
+          assertEquals(WearRealtimeTalkSnapshot(), joined.getCompleted().getOrThrow())
+          assertEquals(listOf("talk-beta"), flow.stoppedAttempts)
+        } finally {
+          if (lock.holdsLock(lockOwner)) lock.unlock(lockOwner)
+        }
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun oldPhoneStopCancellationDoesNotCancelNewPhoneJoiner() =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        flow.holdStopResponses = true
+        val owner = async { flow.talkClient.stop("phone-a") }
+        flow.idle()
+        flow.changePhone("phone-b")
+        val joined = async { runCatching { flow.talkClient.stop("phone-b") } }
+        val samePhone = async { runCatching { flow.talkClient.stop("phone-a") } }
+        val unknownPhone = async { runCatching { flow.talkClient.stop() } }
+        flow.idle()
+        assertFalse(joined.isCompleted)
+        owner.cancel()
+        flow.idle()
+        assertTrue(owner.isCancelled)
+        assertTrue(samePhone.getCompleted().exceptionOrNull() is CancellationException)
+        assertTrue(unknownPhone.getCompleted().exceptionOrNull() is CancellationException)
+        assertEquals(WearRealtimeTalkSnapshot(), joined.getCompleted().getOrThrow())
+        assertEquals(listOf("phone-a"), flow.stoppedPhones)
+        assertFalse(flow.talkClient.isCapturing.value)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun cancelingNewPhoneStopJoinerDoesNotSucceedOrCancelOwner() =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        flow.holdStopResponses = true
+        val owner = async { runCatching { flow.talkClient.stop("phone-a") } }
+        flow.idle()
+        flow.changePhone("phone-b")
+        var returned = false
+        val joined =
+          async {
+            flow.talkClient.stop("phone-b")
+            returned = true
+          }
+        flow.idle()
+        joined.cancel()
+        flow.idle()
+        assertTrue(joined.isCancelled)
+        assertFalse(returned)
+        assertFalse(owner.isCompleted)
+        testScheduler.advanceTimeBy(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS)
+        flow.idle()
+        assertEquals("timeout", (owner.getCompleted().exceptionOrNull() as WearProxyException).code)
+        assertFalse(returned)
+        assertEquals(listOf("talk-beta"), flow.stoppedAttempts)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun unknownStopSourceCannotDiscardCancellationBeforeLifecycleLock() =
+    runTest {
+      withFlow(testScheduler) { flow ->
+        flow.installControlledTalkChannel()
+        val lock = flow.talkClient.talkTestField("lifecycleLock") as Mutex
+        val lockOwner = Any()
+        assertTrue(lock.tryLock(lockOwner))
+        try {
+          val owner = async { flow.talkClient.stop("phone-a") }
+          val joined = async { runCatching { flow.talkClient.stop("phone-b") } }
+          flow.idle()
+          owner.cancel()
+          flow.idle()
+          assertTrue(owner.isCancelled)
+          assertTrue(joined.getCompleted().exceptionOrNull() is CancellationException)
+          assertTrue("No source was resolved and no Stop was sent", flow.stoppedAttempts.isEmpty())
+          assertNotNull(flow.talkClient.talkTestField("activeAttempt"))
+          lock.unlock(lockOwner)
+          val cleanup = async { flow.talkClient.stop("phone-a") }
+          flow.idle()
+          assertEquals("talk-beta", cleanup.getCompleted().attemptId)
+          assertEquals(listOf("phone-a"), flow.stoppedPhones)
+        } finally {
+          if (lock.holdsLock(lockOwner)) lock.unlock(lockOwner)
+        }
+      }
     }
 
   @Test
@@ -1080,16 +1319,27 @@ class WearConversationContextTest {
       assertEquals(listOf(original, original, original), flow.sentRunIds)
     }
 
-  private fun withFlow(block: (Flow) -> Unit) {
-    val flow = Flow()
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun withFlow(
+    scheduler: TestCoroutineScheduler? = null,
+    block: (Flow) -> Unit,
+  ) {
+    if (scheduler != null) Dispatchers.setMain(StandardTestDispatcher(scheduler))
     try {
-      block(flow)
+      val flow = Flow(scheduler)
+      try {
+        block(flow)
+      } finally {
+        flow.close()
+      }
     } finally {
-      flow.close()
+      if (scheduler != null) Dispatchers.resetMain()
     }
   }
 
-  private class Flow {
+  private class Flow(
+    private val scheduler: TestCoroutineScheduler?,
+  ) {
     private val app = RuntimeEnvironment.getApplication() as WearApplication
     private val owner =
       object : ViewModelStoreOwner {
@@ -1105,6 +1355,8 @@ class WearConversationContextTest {
     val deliveredSendResponses = mutableSetOf<Int>()
     val sentRequestIds = mutableListOf<String>()
     var stopGate: CompletableDeferred<Unit>? = null
+    var holdStopResponses = false
+    var failStopTransport = false
     var rejectStop = false
     var sendFailureCode: String? = null
     var supportsSelectionLookup = false
@@ -1117,6 +1369,7 @@ class WearConversationContextTest {
     var statusGate: CompletableDeferred<Unit>? = null
     private var phoneNode = "phone-a"
     val stoppedAttempts = mutableListOf<String>()
+    val stoppedPhones = mutableListOf<String>()
     private var sequence = 0L
     val sentKeys = mutableListOf<String>()
     val historyKeys = mutableListOf<String>()
@@ -1127,6 +1380,7 @@ class WearConversationContextTest {
       )
     val vm: WearViewModel
     val state: WearUiState get() = vm.state.value
+    val talkClient: WearRealtimeTalkClient get() = vm.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
 
     init {
       clientField.set(app, lazyOf(client))
@@ -1136,7 +1390,11 @@ class WearConversationContextTest {
       assertTrue(state.connected)
     }
 
-    fun idle() = shadowOf(Looper.getMainLooper()).idle()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun idle() {
+      scheduler?.runCurrent()
+      shadowOf(Looper.getMainLooper()).idle()
+    }
 
     // Controlled external Data Layer resource at the established client IO owner.
     // This is stop/routing unit proof, not microphone/provider acceptance.
@@ -1290,11 +1548,14 @@ class WearConversationContextTest {
           }
 
           WearRpcMethod.TalkStop -> {
+            stoppedPhones += node
             stoppedAttempts +=
               request.params
                 .getValue("attemptId")
                 .jsonPrimitive.content
             stopGate?.await()
+            if (failStopTransport) error("Controlled Stop transport failure")
+            if (holdStopResponses) return
             WearRealtimeTalkCodec.encode(WearRealtimeTalkSnapshot(attemptId = "talk-beta"))
           }
 

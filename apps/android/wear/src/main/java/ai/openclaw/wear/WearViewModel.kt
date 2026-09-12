@@ -45,7 +45,7 @@ internal enum class WearReplyOutcome {
   Aborted,
   Error,
 
-  // Confirmed Abort from this Watch: finish waiting without speaking transcript text.
+  // Confirmed Watch control completion: finish waiting without speaking transcript text.
   Canceled,
 }
 
@@ -814,19 +814,34 @@ internal class WearViewModel(
     viewModelScope.launch {
       if (!isCurrentSessionAction(session, routeGeneration) || !sendAttemptTracker.isCurrent(attempt)) return@launch
       try {
-        repository.send(attempt, requirePreferredPhone = true)
+        val controlCompleted = repository.send(attempt, requirePreferredPhone = true)
         if (!sendAttemptTracker.isCurrent(attempt) || !isCurrentSessionAction(session, routeGeneration)) return@launch
-        sendAttemptTracker.markSucceeded(attempt)
+        if (controlCompleted) {
+          sendAttemptTracker.retire(session.key, session.phoneNodeId, attempt.idempotencyKey)
+          mutableState.update { state ->
+            state.copy(
+              sending = false,
+              pendingReply = state.pendingReply?.takeUnless { it.runId == attempt.idempotencyKey },
+              replyAbort = state.replyAbort?.takeUnless { it.replyRunId == attempt.idempotencyKey },
+              replyCompletion =
+                if (state.pendingReply?.runId == attempt.idempotencyKey) {
+                  WearReplyTerminal(session.key, session.phoneNodeId, attempt.idempotencyKey, WearReplyOutcome.Canceled)
+                } else {
+                  state.replyCompletion
+                },
+            )
+          }
+        } else {
+          sendAttemptTracker.markSucceeded(attempt)
+        }
         reloadHistoryIfSelected(session, routeGeneration)
       } catch (err: CancellationException) {
         sendAttemptTracker.markAmbiguous(attempt)
         throw err
       } catch (err: Throwable) {
         if (!sendAttemptTracker.isCurrent(attempt) || !isCurrentSessionAction(session, routeGeneration)) return@launch
-        if (err is WearProxyException && err.code == "invalid_request") {
-          // The phone's lowercase validation error rejects before Gateway delivery.
-          // Retire the invocation and its pending Abort together so corrected input can proceed.
-          sendAttemptTracker.retire(session.key, session.phoneNodeId, attempt.idempotencyKey)
+        if (err is WearProxyException && sendAttemptTracker.retireRejected(attempt, err.code)) {
+          // Only a fresh rejected send releases input; a rejected retry remains uncertain.
           mutableState.update { state ->
             state.copy(
               sending = false,

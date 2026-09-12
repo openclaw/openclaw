@@ -56,12 +56,17 @@ internal class WearRealtimeTalkClient(
   private val lifecycleLock = Mutex()
   private val channelLock = Mutex()
   private val audioLock = Any()
-  private var pendingStop: CompletableDeferred<WearRealtimeTalkSnapshot>? = null
+  private var pendingStop: CompletableDeferred<StopOutcome>? = null
   private var unsettledStopTarget: StopTarget? = null
 
   private data class StopTarget(
     val nodeId: String,
     val attemptId: String,
+  )
+
+  private data class StopOutcome(
+    val target: StopTarget?,
+    val result: Result<WearRealtimeTalkSnapshot>,
   )
 
   private val audioFocus =
@@ -173,22 +178,32 @@ internal class WearRealtimeTalkClient(
     var ownsStop = false
     val completion =
       synchronized(audioLock) {
-        pendingStop ?: CompletableDeferred<WearRealtimeTalkSnapshot>().also {
+        pendingStop ?: CompletableDeferred<StopOutcome>().also {
           pendingStop = it
           ownsStop = true
         }
       }
-    // Concurrent navigation observes the original RPC outcome, not an empty
-    // success caused by that RPC already having closed the local attempt.
-    if (!ownsStop) return completion.await()
+    if (!ownsStop) {
+      // Wait for the owner even when its phone is not known until startup releases
+      // the lifecycle lock. A confirmed other phone cannot inherit this outcome.
+      val outcome = completion.await()
+      currentCoroutineContext().ensureActive()
+      if (currentPhoneNodeId != null && outcome.target != null && outcome.target.nodeId != currentPhoneNodeId) {
+        return WearRealtimeTalkSnapshot()
+      }
+      // Unknown routing/source and same-phone callers retain the cleanup failure,
+      // including owner cancellation; only this caller's cancellation aborts await.
+      return outcome.result.getOrThrow()
+    }
     var locked = false
+    var target: StopTarget? = null
     try {
       lifecycleLock.lock()
       locked = true
       val attempt = activeAttempt
       // A confirmed replacement phone cannot inherit an old phone's cleanup.
       // Unknown routing keeps same-owner recovery available until rediscovery.
-      val target =
+      target =
         (attempt?.let { StopTarget(it.nodeId, it.attemptId) } ?: unsettledStopTarget)
           ?.takeIf { currentPhoneNodeId == null || it.nodeId == currentPhoneNodeId }
       unsettledStopTarget = target
@@ -198,10 +213,10 @@ internal class WearRealtimeTalkClient(
       val snapshot =
         if (target == null) WearRealtimeTalkSnapshot() else repository.stopRealtimeTalk(target.nodeId, target.attemptId)
       unsettledStopTarget = null
-      completion.complete(snapshot)
+      completion.complete(StopOutcome(target, Result.success(snapshot)))
       return snapshot
     } catch (err: Throwable) {
-      completion.completeExceptionally(err)
+      completion.complete(StopOutcome(target, Result.failure(err)))
       throw err
     } finally {
       synchronized(audioLock) { if (pendingStop === completion) pendingStop = null }

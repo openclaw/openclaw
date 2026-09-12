@@ -2830,7 +2830,6 @@ private fun SecondaryButton(
   label: String,
   enabled: Boolean,
   onClick: () -> Unit,
-  horizontalPadding: Dp = 12.dp,
 ) {
   val colors = OpenClawWearTheme.colors
   Button(
@@ -2846,7 +2845,7 @@ private fun SecondaryButton(
     modifier =
       Modifier
         .fillMaxWidth()
-        .padding(horizontal = horizontalPadding)
+        .padding(horizontal = 12.dp)
         .border(
           width = 1.dp,
           color = if (enabled) colors.borderStrong else colors.border,

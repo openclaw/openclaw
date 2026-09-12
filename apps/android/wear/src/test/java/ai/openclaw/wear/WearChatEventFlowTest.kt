@@ -1037,6 +1037,128 @@ class WearChatEventFlowTest {
     }
 
   @Test
+  @Config(qualifiers = "w400dp-h800dp-mdpi")
+  fun runlessStopAcknowledgmentReleasesAppInputWithoutSpeakingForeignHistory() {
+    for ((command, aborted) in listOf("/stop" to false, "stop" to true)) {
+      withFlow { flow ->
+        flow.observeApp(autoSpeak = true)
+        val speech = shadowOf(checkNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance()))
+        speech.onInitListener.onInit(TextToSpeech.SUCCESS)
+        // Exact Phone projectAck shape: Gateway ok and runIds are not forwarded.
+        flow.sendAck = buildJsonObject { put("aborted", aborted) }
+        flow.sendGate = CompletableDeferred()
+        flow.submitFromApp(command)
+        val controlRun = flow.runId
+        assertEquals(controlRun, flow.state.pendingReply?.runId)
+        flow.historyMessages = """[{"id":"foreign","role":"assistant","content":"Foreign reply","idempotencyKey":"foreign-run"}]"""
+        flow.sendGate?.complete(Unit)
+        flow.idle()
+        assertEquals(false, flow.state.sending)
+        assertNull(flow.state.pendingReply)
+        assertEquals(controlRun, flow.state.replyCompletion?.runId)
+        assertEquals(WearReplyOutcome.Canceled, flow.state.replyCompletion?.outcome)
+        assertNull(speech.lastSpokenText)
+        assertTrue(SemanticsProperties.Disabled !in flow.appAction("Type").config)
+
+        flow.sendAck = null
+        flow.sendGate = null
+        flow.submitFromApp("Next message")
+        assertEquals(listOf(command, "Next message"), flow.sentMessages)
+        assertTrue(controlRun != flow.runId)
+        assertEquals(flow.runId, flow.state.pendingReply?.runId)
+        flow.historyMessages = """[{"id":"next","role":"assistant","content":"Next reply","idempotencyKey":"${flow.runId}"}]"""
+        flow.emit("final")
+        assertNull(flow.state.pendingReply)
+        assertEquals(listOf("Next reply"), speech.spokenTextList)
+      }
+    }
+  }
+
+  @Test
+  fun runlessControlCompletionRetiresPendingAbortButPreservesForeignStream() =
+    withFlow { flow ->
+      flow.sendAck = buildJsonObject { put("aborted", false) }
+      flow.sendGate = CompletableDeferred()
+      assertEquals(true, flow.vm.sendReply("/stop"))
+      flow.idle()
+      val controlRun = flow.runId
+      flow.observeReplyCompletion()
+      flow.abortGate = CompletableDeferred()
+      flow.abortAccepted = false
+      flow.vm.abort()
+      flow.idle()
+      assertEquals(controlRun, flow.state.pendingAbortRunId)
+      flow.historyRun =
+        buildJsonObject {
+          put("runId", "foreign-run")
+          put("text", "Foreign live")
+        }
+      flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
+      flow.sendGate?.complete(Unit)
+      flow.idle()
+      assertNull(flow.state.pendingReply)
+      assertNull(flow.state.replyAbort)
+      assertEquals(listOf<WearChatMessage?>(null), flow.completedReplies)
+      assertEquals("foreign-run", flow.state.activeRunId)
+      assertEquals("Foreign live", flow.state.streamText)
+      assertEquals(false, flow.vm.sendReply("Next message"))
+      flow.abortGate?.complete(Unit)
+      flow.idle()
+      assertEquals("foreign-run", flow.state.activeRunId)
+      assertEquals(WearReplyOutcome.Canceled, flow.state.replyCompletion?.outcome)
+    }
+
+  @Test
+  fun ordinaryAndEmptySendAcknowledgmentsDoNotCompletePendingReply() {
+    for (ack in listOf(null, JsonObject(emptyMap()))) {
+      withFlow { flow ->
+        flow.sendAck = ack
+        flow.send()
+        flow.observeReplyCompletion()
+        assertEquals(false, flow.state.sending)
+        assertEquals(flow.runId, flow.state.pendingReply?.runId)
+        assertNull(flow.state.replyCompletion)
+        assertTrue(flow.completedReplies.isEmpty())
+        assertEquals(false, flow.vm.sendReply("Next message"))
+      }
+    }
+  }
+
+  @Test
+  fun staleControlAcknowledgmentCannotEndANewerSendOrOverwriteItsTerminal() =
+    withFlow { flow ->
+      val oldGate = CompletableDeferred<Unit>()
+      flow.sendGate = oldGate
+      flow.sendAck = buildJsonObject { put("aborted", true) }
+      assertEquals(true, flow.vm.sendReply("/stop"))
+      flow.idle()
+      val oldRun = flow.runId
+      val session = checkNotNull(flow.state.selectedSession)
+      flow.vm.openSession(session.copy(key = "agent:main:other"))
+      flow.idle()
+      flow.vm.openSession(session)
+      flow.idle()
+      val nextGate = CompletableDeferred<Unit>()
+      flow.sendGate = nextGate
+      flow.sendAck = null
+      assertEquals(true, flow.vm.sendReply("Next message"))
+      flow.idle()
+      val nextRun = flow.runId
+      assertTrue(oldRun != nextRun)
+      oldGate.complete(Unit)
+      flow.idle()
+      assertEquals(nextRun, flow.state.pendingReply?.runId)
+      assertTrue(flow.state.sending)
+      assertNull(flow.state.replyCompletion)
+      flow.emit("error", eventRunId = nextRun)
+      nextGate.complete(Unit)
+      flow.idle()
+      assertNull(flow.state.pendingReply)
+      assertEquals(nextRun, flow.state.replyCompletion?.runId)
+      assertEquals(WearReplyOutcome.Error, flow.state.replyCompletion?.outcome)
+    }
+
+  @Test
   fun acceptedCallbackCannotReenterAndReplaceTheReservedSend() =
     withFlow { flow ->
       var nestedAccepted: Boolean? = null
@@ -1141,6 +1263,69 @@ class WearChatEventFlowTest {
       flow.idle()
       assertTrue("An explicit abort retires the old attempt", flow.runId != firstRun)
     }
+
+  @Test
+  @Config(qualifiers = "w400dp-h800dp-mdpi")
+  fun freshGatewayValidationRejectionAllowsDifferentAppInput() =
+    withFlow { flow ->
+      flow.observeApp()
+      flow.sendFails = true
+      flow.sendErrorCode = "INVALID_REQUEST"
+      flow.submitFromApp("Blocked message")
+      val rejectedRun = flow.runId
+      assertEquals(false, flow.state.sending)
+      assertNull(flow.state.pendingReply)
+      assertNull(flow.state.replyCompletion)
+      assertTrue(SemanticsProperties.Disabled !in flow.appAction("Type").config)
+
+      flow.sendFails = false
+      flow.submitFromApp("Corrected message")
+      assertEquals(listOf("Blocked message", "Corrected message"), flow.sentMessages)
+      assertTrue(rejectedRun != flow.runId)
+      assertEquals(flow.runId, flow.state.pendingReply?.runId)
+      assertNull(flow.state.failure)
+      flow.emit("final")
+      assertNull(flow.state.pendingReply)
+      assertTrue(SemanticsProperties.Disabled !in flow.appAction("Type").config)
+    }
+
+  @Test
+  fun rejectedRetryPreservesUncertainDeliveryAcrossFailureAndRediscovery() {
+    for (code in listOf("INVALID_REQUEST", "invalid_request")) {
+      for (disconnected in listOf(false, true)) {
+        withFlow { flow ->
+          val oldGate = if (disconnected) CompletableDeferred<Unit>() else null
+          flow.sendGate = oldGate
+          flow.sendFails = true
+          flow.send()
+          val uncertainRun = flow.runId
+          if (disconnected) {
+            flow.connection(false)
+            flow.connection(true)
+          }
+          flow.sendGate = null
+          flow.sendErrorCode = code
+          assertEquals(true, flow.vm.sendReply("Hello"))
+          flow.idle()
+          oldGate?.complete(Unit)
+          flow.idle()
+          assertEquals(listOf(uncertainRun, uncertainRun), flow.sentRunIds)
+          assertEquals(uncertainRun, flow.state.pendingReply?.runId)
+          assertEquals(true, flow.state.pendingReply?.retryable)
+          assertEquals(false, flow.vm.sendReply("Different message"))
+          flow.vm.refresh()
+          flow.idle()
+          assertEquals(uncertainRun, flow.state.pendingReply?.runId)
+
+          flow.sendFails = false
+          assertEquals(true, flow.vm.sendReply("Hello"))
+          flow.idle()
+          assertEquals(listOf(uncertainRun, uncertainRun, uncertainRun), flow.sentRunIds)
+          assertEquals(false, flow.state.pendingReply?.retryable)
+        }
+      }
+    }
+  }
 
   @Test
   @Config(qualifiers = "w400dp-h800dp-mdpi")
@@ -1406,7 +1591,7 @@ class WearChatEventFlowTest {
 
   @Test
   fun lateSendCallbacksCannotRetireOrReplaceANewerAttempt() {
-    for (lateErrorCode in listOf(null, "internal_error", "invalid_request")) {
+    for (lateErrorCode in listOf(null, "internal_error", "invalid_request", "INVALID_REQUEST")) {
       withFlow { flow ->
         val oldGate = CompletableDeferred<Unit>()
         flow.sendGate = oldGate
@@ -2445,6 +2630,7 @@ class WearChatEventFlowTest {
     var sendRequests = 0
     var sendFails = false
     var sendErrorCode = "internal_error"
+    var sendAck: JsonObject? = null
     var gatewayConnected = true
     var statusFails = false
     var historyErrorCode = "internal_error"
@@ -2625,11 +2811,13 @@ class WearChatEventFlowTest {
               request.params
                 .getValue("message")
                 .jsonPrimitive.content
+            val ack =
+              sendAck ?: buildJsonObject {
+                put("runId", requestedRunId)
+                put("status", "started")
+              }
             sendGate?.await()
-            buildJsonObject {
-              put("runId", requestedRunId)
-              put("status", "started")
-            }
+            ack
           }
 
           else -> {

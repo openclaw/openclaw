@@ -459,6 +459,34 @@ class WearGatewayRepositoryTest {
   }
 
   @Test
+  fun sendCompletesOnlyForExplicitRunlessControlAcknowledgments() =
+    runTest {
+      val attempt = WearSendAttempt("session-1", "/stop", "wear-stop", "phone-a")
+      val acknowledgments =
+        listOf(
+          """{"aborted":false}""" to true,
+          """{"aborted":true}""" to true,
+          """{"runId":"wear-stop","status":"started"}""" to false,
+          "{}" to false,
+          """{"status":"started"}""" to false,
+          """{"aborted":"false"}""" to false,
+          """{"runId":"wear-stop","aborted":true}""" to false,
+          """{"status":"started","aborted":true}""" to false,
+        )
+      for ((ack, controlCompleted) in acknowledgments) {
+        val requester = RecordingRequester { _, _ -> json.parseToJsonElement(ack) }
+        assertEquals(ack, controlCompleted, WearGatewayRepository(requester).send(attempt, requirePreferredPhone = true))
+        assertEquals(WearRpcMethod.ChatSend, requester.calls.single().first)
+        assertEquals("phone-a", requester.expectedNodeIds.single())
+        assertTrue(requester.requirePreferredNodes.single())
+      }
+
+      val failure = WearProxyException("unavailable", "Outcome unknown")
+      val requester = RecordingRequester { _, _ -> throw failure }
+      assertEquals(failure, runCatching { WearGatewayRepository(requester).send(attempt) }.exceptionOrNull())
+    }
+
+  @Test
   fun ambiguousSendRetryReusesItsIdempotencyKeyUntilSuccess() =
     runTest {
       val generatedIds = ArrayDeque(listOf("first", "second"))

@@ -206,6 +206,7 @@ internal class WearSendAttemptTracker(
 ) {
   private var ambiguousAttempt: WearSendAttempt? = null
   private var latestAttempt: WearSendAttempt? = null
+  private var retryingUncertainDelivery = false
 
   fun begin(
     sessionKey: String,
@@ -230,6 +231,7 @@ internal class WearSendAttemptTracker(
 
   private fun own(attempt: WearSendAttempt): WearSendAttempt {
     // Retries reuse the logical key, never the authority of an older invocation.
+    retryingUncertainDelivery = ambiguousAttempt == attempt
     ambiguousAttempt = null
     latestAttempt = attempt
     return attempt
@@ -242,6 +244,7 @@ internal class WearSendAttemptTracker(
   fun reset() {
     ambiguousAttempt = null
     latestAttempt = null
+    retryingUncertainDelivery = false
   }
 
   fun retainForTarget(
@@ -269,6 +272,19 @@ internal class WearSendAttemptTracker(
 
   fun markSucceeded(attempt: WearSendAttempt) {
     if (isCurrent(attempt)) ambiguousAttempt = null
+  }
+
+  fun retireRejected(
+    attempt: WearSendAttempt,
+    code: String,
+  ): Boolean {
+    if (!isCurrent(attempt) || retryingUncertainDelivery) return false
+    if (code != "invalid_request" && code != "INVALID_REQUEST") return false
+    // Phone validation and Gateway pre-admission can definitively reject this
+    // invocation. Policy runs before deduplication, so neither disproves an
+    // earlier uncertain delivery of the same logical send.
+    reset()
+    return true
   }
 
   fun retire(
@@ -532,20 +548,26 @@ internal class WearGatewayRepository(
     )
   }
 
+  // True only for an explicit runless control completion, not ordinary send acceptance.
   suspend fun send(
     attempt: WearSendAttempt,
     requirePreferredPhone: Boolean = false,
-  ) {
-    requester.request(
-      WearRpcMethod.ChatSend,
-      buildJsonObject {
-        put("sessionKey", attempt.sessionKey)
-        put("message", attempt.message)
-        put("idempotencyKey", attempt.idempotencyKey)
-      },
-      attempt.phoneNodeId,
-      requirePreferredNode = requirePreferredPhone,
-    )
+  ): Boolean {
+    val response =
+      requester.request(
+        WearRpcMethod.ChatSend,
+        buildJsonObject {
+          put("sessionKey", attempt.sessionKey)
+          put("message", attempt.message)
+          put("idempotencyKey", attempt.idempotencyKey)
+        },
+        attempt.phoneNodeId,
+        requirePreferredNode = requirePreferredPhone,
+      )
+    val ack = response.payload as? JsonObject ?: return false
+    // Phone projectAck forwards the stop result as {aborted: false/true}; it
+    // omits Gateway ok/runIds. Missing runId alone (including legacy {}) is not proof.
+    return "runId" !in ack && "status" !in ack && ack.boolean("aborted") != null
   }
 
   suspend fun abort(
