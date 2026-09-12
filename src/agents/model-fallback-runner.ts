@@ -68,6 +68,7 @@ import {
 } from "./model-fallback-cooldown.js";
 import {
   isModelFallbackDecisionLogEnabled,
+  logLocalChainStop,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
@@ -609,6 +610,7 @@ async function runWithModelFallbackInternal<T>(
     // the same local condition and surfacing a misleading "All models
     // failed" summary. See #83510.
     if (isNonProviderRuntimeCoordinationError(err) || isTranscriptNotContinuableError(err)) {
+      logLocalChainStop(err, candidate, runAttribution, isTranscriptNotContinuableError(err));
       throw err;
     }
     if (transientProbeProviderForAttempt) {
