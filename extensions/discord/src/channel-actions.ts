@@ -2,6 +2,7 @@
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
@@ -270,7 +271,13 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: true,
-  supportsConversationReadAuthority: true,
+  conversationReadAuthority: {
+    version: 2,
+    handleAction: async (ctx) =>
+      await discordConversationReadAuthority.run(ctx.assertConversationReadAuthority, async () =>
+        handleDiscordAction(ctx),
+      ),
+  },
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
@@ -344,44 +351,43 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       },
     };
   },
-  handleAction: async ({
+  handleAction: handleDiscordAction,
+};
+
+async function handleDiscordAction({
+  action,
+  params,
+  cfg,
+  accountId,
+  requesterAccountId,
+  requesterSenderId,
+  senderIsOwner,
+  toolContext,
+  mediaAccess,
+  mediaLocalRoots,
+  mediaReadFile,
+  sessionKey,
+  inboundEventKind,
+  conversationReadOrigin,
+  reply,
+}: ChannelMessageActionContext) {
+  return await (
+    await loadDiscordChannelActionsRuntime()
+  ).handleDiscordMessageAction({
     action,
     params,
     cfg,
     accountId,
-    requesterAccountId,
     requesterSenderId,
     senderIsOwner,
     toolContext,
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
-    sessionKey,
-    inboundEventKind,
-    conversationReadOrigin,
-    assertConversationReadAuthority,
-    reply,
-  }) => {
-    return await discordConversationReadAuthority.run(assertConversationReadAuthority, async () => {
-      return await (
-        await loadDiscordChannelActionsRuntime()
-      ).handleDiscordMessageAction({
-        action,
-        params,
-        cfg,
-        accountId,
-        requesterSenderId,
-        senderIsOwner,
-        toolContext,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(inboundEventKind ? { inboundEventKind } : {}),
-        ...(requesterAccountId ? { requesterAccountId } : {}),
-        ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
-        ...(reply ? { reply } : {}),
-      });
-    });
-  },
-};
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(inboundEventKind ? { inboundEventKind } : {}),
+    ...(requesterAccountId ? { requesterAccountId } : {}),
+    ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
+    ...(reply ? { reply } : {}),
+  });
+}

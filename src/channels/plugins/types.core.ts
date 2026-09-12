@@ -772,6 +772,20 @@ export type ChannelMessageActionContext = {
   skipQueue?: boolean;
 };
 
+/** Versioned context for host-authorized provider reads; authority is never optional. */
+export type ChannelMessageActionContextV2 = Omit<
+  ChannelMessageActionContext,
+  "assertConversationReadAuthority"
+> & {
+  assertConversationReadAuthority: () => void;
+};
+
+/** Opt-in read entrypoint kept separate from the source-compatible legacy action handler. */
+export type ChannelMessageReadAuthorityAdapterV2 = {
+  version: 2;
+  handleAction: (ctx: ChannelMessageActionContextV2) => Promise<AgentToolResult<unknown>>;
+};
+
 export type ChannelToolSend = {
   to: string;
   accountId?: string | null;
@@ -810,8 +824,8 @@ export type ChannelMessageActionAdapter = {
    * The adapter must enforce provider account, sender, and destination policy.
    */
   providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
-  /** The adapter enforces the host read assertion before every request after asynchronous work. */
-  supportsConversationReadAuthority?: true;
+  /** Versioned provider read entrypoint requiring host authority on every invocation. */
+  conversationReadAuthority?: ChannelMessageReadAuthorityAdapterV2;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {

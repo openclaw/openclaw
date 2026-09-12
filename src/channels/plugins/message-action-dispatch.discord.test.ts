@@ -163,7 +163,7 @@ describe("registered official Discord read authority through HTTP", () => {
 
   it("stops the next provider request when the registrar revokes during metadata lookup", async () => {
     const { revoke } = registerDiscord();
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const response = createDeferred<Response>();
     fetchMock.mockImplementationOnce(async () => {
       started.resolve();
@@ -183,7 +183,7 @@ describe("registered official Discord read authority through HTTP", () => {
 
   it("rejects an old read across adoption while allowing a fresh read of the retained instance", async () => {
     const { registry } = registerDiscord();
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const response = createDeferred<Response>();
     fetchMock.mockImplementationOnce(async () => {
       started.resolve();
@@ -217,7 +217,7 @@ describe("registered official Discord read authority through HTTP", () => {
     async (revoked) => {
       vi.useFakeTimers();
       const { revoke } = registerDiscord();
-      const limited = createDeferred<void>();
+      const limited = createDeferred();
       let attempts = 0;
       fetchMock.mockImplementation(async (input, init) => {
         if (requestPath(input) === messagesPath && ++attempts === 1) {

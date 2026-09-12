@@ -72,13 +72,24 @@ function invoke(overrides: Partial<ChannelMessageActionContext> = {}) {
   if (!discordMessageActions.handleAction) {
     throw new Error("Discord action adapter is missing");
   }
-  return discordMessageActions.handleAction({
+  const context: ChannelMessageActionContext = {
     channel: "discord",
     action: "read",
     cfg,
     params: { channelId, limit: 1 },
     ...overrides,
-  });
+  };
+  if (context.assertConversationReadAuthority) {
+    const adapter = discordMessageActions.conversationReadAuthority;
+    if (!adapter) {
+      throw new Error("Missing versioned read adapter");
+    }
+    return adapter.handleAction({
+      ...context,
+      assertConversationReadAuthority: context.assertConversationReadAuthority,
+    });
+  }
+  return discordMessageActions.handleAction(context);
 }
 
 function createAuthority() {

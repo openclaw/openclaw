@@ -53,7 +53,7 @@ of action names, to enforce conversation-read authorization itself. Core honors
 this declaration for bundled registrations. Official installs verified by the
 loader against the recorded package source and official catalog are also
 eligible, but only for actions core classifies as read-only and adapters declaring
-`actions.supportsConversationReadAuthority: true`. Such adapters must carry the
+`actions.conversationReadAuthority: { version: 2, handleAction }`. The versioned handler receives `ChannelMessageActionContextV2`, which requires the host callback; the legacy handler remains source-compatible and cannot receive the new delegation. Such adapters must carry the
 host-owned `ctx.assertConversationReadAuthority` through their request lifecycle
 and invoke it synchronously immediately before every provider request, including
 authorization lookups, paginated reads, and retries after a backoff or token refresh.

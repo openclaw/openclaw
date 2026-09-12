@@ -154,7 +154,7 @@ function resolveMessageActionReadEnforcement(params: {
   // their authority without a provider-side final-effect lifecycle fence.
   const officialReadOnly =
     params.pluginTrustedOfficialInstall === true &&
-    params.actions?.supportsConversationReadAuthority === true &&
+    params.actions?.conversationReadAuthority?.version === 2 &&
     actionPolicy?.kind === "conversation-read" &&
     actionPolicy.readOnly;
   if (
@@ -680,18 +680,6 @@ export function shouldDeferExternalMessageActionTargetResolution(
   return isExternalDelegatedMessageActionRead(prepareMessageActionReadContext(ctx));
 }
 
-function requiresTrustedRequesterSender(
-  ctx: ChannelMessageActionContext,
-  plugin: ChannelPlugin,
-): boolean {
-  return Boolean(
-    plugin?.actions?.requiresTrustedRequesterSender?.({
-      action: ctx.action,
-      toolContext: ctx.toolContext,
-    }),
-  );
-}
-
 /**
  * Runs a channel message action if the target plugin supports it.
  */
@@ -704,7 +692,7 @@ export async function dispatchChannelMessageAction(
   }
   const { actionContext, plugin, origin, actionPolicy, enforcement } = prepared;
   const actions = plugin.actions;
-  if (!actions?.handleAction) {
+  if (!actions || (!prepared.assertReadAuthorityCurrent && !actions.handleAction)) {
     return null;
   }
   const authorizedActionContext = attachExternalCurrentTargetSibling({
@@ -724,7 +712,10 @@ export async function dispatchChannelMessageAction(
   // Some plugin actions depend on the sender identity to enforce channel-local
   // trust. Reject tool-driven calls before invoking the action without it.
   if (
-    requiresTrustedRequesterSender(authorizedActionContext, plugin) &&
+    actions.requiresTrustedRequesterSender?.({
+      action: authorizedActionContext.action,
+      toolContext: authorizedActionContext.toolContext,
+    }) &&
     !authorizedActionContext.requesterSenderId?.trim()
   ) {
     throw new Error(
@@ -741,11 +732,22 @@ export async function dispatchChannelMessageAction(
   }
   prepared.assertReadAuthorityCurrent?.();
   try {
-    return await actions.handleAction({
-      ...authorizedActionContext,
-      // Never accept an assertion supplied by the caller or tool arguments.
-      assertConversationReadAuthority: prepared.assertReadAuthorityCurrent,
-    });
+    if (prepared.assertReadAuthorityCurrent) {
+      if (actions.conversationReadAuthority?.version !== 2) {
+        throw new Error("Versioned conversation read authority adapter is required.");
+      }
+      return await actions.conversationReadAuthority.handleAction({
+        ...authorizedActionContext,
+        // Never accept an assertion supplied by the caller or tool arguments.
+        assertConversationReadAuthority: prepared.assertReadAuthorityCurrent,
+      });
+    }
+    return actions.handleAction
+      ? await actions.handleAction({
+          ...authorizedActionContext,
+          assertConversationReadAuthority: undefined,
+        })
+      : null;
   } finally {
     // A replaced/disabled owner cannot publish late read data, including provider errors.
     prepared.assertReadAuthorityCurrent?.();

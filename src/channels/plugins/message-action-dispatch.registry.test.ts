@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type {
+  ChannelMessageActionContextV2,
+  ChannelMessageReadAuthorityAdapterV2,
+} from "../../plugin-sdk/channel-contract.js";
 import { revokePluginRecord } from "../../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -116,6 +120,15 @@ describe("message action registration ownership", () => {
 });
 
 describe("official channel delegated read provenance", () => {
+  it("requires host authority for the versioned read entrypoint without changing legacy context", () => {
+    expectTypeOf<ChannelMessageActionContext>().not.toExtend<ChannelMessageActionContextV2>();
+    expectTypeOf<
+      Parameters<ChannelMessageReadAuthorityAdapterV2["handleAction"]>[0]
+    >().toEqualTypeOf<ChannelMessageActionContextV2>();
+    expectTypeOf<ChannelMessageActionContextV2["assertConversationReadAuthority"]>().toEqualTypeOf<
+      () => void
+    >();
+  });
   function registerChannel(options: {
     trustedOfficialInstall?: boolean;
     providerOwnedReadGates?: NonNullable<ChannelPlugin["actions"]>["providerOwnedReadGates"];
@@ -138,7 +151,7 @@ describe("official channel delegated read provenance", () => {
         describeMessageTool: () => ({ actions: ["read", "search"] }),
         providerOwnedReadGates: options.providerOwnedReadGates,
         ...(options.supportsConversationReadAuthority !== false
-          ? { supportsConversationReadAuthority: true as const }
+          ? { conversationReadAuthority: { version: 2 as const, handleAction } }
           : {}),
         handleAction,
       },
@@ -165,6 +178,22 @@ describe("official channel delegated read provenance", () => {
       currentChannelId: "channel:current",
     },
   };
+
+  it("dispatches a versioned-only read adapter without requiring a legacy handler", async () => {
+    const { plugin, handleAction } = registerChannel({
+      trustedOfficialInstall: true,
+      providerOwnedReadGates: true,
+    });
+    if (!plugin.actions) {
+      throw new Error("Missing test adapter");
+    }
+    delete plugin.actions.handleAction;
+    await expect(dispatchChannelMessageAction(context)).resolves.toEqual(receipt);
+    expect(handleAction).toHaveBeenCalledTimes(1);
+    expect(handleAction.mock.calls[0]?.[0].assertConversationReadAuthority).toEqual(
+      expect.any(Function),
+    );
+  });
 
   it.each([
     {
