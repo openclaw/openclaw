@@ -507,7 +507,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             this.clearTypingActorForSessionMessage(event.payload);
           }
           handlePageGatewayEvent(state, event, () => this.presented);
-          if (event.event === "sessions.changed" && this.active && this.presented) {
+          if (event.event === "sessions.changed" && this.presented && this.visuallyPresented) {
             this.activeSessionResources.reconcileSession(event.payload, state, {
               requestUpdate: () => this.requestUpdate(),
               updated: () => this.updateComplete,

@@ -282,15 +282,21 @@ suite.define(() => {
     );
   });
 
-  it.each([false, true])(
-    "does not accept old desktop discovery while a newer snapshot is pending (filtered: %s)",
-    async (filtered) => {
+  it.each([
+    { filtered: false, unfocused: false },
+    { filtered: true, unfocused: false },
+    { filtered: false, unfocused: true },
+    { filtered: true, unfocused: true },
+  ])(
+    "does not accept old desktop discovery while a newer snapshot is pending (filtered: $filtered, unfocused: $unfocused)",
+    async ({ filtered, unfocused }) => {
       await suite.withPage(
         { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             sessionKey: key,
             featureMethods,
+            heldMethods: ["environments.status"],
             historyMessages: [{ role: "assistant", content: "Resource ownership proof." }],
             methodResponses: {
               "sessions.list": list(false),
@@ -301,7 +307,23 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat/main/resource-demo`);
           await ready(page);
           await gateway.waitForRequest("sessions.describe");
-          await gateway.deferNext("environments.status");
+          if (unfocused) {
+            await page.setViewportSize({ width: 2200, height: 1000 });
+            await page.getByRole("button", { name: "Open split view", exact: true }).click();
+            const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+            await expect.poll(() => panes.count()).toBe(2);
+            await panes.last().locator(".agent-chat__composer-combobox textarea").click();
+            await expect
+              .poll(() =>
+                panes
+                  .first()
+                  .evaluate((element) => (element as HTMLElement & { active: boolean }).active),
+              )
+              .toBe(false);
+          }
+          const ownerPane = unfocused
+            ? page.locator("openclaw-chat-pane.chat-split-view__pane").first()
+            : pane(page);
           await gateway.setSessionsListResponse(list(true));
           await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
           await gateway.waitForRequest("environments.status");
@@ -312,17 +334,19 @@ suite.define(() => {
             filtered ? { ...list(false), sessions: [notes] } : list(false),
           );
           await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
+          await gateway.resolveDeferred("environments.status", inventory.environments[0]);
+          await expectRequestCountStable(gateway, "desktop.observe", 0);
+          expect(await ownerPane.getByRole("tab", { name: "Desktop", exact: true }).count()).toBe(
+            0,
+          );
           await gateway.waitForRequest("sessions.list", {
             after: listReads,
             match: { includeGlobal: true },
           });
-          await gateway.resolveDeferred("environments.status", inventory.environments[0]);
-          await expectRequestCountStable(gateway, "desktop.observe", 0);
-          expect(await desktopTab(page).count()).toBe(0);
           await gateway.resolveDeferred("sessions.list");
           await expect
             .poll(() =>
-              pane(page).evaluate((element, sessionKey) => {
+              ownerPane.evaluate((element, sessionKey) => {
                 const state = (element as HTMLElement & { state: ChatPageHost }).state;
                 return state.sessionsResult?.sessions.find((session) => session.key === sessionKey)
                   ?.placement?.state;
@@ -330,7 +354,9 @@ suite.define(() => {
             )
             .toBe(filtered ? undefined : "local");
           await expectRequestCountStable(gateway, "desktop.observe", 0);
-          expect(await desktopTab(page).count()).toBe(0);
+          expect(await ownerPane.getByRole("tab", { name: "Desktop", exact: true }).count()).toBe(
+            0,
+          );
           await assertNoProvisioning(gateway);
         },
       );
