@@ -596,7 +596,23 @@ describe("Models page catalog publication", () => {
           picker.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
         ),
       ).toEqual(["openai/prepared-primary", "openai/prepared-utility", "openai/prepared-fallback"]);
+      const laterPublication: ModelCatalogResult = {
+        models: [
+          ...published.models,
+          { id: "published-later", name: "Published later", provider: "openai", available: true },
+        ],
+      };
+      readPublished.mockReturnValue(laterPublication);
       await openModelPicker(page, 1);
+      await drainPageUpdates(page);
+      expect(page.data?.models).toEqual(published.models);
+      expect(readPublished).toHaveBeenCalledTimes(2);
+      publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForFast(() => expect(page.data?.models).toEqual(laterPublication.models));
+      await drainPageUpdates(page);
+      expect(
+        page.querySelector('[role="option"][data-value="openai/published-later"]'),
+      ).not.toBeNull();
       const utility = modelPickers(page)[1]!;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();
@@ -614,7 +630,8 @@ describe("Models page catalog publication", () => {
       expect(page.data?.config).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
       expect(discover).not.toHaveBeenCalled();
-      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
+      expect(readPublished).toHaveBeenCalledTimes(3);
     },
   );
 

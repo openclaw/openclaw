@@ -58,6 +58,18 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+New Session shows the agent's known default model while the model catalog loads.
+Model choices are cached in memory for the current connection, agent, session,
+and account, so reopening a picker or returning to a draft can show them
+immediately. Catalog and account changes invalidate these copies; reconnecting
+loads current choices again. Reopening a picker after a reported cooldown expires
+checks readiness again. A catalog refresh keeps existing controls visible,
+and the Gateway still validates the model and account when starting a run.
+
+If a New Session model lookup does not finish within 30 seconds, the controls
+show **Models unavailable**. Open the model picker to retry; your draft stays
+in place.
+
 When you open an existing session, you can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
 composer keeps your draft and focus when the conversation appears. Send shows

@@ -7,10 +7,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished,
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
   subscribeChatMetadata,
-  invalidateChatMetadataStore,
 } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {

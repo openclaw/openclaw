@@ -75,6 +75,20 @@ beforeEach(() => {
 });
 
 describe("Radius native message transport", () => {
+  it("omits disabled reasoning from Pi requests without changing the output cap", async () => {
+    fetchMock.mockResolvedValue(response([{ type: "done", reason: "stop", usage }]));
+    await createRadiusStreamFn()(model, context, {
+      ...options,
+      reasoning: "off",
+      maxTokens: 1024,
+    }).result();
+    expect(await new Response(fetchMock.mock.calls[0]![1]?.body).json()).toEqual({
+      model: model.id,
+      context,
+      options: { maxTokens: 1024 },
+    });
+  });
+
   it("bounds large-tool preview work while emitting every delta and the final arguments", async () => {
     const toolArguments = { content: "a".repeat(100_000) };
     const json = JSON.stringify(toolArguments);

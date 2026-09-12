@@ -251,11 +251,29 @@ suite.define(() => {
           await capture("settings-first-open.png");
 
           providerModel = "published-fixture:latest";
+          const publicationStart = requests.length;
           expect((await publish()).providerOutcomes).toContainEqual({
             provider: "ollama",
             status: "ready",
           });
           expect(acquisitions()).toBe(initialAcquisitions + 1);
+          await expect
+            .poll(() =>
+              requests
+                .slice(publicationStart)
+                .filter(({ params }) => params.refresh === undefined)
+                .map(({ id }) => replies.get(id)?.payload),
+            )
+            .toContainEqual(
+              expect.objectContaining({
+                models: expect.arrayContaining([
+                  expect.objectContaining({
+                    provider: "ollama",
+                    id: "published-fixture:latest",
+                  }),
+                ]),
+              }),
+            );
           await primary
             .locator('[role="option"][data-value="ollama/published-fixture:latest"]')
             .waitFor({ state: "visible" });
