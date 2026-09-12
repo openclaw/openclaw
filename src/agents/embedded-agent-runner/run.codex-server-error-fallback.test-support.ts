@@ -66,6 +66,8 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
 
     const promise = runEmbeddedAgent({
       ...createOverflowRunParams(state),
+      // Exhaust the retry count without the finite run deadline truncating retries.
+      timeoutMs: 360_000,
       runId: "run-codex-server-error-fallback",
       agentHarnessRuntimeOverride: "openclaw",
       config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),

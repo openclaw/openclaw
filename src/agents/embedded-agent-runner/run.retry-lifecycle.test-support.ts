@@ -1,7 +1,11 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
+  MockedFailoverError,
+  mockedIsFailoverAssistantError,
+  mockedIsRateLimitAssistantError,
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
@@ -12,6 +16,7 @@ import {
   createSharedRunIntegrationSession,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import { resolveEmbeddedRunLaneTimeoutMs } from "./run/lane-runtime.js";
 
 describe("direct embedded retry lifecycle", () => {
   let run: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -65,14 +70,15 @@ describe("direct embedded retry lifecycle", () => {
         runId: "run-retry-lane-expiry",
         provider: "mock",
         model: "model",
-        timeoutMs: 30_000,
+        // Admit the provider floor while retaining the finite legacy lane watchdog.
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
         abortSignal: caller.signal,
       });
       const outcome = pending.catch((error: unknown) => error);
       await vi.waitFor(() => expect(mockedSleep).toHaveBeenCalled(), { timeout: 10_000 });
       expect(mockedSleep).toHaveBeenCalledWith(3_600_000, expect.any(AbortSignal));
       expect(waitSettled).toBe(false);
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(resolveEmbeddedRunLaneTimeoutMs(MAX_TIMER_TIMEOUT_MS) + 1);
       expect(await outcome).toMatchObject({ name: "CommandLaneTaskTimeoutError" });
       expect(caller.signal.aborted).toBe(false);
       expect(sleepSignal?.aborted).toBe(true);
@@ -85,6 +91,42 @@ describe("direct embedded retry lifecycle", () => {
       mockedSleep.mockImplementation(previousSleep ?? (async () => {}));
       vi.useRealTimers();
     }
+  });
+
+  it("refuses an oversized retry floor within a finite run budget without aborting the caller", async () => {
+    const { sleepWithAbort } = await import("../../infra/backoff.js");
+    const caller = new AbortController();
+    const assistant = makeAssistantMessageFixture({
+      stopReason: "error",
+      content: [],
+      errorMessage: "429 rate limit exceeded; Retry-After: 3600",
+    });
+    mockedClassifyAssistantFailoverReason.mockReturnValue("rate_limit");
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedIsRateLimitAssistantError.mockReturnValue(true);
+    mockedIsFailoverAssistantError.mockReturnValue(true);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      }),
+    );
+
+    const pending = run({
+      ...session.runParams,
+      runId: "run-retry-floor-refused",
+      provider: "mock",
+      model: "model",
+      timeoutMs: 30_000,
+      abortSignal: caller.signal,
+    });
+
+    await expect(pending).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(pending).rejects.toThrow(/rate limit/i);
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledWith(assistant);
+    expect(caller.signal.aborted).toBe(false);
   });
 
   it.each(["recovered", "exhausted", "caller-deferred"] as const)(

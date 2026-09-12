@@ -51,6 +51,8 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
 
     const promise = runEmbeddedAgent({
       ...createOverflowRunParams(state),
+      // Exhaust the retry count without the finite run deadline truncating retries.
+      timeoutMs: 360_000,
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-prompt-timeout-fallback",
