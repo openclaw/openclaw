@@ -15,6 +15,7 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -1202,6 +1203,10 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
 
 export function closePluginStateDatabase(): void {
   closeOpenClawStateDatabase();
+}
+
+export async function closePluginStateDatabaseAsync(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

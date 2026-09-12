@@ -48,7 +48,7 @@ export type {
 export type { PluginDoctorRawStateEntry } from "./plugin-state-store.sqlite.js";
 
 export {
-  closePluginStateDatabase,
+  closePluginStateDatabaseAsync,
   countPluginStateLiveEntries,
   getPluginStateCapacity,
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,

@@ -1,5 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { toErrorObject } from "./errors.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
@@ -122,8 +122,8 @@ process.on("message", (raw: unknown) => {
           },
         });
       })()
-        .then((result) => {
-          closeOpenClawStateDatabase();
+        .then(async (result) => {
+          await closeOpenClawStateDatabaseAsync();
           send({ type: "result", result }, () => process.exit(0));
         })
         .catch(() => process.exit(1));

@@ -13,7 +13,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
+import { closePluginStateDatabaseAsync } from "../plugin-state/plugin-state-store.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
@@ -685,7 +685,7 @@ export async function completeGatewayClose(
           await closePreparedModelRuntimeSnapshots();
           await retire();
           if (mediaCleanupStopResult !== undefined) {
-            await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
+            await closePluginStateDatabaseAsync();
           }
           try {
             await drainGlobalSingletonLifecycleState(

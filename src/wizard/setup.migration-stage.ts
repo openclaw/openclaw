@@ -22,7 +22,7 @@ import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
 import {
@@ -315,14 +315,14 @@ export async function createSetupMigrationStage(params: {
   let finalAgentDatabaseRegistered = false;
   let retainForRecovery = false;
 
-  const disposeDatabases = () => {
+  const disposeDatabases = async () => {
     if (databasesDisposed) {
       return;
     }
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
     disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
-    closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(stageEnv));
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;
   };
 
@@ -341,7 +341,7 @@ export async function createSetupMigrationStage(params: {
     projectPlanToStage: (plan) => projectPlanTargets(plan, toStage),
     projectResultToFinal: (result) => projectValue(result, toFinal) as MigrationApplyResult,
     async promote({ expectedConfig, continuation, readConfigFile, commitConfigFile }) {
-      disposeDatabases();
+      await disposeDatabases();
       // Bootstrap owns this state-local lock tree; it is not provider output and must not be promoted.
       const gatewayLockDir = resolveGatewayLockDir(stagedStateDir);
       await fs.rm(gatewayLockDir, { recursive: true, force: true });
@@ -492,7 +492,7 @@ export async function createSetupMigrationStage(params: {
       if (retainForRecovery) {
         return;
       }
-      disposeDatabases();
+      await disposeDatabases();
       await Promise.all([
         fs.rm(stagedStateDir, { recursive: true, force: true }),
         fs.rm(stagedWorkspaceDir, { recursive: true, force: true }),

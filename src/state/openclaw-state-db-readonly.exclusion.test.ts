@@ -7,6 +7,7 @@ import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withSqliteSnapshotSource } from "../infra/sqlite-snapshot-source.js";
+import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -33,14 +34,14 @@ function source() {
   return pathname;
 }
 
-it("keeps a fresh live read inside the physical handle barrier", () => {
+it("keeps a fresh live read inside the physical handle barrier", async () => {
   const pathname = source();
   const rows = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) => {
       let excluded = false;
-      let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+      let exclusion: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
       try {
-        exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+        exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
       } catch (error) {
         expect(String(error)).toMatch(/state-handles/);
         excluded = true;
@@ -55,12 +56,12 @@ it("keeps a fresh live read inside the physical handle barrier", () => {
     { path: pathname },
   );
   expect(rows).toEqual([{ event_key: "preserved" }]);
-  acquireOpenClawStateDatabaseFileExclusion(pathname).release();
+  (await acquireOpenClawStateDatabaseFileExclusion(pathname)).release();
 });
 
-it("refuses a new live readonly handle without touching an excluded source", () => {
+it("refuses a new live readonly handle without touching an excluded source", async () => {
   const pathname = source();
-  const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+  const exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
   const before = fs.statSync(pathname, { bigint: true });
   try {
     expect(() =>
@@ -127,9 +128,11 @@ it("keeps the source-copy child's own handle lease until its actual backup settl
     const [ready] = await once(child, "message", { signal: AbortSignal.timeout(15_000) });
     expect(ready).toEqual({ ready: true });
     let excluded = false;
-    let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+    let exclusion:
+      | Awaited<ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion>>
+      | undefined;
     try {
-      exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+      exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
     } catch (error) {
       expect(String(error)).toMatch(/state-handles/);
       excluded = true;
@@ -142,7 +145,7 @@ it("keeps the source-copy child's own handle lease until its actual backup settl
     child.send({ release: true });
     expect((await done)[0]).toEqual({ rows: [{ event_key: "preserved" }] });
     await closed;
-    acquireOpenClawStateDatabaseFileExclusion(pathname).release();
+    (await acquireOpenClawStateDatabaseFileExclusion(pathname)).release();
   } finally {
     await stopChildProcess(child, 5_000);
   }
@@ -174,9 +177,11 @@ it("keeps a live-path snapshot callback excluded until its actual reader closes"
   try {
     await started;
     let excluded = false;
-    let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+    let exclusion:
+      | Awaited<ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion>>
+      | undefined;
     try {
-      exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
+      exclusion = await acquireOpenClawStateDatabaseFileExclusion(pathname);
     } catch (error) {
       expect(String(error)).toMatch(/state-handles/);
       excluded = true;
@@ -188,5 +193,5 @@ it("keeps a live-path snapshot callback excluded until its actual reader closes"
     resume();
   }
   expect(await copying).toEqual([{ event_key: "preserved" }]);
-  acquireOpenClawStateDatabaseFileExclusion(pathname).release();
+  (await acquireOpenClawStateDatabaseFileExclusion(pathname)).release();
 });
