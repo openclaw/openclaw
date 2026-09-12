@@ -129,9 +129,10 @@ function renderAgentAvatar(
   textAvatar = resolveAssistantTextAvatar(avatar),
 ) {
   const value = avatar?.trim() || "";
-  return html`<span class="chat-avatar assistant" role="img" aria-label=${name}>
-    ${renderAgentIdentityAvatar({ id, avatar: isAvatarUrl(value) ? value : null, textAvatar })}
-  </span>`;
+  return renderAgentIdentityAvatar(
+    { id, name, avatar: isAvatarUrl(value) ? value : null, textAvatar },
+    "chat-avatar assistant",
+  );
 }
 
 type ForwardedAvatarOptions = {

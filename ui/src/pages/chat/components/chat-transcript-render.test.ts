@@ -99,13 +99,10 @@ describe("chat transcript rendering", () => {
             const image = slot?.querySelector("img");
             expect(image?.getAttribute("src")).toBe(avatar);
             image?.dispatchEvent(new Event("load"));
-            const identity = slot?.querySelector(".identity-avatar--agent");
-            expect(identity?.classList.contains("is-fallback")).toBe(false);
+            expect(slot?.classList.contains("is-fallback")).toBe(false);
             image?.dispatchEvent(new Event("error"));
-            expect(identity?.classList.contains("is-fallback")).toBe(true);
-            expect(identity?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe(
-              "🦉",
-            );
+            expect(slot?.classList.contains("is-fallback")).toBe(true);
+            expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
           } else {
             expect(slot?.querySelector("img")).toBeNull();
             expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe(avatar);
