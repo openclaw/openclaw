@@ -128,7 +128,10 @@ function createQuickChatHarness(): Record<string, any> {
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
   const elements = new Map();
-  let resolveSend;
+  const sends: Array<{
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+  }> = [];
   let syncedWidgets: unknown[] = [];
   let syncedHasWidgets = false;
   let syncedExpanded = false;
@@ -138,9 +141,26 @@ function createQuickChatHarness(): Record<string, any> {
   let widgetSurfaceRefreshFails = false;
   let widgetSurfaceRefreshResult = "https://gateway.example/__openclaw__/cap/refreshed-capability";
   let fakeNow = 1_000_000;
-  const sendResult = new Promise((resolve) => {
-    resolveSend = resolve;
-  });
+  let timerId = 0;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  const frames = new Map<number, () => void>();
+  const microtasks = async () => {
+    for (let i = 0; i < 16; i += 1) {
+      await Promise.resolve();
+    }
+  };
+  const drain = async () => {
+    for (let batch = 0; batch < 32; batch += 1) {
+      await microtasks();
+      if (frames.size === 0) {
+        return;
+      }
+      const callbacks = [...frames.values()];
+      frames.clear();
+      callbacks.forEach((callback) => callback());
+    }
+    assert.fail("renderer exceeded 32 RAF batches");
+  };
   const Date = { now: () => fakeNow };
   const window = {
     __TAURI__: {
@@ -157,7 +177,9 @@ function createQuickChatHarness(): Record<string, any> {
           },
         ) {
           if (method === "quickchat_send") {
-            return sendResult;
+            return new Promise((resolve, reject) => {
+              sends.push({ resolve, reject });
+            });
           }
           if (method === "quickchat_refresh_widget_surface") {
             widgetSurfaceRefreshCount += 1;
@@ -172,18 +194,35 @@ function createQuickChatHarness(): Record<string, any> {
             syncedGeneration = args?.generation ?? 0;
             widgetSyncCount += 1;
           }
-          return Promise.resolve(null);
+          if (method === "quickchat_agents") {
+            return Promise.resolve([]);
+          }
+          if (method === "quickchat_identity") {
+            return Promise.resolve({ id: "work", name: "Work", isDefault: true });
+          }
+          return Promise.resolve(true);
         },
       },
       event: { listen: async () => () => {} },
     },
     addEventListener() {},
-    clearTimeout() {},
+    clearTimeout(id: number) {
+      timers.delete(id);
+    },
     matchMedia: () => ({ matches: true }),
     requestAnimationFrame(callback: () => void) {
-      callback();
+      const id = ++timerId;
+      frames.set(id, callback);
+      return id;
     },
-    setTimeout: () => 1,
+    cancelAnimationFrame(id: number) {
+      frames.delete(id);
+    },
+    setTimeout(callback: () => void, ms: number) {
+      const id = ++timerId;
+      timers.set(id, { at: fakeNow + ms, callback });
+      return id;
+    },
   };
   const document = {
     body: createFakeElement(),
@@ -197,8 +236,23 @@ function createQuickChatHarness(): Record<string, any> {
       return elements.get(selector);
     },
   };
-  const advanceTime = (ms: number) => {
-    fakeNow += ms;
+  const advanceTime = async (ms: number) => {
+    const until = fakeNow + ms;
+    for (let batch = 0; batch < 128; batch += 1) {
+      await drain();
+      const next = [...timers.entries()]
+        .filter(([, timer]) => timer.at <= until)
+        .toSorted((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      if (!next) {
+        fakeNow = until;
+        await drain();
+        return;
+      }
+      fakeNow = next[1].at;
+      timers.delete(next[0]);
+      next[1].callback();
+    }
+    assert.fail("renderer exceeded 128 timer batches");
   };
   const browserContext: Record<string, any> = {
     advanceTime,
@@ -212,25 +266,25 @@ function createQuickChatHarness(): Record<string, any> {
     `${quickchatSource.slice(0, browserBindingsEnd)}
 this.harness = {
   send,
-  handleChatEvent,
+  handleChatEvent(payload) { handleChatEvent({gatewayGeneration: 1, ...payload}); },
   nextVisibilityOperation,
   requestHide,
   clearReply,
-  setGatewayUp(surface = "https://gateway.example/__openclaw__/cap/fixture-capability") {
-    gatewayState = "up";
-    canvasSurfaceObservedUrl = surface;
-    canvasSurfaceUrl = surface;
-    canvasSurfaceRefreshedAt = Date.now();
-    canvasSurfaceRetryAt = 0;
-    if (visibilitySequence === 0) visibilitySequence = 1;
+  setGatewayUp(surface = "https://gateway.example/__openclaw__/cap/fixture-capability", gatewayGeneration = 1) {
+    setGatewayState({state: "up", canvasSurfaceUrl: surface, gatewayGeneration});
+    if (visibilitySequence === 0) reveal();
   },
-  advanceTime(ms) { advanceTime(ms); },
-  emitGatewayState(payload) { setGatewayState(payload); },
+  advanceTime(ms) { return advanceTime(ms); },
+  emitGatewayState(payload) { setGatewayState({gatewayGeneration: 1, ...payload}); },
   accent() { return document.documentElement.style.getPropertyValue("--accent"); },
   setMessage(value) { elements.input.value = value; },
   pendingCount() { return pendingChatEvents.length; },
   activeRunId() { return activeReply?.runId ?? null; },
   replyText() { return elements.replyText.textContent; },
+  readOnly() { return elements.input.readOnly; },
+  thinking() { return !elements.replyThinking.hidden; },
+  draft() { return elements.input.value; },
+  error() { return elements.status.textContent; },
   reveal,
   expireCanvasSurface() { canvasSurfaceRefreshedAt = 0; canvasSurfaceRetryAt = 0; },
   allowCanvasSurfaceRetry() { canvasSurfaceRetryAt = 0; },
@@ -241,7 +295,23 @@ this.harness = {
   );
   return {
     ...(browserContext.harness as Record<string, (...args: any[]) => any>),
-    resolveSend,
+    resolveSend: (value: Record<string, unknown>, index = sends.length - 1) => {
+      const pending = sends[index];
+      assert.ok(pending, "send invocation exists");
+      pending.resolve({ gatewayGeneration: 1, status: "started", ...value });
+    },
+    rejectSend: (message: string, index = sends.length - 1) => {
+      const pending = sends[index];
+      assert.ok(pending, "send invocation exists");
+      pending.reject(new Error(message));
+    },
+    sendCount: () => sends.length,
+    drain,
+    flushWidgets: async () => {
+      await drain();
+      await browserContext.harness.flushWidgets();
+      await drain();
+    },
     syncedWidgets: () => syncedWidgets,
     syncedHasWidgets: () => syncedHasWidgets,
     syncedExpanded: () => syncedExpanded,
@@ -590,6 +660,88 @@ test("widget URLs stay inside the capability-scoped Canvas host", () => {
   );
 });
 
+test("a cached terminal retry presents the recovered reply and unlocks without another event", async () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage("recover my reply");
+  const first = harness.send(false);
+  harness.rejectSend("ACK connection closed");
+  await first;
+  assert.equal(harness.draft(), "recover my reply");
+  harness.emitGatewayState({ state: "down" });
+  await harness.drain();
+  harness.setGatewayUp();
+  const retry = harness.send(false);
+  harness.resolveSend({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "retained-key",
+    status: "ok",
+    recoveredMessages: [
+      { role: "assistant", content: [{ type: "text", text: "The saved answer." }] },
+    ],
+  });
+  await retry;
+  await harness.advanceTime(450);
+  assert.equal(harness.replyText(), "The saved answer.");
+  assert.equal(harness.thinking(), false);
+  assert.equal(harness.readOnly(), false);
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "other-run",
+    state: "final",
+    message: { role: "assistant", content: "unrelated" },
+  });
+  assert.equal(harness.replyText(), "The saved answer.");
+  harness.setMessage("next turn");
+  const next = harness.send(false);
+  assert.equal(harness.sendCount(), 3);
+  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "next-key" });
+  await next;
+  await harness.advanceTime(450);
+  assert.equal(harness.readOnly(), true, "ordinary started ACK still waits for its final");
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "other-run",
+    state: "final",
+  });
+  assert.equal(harness.readOnly(), true);
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "next-key",
+    state: "final",
+  });
+  assert.equal(harness.readOnly(), false);
+});
+
+test("a buffered matching final wins over terminal history recovery", async () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage("answer");
+  const sending = harness.send(false);
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "reply-key",
+    state: "final",
+    message: { role: "assistant", content: "Live final" },
+  });
+  harness.resolveSend({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "reply-key",
+    status: "ok",
+    recoveredMessages: [{ role: "assistant", content: "Recovered text" }],
+  });
+  await sending;
+  await harness.advanceTime(450);
+  assert.equal(harness.replyText(), "Live final");
+  assert.equal(harness.readOnly(), false);
+});
+
 test("pre-ack frames replay once for only the acknowledged run", async () => {
   const harness = createQuickChatHarness();
   harness.setGatewayUp();
@@ -813,9 +965,11 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
   await harness.flushSurfaceRefresh();
   assert.equal(harness.widgetSurfaceRefreshCount(), 1);
   harness.emitGatewayState({ state: "up", canvasSurfaceUrl: surface, notice: "unchanged" });
-  harness.advanceTime(5_000);
+  await harness.advanceTime(4_999);
+  assert.equal(harness.widgetSurfaceRefreshCount(), 1);
+  assert.equal(harness.syncedWidgets().length, 0);
   harness.setWidgetSurfaceRefreshFails(false);
-  harness.allowCanvasSurfaceRetry();
+  await harness.advanceTime(1);
   harness.handleChatEvent({
     sessionKey: "global",
     agentId: "work",

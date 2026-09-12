@@ -294,6 +294,7 @@ function nextVisibilityOperation() {
 }
 let sendError = "";
 let gatewayState = "down";
+let gatewayGeneration = null;
 let gatewayNotice = "";
 let canvasSurfaceUrl = null;
 let canvasSurfaceObservedUrl = null;
@@ -343,6 +344,12 @@ function renderStatus() {
 }
 
 function setGatewayState(payload) {
+  if (!Number.isSafeInteger(payload?.gatewayGeneration) ||
+      (gatewayGeneration !== null && payload.gatewayGeneration < gatewayGeneration)) {
+    return;
+  }
+  const ownerChanged = gatewayGeneration !== payload.gatewayGeneration;
+  gatewayGeneration = payload.gatewayGeneration;
   const wasUp = gatewayState === "up";
   gatewayState = payload?.state || "down";
   gatewayNotice = typeof payload?.notice === "string" ? payload.notice : "";
@@ -366,7 +373,7 @@ function setGatewayState(payload) {
       canvasSurfaceRefreshPromise = null;
     }
   }
-  if (gatewayState !== "up") {
+  if (ownerChanged || gatewayState !== "up") {
     gatewayDisconnectSequence += 1;
     terminalizeDisconnectedReply();
   }
@@ -375,7 +382,7 @@ function setGatewayState(payload) {
   if (activeReply?.widgets.length) {
     renderReplyWidgets();
   }
-  if (gatewayState === "up" && !wasUp) {
+  if (gatewayState === "up" && (!wasUp || ownerChanged)) {
     void refreshAgents();
   }
 }
@@ -701,6 +708,7 @@ function replyTargetMatches(target, payload) {
 function startReply(target, identity, runId) {
   activeReply = {
     runId,
+    gatewayGeneration: target.gatewayGeneration,
     target: {
       sessionKey: target.sessionKey,
       agentId: typeof target.agentId === "string" ? target.agentId : null,
@@ -730,7 +738,9 @@ function applyChatEvent(payload) {
   }
   // The chat.send ACK owns this reply. Exact runId equality is primary; the routing target remains
   // a secondary guard so concurrent turns from other surfaces never enter this reply area.
-  if (payload?.runId !== activeReply.runId || !replyTargetMatches(activeReply.target, payload)) {
+  if (payload?.gatewayGeneration !== activeReply.gatewayGeneration ||
+      activeReply.gatewayGeneration !== gatewayGeneration ||
+      payload?.runId !== activeReply.runId || !replyTargetMatches(activeReply.target, payload)) {
     return;
   }
   if (activeReply.terminal) {
@@ -776,6 +786,29 @@ function applyChatEvent(payload) {
     scrollReplyToEnd();
   }
   updateSendButton();
+}
+
+function applyRecoveredReply(result) {
+  if (activeReply?.terminal || result.status !== "ok") return;
+  if (!Array.isArray(result.recoveredMessages) || result.recoveredMessages.length === 0) {
+    throw new Error("The completed reply could not be recovered.");
+  }
+  const content = [];
+  for (const message of result.recoveredMessages) {
+    const text = chatMessageText(message);
+    if (text) content.push({ type: "text", text });
+    if (Array.isArray(message.content)) {
+      content.push(...message.content.filter((block) => block?.type === "canvas"));
+    }
+  }
+  applyChatEvent({
+    gatewayGeneration: result.gatewayGeneration,
+    sessionKey: result.sessionKey,
+    agentId: result.agentId,
+    runId: result.runId,
+    state: "final",
+    message: { role: "assistant", content },
+  });
 }
 
 function handleChatEvent(payload) {
@@ -833,21 +866,26 @@ function renderAgentList() {
   }
 }
 
-async function refreshIdentity() {
+async function refreshIdentity(owner = gatewayGeneration) {
   try {
-    renderIdentity(await invoke("quickchat_identity"));
+    const identity = await invoke("quickchat_identity");
+    if (gatewayGeneration === owner) renderIdentity(identity);
   } catch {
-    renderIdentity({ id: "", name: "Agent", isDefault: true });
+    if (gatewayGeneration === owner) renderIdentity({ id: "", name: "Agent", isDefault: true });
   }
 }
 
 async function refreshAgents() {
+  const owner = gatewayGeneration;
   try {
-    agents = await invoke("quickchat_agents");
+    const next = await invoke("quickchat_agents");
+    if (gatewayGeneration !== owner) return;
+    agents = next;
   } catch {
+    if (gatewayGeneration !== owner) return;
     agents = [];
   }
-  await refreshIdentity();
+  await refreshIdentity(owner);
 }
 
 async function selectAgent(agentId) {
@@ -855,12 +893,16 @@ async function selectAgent(agentId) {
     return;
   }
   selectingAgent = true;
+  const owner = gatewayGeneration;
   updateSendButton();
   try {
     await invoke("quickchat_select_agent", { agentId });
-    await refreshIdentity();
+    if (gatewayGeneration !== owner) return;
+    await refreshIdentity(owner);
+    if (gatewayGeneration !== owner) return;
     closePopover();
   } catch (error) {
+    if (gatewayGeneration !== owner) return;
     sendError = friendlyError(error, "Could not select that agent.");
     renderStatus();
   } finally {
@@ -1099,6 +1141,7 @@ async function send(openDashboard) {
   sending = true;
   const sendDisconnectSequence = gatewayDisconnectSequence;
   const sendVisibilitySequence = visibilitySequence;
+  const sendGeneration = gatewayGeneration;
   clearReply();
   pendingChatEvents = [];
   void invoke("quickchat_set_expanded", { expanded: false });
@@ -1113,6 +1156,9 @@ async function send(openDashboard) {
     }
     if (typeof result.runId !== "string" || !result.runId) {
       throw new Error("Gateway accepted the message without a run ID.");
+    }
+    if (result.gatewayGeneration !== sendGeneration || gatewayGeneration !== sendGeneration) {
+      throw new Error("Gateway changed before the Quick Chat reply was accepted.");
     }
     sending = false;
     sendError = "";
@@ -1129,6 +1175,7 @@ async function send(openDashboard) {
     for (const payload of bufferedEvents) {
       applyChatEvent(payload);
     }
+    applyRecoveredReply(result);
     if (gatewayDisconnectSequence !== sendDisconnectSequence || gatewayState !== "up") {
       terminalizeDisconnectedReply();
     }
