@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export type ExistingAgentSchemaMeta = {
   agentId: string | null;
@@ -11,10 +12,7 @@ export type ExistingAgentSchemaMeta = {
 
 /** Read ownership metadata without loading runtime schema or migration owners. */
 export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
-  const schemaMetaTable = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
-    .get();
-  if (!schemaMetaTable) {
+  if (!tableExists(db, "schema_meta")) {
     return null;
   }
   const row = executeSqliteQueryTakeFirstSync(
