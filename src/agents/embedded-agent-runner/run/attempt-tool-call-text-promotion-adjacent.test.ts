@@ -3,38 +3,11 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
-
-type FakeWrappedStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createFakeStream(params: {
-  events: unknown[];
-  resultMessage: unknown;
-}): FakeWrappedStream {
-  return {
-    async result() {
-      return params.resultMessage;
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {
-        for (const event of params.events) {
-          yield event;
-        }
-      })();
-    },
-  };
-}
-
-async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
-  // Drain streams to inspect generated tool-call events after wrapper mutation.
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
+import {
+  collectStreamEvents,
+  createFakeStream,
+  type FakeWrappedStream,
+} from "./attempt-tool-call-text-promotion.test-helpers.js";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
