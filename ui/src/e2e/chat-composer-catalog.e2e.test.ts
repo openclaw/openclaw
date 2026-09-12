@@ -83,7 +83,7 @@ suite.define(() => {
     },
   );
 
-  it("clears the active fallback model after recovery while retaining the selected preference", async () => {
+  it("tracks the executing model through pending, fallback, and recovery without changing selection", async () => {
     const artifactDir = suite.artifactDir;
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, recordVideo: { dir: artifactDir } },
@@ -134,7 +134,59 @@ suite.define(() => {
           )
           .toBe("true");
         await page.screenshot({ path: `${artifactDir}/active-fallback-model.png` });
-        const recovered = { ...session, updatedAt: session.updatedAt + 1 };
+        await composer
+          .locator(".agent-chat__composer-combobox textarea")
+          .fill("Try the selected model again.");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        await page.screenshot({ path: `${artifactDir}/pending-executing-model.png` });
+        await expect.poll(() => trigger.textContent()).toContain("Model pending");
+        for (const [index, model] of [selectedModel, activeModel].entries()) {
+          const running = {
+            ...session,
+            status: "running" as const,
+            hasActiveRun: true,
+            activeRunIds: [runId],
+            activeModel: model.id,
+            activeModelProvider: model.provider,
+            updatedAt: session.updatedAt + index + 1,
+          };
+          await gateway.setMethodResponse("sessions.list", {
+            count: 1,
+            defaults: { model: selectedModel.id, modelProvider: selectedModel.provider },
+            sessions: [running],
+            path: "",
+            ts: running.updatedAt,
+          });
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey: session.key,
+            agentId: "main",
+            reason: "runtime",
+            ...buildGatewaySessionSnapshot({
+              sessionRow: running,
+              agentId: "main",
+              includeSession: true,
+              activeRunState: { active: true, runIds: [runId] },
+            }),
+          });
+          await expect.poll(() => trigger.textContent()).toContain(model.name);
+          expect(
+            await composer
+              .locator('[data-chat-model-option="codex/gpt-5.5"]')
+              .getAttribute("aria-selected"),
+          ).toBe("true");
+          await page.screenshot({
+            path: `${artifactDir}/running-${index === 0 ? "primary" : "fallback"}-model.png`,
+          });
+        }
+        const recovered = {
+          ...session,
+          hasActiveRun: false,
+          activeRunIds: [],
+          updatedAt: session.updatedAt + 3,
+        };
         const message = {
           role: "assistant",
           content: "The selected model recovered.",
@@ -181,6 +233,11 @@ suite.define(() => {
           };
         }, recovered);
         try {
+          await gateway.emitGatewayEvent("chat", {
+            runId,
+            sessionKey: session.key,
+            state: "final",
+          });
           await gateway.emitGatewayEvent("session.message", {
             sessionKey: session.key,
             agentId: "main",
@@ -195,7 +252,7 @@ suite.define(() => {
             }),
           });
           await gateway.waitForRequest("chat.history");
-          await page.getByText(message.content, { exact: true }).waitFor();
+          await page.locator(".chat-text").getByText(message.content, { exact: true }).waitFor();
           await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(
             await composer

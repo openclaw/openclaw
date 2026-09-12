@@ -536,6 +536,8 @@ class FakeWorkerGateway {
     }
     if (
       this.options.liveResyncAckedSeq !== undefined &&
+      frame.params.event.kind === "lifecycle" &&
+      frame.params.event.payload.phase === "start" &&
       this.sentLiveResync < (this.options.liveResyncResponses ?? 1)
     ) {
       this.sentLiveResync += 1;
@@ -1399,11 +1401,14 @@ describe("worker runtime", () => {
 
     expect(gateway.inferenceRequests).toHaveLength(1);
     expect(gateway.acceptedTranscriptRequests).toHaveLength(2);
-    expect(gateway.liveEventRequests.slice(0, 2)).toEqual([
+    const starts = gateway.liveEventRequests.filter(
+      (request) => request.event.kind === "lifecycle" && request.event.payload.phase === "start",
+    );
+    expect(starts).toEqual([
       expect.objectContaining({ seq: 6, lastAckedSeq: 5 }),
       expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
     ]);
-    expect(gateway.liveEventRequests[1]?.event).toEqual(gateway.liveEventRequests[0]?.event);
+    expect(starts[1]?.event).toEqual(starts[0]?.event);
   });
 
   it("requires authoritative terminal delivery after degrading preview live events", async () => {
@@ -1435,7 +1440,19 @@ describe("worker runtime", () => {
 
     expect(gateway.inferenceRequests).toHaveLength(1);
     expect(gateway.acceptedTranscriptRequests).toHaveLength(2);
-    expect(gateway.liveEventRequests).toHaveLength(3);
+    const starts = gateway.liveEventRequests.filter(
+      (request) => request.event.kind === "lifecycle" && request.event.payload.phase === "start",
+    );
+    expect(starts).toEqual([
+      expect.objectContaining({ seq: 6, lastAckedSeq: 5 }),
+      expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
+    ]);
+    expect(starts[1]?.event).toEqual(starts[0]?.event);
+    const terminals = gateway.liveEventRequests.filter(
+      (request) =>
+        request.event.kind === "lifecycle" && request.event.payload.phase === "finishing",
+    );
+    expect(terminals).toEqual([gateway.liveEventRequests.at(-1)]);
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
       payload: { phase: "finishing" },

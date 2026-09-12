@@ -2,12 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  registerAgentRunContext,
+  resolveProjectedAgentRunModel,
+} from "../../infra/agent-run-registry.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
 import { createWorkerLiveRuntime } from "../../worker/embedded-agent-live.runtime.js";
 import {
   ComposedGatewayHarness,
   RUN_ID,
+  SESSION_ID,
+  SESSION_KEY,
   type WorkerClients,
 } from "../../worker/worker-fault-injection.test-support.js";
 
@@ -35,10 +41,13 @@ describe("worker live Gateway chat projection", () => {
     const current = harness.createClients();
     clients.push(current);
     await current.connection.start();
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: (event) => current.live.enqueuePreview(RUN_ID, event),
-      emitTerminal: (event) => current.live.emitTerminal(RUN_ID, event),
-    });
+    const runtime = createWorkerLiveRuntime(
+      {
+        enqueuePreview: (event) => current.live.enqueuePreview(RUN_ID, event),
+        emitTerminal: (event) => current.live.emitTerminal(RUN_ID, event),
+      },
+      { provider: "openai", model: "test-model" },
+    );
     const start = () => runtime.handleSessionEvent({ type: "message_start", message: message("") });
     const preview = (message: AssistantMessage, contentIndex = 0, delta?: string) => {
       const block = message.content[contentIndex];
@@ -60,7 +69,7 @@ describe("worker live Gateway chat projection", () => {
       await runtime.emitTerminal();
       expect(harness.chat.events.every((event) => event.state === "delta")).toBe(true);
     };
-    return { runtime, start, preview, end, finish };
+    return { runtime, start, preview, end, finish, client: current.live };
   }
 
   const message = (text: string) =>
@@ -74,6 +83,47 @@ describe("worker live Gateway chat projection", () => {
     });
     expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer).toBe(text);
   };
+
+  it("projects worker models only for the owning session and clears them through lifecycle events", async () => {
+    const live = await liveProjection();
+    const identity = { agentId: "main", sessionId: SESSION_ID, sessionKey: SESSION_KEY };
+    registerAgentRunContext(RUN_ID, { ...identity, isControlUiVisible: true });
+    const activeModel = () => resolveProjectedAgentRunModel(identity);
+    live.runtime.handleSessionEvent({ type: "agent_start" });
+    await vi.waitFor(() => {
+      expect(activeModel()).toEqual({ provider: "openai", model: "test-model" });
+    });
+    expect(resolveProjectedAgentRunModel({ ...identity, agentId: "other" })).toBeUndefined();
+    expect(
+      resolveProjectedAgentRunModel({ ...identity, sessionId: "replacement-session" }),
+    ).toBeUndefined();
+
+    live.runtime.handleSessionEvent({
+      type: "message_start",
+      message: makeAgentAssistantMessage({
+        content: [],
+        provider: "fallback",
+        model: "fallback-model",
+      }),
+    });
+    await vi.waitFor(() => {
+      expect(activeModel()).toEqual({ provider: "fallback", model: "fallback-model" });
+    });
+    live.client.enqueuePreview(RUN_ID, {
+      kind: "lifecycle",
+      payload: { phase: "model", provider: null, model: null },
+    });
+    await vi.waitFor(() => expect(activeModel()).toBeNull());
+    live.start();
+    await vi.waitFor(() => {
+      expect(activeModel()).toEqual({ provider: "openai", model: "test-model" });
+    });
+    await live.client.emitTerminal(RUN_ID, {
+      kind: "lifecycle",
+      payload: { phase: "end", endedAt: Date.now() },
+    });
+    expect(activeModel()).toBeUndefined();
+  });
 
   it.each([
     {

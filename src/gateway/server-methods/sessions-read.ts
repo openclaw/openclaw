@@ -26,6 +26,10 @@ import {
 import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import {
+  buildProjectedAgentRunIndex,
+  resolveProjectedAgentRunModel,
+} from "../../infra/agent-run-registry.js";
+import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
@@ -447,6 +451,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           diagnostics?.mark("decoration");
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
           const projectActiveRun = createVisibleActiveSessionRunProjector(context);
+          const projectedAgentRuns = buildProjectedAgentRunIndex();
           // These rows are unpublished; decorate them with fresh caller facts after the yields.
           const sharing = prepareSessionSharing({ client, cfg });
           measureDiagnosticsTimelineSpanSync(
@@ -465,6 +470,20 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   agentId: session.agentId,
                   defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, storeKey),
                 });
+                if (activeRunState.active) {
+                  const agentId =
+                    session.agentId ?? tryResolveSessionCompatibilityOwnerAgentId(cfg, storeKey);
+                  const liveModel = agentId
+                    ? resolveProjectedAgentRunModel({
+                        agentId,
+                        sessionId: session.sessionId,
+                        sessionKey: storeKey,
+                        index: projectedAgentRuns,
+                      })
+                    : undefined;
+                  session.activeModelProvider = liveModel?.provider;
+                  session.activeModel = liveModel?.model;
+                }
                 Object.assign(session, {
                   visibility,
                   ...(sharingTarget

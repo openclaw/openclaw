@@ -9,9 +9,15 @@ import {
   type AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
+import {
+  deriveProjectedAgentRunIndex,
+  projectedModelIdentity,
+  projectedRunIdentity,
+} from "./agent-run-registry-projection.js";
 import type {
   AgentRunContext,
   AgentRunContextOwnership,
+  AgentRunModel,
   AgentRunRegistryState,
   ProjectedAgentRunIndex,
   ProjectedAgentRunState,
@@ -542,55 +548,41 @@ export function listAgentRunsForSession(params: {
   return runs.toSorted((a, b) => a.runId.localeCompare(b.runId));
 }
 
-function projectedRunIdentity(agentId: string, value: string): string {
-  return `${normalizeAgentId(agentId)}\0${value}`;
+export function recordAgentRunModel(runId: string, model: AgentRunModel | undefined): void {
+  const context = getAgentRunContext(runId);
+  if (!context || context.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {
+    return;
+  }
+  if (
+    context.activeModel?.provider === model?.provider &&
+    context.activeModel?.model === model?.model
+  ) {
+    return;
+  }
+  if (model) {
+    context.activeModel = model;
+  } else {
+    delete context.activeModel;
+  }
+  bumpAgentRunIndexVersion();
+}
+
+export function resolveProjectedAgentRunModel(params: {
+  agentId: string;
+  sessionId?: string;
+  sessionKey: string;
+  index?: ProjectedAgentRunIndex;
+}): AgentRunModel | null | undefined {
+  return params.sessionId === undefined
+    ? undefined
+    : (params.index ?? buildProjectedAgentRunIndex()).modelsBySession.get(
+        projectedModelIdentity(params.agentId, params.sessionId, params.sessionKey),
+      );
 }
 
 export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
   const state = getAgentRunRegistryState();
-  const sessionKeys = new Map<string, ProjectedAgentRunState>();
-  const sessionIds = new Map<string, ProjectedAgentRunState>();
-  const ownerlessSessionKeys = new Map<string, ProjectedAgentRunState>();
-  const ownerlessSessionIds = new Map<string, ProjectedAgentRunState>();
-  const add = (
-    index: Map<string, ProjectedAgentRunState>,
-    key: string,
-    status: ProjectedAgentRunState,
-  ) => {
-    const previous = index.get(key);
-    if (previous !== "running" && !(previous === "queued" && status === "capacity-wait")) {
-      index.set(key, status);
-    }
-  };
-  for (const context of state.contexts.values()) {
-    const queued = (context.capacityWaits?.size ?? 0) > 0;
-    if (
-      context.lifecycleGeneration !== state.lifecycleGeneration ||
-      (context.projectSessionActive !== true &&
-        (!queued ||
-          context.projectSessionActive === false ||
-          context.projectSessionLifecycle === false))
-    ) {
-      continue;
-    }
-    const status = !queued
-      ? "running"
-      : context.projectSessionActive === true
-        ? "queued"
-        : "capacity-wait";
-    const agentId = context.agentId ?? parseAgentSessionKey(context.sessionKey)?.agentId;
-    if (context.sessionKey !== undefined && agentId) {
-      add(sessionKeys, projectedRunIdentity(agentId, context.sessionKey), status);
-    } else if (context.sessionKey !== undefined) {
-      add(ownerlessSessionKeys, context.sessionKey, status);
-    }
-    if (context.sessionId !== undefined && agentId) {
-      add(sessionIds, projectedRunIdentity(agentId, context.sessionId), status);
-    } else if (context.sessionId !== undefined) {
-      add(ownerlessSessionIds, context.sessionId, status);
-    }
-  }
-  return { sessionKeys, sessionIds, ownerlessSessionKeys, ownerlessSessionIds };
+  return deriveProjectedAgentRunIndex(state.contexts.values(), state.lifecycleGeneration);
 }
 
 export function resolveProjectedAgentRunProgressState(params: {

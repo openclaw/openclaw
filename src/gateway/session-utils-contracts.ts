@@ -10,6 +10,7 @@ import type { ThinkLevel, listThinkingLevelOptions } from "../auto-reply/thinkin
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { ProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import type { CurrentUserProfileDisplay } from "./current-user-profile-display.js";
 
@@ -26,6 +27,7 @@ export type GatewaySessionModelSource = {
 };
 
 export type SessionListRowContext = {
+  projectedAgentRuns?: ProjectedAgentRunIndex;
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   thinkingMetadataByModelRef: Map<string, GatewayModelThinkingProfile>;

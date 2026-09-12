@@ -27,6 +27,10 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildProjectedAgentRunIndex,
+  resolveProjectedAgentRunModel,
+} from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
@@ -218,6 +222,15 @@ export function buildGatewaySessionRow(params: {
     model: rowModel,
     rowContext: params.rowContext,
   });
+  const liveModel = resolveProjectedAgentRunModel({
+    agentId: sessionAgentId,
+    sessionId: entry?.sessionId,
+    sessionKey: key,
+    index: rowContext
+      ? (rowContext.projectedAgentRuns ??= buildProjectedAgentRunIndex())
+      : undefined,
+  });
+  const liveRun = liveModel !== undefined || entry?.status === "running";
   // Display aliases do not change the selected route's catalog or runtime policy.
   const completedModel = readSessionFallbackModel({
     selectedProvider: rowModelProvider,
@@ -498,8 +511,16 @@ export function buildGatewaySessionRow(params: {
     }).mode,
     modelProvider: rowModelIdentity.provider,
     model: rowModelIdentity.model,
-    activeModelProvider: activeFallback.active ? runtimeModels.active.provider : undefined,
-    activeModel: activeFallback.active ? runtimeModels.active.model : undefined,
+    activeModelProvider: liveRun
+      ? liveModel?.provider
+      : activeFallback.active
+        ? runtimeModels.active.provider
+        : undefined,
+    activeModel: liveRun
+      ? liveModel?.model
+      : activeFallback.active
+        ? runtimeModels.active.model
+        : undefined,
     modelOverrideSource:
       selectedModel.storedOverrideSource === "parent"
         ? "inherited"

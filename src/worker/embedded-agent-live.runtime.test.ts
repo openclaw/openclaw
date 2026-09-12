@@ -1,18 +1,57 @@
 import { describe, expect, it } from "vitest";
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
 describe("createWorkerLiveRuntime", () => {
+  it("publishes the candidate before refining it with the executing assistant model", () => {
+    const emitted: WorkerLiveEvent[] = [];
+    const runtime = createWorkerLiveRuntime(
+      {
+        enqueuePreview: (event) => {
+          emitted.push(event);
+          return true;
+        },
+        emitTerminal: async (event) => void emitted.push(event),
+      },
+      { provider: "candidate", model: "candidate-model" },
+    );
+
+    runtime.handleSessionEvent({ type: "agent_start" });
+    expect(emitted).toEqual([
+      { kind: "lifecycle", payload: { phase: "start", startedAt: expect.any(Number) } },
+      {
+        kind: "lifecycle",
+        payload: { phase: "model", provider: "candidate", model: "candidate-model" },
+      },
+    ]);
+    runtime.handleSessionEvent({
+      type: "message_start",
+      message: makeAgentAssistantMessage({
+        content: [],
+        provider: "fallback",
+        model: "fallback-model",
+      }),
+    });
+    expect(emitted.at(-1)).toEqual({
+      kind: "lifecycle",
+      payload: { phase: "model", provider: "fallback", model: "fallback-model" },
+    });
+  });
+
   it("redacts media payloads from tool diagnostics before cloud egress", () => {
     const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: (event) => {
-        emitted.push(event);
-        return true;
+    const runtime = createWorkerLiveRuntime(
+      {
+        enqueuePreview: (event) => {
+          emitted.push(event);
+          return true;
+        },
+        emitTerminal: async (event) => void emitted.push(event),
       },
-      emitTerminal: async (event) => void emitted.push(event),
-    });
+      { provider: "candidate", model: "candidate-model" },
+    );
     const events: AgentSessionEvent[] = [
       {
         type: "tool_execution_start",
@@ -46,13 +85,16 @@ describe("createWorkerLiveRuntime", () => {
 
   it("stops preparing previews after the client degrades", () => {
     let previewCalls = 0;
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: () => {
-        previewCalls += 1;
-        return false;
+    const runtime = createWorkerLiveRuntime(
+      {
+        enqueuePreview: () => {
+          previewCalls += 1;
+          return false;
+        },
+        emitTerminal: async () => {},
       },
-      emitTerminal: async () => {},
-    });
+      { provider: "candidate", model: "candidate-model" },
+    );
 
     runtime.handleSessionEvent({
       type: "tool_execution_start",
@@ -73,10 +115,13 @@ describe("createWorkerLiveRuntime", () => {
 
   it("redacts lifecycle errors before terminal cloud egress", async () => {
     const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({
-      enqueuePreview: () => false,
-      emitTerminal: async (event) => void emitted.push(event),
-    });
+    const runtime = createWorkerLiveRuntime(
+      {
+        enqueuePreview: () => false,
+        emitTerminal: async (event) => void emitted.push(event),
+      },
+      { provider: "candidate", model: "candidate-model" },
+    );
 
     runtime.enqueueRunFailure({
       aborted: false,

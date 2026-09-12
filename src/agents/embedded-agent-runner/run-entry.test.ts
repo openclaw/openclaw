@@ -1,8 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  resolveProjectedAgentRunModel,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import {
+  recordTurnAttempt,
   initialAttemptOptions,
   fallbackAttemptOptions,
   type FallbackRunnerParams,
@@ -74,47 +82,6 @@ function createDirectHarness() {
     preparation: { kind: "direct" as const },
     resolveRuntimeOverride: () => undefined,
   };
-}
-
-function recordTurnAttempt(
-  record: ((facts: ContextEngineTurnAttemptFacts) => void) | undefined,
-  label: string,
-): void {
-  if (!record) {
-    throw new Error("expected context-engine turn candidate callback");
-  }
-  record({
-    boundary: {
-      admission: {
-        agentId: "main",
-        sessionId: label,
-        sessionKey: `agent:main:${label}`,
-        storePath: `/${label}.sqlite`,
-        generation: "generation-1",
-        entryId: `${label}-user`,
-        rawSeq: 1,
-        effectiveParentId: null,
-        activeMessagePosition: 0,
-        logicalTurnId: `${label}-turn`,
-        role: "user",
-      },
-      terminal: {
-        agentId: "main",
-        sessionId: label,
-        sessionKey: `agent:main:${label}`,
-        storePath: `/${label}.sqlite`,
-        generation: "generation-1",
-        entryId: `${label}-assistant`,
-        rawSeq: 2,
-        effectiveParentId: `${label}-user`,
-        activeMessagePosition: 1,
-      },
-    },
-    sessionIdUsed: label,
-    promptError: false,
-    aborted: false,
-    yieldAborted: false,
-  });
 }
 
 describe("runEmbeddedAgentEntry", () => {
@@ -234,9 +201,28 @@ describe("runEmbeddedAgentEntry", () => {
     }
   });
 
-  it("keeps shared fallback and terminal behavior aligned across entry modes", async () => {
+  it("keeps shared fallback and terminal behavior aligned across entry modes", async ({
+    onTestFinished,
+  }) => {
     const cfg: OpenClawConfig = {};
     const runMode = async (behavior: "channel-delivery" | "command-rpc") => {
+      registerAgentRunContext("run-shared-fallback", {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:chat",
+      });
+      onTestFinished(() => clearAgentRunContext("run-shared-fallback"));
+      const models: unknown[] = [];
+      const unsubscribe = onAgentEvent((event) => {
+        if (
+          event.runId === "run-shared-fallback" &&
+          event.stream === "lifecycle" &&
+          event.data.phase === "model"
+        ) {
+          models.push(event.data);
+        }
+      });
+      onTestFinished(unsubscribe);
       const candidateCalls: Array<{
         provider: string;
         model: string;
@@ -273,6 +259,16 @@ describe("runEmbeddedAgentEntry", () => {
           },
         },
         runCandidate: async (provider, model, options) => {
+          expect(
+            resolveProjectedAgentRunModel({
+              agentId: "main",
+              sessionId: "session-1",
+              sessionKey: "agent:main:chat",
+            }),
+          ).toEqual({
+            provider,
+            model,
+          });
           candidateCalls.push({ provider, model, isFallbackRetry: options.isFallbackRetry });
           candidateLeases.push(options.contextEngineLogicalTurnLease);
           return makeResult({
@@ -317,6 +313,14 @@ describe("runEmbeddedAgentEntry", () => {
           });
         },
       });
+      expect(getAgentRunContext("run-shared-fallback")?.activeModel).toBeUndefined();
+      expect(models).toEqual([
+        { phase: "model", provider: "primary-provider", model: "primary-model" },
+        { phase: "model", provider: null, model: null },
+        { phase: "model", provider: "fallback-provider", model: "fallback-model" },
+        { phase: "model", provider: null, model: null },
+      ]);
+      unsubscribe();
       await result.settleSessionOverride();
       await result.settleSessionOverride();
       return { result, candidateCalls, candidateLeases, reconciled };

@@ -373,7 +373,7 @@ async function runWorkerEmbeddedTurnWithResources(
     });
   };
 
-  const liveRuntime = createWorkerLiveRuntime(params.live);
+  const liveRuntime = createWorkerLiveRuntime(params.live, params.modelRef);
   const unsubscribe = session.subscribe(liveRuntime.handleSessionEvent);
 
   const abortTurn = () => session.agent.abort();
