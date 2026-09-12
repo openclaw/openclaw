@@ -185,7 +185,7 @@ export function createInitialModelCatalogRead() {
     },
     start(client: ModelCatalogClient, hello: GatewayHelloOk) {
       invalidateModelCatalogCache(client);
-      const scope =
+      const scope: ModelCatalogReadScope | undefined =
         target && !("shortId" in target)
           ? target.sessionKey
             ? resolveUiConversationIdentity({ hello }, target.sessionKey, target.agentId)

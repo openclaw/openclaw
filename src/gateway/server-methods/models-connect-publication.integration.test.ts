@@ -196,8 +196,8 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(saved);
         }
       }
-      const acquisitionStarted = createDeferred<void>();
-      const releaseAcquisition = createDeferred<void>();
+      const acquisitionStarted = createDeferred();
+      const releaseAcquisition = createDeferred();
       const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
       const acquisition = vi
         .spyOn(modelCatalogAuth, "readPreparedCatalog")

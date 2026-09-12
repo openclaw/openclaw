@@ -250,8 +250,8 @@ suite.define(() => {
         );
         await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
           const initialSnapshot = createDeferred<{ deliver: () => void; payload: unknown }>();
-          const replacementRead = createDeferred<void>();
-          const invalidation = createDeferred<void>();
+          const replacementRead = createDeferred();
+          const invalidation = createDeferred();
           const catalogRequests = new Set<string>();
           const heldReplies: Array<() => void> = [];
           let holdReplacement = true;
@@ -326,8 +326,10 @@ suite.define(() => {
             'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
           );
           const trigger = picker.locator('[data-chat-model-select][aria-disabled="false"]');
+          const account = picker.locator("[data-chat-account-group-toggle]");
           await trigger.click();
-          await expect.poll(() => picker.innerText()).toContain("Account A");
+          await expect.poll(() => account.isVisible()).toBe(true);
+          await expect.poll(() => account.textContent()).toContain("Account A");
           frames.push({ direction: "patch", model: "fixture/second@fixture:account-b" });
           await admin.request("sessions.patch", {
             key: sessionKey,
@@ -350,26 +352,29 @@ suite.define(() => {
           };
           if (replacementState === "complete") {
             deliverReplacement();
-            await expect.poll(() => picker.innerText()).toContain("Account B");
+            await expect.poll(() => account.textContent()).toContain("Account B");
           }
           frames.push({ direction: "deliver-initial", replacementState });
           initial.deliver();
           // Cross one browser render before releasing B so the stale snapshot can cancel it.
           await page.evaluate(
-            () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              }),
           );
           if (replacementState === "pending") {
             deliverReplacement();
           }
-          await expect.poll(() => picker.innerText()).toContain("Account B");
+          await expect.poll(() => account.textContent()).toContain("Account B");
           const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
           await expect.poll(() => selectedRow.isVisible()).toBe(true);
           expect(await selectedRow.isEnabled()).toBe(true);
-          expect(await picker.innerText()).not.toContain("Account A");
+          expect(await account.textContent()).not.toContain("Account A");
           const readsBeforeReopen = catalogRequests.size;
           await trigger.click();
           await trigger.click();
-          await expect.poll(() => picker.innerText()).toContain("Account B");
+          await expect.poll(() => account.textContent()).toContain("Account B");
           expect(await selectedRow.isEnabled()).toBe(true);
           expect(catalogRequests.size).toBe(readsBeforeReopen);
         });
