@@ -109,11 +109,12 @@ describe("AppSidebar agent roster", () => {
       sidebar.querySelector('[data-session-key="agent:main:recent"] .session-unread-dot'),
     ).not.toBeNull();
     expect(sidebar.querySelector("openclaw-sidebar-agent-card")).toBeNull();
-    result.sessions = result.sessions.map((row) => ({
-      ...row,
-      hasActiveRun: row.agentId === "recent",
-      updatedAt: row.agentId === "recent" ? 999 : 1,
-    }));
+    result.sessions = result.sessions.map((row) =>
+      Object.assign({}, row, {
+        hasActiveRun: row.agentId === "recent",
+        updatedAt: row.agentId === "recent" ? 999 : 1,
+      }),
+    );
     await rosterActivityStore(context).refresh();
     expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
   });
