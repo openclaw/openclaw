@@ -4,6 +4,7 @@ import { resolveCliChannelOptions } from "../channel-options.js";
 
 /** Root CLI program context consumed by command registration and help rendering. */
 export type ProgramContext = {
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
   programVersion: string;
   messageChannelOptions: string;
   agentChannelOptions: string;

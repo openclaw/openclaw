@@ -26,7 +26,10 @@ import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import type {
+  OriginalManagedServiceRuntime,
+  PreManagedServiceStop,
+} from "./update-command-service-context-types.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
@@ -56,6 +59,7 @@ export type MutableUpdateExecutionResult = {
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   activationConfig?: UpdateConfigSnapshot;
 };
 
@@ -310,4 +314,27 @@ export function recordUpdateResultNextAction(
     recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
   }
   return nextAction;
+}
+
+/** Construct the ordinary post-update failure without changing its recovery owner. */
+export function buildPostUpdateFailureResult(
+  params: Pick<FinishUpdateParams, "result" | "root" | "startedAt">,
+  message: string,
+): UpdateRunResult {
+  return {
+    ...params.result,
+    status: "error",
+    reason: "post-update-failed",
+    steps: [
+      ...params.result.steps,
+      {
+        name: "post-update verification",
+        command: "openclaw update",
+        cwd: params.result.root ?? params.root,
+        durationMs: Math.max(0, Date.now() - params.startedAt),
+        exitCode: 1,
+        stderrTail: message,
+      },
+    ],
+  };
 }

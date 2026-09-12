@@ -12,7 +12,11 @@ describe("early service capability routing", () => {
     const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     expect(tryRunGatewayServiceUpdateCapabilityProbe(["node", "openclaw", ...args])).toBe(true);
     expect(output).toHaveBeenCalledExactlyOnceWith(
-      JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }),
+      JSON.stringify({
+        updateExecutor: "root-spawner-v1",
+        targetRootBinding: true,
+        retainedOwnerBinding: true,
+      }),
     );
   });
 

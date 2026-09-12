@@ -223,6 +223,8 @@ const rootEntries = [
   "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.js!",
   "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
   "openclaw.mjs!",
+  // update-command-node-runtime-resolution loads this package-root module by absolute URL.
+  "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.

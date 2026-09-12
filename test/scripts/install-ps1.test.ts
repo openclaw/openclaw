@@ -736,6 +736,8 @@ try {
           "}",
           "$nodeDownload = Resolve-PortableNodeDownload",
           "if ($nodeDownload.Name -ne 'node-v26.5.0-win-arm64.zip') { throw \"NodeName=$($nodeDownload.Name)\" }",
+          "$exactNode = Resolve-PortableNodeDownload -Version 24.17.0",
+          "if ($exactNode.Name -ne 'node-v24.17.0-win-arm64.zip') { throw \"ExactNode=$($exactNode.Name)\" }",
           "$gitDownload = Resolve-PortableGitDownload",
           "if ($gitDownload.Name -ne 'MinGit-2.54.0-arm64.zip') { throw \"GitName=$($gitDownload.Name)\" }",
           "",

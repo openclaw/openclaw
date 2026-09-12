@@ -26,6 +26,7 @@ import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import * as execution from "./update-command-execution.js";
 import * as executorOwner from "./update-command-executor.js";
+import { captureFreshManagedServiceAdmission } from "./update-command-fresh-preview.test-support.js";
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
@@ -574,15 +575,18 @@ describe("update command admission with fresh state", () => {
   );
 
   it.each([
-    { owned: true, restart: true, expectedFallback: "/current/node" },
-    { owned: false, restart: true, expectedFallback: undefined },
-    { owned: true, restart: false, expectedFallback: undefined },
+    { owned: true, writable: true, restart: true, expectedFallback: "/current/node" },
+    { owned: false, writable: false, restart: true, expectedFallback: undefined },
+    { owned: true, writable: true, restart: false, expectedFallback: undefined },
+    { owned: true, writable: false, restart: true, expectedFallback: undefined },
   ])(
-    "limits fresh-state Node fallback to the service it will refresh (owned=$owned, restart=$restart)",
-    async ({ owned, restart, expectedFallback }) => {
+    "limits fresh-state Node fallback to the service it will refresh (owned=$owned, writable=$writable, restart=$restart)",
+    async ({ owned, writable, restart, expectedFallback }) => {
       managedServiceNodeRunner = "/service/node";
       vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
-      vi.spyOn(servicePlan, "gatewayServiceCommandUsesRoot").mockResolvedValue(owned);
+      vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockImplementation(() =>
+        captureFreshManagedServiceAdmission({ root, owned, writable, restart }),
+      );
       const runtimePreflight = vi
         .spyOn(servicePlan, "resolvePackageRuntimePreflight")
         .mockResolvedValue({ ok: false, error: "fixture-stop" });
@@ -591,17 +595,13 @@ describe("update command admission with fresh state", () => {
         updateCommand({ tag: "2026.9.2", yes: true, json: true, restart }),
       ).rejects.toMatchObject({ code: 1 });
 
-      expect(
-        runtimePreflight.mock.calls.map(([params]) => ({
-          nodeRunner: params.nodeRunner,
-          fallbackNodeRunner: params.fallbackNodeRunner,
-        })),
-      ).toEqual([
-        {
+      expect(runtimePreflight).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
           nodeRunner: "/service/node",
           fallbackNodeRunner: expectedFallback,
-        },
-      ]);
+          runtimeRecovery: !owned || (restart && writable) ? expect.any(Object) : undefined,
+        }),
+      );
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({ status: "error", reason: "node-runtime-preflight" }),
       );

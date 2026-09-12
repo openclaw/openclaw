@@ -301,17 +301,26 @@ const servingAncestorMaintenanceCases = [
 ] as const;
 
 it.runIf(process.platform === "linux" || process.platform === "darwin").each(
-  servingAncestorMaintenanceCases.filter(
-    // Binding a foreign PID reads native process identity, so only exercise that
-    // fixture where the simulated Linux policy matches the actual host.
-    ({ identity }) => identity !== "parent lease" || process.platform === "linux",
-  ),
+  servingAncestorMaintenanceCases
+    .flatMap((testCase) => [
+      { ...testCase, splitRoot: false },
+      { ...testCase, splitRoot: true },
+    ])
+    .filter(
+      // Binding a foreign PID reads native process identity, so only exercise that
+      // fixture where the simulated Linux policy matches the actual host.
+      ({ identity }) => identity !== "parent lease" || process.platform === "linux",
+    ),
 )(
-  "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase",
-  ({ platform, identity, phase, authorized }) =>
+  "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase split=$splitRoot",
+  ({ platform, identity, phase, authorized, splitRoot }) =>
     withServiceHome(async (home) => {
       mockProcessPlatform(platform);
       const root = await fs.realpath(process.cwd());
+      const packageRoot = splitRoot ? path.join(home, "package-B") : root;
+      if (splitRoot) {
+        await fs.mkdir(packageRoot);
+      }
       const metaPath = path.join(home, "handoff-meta.json");
       const runId = randomUUID();
       vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
@@ -321,7 +330,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
         JSON.stringify({
           version: 1,
           meta: {
-            root: identity === "different root" ? home : root,
+            root: identity === "different root" ? home : packageRoot,
             runId: identity === "different run" ? randomUUID() : runId,
             handoffId: "owned-handoff",
           },
@@ -330,7 +339,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
       const store = createManagedHandoffLeaseStore();
       if (identity !== "missing lease") {
         const claim = store.acquire(
-          root,
+          packageRoot,
           identity === "replaced owner" ? "replacement-handoff" : "owned-handoff",
           { kind: "update" },
         );
@@ -344,7 +353,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
           try {
             db.prepare(
               "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'stale') WHERE install_root = ?",
-            ).run(root);
+            ).run(packageRoot);
           } finally {
             db.close();
           }
@@ -372,6 +381,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
           mocks.service.mockReturnValue(service);
           const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
             root,
+            handoffRoot: splitRoot ? packageRoot : undefined,
             updateInstallKind: "package",
             shouldRestart: true,
             jsonMode: true,

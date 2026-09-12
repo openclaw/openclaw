@@ -32,6 +32,11 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "../../daemon/service-update-authority",
     distWorkerPath: "daemon/service-update-authority.js",
   },
+  doctorResult: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-doctor-result",
+    distWorkerPath: "infra/update-doctor-result.js",
+  },
   configIO: {
     currentModuleUrl,
     sourceWorkerName: "../../config/io.factory",

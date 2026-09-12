@@ -9,6 +9,7 @@ import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -18,6 +19,7 @@ import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
+import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
 
 export type ManagedServiceRootRedirect = {
   root: string;
@@ -96,7 +98,7 @@ export function isGatewayServiceManagementAllowedForUpdate(
   return resolveGatewayServiceManagementBlockMessageForUpdate(env) === undefined;
 }
 
-type PackageRuntimePreflight = {
+export type PackageRuntimePreflight = {
   nodeRunner?: string;
   replacedNodeRunner?: string;
   targetVersion?: string;
@@ -108,6 +110,7 @@ export async function resolvePackageRuntimePreflight(params: {
   timeoutMs?: number;
   nodeRunner?: string;
   fallbackNodeRunner?: string;
+  runtimeRecovery?: PackageRuntimeRecovery;
 }): Promise<Result<PackageRuntimePreflight, string>> {
   const nodeRunner = normalizeOptionalString(params.nodeRunner);
   const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
@@ -164,6 +167,22 @@ export async function resolvePackageRuntimePreflight(params: {
   if (satisfies !== false) {
     return ok(unchangedRuntime);
   }
+  if (params.runtimeRecovery && target.nodeEngine) {
+    const { resolveTargetNodeRuntime } =
+      await import("./update-command-node-runtime-resolution.js");
+    const recovered = await resolveTargetNodeRuntime({
+      engine: target.nodeEngine,
+      recovery: params.runtimeRecovery,
+      timeoutMs: params.timeoutMs,
+    });
+    if (recovered) {
+      return ok({
+        nodeRunner: recovered,
+        replacedNodeRunner: nodeRunner ?? resolveNodeRunner(),
+        targetVersion,
+      });
+    }
+  }
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
@@ -219,13 +238,19 @@ export function resolveManagedServiceNodeRunner(
 
 export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
-}): Promise<{ rootRedirect: ManagedServiceRootRedirect | null; nodeRunner?: string }> {
+  rebind?: boolean;
+}): Promise<{
+  rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
+  nodeRunner?: string;
+}> {
   if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
     return { rootRedirect: null };
   }
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
-  const command = await resolveGatewayService()
+  const service = resolveGatewayService();
+  const command = await service
     .readCommand(process.env, { requireEffective: true, requireLoaded: true })
     .catch(() => null);
   const layout = await summarizeGatewayServiceLayout(command);
@@ -237,8 +262,23 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     layout.entrypointSourceCheckout !== true &&
     (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
   ) {
+    const capability =
+      params.rebind === false
+        ? undefined
+        : await service
+            .readDefinitionMutationCapability?.({
+              env: process.env,
+              environment: mergeGatewayServiceEnv(process.env, command),
+              requireLoaded: true,
+            })
+            .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+    // A protected definition can still activate an updated package at its current root.
+    // Preserve that existing path; this observation does not grant later mutation authority.
+    const canRebind = params.rebind !== false && (capability?.kind ?? "writable") === "writable";
     return {
-      rootRedirect: { root: serviceRoot, previousRoot: params.root },
+      ...(!canRebind
+        ? { rootRedirect: { root: serviceRoot, previousRoot: params.root } }
+        : { rootRedirect: null, serviceRoot }),
       ...(serviceNode ? { nodeRunner: serviceNode } : {}),
     };
   }
@@ -364,9 +404,18 @@ export async function resolveUpdatedGatewayRestartPort(params: {
 /** Describe the selected plan without changing roots, runtime, or service authority. */
 export function formatManagedServicePackageUpdatePlan(params: {
   rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
   nodeRunner?: string;
 }): Array<{ level: "muted" | "warn"; message: string }> {
   const { rootRedirect, nodeRunner } = params;
+  if (params.serviceRoot) {
+    return [
+      {
+        level: "muted",
+        message: `Updating this installation and rebinding the managed Gateway from ${params.serviceRoot} after ownership and runtime verification.`,
+      },
+    ];
+  }
   if (rootRedirect) {
     return [
       {

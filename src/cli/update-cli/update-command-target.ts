@@ -32,6 +32,7 @@ import {
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
+  resolveNodeRunner,
   resolveTargetVersion,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -170,14 +171,17 @@ export async function resolveUpdateCommandTarget(
   let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
   let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
+  let managedServiceRoot: string | undefined;
   // The service's Node can differ even when its package root matches the shell.
   let managedServiceNodeRunner: string | undefined;
   let packageUpdateNodeRunner: string | undefined;
 
   if (updateInstallKind === "package") {
     const servicePlan =
-      prepared.servicePlan ?? (await resolveManagedServicePackageUpdatePlan({ root }));
+      prepared.servicePlan ??
+      (await resolveManagedServicePackageUpdatePlan({ root, rebind: prepared.shouldRestart }));
     managedServiceRootRedirect = servicePlan.rootRedirect;
+    managedServiceRoot = servicePlan.serviceRoot;
     managedServiceNodeRunner = servicePlan.nodeRunner;
     if (managedServiceRootRedirect) {
       root = managedServiceRootRedirect.root;
@@ -187,14 +191,14 @@ export async function resolveUpdateCommandTarget(
         defaultRuntime.log(theme[level](message));
       }
     }
-    packageUpdateNodeRunner = managedServiceNodeRunner;
+    packageUpdateNodeRunner = managedServiceRoot ? resolveNodeRunner() : managedServiceNodeRunner;
   }
 
   // Read-only native/root admission is complete. Own interruption settlement
   // before metadata can block, but defer mutable housekeeping until target admission.
   if (updateInstallKind === "package" && !opts.dryRun) {
     assertUpdatePackageActivationAdmission(root);
-    const fence = await executor.enter(root, { preflight: true });
+    const fence = await executor.enter(root, { preflight: true, serviceRoot: managedServiceRoot });
     if (opts.run) {
       opts.run.executorFence = fence;
     }
@@ -291,7 +295,9 @@ export async function resolveUpdateCommandTarget(
       tag,
       env: packageInstallEnv,
     });
+    // Split serving roots need full staging and activation even at equal versions.
     packageAlreadyCurrent =
+      !managedServiceRoot &&
       updateInstallKind === "package" &&
       !switchToPackage &&
       isPackageTargetAlreadyCurrent({ currentVersion, targetVersion, target: packageInstallSpec });
@@ -361,6 +367,7 @@ export async function resolveUpdateCommandTarget(
     packageTargetSchemaVersions,
     packageRuntimeTarget,
     managedServiceRootRedirect,
+    managedServiceRoot,
     managedServiceNodeRunner,
     packageUpdateNodeRunner,
     devTarget,

@@ -38,6 +38,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  run?: UpdateCommandOptions["run"];
 }): Promise<boolean> {
   const { config, env } = params;
   const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
@@ -63,13 +64,28 @@ export async function verifyPreviousGatewayForUpdate(params: {
     }),
     gatewayServiceCommandUsesRoot({ root: params.root, env }),
   ]);
-  return Boolean(
+  const verified = Boolean(
     expectedVersion &&
     servesPreviousPackage === true &&
     health.healthy &&
     health.runtime.status === "running" &&
     readiness.readyz === 200,
   );
+  if (params.run) {
+    recordUpdateRunStep(
+      params.run.runId,
+      {
+        step: "previous gateway verification",
+        status: "completed",
+        detail: verified
+          ? "Previous package is running and ready."
+          : "Previous gateway was not verified; automatic rollback cannot restart it.",
+        endedAtMs: Date.now(),
+      },
+      { env: params.run.env },
+    );
+  }
+  return verified;
 }
 
 export function recordUpdateGatewayHealth(

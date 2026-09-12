@@ -92,7 +92,7 @@ it.each([
               assert.equal(existsSync(receipt), false);
             } else if (scenario === "unregistered executor") {
               await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
-                message: "Child continuation requires its live executor.",
+                message: "Package recovery requires its admitted executor.",
               });
               assert.equal(existsSync(receipt), false);
             } else if (scenario.endsWith("revoked")) {

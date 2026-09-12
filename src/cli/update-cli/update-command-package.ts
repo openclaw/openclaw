@@ -330,6 +330,7 @@ export async function prepareGitPackageExposure(
 
 export type PackageInstallUpdateParams = {
   reapplyLocalOverrides?: boolean;
+  requirePackageReplacement?: boolean;
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
@@ -486,7 +487,9 @@ export async function runPackageInstallUpdate(
     packageRoot: pkgRoot,
     // Explicit artifacts identify the payload; an equal version is not artifact equality.
     requirePackageReplacement:
-      params.installKind === "git" || !canResolveRegistryVersionForPackageTarget(installSpec),
+      params.requirePackageReplacement === true ||
+      params.installKind === "git" ||
+      !canResolveRegistryVersionForPackageTarget(installSpec),
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),

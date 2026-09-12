@@ -53,7 +53,11 @@ export async function runGatewayServiceUpdateCommand(
       !isRecord(input.executor.originalParent) ||
       !isRecord(input.executor.databaseIdentity) ||
       typeof input.executor.originalChildKey !== "string" ||
-      !isRecord(input.executor.spawner)
+      !isRecord(input.executor.spawner) ||
+      ((Object.hasOwn(input.executor, "retainedParent") ||
+        Object.hasOwn(input.executor, "retainedChildKey")) &&
+        (!isRecord(input.executor.retainedParent) ||
+          typeof input.executor.retainedChildKey !== "string"))
     ) {
       throw new Error("Invalid native update executor input.");
     }

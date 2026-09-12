@@ -8,7 +8,12 @@ export function resolveRecoveryPath(
 ): string | null;
 export function isUsableNode(
   nodePath: string,
-  options?: { allowCwd?: boolean; trustedRoot?: string; env?: NodeJS.ProcessEnv },
+  options?: {
+    allowCwd?: boolean;
+    trustedRoot?: string;
+    env?: NodeJS.ProcessEnv;
+    acceptVersion?: (version: string) => boolean;
+  },
 ): boolean;
 export function runRespawnedChild(command: string, args: string[], env: NodeJS.ProcessEnv): true;
 export function recoverNodeRuntime(options?: {
@@ -16,3 +21,17 @@ export function recoverNodeRuntime(options?: {
   allowInstall?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<boolean>;
+
+export type NodeRuntimeInstallCommand = (
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+) => Promise<number | null>;
+export function findUsableNodeRuntime(options?: {
+  homeDir?: string;
+  allowInstall?: boolean;
+  env?: NodeJS.ProcessEnv;
+  acceptVersion?: (version: string) => boolean;
+  nodeVersion?: string;
+  installCommand?: NodeRuntimeInstallCommand;
+}): Promise<{ nodePath: string; reason: string } | null>;

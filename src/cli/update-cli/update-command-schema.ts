@@ -16,6 +16,7 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { handleDryRunPreflightError, printUpdateDryRun } from "./update-command-dry-run.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -71,6 +72,7 @@ export async function preflightUpdateCommandSchemas(params: {
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  managedServiceRoot?: string;
   channel: UpdateChannel;
   devTarget?: DevUpdateTarget;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
@@ -79,7 +81,12 @@ export async function preflightUpdateCommandSchemas(params: {
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: (reason: string, message?: string) => Promise<void>;
 }): Promise<
-  { packageSchemaPreflight: OpenClawDatabaseSchemaPreflight; preflightNotes: string[] } | undefined
+  | {
+      packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
+      preflightNotes: string[];
+      managedService?: PreManagedServiceStop;
+    }
+  | undefined
 > {
   const {
     root,
@@ -104,6 +111,7 @@ export async function preflightUpdateCommandSchemas(params: {
     indeterminate: [],
   };
   const preflightNotes: string[] = [];
+  let managedService: PreManagedServiceStop | undefined;
   if ((opts.dryRun || updateInstallKind === "package") && updateInstallKind !== "unknown") {
     try {
       const { inspectUpdateDatabaseContexts } =
@@ -117,8 +125,10 @@ export async function preflightUpdateCommandSchemas(params: {
         timeoutMs: updateStepTimeoutMs,
         invocationCwd,
         managedServiceRootRedirect,
+        managedServiceRoot: params.managedServiceRoot,
         legacyConfigPlan: params.legacyConfigPlan,
       });
+      managedService = admission.service;
       const target =
         updateInstallKind === "git"
           ? await inspectGitDryRunTargetSchemaVersions({
@@ -182,5 +192,5 @@ export async function preflightUpdateCommandSchemas(params: {
     );
     return undefined;
   }
-  return { packageSchemaPreflight, preflightNotes };
+  return { packageSchemaPreflight, preflightNotes, managedService };
 }

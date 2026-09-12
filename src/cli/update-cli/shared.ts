@@ -32,6 +32,8 @@ import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
+  /** Captured before dotenv; only inherited selectors may choose a Node executable. */
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
   /** In-process executor only; workers must reacquire authority, never deserialize this. */
   /** Legacy live context is unsupported; its presence is refusal-only. */
   recovery?: unknown;
@@ -72,6 +74,7 @@ export type UpdateFinalizeOptions = {
 };
 
 export type UpdateWizardOptions = {
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
   acceptCapabilities?: boolean;
   timeout?: string;
 };

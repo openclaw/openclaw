@@ -7,7 +7,7 @@ import { OpenClawCommand } from "./openclaw-command.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { setProgramContext } from "./program-context.js";
 
-export function buildProgram() {
+export function buildProgram(options: { runtimeRecoveryEnv?: NodeJS.ProcessEnv } = {}) {
   const program = new OpenClawCommand();
   program.enablePositionalOptions();
   // Preserve Commander-computed exit codes while still aborting parse flow.
@@ -18,6 +18,7 @@ export function buildProgram() {
     throw err;
   });
   const ctx = createProgramContext();
+  ctx.runtimeRecoveryEnv = options.runtimeRecoveryEnv;
   const argv = process.argv;
 
   setProgramContext(program, ctx);
