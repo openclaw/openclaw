@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { DelegationCapability } from "../delegation-capability.js";
+import { getRequesterToolCap } from "../requester-tool-cap.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -149,6 +150,7 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow?.length === 1 &&
     grantedToolsAllow[0] === "message";
   return {
+    requesterToolCap: getRequesterToolCap(),
     sessionKey,
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),

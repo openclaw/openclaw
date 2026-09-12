@@ -114,6 +114,7 @@ import {
   buildActiveMusicGenerationTaskPromptContextForSession,
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../media-generation-task-status.js";
+import { captureRequesterToolCap, runWithRequesterToolCap } from "../requester-tool-cap.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -5150,6 +5151,37 @@ describe("prepareCliRunContext", () => {
     await expect(fixture.prepare({ provider: "test-cli" })).rejects.toThrow(
       'CLI backend "test-cli" cannot enforce before_prompt_build tool restrictions',
     );
+  });
+
+  it("replaces native CLI tools with an exact mediated sender surface", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    const cap = captureRequesterToolCap([{ name: "write" }]);
+    const context = await runWithRequesterToolCap(cap, () =>
+      fixture.prepare({
+        provider: "selectable-cli",
+        sessionKey: "agent:main:main",
+        cliToolAvailability: { native: ["read", "write"], openClaw: ["write", "message"] },
+      }),
+    );
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: ["write"] });
+    await context.preparedBackend.cleanup?.();
   });
 
   it("keeps runtime toolsAllow canonical and bounds the backend-independent MCP grant", async () => {

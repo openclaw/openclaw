@@ -5,6 +5,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  filterToolsByRequesterCap,
+  type RequesterToolCapRef,
+} from "../agents/requester-tool-cap.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -933,16 +937,27 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   });
 
   it("does not inherit node-only exec as a generic child or cron capability", () => {
+    const sessionSendToolCapRef: RequesterToolCapRef = {};
     const result = resolveGatewayScopedTools({
       cfg: { tools: { allow: ["exec", "sessions_spawn", "automations"] } } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
       senderIsOwner: true,
+      sessionSendToolCapRef,
       includeNodeExecTool: true,
       nodeExecAvailable: () => true,
+      nativeCronCreatorToolAllowlist: ["read", "exec"],
     });
 
     expect(result.tools.map((tool) => tool.name)).toContain("exec");
+    expect(sessionSendToolCapRef.current?.names).toContain("read");
+    expect(sessionSendToolCapRef.current?.names).not.toContain("exec");
+    expect(
+      filterToolsByRequesterCap(
+        [hoisted.makeTool("read"), hoisted.makeTool("exec")],
+        sessionSendToolCapRef.current,
+      ).map((tool) => tool.name),
+    ).toEqual(["read"]);
     expect(readCreateToolsArgs().inheritedToolAllowlist).not.toContain("exec");
     expect(readCreateToolsArgs().cronCreatorToolAllowlist).not.toContainEqual({ name: "exec" });
   });

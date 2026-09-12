@@ -457,7 +457,9 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           sessionKey,
         });
       }
-      expect(onExecutionStarted).toHaveBeenCalledTimes(2);
+      // Cancellation can overtake the prepared retry before admission, so the
+      // second attempt must not report that provider execution started.
+      expect(onExecutionStarted).toHaveBeenCalledTimes(outcome === "cancelled" ? 1 : 2);
       const state = cancelled
         ? "aborted"
         : outcome === "failure" || outcome === "cli-timeout" || retryPreparationFailure || exhausted

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 /** In-process Gateway calls for built-in agent tools. */
 import type { CallGatewayOptions } from "../../gateway/call.js";
@@ -21,7 +23,15 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
+import { getRequesterToolCap } from "../requester-tool-cap.js";
+import {
+  captureGatewayToolCallerContinuationAssertion,
   getGatewayToolCallerIdentity,
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -83,7 +93,7 @@ function callerGatewayContextResolver(
   return explicit ?? getGatewayToolCallerIdentity()?.gatewayContextResolver;
 }
 
-function captureGatewayToolCallerAssertion(): (() => void) | undefined {
+export function captureGatewayToolCallerAssertion(): (() => void) | undefined {
   const caller = getGatewayToolCallerIdentity();
   if (!caller?.operationalRunInstance) {
     return undefined;
@@ -112,6 +122,56 @@ export function runWithGatewayToolCleanupContext<T>(
         : run(),
     ),
   );
+}
+
+/** Bounded local follow-up gets its own run, retaining source cancellation and Gateway routing. */
+export async function runWithGatewayToolContinuationContext<T>(
+  cfg: OpenClawConfig,
+  run: () => Promise<T>,
+): Promise<T> {
+  const source = getGatewayToolCallerIdentity();
+  captureGatewayToolCallerAssertion()?.();
+  if (source?.workerTurnClaim || source?.workerTurnExecutionIdentityCapability) {
+    throw new Error("Worker session tools cannot detach follow-up authority");
+  }
+  if (!source?.operationalRunInstance) {
+    return runWithGatewayToolCleanupContext(run);
+  }
+  const assertSourceCurrent = captureGatewayToolCallerContinuationAssertion();
+  if (!assertSourceCurrent) {
+    throw new Error("Source run cannot transfer follow-up authority");
+  }
+  const runId = randomUUID();
+  const admission = prepareAgentRunAdmission({
+    cfg,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      runId,
+      agentId: source.agentId,
+      ingress: { kind: "system", boundary: "sessions-send-followup", state: "present" },
+    },
+    assertSourceCurrent,
+  });
+  try {
+    const admittedRunContext = await admission.admit("embedded");
+    return await runWithGatewayToolCleanupContext(() =>
+      withGatewayToolCallerIdentity(
+        {
+          ...createAdmittedGatewayToolCallerIdentity({
+            admittedRunContext,
+            agentId: source.agentId,
+            sessionKey: source.sessionKey,
+          }),
+          agentId: source.agentId,
+          sessionKey: source.sessionKey,
+          gatewayContextResolver: source.gatewayContextResolver,
+        },
+        run,
+      ),
+    );
+  } finally {
+    admission.close();
+  }
 }
 
 function bindInProcessGatewayContext(
@@ -194,6 +254,11 @@ async function callAgentToolGatewayRequestBound<T>(
     ? bindInProcessGatewayContext(request.method, resolveGatewayContext)
     : undefined;
   if (!hasInProcessGatewayContext(boundGateway?.resolve)) {
+    if (request.method === "agent" && getRequesterToolCap()) {
+      throw new Error(
+        "sessions_send tool policy requires the owning Gateway. Run this tool through that Gateway or its managed worker; remote policy transport is unavailable.",
+      );
+    }
     if (runtimeIdentity) {
       throw new Error("trusted agent runtime identity requires in-process Gateway dispatch");
     }

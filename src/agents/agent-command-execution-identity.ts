@@ -29,6 +29,9 @@ import type {
 } from "./command/types.js";
 import { commitMainSessionRecovery } from "./main-session-recovery/main-session-recovery-store.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery/main-session-recovery-types.js";
+import { getRequesterToolCap } from "./requester-tool-cap.js";
+import { captureGatewayToolCallerContinuationAssertion } from "./tools/gateway-caller-context.js";
+import { captureGatewayToolCallerAssertion } from "./tools/in-process-gateway.js";
 
 export type AgentCommandAdmissionIngress = ExecutionIdentityAdmissionFacts["ingress"];
 
@@ -54,6 +57,7 @@ function prepareAgentCommandRunAdmission(
     runId: string;
     onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
     assertSourceCurrent?: () => void;
+    cancellationSignal?: AbortSignal;
   },
   spawnFacts?: AgentCommandExecutionIdentitySpawnFacts,
 ) {
@@ -82,6 +86,7 @@ function prepareAgentCommandRunAdmission(
     ...(params.admission ? { recovery: params.admission } : {}),
     ...(params.onAdmitted ? { onAdmitted: params.onAdmitted } : {}),
     assertSourceCurrent: params.assertSourceCurrent,
+    cancellationSignal: params.cancellationSignal,
   });
 }
 
@@ -127,6 +132,25 @@ export function prepareAgentCommandExecutionIdentity(params: {
   lifecycleGeneration: string;
 }) {
   const { opts, prepared } = params;
+  const assertToolCallerCurrent = getRequesterToolCap()
+    ? captureGatewayToolCallerAssertion()
+    : undefined;
+  const assertToolCallerContinuation = getRequesterToolCap()
+    ? captureGatewayToolCallerContinuationAssertion()
+    : undefined;
+  assertToolCallerCurrent?.();
+  // Direct announce ingress remains tied to the exact caller. Ordinary delegated
+  // runs may outlive foreground completion, but retain cancellation and lifecycle fences.
+  const assertDelegatedSourceCurrent =
+    opts.transcriptMessage !== undefined
+      ? assertToolCallerCurrent
+      : (assertToolCallerContinuation ?? assertToolCallerCurrent);
+  const assertSourceCurrent = assertDelegatedSourceCurrent
+    ? () => {
+        opts.assertSourceCurrent?.();
+        assertDelegatedSourceCurrent();
+      }
+    : opts.assertSourceCurrent;
   const operationalRunInstance =
     opts.operationalRunInstance ?? createOperationalRunInstanceRef(prepared.runId);
   const admissionFacts = getAgentCommandAdmissionFacts(params.opts.runContext ?? params.opts);
@@ -165,7 +189,8 @@ export function prepareAgentCommandExecutionIdentity(params: {
     ingress: params.ingress,
     operationalRunInstance,
     runId: prepared.runId,
-    assertSourceCurrent: opts.assertSourceCurrent,
+    assertSourceCurrent,
+    cancellationSignal: opts.abortSignal,
     onAdmitted: async (admittedRunContext) => {
       await opts.onAdmittedRunContext?.(admittedRunContext);
       admittedContext = admittedRunContext;

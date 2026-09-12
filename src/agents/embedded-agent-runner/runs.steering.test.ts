@@ -9,6 +9,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
+import { captureRequesterToolCap, runWithRequesterToolCap } from "../requester-tool-cap.js";
 import {
   claimPendingEmbeddedAgentQuestionAnswer,
   clearActiveEmbeddedRun,
@@ -30,6 +31,57 @@ describe("embedded-agent active-run steering", () => {
     resetDiagnosticSessionStateForTest();
     setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
+  });
+
+  it.each([false, true])(
+    "only steers a target with compatible delegated authority (%s)",
+    async (compatible) => {
+      const source = captureRequesterToolCap([{ name: "read" }]);
+      const target = captureRequesterToolCap([
+        { name: "read" },
+        ...(compatible ? [] : [{ name: "message" }]),
+      ]);
+      const sink = vi.fn();
+      const handle = createEmbeddedRunHandle();
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (_text, _options, assertCurrent) => {
+          assertCurrent();
+          sink();
+        },
+      };
+      runWithRequesterToolCap(target, () => setActiveEmbeddedRun("capped-target", handle));
+      const outcome = await runWithRequesterToolCap(source, () =>
+        queueEmbeddedAgentMessageWithOutcomeAsync("capped-target", "hello"),
+      );
+      expect(outcome).toMatchObject(
+        compatible ? { queued: true } : { queued: false, reason: "tool_authority_mismatch" },
+      );
+      expect(sink).toHaveBeenCalledTimes(compatible ? 1 : 0);
+    },
+  );
+
+  it("rechecks capped steering after the target is replaced during an await", async () => {
+    const cap = captureRequesterToolCap([{ name: "read" }]);
+    const sink = vi.fn();
+    const handle = createEmbeddedRunHandle();
+    handle.messageInjectionV2 = {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (_text, _options, assertCurrent) => {
+        await Promise.resolve();
+        setActiveEmbeddedRun("capped-replaced", createEmbeddedRunHandle());
+        assertCurrent();
+        sink();
+      },
+    };
+    runWithRequesterToolCap(cap, () => setActiveEmbeddedRun("capped-replaced", handle));
+    const outcome = await runWithRequesterToolCap(cap, () =>
+      queueEmbeddedAgentMessageWithOutcomeAsync("capped-replaced", "hello"),
+    );
+    expect(outcome).toMatchObject({ queued: false });
+    expect(sink).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

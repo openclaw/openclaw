@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  captureRequesterToolCap,
+  runWithRequesterToolCap,
+} from "../../agents/requester-tool-cap.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -30,6 +34,26 @@ const dependencies: SkillToolDispatchDependencies = {
 };
 
 describe("resolveSkillDispatchTools", () => {
+  it("exports delegated authority to child tools without a configured allowlist", () => {
+    const tools = runWithRequesterToolCap(captureRequesterToolCap([{ name: "read" }]), () =>
+      resolveSkillDispatchTools(
+        {
+          message: { surface: "webchat" },
+          cfg: {},
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+          provider: "openai",
+          model: "test",
+          senderIsOwner: true,
+        },
+        dependencies,
+      ),
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(["read"]);
+    expect(createOpenClawToolsMock.mock.lastCall?.[0]?.inheritedToolAllowlist).toEqual(["read"]);
+  });
+
   it.each([
     { agentId: "isolated", expectedTools: ["read"] },
     { agentId: "direct", expectedTools: ["read", "cron", "exec", "conversations_send"] },

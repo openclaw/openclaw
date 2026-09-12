@@ -1,4 +1,5 @@
 import type { WorkerSessionsSendParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { RequesterToolCapRef } from "../../agents/requester-tool-cap.js";
 import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-process-gateway.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
@@ -13,6 +14,7 @@ import {
 
 export async function executeWorkerSessionSend(operation: {
   source: ExactSource;
+  sessionSendToolCapRef: RequesterToolCapRef;
   target: ExactTarget;
   request: WorkerSessionsSendParams;
   idempotencyKey: string;
@@ -38,6 +40,7 @@ export async function executeWorkerSessionSend(operation: {
     assertCurrentTarget();
     const tool = createSessionsSendTool({
       agentSessionKey: operation.source.sessionKey,
+      sessionSendToolCapRef: operation.sessionSendToolCapRef,
       agentChannel: sessionDeliveryChannel(operation.source.entry),
       expectedTargetSessionId: operation.target.sessionId,
       idempotencyKey: operation.idempotencyKey,

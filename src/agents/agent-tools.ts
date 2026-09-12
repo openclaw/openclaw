@@ -93,6 +93,11 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
 import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
+import {
+  captureRequesterToolCap,
+  filterToolsByRequesterCap,
+  type RequesterToolCapRef,
+} from "./requester-tool-cap.js";
 import type { SandboxContext } from "./sandbox.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import {
@@ -344,6 +349,7 @@ type OpenClawCodingToolsOptions = {
   inheritRuntimeToolAllowlist?: boolean;
   /** Mutable spawn capability snapshot refreshed after late-bound runtime tools are authorized. */
   inheritedToolAllowlistRef?: string[];
+  sessionSendToolCapRef?: RequesterToolCapRef;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** Mutable proof that the cron cap reached the final executable surface. */
@@ -754,11 +760,13 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     ...ownerOnlyCoreToolDenylist,
   ];
   const inheritedToolDenylist = [...pluginToolDenylist];
+  const sessionSendToolCapRef = options?.sessionSendToolCapRef ?? {};
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
   const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
+    Boolean(capabilityProfile.policy.requesterToolCap) ||
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const cronCreatorToolAllowlistCaptureRef = options?.cronCreatorToolAllowlistCaptureRef;
@@ -975,6 +983,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sessionId: options?.sessionId,
             conversationRecall: options?.conversationRecall,
             oneShotCliRun: options?.oneShotCliRun,
+            sessionSendToolCapRef,
             inheritedToolAllowlist,
             inheritedToolDenylist,
             onYield: options?.onYield,
@@ -1066,9 +1075,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
-  const authorizedTools = applyDelegationCapability(
-    mergeAgentRingZeroTools(ringZeroTools, subagentFiltered),
-    options?.delegationCapability,
+  const authorizedTools = filterToolsByRequesterCap(
+    applyDelegationCapability(
+      mergeAgentRingZeroTools(ringZeroTools, subagentFiltered),
+      options?.delegationCapability,
+    ),
   ).filter(
     (tool) =>
       !options?.swarmCollector ||
@@ -1150,7 +1161,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
   // NOTE: Keep canonical (lowercase) tool names here. Provider transports remap on the wire.
-  return finalizeAgentTools({
+  const finalizedTools = finalizeAgentTools({
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
@@ -1162,6 +1173,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     abortSignal: options?.abortSignal,
     recordToolPrepStage: options?.recordToolPrepStage,
   }).map((tool) => wrapToolWithGatewayCallerIdentity(tool, toolCallerIdentity));
+  sessionSendToolCapRef.current = captureRequesterToolCap(finalizedTools, inheritedToolDenylist);
+  return finalizedTools;
 }
 
 /** Build the runtime tool list exposed through the public agent harness SDK. */

@@ -28,6 +28,14 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { GatewayClient } from "./client.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  runSessionsSendAuthorityScenario,
+  runSessionsSendAnnounceAuthorityScenario,
+  sessionSendAuthorityCases,
+} from "./server.sessions-send-authority.test-support.js";
+import { runSessionsSendNodeAuthorityScenario } from "./server.sessions-send-node-authority.test-support.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
@@ -46,6 +54,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
+let gatewayContext: GatewayRequestContext;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -160,7 +169,15 @@ beforeAll(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  const registry = createTestRegistry();
+  registry.gatewayHandlers["test.capture-context"] = ({ context, respond }) => {
+    gatewayContext = context;
+    respond(true, {});
+  };
+  setTestPluginRegistry(registry);
   server = await startTestGatewayServer(gatewayPort);
+  const { callGateway } = await import("./call.js");
+  await callGateway({ method: "test.capture-context", params: {}, scopes: ["operator.admin"] });
   // Prepare the real history handler before the RPC deadline starts.
   await import("./server-methods/chat.js");
 });
@@ -178,6 +195,50 @@ afterAll(async () => {
 });
 
 describe("sessions_send gateway loopback", () => {
+  it.each([true, false])(
+    "keeps node-only execution from becoming receiving local file I/O (node only: %s)",
+    async (nodeOnly) => {
+      await runSessionsSendNodeAuthorityScenario({
+        nodeOnly,
+        gatewayContext,
+        createNodeClient: (options) =>
+          new GatewayClient({
+            ...options,
+            url: `ws://127.0.0.1:${gatewayPort}`,
+            token: gatewayToken,
+            role: "node",
+            clientName: "node-host",
+            clientVersion: "1.0.0",
+            platform: "linux",
+            mode: "node",
+            scopes: [],
+            caps: ["system"],
+          }),
+        makeTempDir: (prefix) => tempDirs.make(prefix),
+      });
+    },
+  );
+  it.each([false, true])(
+    "guards direct-announcement file I/O after target admission (request cancelled: %s)",
+    async (cancelRequest) => {
+      await runSessionsSendAnnounceAuthorityScenario({
+        cancelRequest,
+        gatewayContext,
+        makeTempDir: (prefix) => tempDirs.make(prefix),
+      });
+    },
+  );
+  it.each(sessionSendAuthorityCases)(
+    "keeps a $mode source cap through Gateway admission to file I/O",
+    async (testCase) => {
+      await runSessionsSendAuthorityScenario({
+        testCase,
+        gatewayContext,
+        makeTempDir: (prefix) => tempDirs.make(prefix),
+      });
+    },
+  );
+
   it("rejects a missing explicit key without creating or running a session", async () => {
     const dir = tempDirs.make("openclaw-sessions-send-missing-");
     const missingKey = "agent:main:missing";

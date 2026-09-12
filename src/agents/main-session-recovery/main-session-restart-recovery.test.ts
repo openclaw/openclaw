@@ -6082,41 +6082,88 @@ describe("main-session-restart-recovery", () => {
     { label: "explicit full access", mode: "ask", permissionMode: "full", restricted: false },
     { label: "inherited approvals", mode: "ask", permissionMode: undefined, restricted: true },
     { label: "explicit guarded access", mode: "full", permissionMode: "guarded", restricted: true },
-  ] as const)(
-    "continues interrupted work with $label",
-    async ({ mode, permissionMode, restricted }) => {
-      const sessionsDir = await writeMainSessionTranscript(
-        [
-          { role: "user", content: "do the thing" },
-          createAssistantToolCallMessage([
-            { type: "text", text: "Running the check now." },
-            {
-              type: "toolCall",
-              id: "call-exec-1",
-              name: "exec",
-              arguments: { code: "await shell({command: 'true'})" },
-            },
-          ]),
-        ],
-        { permissionMode, restartRecoveryForceSafeTools: true },
-      );
+  ] as const)("continues interrupted work with $label", async (testCase) => {
+    const { mode, permissionMode, restricted } = testCase;
+    const sessionsDir = await writeMainSessionTranscript(
+      [
+        { role: "user", content: "do the thing" },
+        createAssistantToolCallMessage([
+          { type: "text", text: "Running the check now." },
+          {
+            type: "toolCall",
+            id: "call-exec-1",
+            name: "exec",
+            arguments: { code: "await shell({command: 'true'})" },
+          },
+        ]),
+      ],
+      { permissionMode, restartRecoveryForceSafeTools: true },
+    );
 
-      await expectRecovery(
-        { started: 1, settled: 0, failed: 0, skipped: 0 },
-        { tools: { exec: { mode } } },
-      );
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(gatewayParams().forceRestartSafeTools === true).toBe(restricted);
-      expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
-      expect(gatewayParams().message).toContain("unknown outcome");
-      expect(
-        loadSessionEntry({
-          storePath: path.join(sessionsDir, "sessions.json"),
-          sessionKey: "agent:main:main",
-        })?.restartRecoveryForceSafeTools === true,
-      ).toBe(restricted);
-    },
-  );
+    await expectRecovery(
+      { started: 1, settled: 0, failed: 0, skipped: 0 },
+      { tools: { exec: { mode } } },
+    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(gatewayParams().forceRestartSafeTools === true).toBe(restricted);
+    expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+    expect(gatewayParams().message).toContain("unknown outcome");
+    expect(
+      loadSessionEntry({
+        storePath: path.join(sessionsDir, "sessions.json"),
+        sessionKey: "agent:main:main",
+      })?.restartRecoveryForceSafeTools === true,
+    ).toBe(restricted);
+  });
+
+  it("fails delegated restart recovery before a sender-denied safe tool can run", async () => {
+    const sessionsDir = await writeMainSessionTranscript(
+      [
+        {
+          role: "user",
+          content: "read the file after restart",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+        ...Array.from({ length: 80 }, (_, index) => ({
+          role: index % 2 === 0 ? "assistant" : "toolResult",
+          content: `delegated turn detail ${index}`,
+        })),
+        {
+          role: "user",
+          content: "continue after restart",
+          provenance: {
+            kind: "internal_system",
+            sourceTool: "main_session_restart_recovery",
+          },
+        },
+        createAssistantToolCallMessage([
+          {
+            type: "toolCall",
+            id: "call-read-1",
+            name: "read",
+            arguments: { path: "/tmp/sender-denied" },
+          },
+        ]),
+      ],
+      { permissionMode: "full", restartRecoveryForceSafeTools: true },
+    );
+
+    await expectRecovery(
+      { started: 0, settled: 0, failed: 0, skipped: 1 },
+      { tools: { exec: { mode: "full" } } },
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(
+      loadSessionEntry({
+        storePath: path.join(sessionsDir, "sessions.json"),
+        sessionKey: "agent:main:main",
+      }),
+    ).toMatchObject({
+      abortedLastRun: false,
+      status: "failed",
+      mainRestartRecovery: { tombstone: expect.any(Object) },
+    });
+  });
 
   it("reports an interrupted native tool outcome as unknown", async () => {
     await writeMainSessionTranscript([

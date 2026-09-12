@@ -8,6 +8,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
+import { captureRequesterToolCap } from "../../requester-tool-cap.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
@@ -40,6 +41,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     inheritedToolAllowlist,
+    sessionSendToolCapRef,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -222,6 +224,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           (tool) => getPluginToolMeta(tool),
         );
       }
+      sessionSendToolCapRef.current = captureRequesterToolCap(
+        schemaProjection.tools,
+        runtimeCapabilityProfile.policy.explicitToolDenylist,
+      );
       if (inheritedToolAllowlist?.length) {
         // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
         // only after final policy and schema projection so children inherit the

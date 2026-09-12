@@ -13,6 +13,7 @@ import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
+import type { RequesterToolCapRef } from "./requester-tool-cap.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -20,6 +21,7 @@ import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
 export type OpenClawToolsOptions = {
+  sessionSendToolCapRef?: RequesterToolCapRef;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;

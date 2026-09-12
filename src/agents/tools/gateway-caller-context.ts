@@ -12,6 +12,7 @@ import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
+  resolveAdmittedRunContinuationAssertion,
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
@@ -42,6 +43,8 @@ type GatewayToolCallerIdentity = {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Synchronous host-owned fence for before-tool decision receipts. */
   receiptAuthority?: () => boolean | void;
+  /** Source cancellation survives normal foreground completion for admitted follow-up. */
+  continuationAuthorityCheck?: () => void;
   /** Exact Gateway-owned worker claim; never sourced from model or RPC arguments. */
   workerTurnClaim?: WorkerSessionTurnClaim;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -152,6 +155,13 @@ export function createAdmittedGatewayToolCallerIdentity(
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    ...(delegatedAuthority
+      ? {
+          continuationAuthorityCheck: resolveAdmittedRunContinuationAssertion(
+            params.admittedRunContext,
+          ),
+        }
+      : {}),
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
@@ -175,6 +185,40 @@ export function createAdmittedGatewayToolCallerIdentity(
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+/** Add an individual tool request's cancellation fence to downstream admitted work. */
+export function withGatewayToolCallerApprovalSignal<T>(
+  signal: AbortSignal | undefined,
+  run: () => T,
+): T {
+  const caller = getGatewayToolCallerIdentity();
+  if (!caller || !signal) {
+    return run();
+  }
+  return gatewayToolCallerStorage.run(
+    {
+      ...caller,
+      approvalSignals: [...(caller.approvalSignals ?? []), signal],
+    },
+    run,
+  );
+}
+
+/** Retains explicit cancellation and lifecycle fences without pinning foreground completion. */
+export function captureGatewayToolCallerContinuationAssertion(): (() => void) | undefined {
+  const caller = getGatewayToolCallerIdentity();
+  const assertContinuationCurrent = caller?.continuationAuthorityCheck;
+  if (!caller?.operationalRunInstance || !assertContinuationCurrent) {
+    return undefined;
+  }
+  const signals = caller.approvalSignals ?? [];
+  return () => {
+    if (signals.some((signal) => signal.aborted)) {
+      throw new Error("agent tool caller continuation authority is no longer active");
+    }
+    assertContinuationCurrent();
+  };
 }
 
 /** Process-owned work must not retain the turn that authorized its launch. */
@@ -262,6 +306,8 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(cronManagementGrant ? { cronManagementGrant } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
       ...(receiptAuthority ? { receiptAuthority } : {}),
+      continuationAuthorityCheck:
+        inheritedOwner?.continuationAuthorityCheck ?? identity.continuationAuthorityCheck,
       ...(approvalSignals.length ? { approvalSignals } : {}),
       ...(workerTurnClaim ? { workerTurnClaim } : {}),
       ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),

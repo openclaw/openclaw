@@ -66,6 +66,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import { runWithRequesterToolCap, type RequesterToolCapRef } from "../requester-tool-cap.js";
 import { type AgentWaitResult, waitForAgentRunReply } from "../run-wait.js";
 import { loadSessionEntryByKey } from "../subagents/announce/subagent-announce-delivery.js";
 import {
@@ -75,10 +76,12 @@ import {
 import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import { withGatewayToolCallerApprovalSignal } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
+  runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
@@ -463,6 +466,15 @@ async function startAgentRun(params: {
           a2aDisplayKey: fallbackSessionKey,
         };
       }
+      if (
+        !queueOutcome.queued &&
+        (queueOutcome.reason === "tool_authority_mismatch" ||
+          queueOutcome.reason === "guarded_injection_unsupported")
+      ) {
+        throw new Error(
+          "The active target cannot accept this sender's tool policy. Retry after it finishes, using the target's durable session key.",
+        );
+      }
       const queueSummary =
         formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
       throw new Error(queueSummary);
@@ -494,6 +506,7 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentId?: string;
+  sessionSendToolCapRef?: RequesterToolCapRef;
   agentSessionKey?: string;
   agentChannel?: string;
   sandboxed?: boolean;
@@ -505,7 +518,7 @@ export function createSessionsSendTool(opts?: {
   idempotencyKey?: string;
   signal?: AbortSignal;
 }): AnyAgentTool {
-  return {
+  const tool: AnyAgentTool = {
     label: "Session Send",
     name: "sessions_send",
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -513,10 +526,17 @@ export function createSessionsSendTool(opts?: {
     parameters: SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const promptedAt = Date.now();
       const params = normalizeSessionsSendArguments(args);
-      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const executionSignal =
+        signal && opts?.signal ? AbortSignal.any([signal, opts.signal]) : (signal ?? opts?.signal);
+      const baseGatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const gatewayCall: GatewayCaller = async <T>(request: Parameters<GatewayCaller>[0]) =>
+        await baseGatewayCall<T>({
+          ...request,
+          ...(executionSignal ? { signal: executionSignal } : {}),
+        });
       const message = readToolStringParam(params, "message", { required: true, trim: false });
       if (!message.trim()) {
         throw new ToolInputError("message required");
@@ -948,7 +968,7 @@ export function createSessionsSendTool(opts?: {
         cfg,
         agentId: targetAgentId,
         expectedSessionId,
-        ...(opts?.signal ? { signal: opts.signal } : {}),
+        ...(executionSignal ? { signal: executionSignal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
           if (visibleSession.missing) {
@@ -1071,25 +1091,27 @@ export function createSessionsSendTool(opts?: {
             // Own a fresh root so parent release cannot retire later nested turns.
             void runWithGatewayIndependentRootWorkContinuation(
               () =>
-                runWithoutOwnedSessionTranscriptWrites(() =>
-                  runSessionsSendA2AFlow({
-                    callGateway: gatewayCall,
-                    targetSessionKey: flowTargetSessionKey,
-                    targetAgentId,
-                    displayKey: flowDisplayKey,
-                    message,
-                    announceTimeoutMs,
-                    // Cron runs are isolated jobs; target replies must not become new
-                    // requester turns, but the target-side announce still runs.
-                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                    requesterSessionKey: replyRequesterSessionKey,
-                    requesterAgentId,
-                    requesterChannel,
-                    roundOneReply: reply?.replyText,
-                    sourceReplyDelivered: reply?.sourceReplyDelivered,
-                    waitRunId,
-                    notifyRequesterOnWaitFailure,
-                  }),
+                runWithGatewayToolContinuationContext(cfg, () =>
+                  runWithoutOwnedSessionTranscriptWrites(() =>
+                    runSessionsSendA2AFlow({
+                      callGateway: gatewayCall,
+                      targetSessionKey: flowTargetSessionKey,
+                      targetAgentId,
+                      displayKey: flowDisplayKey,
+                      message,
+                      announceTimeoutMs,
+                      // Cron runs are isolated jobs; target replies must not become new
+                      // requester turns, but the target-side announce still runs.
+                      maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                      requesterSessionKey: replyRequesterSessionKey,
+                      requesterAgentId,
+                      requesterChannel,
+                      roundOneReply: reply?.replyText,
+                      sourceReplyDelivered: reply?.sourceReplyDelivered,
+                      waitRunId,
+                      notifyRequesterOnWaitFailure,
+                    }),
+                  ),
                 ),
               "session:a2a-send",
             ).catch((err: unknown) => {
@@ -1140,7 +1162,9 @@ export function createSessionsSendTool(opts?: {
             promptedAt,
             agentId: targetAgentId,
             sessionKey: acceptedTargetSessionKey,
-            storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+            storePath: resolveSessionStorePathCore(cfg.session?.store, {
+              agentId: targetAgentId,
+            }),
             onError: (error) => log.warn("failed to record session participant", { error }),
           });
           runId = start.runId;
@@ -1224,6 +1248,13 @@ export function createSessionsSendTool(opts?: {
         },
       });
     },
+  };
+  return {
+    ...tool,
+    execute: (...args) =>
+      withGatewayToolCallerApprovalSignal(args[2], () =>
+        runWithRequesterToolCap(opts?.sessionSendToolCapRef?.current, () => tool.execute(...args)),
+      ),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

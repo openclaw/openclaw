@@ -11,6 +11,7 @@ import { buildRestartRecoveryExpectedState } from "../../config/sessions/session
 import {
   hasInterSessionUserProvenance,
   isCompletionReportInputProvenance,
+  isMainSessionRestartRecoveryInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
 import { isAnnounceRunId } from "../announce-idempotency.js";
@@ -32,16 +33,23 @@ export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
   return Boolean(runs?.length && runs.every((run) => isAnnounceRunId(run.runId)));
 }
 
-export function hasCompletionReportUserTail(messages: readonly unknown[]): boolean {
-  const message = messages.findLast((candidate) => getMessageRole(candidate) === "user");
-  if (!message || typeof message !== "object") {
-    return false;
+export type MainSessionRestartRecoverySource = "completion" | "inter_session" | "other";
+
+/** Classify a candidate source turn while excluding canonical recovery continuations. */
+export function classifyMainSessionRestartRecoverySource(
+  message: unknown,
+): MainSessionRestartRecoverySource | undefined {
+  if (getMessageRole(message) !== "user" || !message || typeof message !== "object") {
+    return undefined;
   }
   const userMessage = message as { role?: unknown; provenance?: unknown };
-  return (
-    hasInterSessionUserProvenance(userMessage) &&
-    isCompletionReportInputProvenance(userMessage.provenance)
-  );
+  if (isMainSessionRestartRecoveryInputProvenance(userMessage.provenance)) {
+    return undefined;
+  }
+  if (!hasInterSessionUserProvenance(userMessage)) {
+    return "other";
+  }
+  return isCompletionReportInputProvenance(userMessage.provenance) ? "completion" : "inter_session";
 }
 
 export async function reconcileInterruptedCompletionReport(

@@ -25,6 +25,7 @@ import {
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
+import type { RequesterToolCap } from "../requester-tool-cap.js";
 
 /**
  * Shared process state for embedded-agent runs, queues, and snapshots.
@@ -106,6 +107,7 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
 };
 
 export type EmbeddedRunRegistration = {
+  requesterToolCap?: RequesterToolCap;
   /** Registration-owned presentation fact; retained cleanup must not reappear after context release. */
   projectSessionActive?: boolean;
   toolAuthority?: ReturnType<EmbeddedRunToolAuthorityBinding>;

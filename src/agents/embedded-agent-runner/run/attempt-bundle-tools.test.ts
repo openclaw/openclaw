@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
@@ -76,8 +77,12 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         cronCreatorToolAllowlist: [],
         effectiveToolsAllow: undefined,
         inheritedToolAllowlist,
+        sessionSendToolCapRef: {},
         localModelLeanPreserveToolNames: [],
-        runtimeCapabilityProfile: undefined,
+        runtimeCapabilityProfile: resolveConversationCapabilityProfile({
+          config: {},
+          agentId: "main",
+        }),
         toolsEnabled: true,
         toolsRaw,
       },
@@ -388,12 +393,15 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     const inherited = ["initial"];
     const input = createInput(inherited, core);
     const creatorTools = input.preparedToolBase.cronCreatorToolAllowlist;
+    const sendCap = input.preparedToolBase.sessionSendToolCapRef;
     input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = {};
     mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [bundled] });
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
     const retained = result.uncompactedEffectiveTools;
+    const firstCap = sendCap.current;
+    expect(firstCap?.names).toEqual(["core_first", "server__read"]);
     expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
     expect(core).toEqual([first]);
 
@@ -406,6 +414,8 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(core).toEqual([second]);
     expect(inherited).toEqual(["core_second"]);
     expect(creatorTools).toEqual([{ name: "core_second" }]);
+    expect(sendCap.current?.names).toEqual(["core_second"]);
+    expect(firstCap?.names).toEqual(["core_first", "server__read"]);
 
     core.splice(0, core.length, first);
     bundledSchema.type = "object";
@@ -414,6 +424,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
     expect(core).toEqual([first]);
     expect(inherited).toEqual(["core_first", "server__read"]);
+    expect(sendCap.current?.names).toEqual(["core_first", "server__read"]);
     expect(creatorTools).toEqual([
       { name: "core_first" },
       { name: "server__read", pluginId: "bundle-mcp" },
