@@ -10923,6 +10923,7 @@ public struct PortalSummary: Codable, Sendable {
 
 public struct PresenceEntry: Codable, Sendable {
     public let host: String?
+    public let clientid: String?
     public let ip: String?
     public let version: String?
     public let platform: String?
@@ -10946,6 +10947,7 @@ public struct PresenceEntry: Codable, Sendable {
 
     public init(
         host: String? = nil,
+        clientid: String? = nil,
         ip: String? = nil,
         version: String? = nil,
         platform: String? = nil,
@@ -10968,6 +10970,7 @@ public struct PresenceEntry: Codable, Sendable {
         watchedsessions: [String]? = nil)
     {
         self.host = host
+        self.clientid = clientid
         self.ip = ip
         self.version = version
         self.platform = platform
@@ -10992,6 +10995,7 @@ public struct PresenceEntry: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case host
+        case clientid = "clientId"
         case ip
         case version
         case platform

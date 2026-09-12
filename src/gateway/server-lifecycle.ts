@@ -171,6 +171,7 @@ export async function prepareGatewayLifecycle(params: {
     onNodeConnected: (session) => {
       upsertPresence(session.nodeId, {
         host: session.displayName ?? session.clientId ?? session.nodeId,
+        clientId: session.clientId,
         ip: session.remoteIp,
         version: session.version,
         platform: session.platform,

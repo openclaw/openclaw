@@ -3470,6 +3470,7 @@ export const en: TranslationMap & {
       viewActivity: "View activity",
       web: "Web",
       cli: "Command line",
+      terminal: "Terminal",
       app: "App",
     },
   },
