@@ -432,7 +432,7 @@ export async function executeMutableUpdate(
         rehearsal,
         assertCurrent,
         nodeRunner: params.packageUpdateNodeRunner,
-        timeoutMs: updateStepTimeoutMs,
+        timeoutMs: params.timeoutMs,
         onStep: (step) => params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
       });
       assertUpdateCommandRecovery(opts);

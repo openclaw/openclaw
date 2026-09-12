@@ -33,10 +33,10 @@ const { executionParams, inspectOrStopService, mocks, schemaContext, successfulU
 describe("mutable update execution", () => {
   it.each(
     (["package", "git"] as const).flatMap((kind) =>
-      [30_000, 600_000].map((timeoutMs) => ({ kind, timeoutMs })),
+      [undefined, 30_000, 600_000].map((timeoutMs) => ({ kind, timeoutMs })),
     ),
   )(
-    "passes the configured $timeoutMs ms step budget to $kind candidate validation",
+    "passes only the operator's $timeoutMs ms deadline to $kind candidate validation",
     async ({ kind, timeoutMs }) => {
       const runStagedUpdate = async ({
         validateCandidate,
@@ -53,7 +53,7 @@ describe("mutable update execution", () => {
       const execution = await executeMutableUpdate({
         ...executionParams(kind),
         timeoutMs,
-        updateStepTimeoutMs: timeoutMs,
+        updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
       });
 
       expect(execution?.result.status).toBe("ok");

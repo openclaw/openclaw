@@ -107,7 +107,9 @@ including copying and verification passes, with a five-minute startup floor.
 It uses the larger of that allowance and the configured per-step timeout.
 The deadline extends while private files continue changing. A stalled snapshot
 reports its size and applied budget. Snapshot time does not consume the separate
-runtime validation budget, which also honors the configured per-step timeout.
+runtime validation budget. By default, that budget scales with measured database
+and plugin bytes, allowing each validation process to inspect the private state.
+An explicit per-step timeout replaces that derived runtime allowance.
 
 Before copying, the updater measures the shared and agent SQLite database
 families and the installed plugin payloads and dependency trees that the
@@ -162,7 +164,7 @@ not discard the previous generation's rollback eligibility. Native service and
 Gateway boot identities must still match through the final observation.
 
 The canary binds a free loopback port and must report `/startupz` as `started`,
-then `/readyz` as ready within the configured per-step timeout. Plugin-resolution
+then `/readyz` as ready within the runtime validation allowance. Plugin-resolution
 errors attributed to a named plugin are recorded without rejecting the candidate.
 An invalid plugin inventory, an unattributed registry error, or failure to meet
 the required core startup or readiness checks still fails validation. Failure
