@@ -929,7 +929,8 @@ jobs:
           releases_json=""
           if [[ "$REQUESTED_BASELINES" == *"release-history"* || "$REQUESTED_BASELINES" == *"all-since-"* || "$REQUESTED_BASELINES" == *"last-stable-"* ]]; then
             releases_json=".artifacts/package-candidate-input/openclaw-releases.json"
-            gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,publishedAt,isPrerelease > "$releases_json"
+            gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+              jq '[.[][] | {tagName: .tag_name, publishedAt: .published_at, isPrerelease: .prerelease}]' > "$releases_json"
           fi
           args=(
             --requested "$REQUESTED_BASELINES"

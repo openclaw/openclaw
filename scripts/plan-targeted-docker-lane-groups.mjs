@@ -190,6 +190,11 @@ export function planTargetedDockerLaneGroups({
   }
 
   flushPending();
+  if (groups.length > 256) {
+    throw new Error(
+      `Targeted Docker coverage requires ${groups.length} jobs, exceeding the GitHub Actions matrix limit of 256. Split the requested baselines or scenarios across workflow runs; no coverage was dropped.`,
+    );
+  }
   return groups;
 }
 

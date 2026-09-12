@@ -29,6 +29,30 @@ function expandedPlan(
 }
 
 describe("scripts/plan-targeted-docker-lane-groups", () => {
+  it("retains 256 groups and explicitly rejects matrix overflow without dropping coverage", () => {
+    const baselines = Array.from({ length: 256 }, (_, index) => `2026.9.${index + 1}`).join(" ");
+    expect(
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration",
+        upgradeSurvivorBaselines: baselines,
+      }),
+    ).toHaveLength(256);
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration install-smoke",
+        upgradeSurvivorBaselines: baselines,
+      }),
+    ).toThrow("257 jobs, exceeding the GitHub Actions matrix limit of 256");
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration",
+        upgradeSurvivorBaselines: baselines,
+        upgradeSurvivorScenarios:
+          "base plugin-deps-cleanup legacy-operator-state bootstrap-persona",
+      }),
+    ).toThrow("512 jobs, exceeding the GitHub Actions matrix limit of 256");
+  });
+
   it.each([
     { lane: "published-upgrade-survivor", scenario: "base" },
     { lane: "update-migration", scenario: "plugin-deps-cleanup" },
