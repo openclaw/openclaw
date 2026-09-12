@@ -914,6 +914,7 @@ jobs:
         working-directory: selected
 
       - name: Download QA profile shard evidence
+        id: download_shards
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -960,19 +961,8 @@ jobs:
             shardCount: Number(process.env.SHARD_COUNT),
           });
           NODE
-          jq -s \
-            --arg profile "$QA_PROFILE" \
-            --argjson exitCode "$qa_exit_code" \
-            '{
-              target: .[0].target,
-              profile: $profile,
-              run: .[0].run,
-              shards: map(.shard + {exitCode, timedOut, timeoutOutcome, completedAt}),
-              exitCode: $exitCode,
-              timedOut: false,
-              timeoutOutcome: "none",
-              completedAt: (map(.completedAt) | max)
-            }' "${status_paths[@]}" > "$OUTPUT_DIR/qa-profile-run-status.json"
+          # Preserve the former status assembly's admission checks; projection is advisory below.
+          jq -s --argjson exitCode "$qa_exit_code" 'map(.shard + {})' "${status_paths[@]}" >/dev/null
           echo "output_dir=${OUTPUT_DIR}" >> "$GITHUB_OUTPUT"
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
 
@@ -1041,6 +1031,46 @@ jobs:
           echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=${TRUSTED_REASON}" >> "$GITHUB_OUTPUT"
           echo "qa_evidence_path=qa-evidence.json" >> "$GITHUB_OUTPUT"
+
+      # Diagnostics use the frozen harness even when candidate aggregation cannot start.
+      # They never produce a manifest or participate in qualification outputs.
+      - name: Collect QA profile diagnostics
+        id: collect_diagnostics
+        if: always()
+        continue-on-error: true
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          INPUT_DIR: ${{ github.workspace }}/selected/.artifacts/qa-profile-shards
+          OUTPUT_DIR: ${{ github.workspace }}/selected/.artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          PLAN_MATRIX_JSON: ${{ needs.plan_qa_profile.outputs.matrix }}
+          QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          PROTOCOL_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+          QA_EXIT_CODE: ${{ steps.aggregate.outputs.qa_exit_code }}
+          SHARD_JOB_OUTCOME: ${{ needs.run_qa_profile_shard.result }}
+          DOWNLOAD_OUTCOME: ${{ steps.download_shards.outcome }}
+          AGGREGATE_OUTCOME: ${{ steps.aggregate.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
+          node scripts/qa/qa-profile-run-status.mjs
+
+      - name: Upload QA profile diagnostics
+        id: upload_diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-profile-diagnostics-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/selected/.artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}/qa-profile-run-status.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Warn if QA profile diagnostics were not retained
+        if: always() && (steps.collect_diagnostics.outcome == 'failure' || steps.upload_diagnostics.outcome == 'failure')
+        run: echo "::warning::QA profile diagnostics collection or upload failed; inspect the original shard artifacts and job logs."
 
       - name: Upload QA profile evidence
         if: always() && steps.evidence.outcome == 'success'
