@@ -15,12 +15,12 @@ import { SessionTranscriptColdError } from "../config/sessions/session-cold-stor
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
+import { sqliteMessageEventWithSeq } from "./session-transcript-message.js";
 import {
   resolveTranscriptReadTarget,
-  sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type ResolvedTranscriptReadTarget,
-} from "./session-transcript-readers.js";
+} from "./session-transcript-read-target.js";
 
 type SessionTitleFields = {
   firstUserMessage: string | null;

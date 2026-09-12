@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import type { SessionTranscriptMessageEvent } from "../config/sessions/session-accessor.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
   createCurrentUserProfileMessageProjector,
@@ -43,6 +44,12 @@ export function readTranscriptMessageIdempotencyKey(message: unknown): string | 
   }
   const value = (message as Record<string, unknown>).idempotencyKey;
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export function sqliteMessageEventWithSeq(
+  entry: Pick<SessionTranscriptMessageEvent, "event" | "seq" | "displayPosition">,
+): unknown {
+  return projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
 }
 
 function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefined {

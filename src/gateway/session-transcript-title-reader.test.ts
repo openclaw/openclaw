@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -165,6 +166,15 @@ function boundedTitleEventReadCount(): number {
       )
   );
 }
+
+test.each([
+  "src/gateway/session-transcript-title-reader.ts",
+  "src/gateway/session-transcript-anchor-reader.ts",
+])("keeps %s independent of the full transcript reader", (entry) => {
+  expect(findSourceImportBackedges(entry, ["src/gateway/session-transcript-readers.ts"])).toEqual(
+    [],
+  );
+});
 
 describe("session transcript title hydration", () => {
   test("keeps cold transcripts archived while reading mixed title rows and heals after restoration", async () => {

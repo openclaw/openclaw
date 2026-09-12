@@ -5,8 +5,8 @@ import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
-  type ReadRecentSessionMessagesResult,
-} from "./session-transcript-readers.js";
+} from "./session-transcript-read-target.js";
+import type { ReadRecentSessionMessagesResult } from "./session-transcript-readers.js";
 import { ArchivedTranscriptReader } from "./session-utils.fs.js";
 
 type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {

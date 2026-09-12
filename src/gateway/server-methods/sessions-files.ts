@@ -15,11 +15,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { sqliteMessageEventWithSeq } from "../session-transcript-message.js";
+import {
+  resolveTranscriptReadTarget,
+  toTranscriptReadScope,
+} from "../session-transcript-read-target.js";
 import {
   readSessionTranscriptVisibleMessageDeltaCore,
-  resolveTranscriptReadTarget,
-  sqliteMessageEventWithSeq,
-  toTranscriptReadScope,
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
