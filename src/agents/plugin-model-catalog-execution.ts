@@ -25,6 +25,7 @@ import {
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
+import { withHandedOffPluginModelCatalogs } from "./plugin-model-catalog-handoff.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.read-operation.js";
 import type { PluginModelCatalogCredentialOperations } from "./plugin-model-catalog.worker.js";
 
@@ -122,7 +123,7 @@ export async function loadPersistedPluginModelCatalogs(
   };
   const identity = readDatabasePathIdentitySync(options.path);
   if (!identity.key.startsWith("file:")) {
-    return [];
+    return withHandedOffPluginModelCatalogs([], pluginIds);
   }
   const root = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
   const controller = new AbortController();
@@ -156,7 +157,7 @@ export async function loadPersistedPluginModelCatalogs(
     );
     const catalogs = await reading;
     assertCurrent();
-    return catalogs;
+    return withHandedOffPluginModelCatalogs(catalogs, pluginIds);
   } finally {
     unregisterRoot?.();
     unregisterAgent();
