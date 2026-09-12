@@ -6,8 +6,8 @@ import {
   readAgentRunTerminalReceipt,
   writeAgentRunTerminalReceipt,
 } from "./agent-run-terminal-receipts.js";
-import { ensureAgentRunTerminalReceiptSchema } from "./openclaw-state-db-schema-additive.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { ensureAgentRunTerminalReceiptSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

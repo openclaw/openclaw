@@ -32,15 +32,15 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import {
+  authorizeResolvedSessionMutation,
+  resolveSessionSharingTarget,
+} from "../session-sharing.js";
+import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
-import {
-  authorizeResolvedSessionMutation,
-  resolveSessionSharingTarget,
-} from "../session-sharing.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";

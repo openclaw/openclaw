@@ -3,10 +3,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { AgentRunTerminalReceipts } from "./openclaw-state-db.generated.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureAgentRunTerminalReceiptSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import type { AgentRunTerminalReceipts } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 
 export const AGENT_RUN_TERMINAL_RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;

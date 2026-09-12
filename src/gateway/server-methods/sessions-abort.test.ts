@@ -6,12 +6,12 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { writeAgentRunTerminalReceipt } from "../../state/agent-run-terminal-receipts.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { writeAgentRunTerminalReceipt } from "../../state/agent-run-terminal-receipts.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { resetAgentJobStateForTest } from "../agent-turn/agent-job.js";
