@@ -20,7 +20,7 @@ import {
   adoptProcessPluginCache,
   getPluginMetadataSnapshotCache,
 } from "../../plugins/plugin-cache.js";
-import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -348,11 +348,10 @@ export async function ensureConfigReady(
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const [{ formatConfigIssueLines, normalizeConfigIssues }, { renderConfigValidationIssueLines }] =
-    await Promise.all([
-      import("../../config/issue-format.js"),
-      import("../../config/issue-location.js"),
-    ]);
+  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
+    import("../../config/issue-format.js"),
+    import("../../config/issue-location.js"),
+  ]);
   const issues =
     snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
   const legacyIssues =
@@ -430,11 +429,8 @@ export async function ensureConfigReady(
     mustBlockInvalid &&
     (await import("../json-output-mode.js")).isJsonOutputModeActive(process.argv)
   ) {
-    const { formatCliJsonFailure } = await import("../failure-output.js");
-    writeRuntimeJson(params.runtime, {
-      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
-      issues: normalizeConfigIssues(snapshot.issues),
-    });
+    const { writeInvalidConfigCliJson } = await import("../config-validation-output.js");
+    writeInvalidConfigCliJson(params.runtime, snapshot);
   }
   if (isPluginPackagingFailure && isGatewayStartup) {
     params.runtime.exit(78);

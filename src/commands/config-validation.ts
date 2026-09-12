@@ -1,6 +1,7 @@
 // Config validation helpers shared by commands that need fail-fast config loading.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../cli/config-recovery-hints.js";
+import { isJsonOutputModeActive } from "../cli/json-output-mode.js";
 import {
   type ConfigFileSnapshot,
   type OpenClawConfig,
@@ -44,26 +45,31 @@ export async function requireValidConfigFileSnapshot(
 /** Preserve native read-time ownership through commands that can write after awaits. */
 export async function requireValidConfigForWrite(runtime: RuntimeEnv) {
   const read = await readConfigFileSnapshotForWrite();
-  return validateConfigFileSnapshot(read.snapshot, runtime) ? read : null;
+  return (await validateConfigFileSnapshot(read.snapshot, runtime)) ? read : null;
 }
 
-function validateConfigFileSnapshot(
+async function validateConfigFileSnapshot(
   snapshot: ConfigFileSnapshot,
   runtime: RuntimeEnv,
   includeCompatibilityAdvisory = false,
-): ConfigFileSnapshot | null {
+): Promise<ConfigFileSnapshot | null> {
   if (snapshot.exists && !snapshot.valid) {
-    const issues =
-      snapshot.issues.length > 0
-        ? renderConfigValidationIssueLines(snapshot).join("\n")
-        : "Unknown validation issue.";
-    runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
-    runtime.error(
-      isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-        ? `Fix: ${formatPluginPackagingRuntimeOutputRecoveryHint()}`
-        : `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
-    );
-    runtime.error(`Inspect: ${formatCliCommand("openclaw config validate")}`);
+    if (isJsonOutputModeActive(process.argv)) {
+      const { writeInvalidConfigCliJson } = await import("../cli/config-validation-output.js");
+      writeInvalidConfigCliJson(runtime, snapshot);
+    } else {
+      const issues =
+        snapshot.issues.length > 0
+          ? renderConfigValidationIssueLines(snapshot).join("\n")
+          : "Unknown validation issue.";
+      runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
+      runtime.error(
+        isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+          ? `Fix: ${formatPluginPackagingRuntimeOutputRecoveryHint()}`
+          : `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
+      );
+      runtime.error(`Inspect: ${formatCliCommand("openclaw config validate")}`);
+    }
     runtime.exit(1);
     return null;
   }
