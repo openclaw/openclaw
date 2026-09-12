@@ -11,10 +11,13 @@ const loadDiscordQaAdapterRuntime = createLazyCliRuntimeLoader<
 
 export const discordQaCliRegistration: LiveTransportQaCliRegistration =
   createStandardLiveTransportQaCliRegistration({
+    channelDriverHelp:
+      "Discord transport boundary: live (default) or Crabline local provider server",
     channelId: "discord",
     channelLabel: "Discord",
     async createAdapter(context) {
       return (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
     },
-    description: "Run the Discord live QA lane against a private guild bot-to-bot harness",
+    description: "Run Discord QA through the live service or Crabline local provider server",
+    listScenariosHelp: "Print the selected Discord scenario ids and exit",
   });

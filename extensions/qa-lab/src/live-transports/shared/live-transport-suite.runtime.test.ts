@@ -319,6 +319,39 @@ describe("live transport suite runtime", () => {
     );
   });
 
+  it("routes dedicated Discord through Crabline without channel credential inputs", async () => {
+    await runStandardLiveTransportQaSuiteCommand({
+      channelId: "discord",
+      options: {
+        channelDriver: "crabline",
+        providerMode: "mock-openai",
+        scenarioIds: ["discord-crabline-roundtrip"],
+      },
+    });
+
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        channelDriver: "crabline",
+        scenarioIds: ["discord-crabline-roundtrip"],
+      }),
+    );
+    expect(runQaSuiteCommand.mock.calls.at(-1)?.[0]).not.toHaveProperty("credentialFile");
+
+    for (const options of [
+      { credentialFile: "/tmp/not-used.json" },
+      { credentialSource: "env" },
+      { credentialRole: "ci" },
+    ]) {
+      await expect(
+        runStandardLiveTransportQaSuiteCommand({
+          channelId: "discord",
+          options: { channelDriver: "crabline", ...options },
+        }),
+      ).rejects.toThrow(/Crabline channel drivers do not use/u);
+    }
+  });
+
   it("normalizes the shared credential source environment override", async () => {
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", " convex ");
 

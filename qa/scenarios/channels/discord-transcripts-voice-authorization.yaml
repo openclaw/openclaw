@@ -9,6 +9,8 @@ scenario:
   execution:
     kind: flow
     channel: discord
+    config:
+      requiredChannelDriver: live
     providerMode: live-frontier
     timeoutMs: 120000
     retryCount: 0

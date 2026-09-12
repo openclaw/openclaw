@@ -53,7 +53,7 @@ import { listLiveTransportQaAdapterFactories, listLiveTransportQaCliRegistration
 const STANDARD_LANES = [
   {
     commandName: "discord",
-    description: "Run the Discord live QA lane against a private guild bot-to-bot harness",
+    description: "Run Discord QA through the live service or Crabline local provider server",
     label: "Discord",
   },
   {
@@ -191,6 +191,15 @@ describe("live transport QA contributions", () => {
           description: `Temporary ${label} account id inside the QA gateway config`,
           flags: "--sut-account <id>",
         },
+        ...(commandName === "discord"
+          ? [
+              {
+                defaultValue: false,
+                description: "Print the selected Discord scenario ids and exit",
+                flags: "--list-scenarios",
+              },
+            ]
+          : []),
         {
           defaultValue: undefined,
           description: `Credential source for ${label} QA: env or convex (default: env)`,
@@ -202,10 +211,39 @@ describe("live transport QA contributions", () => {
             "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
           flags: "--credential-role <role>",
         },
+        ...(commandName === "discord"
+          ? [
+              {
+                defaultValue: undefined,
+                description:
+                  "Discord transport boundary: live (default) or Crabline local provider server",
+                flags: "--channel-driver <live|crabline>",
+              },
+            ]
+          : []),
       ]);
       expect(command.helpInformation()).toContain(`Usage: qa ${commandName} [options]`);
     },
   );
+
+  it("maps the dedicated Discord Crabline driver and listing options", async () => {
+    const qa = new Command();
+    requireRegistration("discord").register(qa);
+
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "discord",
+      "--channel-driver",
+      "crabline",
+      "--list-scenarios",
+    ]);
+
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
+      channelId: "discord",
+      options: expect.objectContaining({ channelDriver: "crabline", listScenarios: true }),
+    });
+  });
 
   it.each(STANDARD_LANES)(
     "preserves $commandName defaults, optional fields, duplicate scenarios, and dispatch errors",

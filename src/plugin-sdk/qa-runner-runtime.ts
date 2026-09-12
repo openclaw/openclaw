@@ -209,6 +209,7 @@ export type QaRunnerCliRegistration = {
 
 /** Normalized options passed from live-transport QA CLIs into lane runners. */
 export type LiveTransportQaCommandOptions = {
+  channelDriver?: string;
   concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
@@ -243,6 +244,7 @@ export type LiveTransportQaSuiteCommandOptions = {
 };
 
 type LiveTransportQaCommanderOptions = {
+  channelDriver?: string;
   concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
@@ -272,6 +274,8 @@ export type LiveTransportQaCredentialCliOptions = {
 
 /** Declarative command metadata and runner used to install a live-transport QA CLI. */
 export type LiveTransportQaCliRegistrationOptions = {
+  /** When set, registers `--channel-driver <live|crabline>` with this help text. */
+  channelDriverHelp?: string;
   commandName: string;
   concurrency?: {
     help: string;
@@ -282,7 +286,13 @@ export type LiveTransportQaCliRegistrationOptions = {
   defaultProviderMode: string;
   description: string;
   providerModeHelp: string;
+  /** When set, registers `--list-scenarios` with this help text. */
   listScenariosHelp?: string;
+  /**
+   * Preserve the standard command payload shape when selection flags are inactive.
+   * Specialized registrations may leave this false to preserve their legacy option shape.
+   */
+  normalizeInactiveSelectionOptions?: boolean;
   outputDirHelp: string;
   profileHelp?: string;
   failFastHelp?: string;
@@ -309,9 +319,11 @@ function collectLiveTransportQaStringOption(value: string, previous: string[]) {
 
 function mapLiveTransportQaCommanderOptions(
   opts: LiveTransportQaCommanderOptions,
+  normalizeInactiveSelectionOptions: boolean,
 ): LiveTransportQaCommandOptions {
   return {
-    concurrency: opts.concurrency,
+    ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
+    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -319,12 +331,18 @@ function mapLiveTransportQaCommanderOptions(
     alternateModel: opts.altModel,
     fastMode: opts.fast,
     allowFailures: opts.allowFailures,
-    failFast: opts.failFast,
-    profile: opts.profile,
+    ...(normalizeInactiveSelectionOptions || opts.failFast !== undefined
+      ? { failFast: opts.failFast }
+      : {}),
+    ...(normalizeInactiveSelectionOptions || opts.profile !== undefined
+      ? { profile: opts.profile }
+      : {}),
     scenarioIds: opts.scenario,
-    listScenarios: opts.listScenarios,
+    listScenarios: normalizeInactiveSelectionOptions
+      ? opts.listScenarios || undefined
+      : opts.listScenarios,
     sutAccountId: opts.sutAccount,
-    credentialFile: opts.credentialFile,
+    ...(opts.credentialFile ? { credentialFile: opts.credentialFile } : {}),
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
   };
@@ -384,8 +402,14 @@ function registerLiveTransportQaCli(
     }
   }
 
+  if (params.channelDriverHelp) {
+    command.option("--channel-driver <live|crabline>", params.channelDriverHelp);
+  }
+
   command.action(async (opts: LiveTransportQaCommanderOptions) => {
-    await params.run(mapLiveTransportQaCommanderOptions(opts));
+    await params.run(
+      mapLiveTransportQaCommanderOptions(opts, params.normalizeInactiveSelectionOptions === true),
+    );
   });
 }
 

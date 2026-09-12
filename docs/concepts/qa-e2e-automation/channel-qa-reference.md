@@ -11,8 +11,9 @@ title: "Channel QA reference"
 
 The Matrix adapter uses the disposable Docker-backed lane documented in
 [Matrix live lane](/concepts/qa-e2e-automation/operator-flow#matrix-live-lane).
-Buzz, Discord, Slack, Telegram, and WhatsApp run against pre-existing real
-transports, so their reference lives here.
+Buzz, Discord, Slack, Telegram, and WhatsApp can run against pre-existing real
+transports, so their reference lives here. Discord can also use Crabline's
+local provider simulator.
 
 ### Shared CLI flags
 
@@ -38,9 +39,10 @@ Telegram fixes `--credential-source` to `convex`. Its Test Server userbot
 credential cannot be supplied through the shared environment credential mode.
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
-artifacts without setting a failing exit code. Telegram also accepts
+artifacts without setting a failing exit code. Discord and Telegram also accept
 `--list-scenarios` to print available scenario ids and exit; the other lanes
-do not expose that flag.
+do not expose that flag. Discord additionally accepts `--channel-driver
+<live|crabline>`; `live` remains the default.
 
 ### Buzz QA
 
@@ -149,6 +151,22 @@ controlled by the harness and a SUT bot started by the child OpenClaw gateway
 through the bundled Discord plugin. Verifies channel mention handling, that
 the SUT bot has registered the native `/help` command with Discord, and
 opt-in Mantis evidence scenarios.
+
+For credential-free local transport coverage, select Crabline and optionally
+list the scenarios before running one:
+
+```bash
+pnpm openclaw qa discord --channel-driver crabline --list-scenarios
+pnpm openclaw qa discord \
+  --channel-driver crabline \
+  --scenario discord-crabline-roundtrip \
+  --provider-mode mock-openai
+```
+
+Crabline starts a local Discord-compatible provider server and exercises the
+bundled Discord plugin without contacting Discord or acquiring Discord bot
+credentials. Omitting `--channel-driver` keeps the live-service behavior and
+credential requirements below.
 
 Required env when `--credential-source env`:
 

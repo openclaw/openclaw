@@ -30,6 +30,8 @@ scenario:
   execution:
     kind: flow
     channel: discord
+    config:
+      requiredChannelDriver: live
     providerMode: mock-openai
     timeoutMs: 90000
     retryCount: 0
