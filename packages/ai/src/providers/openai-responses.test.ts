@@ -237,7 +237,7 @@ describe("OpenAI Responses provider", () => {
         supportedReasoningEfforts: ["low", "medium", "high", "MAX"],
       },
     });
-    const options = { apiKey: "sentinel-key", reasoningEffort: "max" };
+    const options = { apiKey: "sentinel-key", reasoningEffort: "max" as const };
     const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
     await streamOpenAIResponses(requestModel, context, options).result();
 

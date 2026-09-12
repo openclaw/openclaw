@@ -128,7 +128,10 @@ export async function prepareEmbeddedRunRuntime(input: {
       : undefined;
     const resolvedModel = preparedThinkingCompat
       ? (() => {
-          const nextCompat = { ...candidate.compat };
+          const nextCompat: Record<string, unknown> = {
+            // SAFETY: candidate.compat is a model compatibility object; spreading into a record preserves existing flags
+            ...(candidate.compat as Record<string, unknown> | undefined),
+          };
           if (preparedThinkingCompat.thinkingFormat) {
             nextCompat.thinkingFormat = preparedThinkingCompat.thinkingFormat;
           }
@@ -139,7 +142,8 @@ export async function prepareEmbeddedRunRuntime(input: {
           } else if (preparedThinkingCompat.supportedReasoningEfforts === null) {
             delete nextCompat.supportedReasoningEfforts;
           }
-          return { ...candidate, compat: nextCompat };
+          // SAFETY: nextCompat preserves candidate.compat shape augmented with validated thinking compat
+          return { ...candidate, compat: nextCompat as typeof candidate.compat };
         })()
       : candidate;
     const resolved =

@@ -1,7 +1,11 @@
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { resolveOpenAIReasoningEffortForModel } from "../providers/openai-reasoning-effort.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
-import type { OpenAIModeModel } from "./openai-transport-shared.js";
+import {
+  isOpenAICompletionsThinkingEnabled,
+  type OpenAIModeModel,
+} from "./openai-transport-shared.js";
 
 export function applyDirectCompletionsReasoningAndRouting(
   params: Record<string, unknown>,
@@ -16,13 +20,23 @@ export function applyDirectCompletionsReasoningAndRouting(
     | Partial<Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string | null>>
     | undefined = model.thinkingLevelMap;
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
-  const reasoningEffort =
-    options?.reasoningEffort === undefined
-      ? (offReasoningEffort ?? undefined)
-      : (reasoningEffortMap[options.reasoningEffort] ??
-        thinkingLevelMap?.[options.reasoningEffort] ??
-        options.reasoningEffort);
-  const reasoningEnabled = reasoningEffort !== undefined && reasoningEffort !== "none";
+  let reasoningEffort: string | undefined;
+  if (options?.reasoningEffort === undefined) {
+    reasoningEffort = offReasoningEffort ?? undefined;
+  } else if (reasoningEffortMap[options.reasoningEffort] !== undefined) {
+    reasoningEffort = reasoningEffortMap[options.reasoningEffort];
+  } else if (thinkingLevelMap && options.reasoningEffort in thinkingLevelMap) {
+    reasoningEffort = thinkingLevelMap[options.reasoningEffort] ?? undefined;
+  } else {
+    reasoningEffort =
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: options.reasoningEffort,
+        fallbackMap: reasoningEffortMap,
+      }) ?? options.reasoningEffort;
+  }
+  const reasoningEnabled =
+    reasoningEffort !== undefined && isOpenAICompletionsThinkingEnabled(reasoningEffort);
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = reasoningEnabled
@@ -52,11 +66,13 @@ export function applyDirectCompletionsReasoningAndRouting(
     if (reasoningEnabled && compat.supportsReasoningEffort) {
       params.reasoning_effort = reasoningEffort;
     }
-  } else if (reasoningEnabled && model.reasoning && compat.supportsReasoningEffort) {
-    // OpenAI-style reasoning_effort
-    params.reasoning_effort = reasoningEffort;
   } else if (model.reasoning && compat.supportsReasoningEffort) {
-    if (typeof offReasoningEffort === "string") {
+    if (reasoningEnabled && reasoningEffort) {
+      // OpenAI-style reasoning_effort
+      params.reasoning_effort = reasoningEffort;
+    } else if (reasoningEffort === "none" || offReasoningEffort === "none") {
+      params.reasoning_effort = "none";
+    } else if (typeof offReasoningEffort === "string") {
       params.reasoning_effort = offReasoningEffort;
     }
   }
