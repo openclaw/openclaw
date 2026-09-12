@@ -58,7 +58,7 @@ function hasProxyPrototype(object: object): boolean {
   return false;
 }
 
-function isPluginData(value: unknown, seen = new Set<object>()): boolean {
+function isPluginData(value: unknown, seen?: Set<object>): boolean {
   if (!value || typeof value !== "object") {
     return typeof value !== "function";
   }
@@ -74,10 +74,11 @@ function isPluginData(value: unknown, seen = new Set<object>()): boolean {
   ) {
     return true;
   }
-  if (seen.has(value)) {
+  if (seen?.has(value)) {
     return true;
   }
-  seen.add(value);
+  const visited = seen ?? new Set<object>();
+  visited.add(value);
   const native = Array.isArray(value)
     ? Array
     : types.isMap(value)
@@ -94,19 +95,48 @@ function isPluginData(value: unknown, seen = new Set<object>()): boolean {
   if (
     prototype !== null &&
     (typeof constructor !== "function" ||
-      Function.prototype.toString.call(constructor) !== Function.prototype.toString.call(native) ||
+      (constructor !== native &&
+        Function.prototype.toString.call(constructor) !==
+          Function.prototype.toString.call(native)) ||
       Object.getOwnPropertyDescriptor(constructor, "prototype")?.value !== prototype)
   ) {
     return false;
   }
-  const entries = native === Map || native === Set ? native.prototype.entries : undefined;
-  return (
-    Reflect.ownKeys(value).every((key) => {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-      return "value" in descriptor && isPluginData(descriptor.value, seen);
-    }) &&
-    (!entries || [...Reflect.apply(entries, value, [])].every((entry) => isPluginData(entry, seen)))
-  );
+  let nested: object[] | undefined;
+  // A callable or accessor already requires a view. Check direct members before
+  // walking large data graphs attached to tool metadata and execution contexts.
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!("value" in descriptor) || typeof descriptor.value === "function") {
+      return false;
+    }
+    if (descriptor.value && typeof descriptor.value === "object") {
+      (nested ??= []).push(descriptor.value);
+    }
+  }
+  if (nested) {
+    for (const child of nested) {
+      if (!isPluginData(child, visited)) {
+        return false;
+      }
+    }
+  }
+  // Stream collection members so an early callable does not materialize every
+  // entry, and Set members do not allocate duplicate key/value pairs.
+  if (native === Map) {
+    for (const [key, entry] of Map.prototype.entries.call(value)) {
+      if (!isPluginData(key, visited) || !isPluginData(entry, visited)) {
+        return false;
+      }
+    }
+  } else if (native === Set) {
+    for (const entry of Set.prototype.values.call(value)) {
+      if (!isPluginData(entry, visited)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 const arrayCallbacks = new Set([
