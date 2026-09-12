@@ -56,8 +56,8 @@ import {
 } from "./skill-workshop-tool-helpers.js";
 import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
 import {
-  assertSkillPatchRunUsage,
   executePrepareSkillPatch,
+  prepareAuthorizedSkillPatch,
   readSkillPatchText,
   resolveSkillPatchAuthorization,
 } from "./skill-workshop-tool-patch.js";
@@ -394,6 +394,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
       let expectedCurrentContentHash: string | undefined;
       let currentSkillContent: string | undefined;
+      let assertPatchMutationAuthorized: (() => void) | undefined;
       const patchOldString = action === "patch" ? readSkillPatchText(params).oldString : undefined;
       const requiresRead = action === "patch" || (action === "update" && options.updateProposals);
       if (requiresRead) {
@@ -440,19 +441,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         expectedCurrentContentHash = readHash ?? preparedHash ?? contentHash;
         if (action === "patch") {
-          assertSkillPatchRunUsage({
+          assertPatchMutationAuthorized = prepareAuthorizedSkillPatch({
             skill: target,
             foregroundRepair,
-            runId: options.origin?.runId,
+            patch: readSkillPatchText(params),
           });
-          try {
-            composeSkillBodyPatch(
-              stripProposalFrontmatterForSkill(target.content),
-              readSkillPatchText(params),
-            );
-          } catch (error) {
-            throw new ToolInputError(error instanceof Error ? error.message : String(error));
-          }
         }
       }
 
@@ -529,7 +522,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             expectedCurrentContentHash,
             // A patch may only change its exact span, never description or support files.
             ...(action === "patch"
-              ? { composePatch: readSkillPatchText(params) }
+              ? {
+                  composePatch: readSkillPatchText(params),
+                  ...(assertPatchMutationAuthorized
+                    ? { assertMutationAuthorized: assertPatchMutationAuthorized }
+                    : {}),
+                }
               : {
                   description: readToolStringParam(params, "description"),
                   content: requireProposalContent(proposalContent),
@@ -601,6 +599,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             proposalId: proposal.record.id,
             expectedRevisionHash: proposal.revisionHash,
             reason: "Foreground repair of a used skill",
+            ...(assertPatchMutationAuthorized
+              ? { assertMutationAuthorized: assertPatchMutationAuthorized }
+              : {}),
           });
           return actionResult(applied.record, {
             contentText: `Repaired used skill ${applied.record.target.skillName} through proposal ${applied.record.id}.`,

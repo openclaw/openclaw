@@ -16,11 +16,15 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { listCoreToolSections } from "../tool-catalog.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
-import { readSkillWorkshopTestProposalRecord } from "./skill-workshop-tool.test-support.js";
+import {
+  createTrackedSkillWorkshopRunAuthorities,
+  readSkillWorkshopTestProposalRecord,
+} from "./skill-workshop-tool.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
+const runAuthorities = createTrackedSkillWorkshopRunAuthorities();
 const createSkillWorkshopTool = (
   options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
     config?: Parameters<typeof createSkillWorkshopToolImpl>[0]["config"];
@@ -63,6 +67,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  runAuthorities.cleanup();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -697,13 +702,17 @@ describe("skill_workshop tool", () => {
     async (mode) => {
       const workspaceDir = await tempDirs.make(`openclaw-skill-workshop-repair-${mode}-`);
       const runId = `repair-${mode}`;
+      const operationalRunInstance = runAuthorities.admit(runId);
       const skillName = `weather-planner-${mode}`;
-      const tool = createSkillWorkshopTool({
-        workspaceDir,
-        config: { skills: { workshop: { autonomous: { mode } } } },
-        agentId: "main",
-        origin: { agentId: "main", runId },
-      });
+      const tool = runAuthorities.bind(
+        createSkillWorkshopTool({
+          workspaceDir,
+          config: { skills: { workshop: { autonomous: { mode } } } },
+          agentId: "main",
+          origin: { agentId: "main", runId },
+        }),
+        operationalRunInstance,
+      );
       const created = await tool.execute("repair-create", {
         action: "create",
         name: skillName,
@@ -735,6 +744,7 @@ describe("skill_workshop tool", () => {
       );
       recordRunSkillUsage({
         runId,
+        operationalRunInstance,
         name: skillName,
         source: "workspace",
         activation: "read",
@@ -772,14 +782,18 @@ describe("skill_workshop tool", () => {
   it("matches an aliased used-skill receipt by canonical file", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-alias-");
     const runId = "repair-alias";
+    const operationalRunInstance = runAuthorities.admit(runId);
     const skillName = "canonical-skill-key";
     const skillFile = workshopSkillPath(skillName, "SKILL.md");
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      agentId: "main",
-      origin: { agentId: "main", runId },
-    });
+    const tool = runAuthorities.bind(
+      createSkillWorkshopTool({
+        workspaceDir,
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        agentId: "main",
+        origin: { agentId: "main", runId },
+      }),
+      operationalRunInstance,
+    );
     const created = await tool.execute("alias-create", {
       action: "create",
       name: skillName,
@@ -793,6 +807,7 @@ describe("skill_workshop tool", () => {
     await tool.execute("alias-read", { action: "read", skill_name: skillName });
     recordRunSkillUsage({
       runId,
+      operationalRunInstance,
       name: "frontmatter-skill-name",
       source: "workspace",
       activation: "read",
