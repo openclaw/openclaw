@@ -9888,6 +9888,55 @@ describe("right-click Reply", () => {
   const renderReply = (overrides: Partial<ChatProps> = {}) =>
     renderChatView({ replyTarget, ...overrides });
 
+  function createReplyPane(paneId: string, draft: string, quote: string) {
+    const container = document.createElement("div");
+    const host: Pick<ChatProps, "draft" | "replyTarget"> = {
+      draft,
+      replyTarget: { ...replyTarget, messageId: `${paneId}-message`, text: quote },
+    };
+    const onSend = vi.fn();
+    const onAbort = vi.fn();
+    const onDraftChange = vi.fn((next: string) => {
+      host.draft = next;
+    });
+    const onRequestUpdate = vi.fn(() => redraw());
+    const onClearReply = vi.fn(() => {
+      host.replyTarget = null;
+      redraw();
+    });
+    function redraw() {
+      renderChatInto(container, {
+        paneId,
+        sessionKey: `agent:main:${paneId}`,
+        draft: host.draft,
+        getDraft: () => host.draft,
+        replyTarget: host.replyTarget,
+        canAbort: true,
+        runActive: true,
+        onDraftChange,
+        onRequestUpdate,
+        onClearReply,
+        onSend,
+        onAbort,
+      });
+    }
+    return {
+      container,
+      host,
+      redraw,
+      onDraftChange,
+      onRequestUpdate,
+      onClearReply,
+      onSend,
+      onAbort,
+      dispose: () => {
+        render(null, container);
+        container.remove();
+        resetChatViewState(paneId, container);
+      },
+    };
+  }
+
   function dispatchContextMenu(target: EventTarget): MouseEvent {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     target.dispatchEvent(event);
@@ -10221,19 +10270,172 @@ describe("right-click Reply", () => {
     expect(onClearReply).toHaveBeenCalledTimes(1);
   });
 
-  it("clears reply target on Escape when no other handler intercepted", () => {
+  it.each([false, true])("clears reply target on Escape with shiftKey=%s", (shiftKey) => {
     const onClearReply = vi.fn();
     const container = renderReply({ onClearReply });
 
     const section = container.querySelector<HTMLElement>(".card.chat");
     const evt = new KeyboardEvent("keydown", {
       key: "Escape",
+      shiftKey,
       bubbles: true,
       cancelable: true,
     });
     section!.dispatchEvent(evt);
 
+    expect(evt.defaultPrevented).toBe(true);
     expect(onClearReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["isComposing", "keyCode229", "live", "rerendered-live", "prevented"])(
+    "preserves the reply and draft for %s Escape before deliberate reply clearing and abort",
+    (mode) => {
+      const draft = "Keep this reply draft";
+      const quote = "Keep this quoted message";
+      const pane = createReplyPane(`reply-${mode}`, draft, quote);
+      try {
+        document.body.append(pane.container);
+        pane.redraw();
+        const textarea = getComposerTextarea(pane.container);
+        textarea.focus();
+        expect(document.activeElement).toBe(textarea);
+        expect(textarea.value).toBe(draft);
+        expect(pane.container.querySelector(".chat-reply-preview__text")?.textContent).toBe(quote);
+        const updatesBeforeComposition = pane.onRequestUpdate.mock.calls.length;
+        const live = mode === "live" || mode === "rerendered-live";
+        if (live) {
+          textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+          expect(pane.onRequestUpdate).toHaveBeenCalledTimes(updatesBeforeComposition);
+        }
+        const visibleDraft = mode === "rerendered-live" ? `${draft} composing` : draft;
+        if (mode === "rerendered-live") {
+          textarea.value = visibleDraft;
+          textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+          expect(pane.onRequestUpdate.mock.calls.length).toBeGreaterThan(updatesBeforeComposition);
+          expect(pane.onDraftChange).not.toHaveBeenCalled();
+        }
+        const event = new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+          isComposing: mode === "isComposing",
+          keyCode: mode === "keyCode229" ? 229 : 0,
+        });
+        if (mode === "prevented") {
+          event.preventDefault();
+        }
+        expect(event).toMatchObject({
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+          isComposing: mode === "isComposing",
+          keyCode: mode === "keyCode229" ? 229 : 0,
+          defaultPrevented: mode === "prevented",
+        });
+        textarea.dispatchEvent(event);
+
+        expect(event.defaultPrevented).toBe(mode === "prevented");
+        expect(getComposerTextarea(pane.container)).toBe(textarea);
+        expect(textarea.value).toBe(visibleDraft);
+        expect(document.activeElement).toBe(textarea);
+        expect(pane.host.draft).toBe(draft);
+        expect(pane.host.replyTarget?.text).toBe(quote);
+        expect(pane.container.querySelector(".chat-reply-preview__text")?.textContent).toBe(quote);
+        expect(pane.onClearReply).not.toHaveBeenCalled();
+        expect(pane.onSend).not.toHaveBeenCalled();
+        expect(pane.onAbort).not.toHaveBeenCalled();
+
+        if (mode === "live") {
+          textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+        } else if (mode === "rerendered-live") {
+          textarea.blur();
+          textarea.focus();
+        }
+        expect(pane.host.draft).toBe(visibleDraft);
+        const clear = new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        });
+        textarea.dispatchEvent(clear);
+        expect(clear.defaultPrevented).toBe(true);
+        expect(pane.onClearReply).toHaveBeenCalledOnce();
+        expect(pane.host.replyTarget).toBeNull();
+        expect(pane.container.querySelector(".chat-reply-preview")).toBeNull();
+        expect(pane.onAbort).not.toHaveBeenCalled();
+        expect(getComposerTextarea(pane.container)).toBe(textarea);
+        expect(textarea.value).toBe(visibleDraft);
+        expect(document.activeElement).toBe(textarea);
+
+        const abort = new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        });
+        textarea.dispatchEvent(abort);
+        expect(abort.defaultPrevented).toBe(true);
+        expect(pane.onAbort).toHaveBeenCalledOnce();
+        expect(pane.onClearReply).toHaveBeenCalledOnce();
+        expect(pane.onSend).not.toHaveBeenCalled();
+        expect(pane.host.draft).toBe(visibleDraft);
+        expect(getComposerTextarea(pane.container)).toBe(textarea);
+        expect(textarea.value).toBe(visibleDraft);
+        expect(document.activeElement).toBe(textarea);
+      } finally {
+        pane.dispose();
+      }
+    },
+  );
+
+  it("keeps a composing reply isolated from Escape in another pane", () => {
+    const paneA = createReplyPane("reply-pane-a", "Draft A", "Quote A");
+    const paneB = createReplyPane("reply-pane-b", "Draft B", "Quote B");
+    try {
+      document.body.append(paneA.container, paneB.container);
+      paneA.redraw();
+      paneB.redraw();
+      const textareaA = getComposerTextarea(paneA.container);
+      const textareaB = getComposerTextarea(paneB.container);
+      textareaA.focus();
+      textareaA.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const escapeB = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      textareaB.dispatchEvent(escapeB);
+
+      expect(escapeB.defaultPrevented).toBe(true);
+      expect(paneB.onClearReply).toHaveBeenCalledOnce();
+      expect(paneB.host.replyTarget).toBeNull();
+      expect(paneB.container.querySelector(".chat-reply-preview")).toBeNull();
+      const escapeA = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      textareaA.dispatchEvent(escapeA);
+      expect(escapeA.defaultPrevented).toBe(false);
+      expect(paneA.onClearReply).not.toHaveBeenCalled();
+      expect(paneA.host.replyTarget?.text).toBe("Quote A");
+      expect(paneA.container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+        "Quote A",
+      );
+      for (const [pane, textarea, draft] of [
+        [paneA, textareaA, "Draft A"],
+        [paneB, textareaB, "Draft B"],
+      ] as const) {
+        expect(getComposerTextarea(pane.container)).toBe(textarea);
+        expect(textarea.value).toBe(draft);
+        expect(pane.host.draft).toBe(draft);
+        expect(pane.onSend).not.toHaveBeenCalled();
+        expect(pane.onAbort).not.toHaveBeenCalled();
+      }
+      expect(document.activeElement).toBe(textareaA);
+    } finally {
+      paneA.dispose();
+      paneB.dispose();
+    }
   });
 
   it("does not clear reply target when Escape is already defaultPrevented", () => {
