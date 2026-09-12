@@ -150,6 +150,20 @@ class BridgeContract(unittest.TestCase):
         self.assertEqual(self.calls()[2]['params']['agentId'], 'builder')
         self.assertEqual(self.calls()[2]['params']['sessionKey'], 'global')
 
+    def test_unicode_session_identity_survives_prompt_and_refresh(self):
+        key = 'agent:builder:café-🦞'
+        self.env['FIXTURE_SESSION_KEY'] = key
+        self.start()
+        before = next(row for row in self.request('snapshot')['sessions'] if row['key'] == key)
+        result = self.prompt(sessionKey=key)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['sessionId'], before['id'])
+        after = next(row for row in self.request('snapshot')['sessions'] if row['id'] == result['sessionId'])
+        self.assertEqual((after['agentId'], after['key']), ('builder', key))
+        self.assertTrue(self.prompt(sessionKey=after['key'])['ok'])
+        created = self.prompt(sessionKey='')
+        self.assertEqual(json.loads(created['sessionId']), ['builder', created['sessionKey']])
+
     def test_cli_session_activation_preserves_global_agent_owner(self):
         self.start()
         for index, (key, expected) in enumerate((('agent:builder:review', 'agent:builder:review'),

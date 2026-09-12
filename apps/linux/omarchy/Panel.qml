@@ -124,7 +124,7 @@ Panel {
       if (result.id !== root.sendId || result.op !== "send") return
       root.sendId = ""
       root.uncertain = result.uncertain === true
-      if (result.routeId === root.routeId && result.sessionKey) root.selectedId = JSON.stringify([root.sendRequest.agentId, result.sessionKey])
+      if (result.routeId === root.routeId && result.sessionId) root.selectedId = result.sessionId
       if (result.ok) {
         root.sendNotice = "Prompt accepted. The session list will show its progress and latest reply."
         if (prompt.text === root.sendRequest.message && result.routeId === root.routeId) prompt.text = ""

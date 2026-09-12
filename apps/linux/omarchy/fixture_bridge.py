@@ -25,7 +25,7 @@ def response(method, params):
              'hasActiveRun': True, 'updatedAt': now - 60000,
              'observerDigest': {'health': 'on-track', 'headline': 'Comparing release notes'},
              'lastMessagePreview': 'Summarize changes.', 'model': 'example/model', 'totalTokens': 12500},
-            {'key': 'agent:builder:review', 'agentId': 'builder', 'label': 'Review the widget',
+            {'key': os.environ.get('FIXTURE_SESSION_KEY', 'agent:builder:review'), 'agentId': 'builder', 'label': 'Review the widget',
              'status': 'done', 'unread': False, 'updatedAt': now - 180000,
              'observerDigest': {'health': 'waiting-on-user', 'headline': 'Choose a layout'}},
             {'key': 'agent:research:notes', 'agentId': 'research', 'status': 'done',

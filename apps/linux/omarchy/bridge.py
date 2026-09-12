@@ -57,6 +57,10 @@ def text(value, limit=240):
     return value[:limit] if isinstance(value, str) else ""
 
 
+def session_id(agent_id, key):
+    return json.dumps([agent_id, key], separators=(",", ":"))
+
+
 def session(row):
     if not isinstance(row, dict) or not isinstance(row.get("key"), str):
         return None
@@ -76,7 +80,7 @@ def session(row):
                  or (isinstance(digest, dict) and digest.get("health") in ("waiting-on-user", "stuck", "failed"))
                  or (isinstance(agent_status, dict) and bool(agent_status.get("attention"))))
     return {
-        "id": json.dumps([agent_id, row["key"]], separators=(",", ":")),
+        "id": session_id(agent_id, row["key"]),
         "key": row["key"], "agentId": agent_id,
         "title": text(row.get("label") or row.get("displayName") or row.get("derivedTitle") or row["key"]),
         "preview": text(row.get("lastMessagePreview"), 360),
@@ -322,6 +326,8 @@ class Worker:
                 self.target(request)
             elif operation == "send":
                 result = send(request, lambda method, params: self.dispatch(state, method, params))
+                if result.get("sessionKey"):
+                    result["sessionId"] = session_id(request["agentId"], result["sessionKey"])
             elif operation == "activate":
                 result = self.activate(state, request)
             else:
