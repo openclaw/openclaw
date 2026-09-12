@@ -570,6 +570,28 @@ describe("normalizeMimeType", () => {
   });
 });
 
+describe("prototype-named mime keys", () => {
+  // Remote senders control Content-Type headers; object-literal lookups must
+  // not resolve inherited Object.prototype members or downstream string ops throw.
+  it.each([
+    { input: "__proto__", expected: "__proto__" },
+    { input: "constructor", expected: "constructor" },
+  ] as const)("normalizeMimeType($input) stays a plain string", ({ input, expected }) => {
+    expect(normalizeMimeType(input)).toBe(expected);
+  });
+
+  it.each(["__proto__", "constructor"])(
+    "kindFromMime(%s) returns undefined, not a throw",
+    (input) => {
+      expect(kindFromMime(input)).toBeUndefined();
+    },
+  );
+
+  it.each(["__proto__", "constructor"])("extensionForMime(%s) returns undefined", (input) => {
+    expect(extensionForMime(input)).toBeUndefined();
+  });
+});
+
 describe("mediaKindFromMime", () => {
   it.each([
     { mime: "text/plain", expected: "document" },
