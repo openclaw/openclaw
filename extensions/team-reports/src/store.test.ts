@@ -140,14 +140,28 @@ describe("Team Reports storage", () => {
     expect(await store.listPersonDays("ALICE")).toMatchObject([
       { dayKey: "2026-08-20", githubTotal: 1, commits: 1, discordMessages: 2 },
     ]);
-    await expect(
-      store.upsertPeriod({
-        report: report("2026-08-20", ["alice", "alice"]),
-        markdown: "failed refresh",
-      }),
-    ).rejects.toThrow();
-    expect((await store.getPeriod("day", "2026-08-20"))?.markdown).toBe("original");
-    expect(await store.listPersonDays("bob")).toHaveLength(1);
+    const lateDuplicate = [
+      "alice",
+      ...Array.from({ length: 3000 }, (_, index) => `new-${index}`),
+      "ALICE",
+    ];
+    for (const logins of [["alice", "alice"], lateDuplicate]) {
+      await expect(
+        store.upsertPeriod({
+          report: report("2026-08-20", logins),
+          markdown: "failed refresh",
+        }),
+      ).rejects.toThrow();
+      expect(await store.getPeriod("day", "2026-08-20")).toEqual({
+        report: report(),
+        summary,
+        markdown: "original",
+      });
+      expect((await store.listPersonDaysSince("2026-08-20")).map((day) => day.login)).toEqual([
+        "alice",
+        "bob",
+      ]);
+    }
     const refreshed = report("2026-08-20", ["alice"]);
     refreshed.members[0]!.github.commits = 3;
     refreshed.members[0]!.github.total = 3;
@@ -228,8 +242,8 @@ describe("Team Reports storage", () => {
   it("lists all logins since an inclusive day without the individual timeline limit", async () => {
     const { store } = await openStore();
     const logins = Array.from(
-      { length: 30 },
-      (_, index) => `member-${String(index).padStart(2, "0")}`,
+      { length: 3000 },
+      (_, index) => `member-${String(index).padStart(4, "0")}`,
     );
     await store.upsertPeriod({ report: report("2026-08-18", ["older"]), markdown: "older" });
     await store.upsertPeriod({ report: report("2026-08-19", logins), markdown: "boundary" });
@@ -241,7 +255,7 @@ describe("Team Reports storage", () => {
     ]);
     expect(days[1]).toEqual({
       dayKey: "2026-08-19",
-      login: "member-00",
+      login: "member-0000",
       githubTotal: 1,
       commits: 1,
       prsOpened: 0,
@@ -254,6 +268,11 @@ describe("Team Reports storage", () => {
       discordMessages: 2,
     });
     expect(await store.listPersonDaysSince("2026-08-21")).toEqual([]);
+    await store.upsertPeriod({ report: report("2026-08-19", []), markdown: "empty roster" });
+    expect((await store.listPersonDaysSince("2026-08-19")).map((day) => day.login)).toEqual([
+      "latest",
+    ]);
+    expect((await store.getPeriod("day", "2026-08-19"))?.report.members).toEqual([]);
   });
 
   it("reads a complete month of individually valid reports across the worker boundary", async () => {

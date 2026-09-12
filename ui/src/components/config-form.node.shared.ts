@@ -256,21 +256,6 @@ export function renderFieldRow(params: {
   `;
 }
 
-export function renderFlatDefaultRow(
-  description: TemplateResult | typeof nothing,
-): TemplateResult | typeof nothing {
-  if (description === nothing) {
-    return nothing;
-  }
-  return html`
-    <div class="settings-row">
-      <div class="settings-row__text">
-        <span class="settings-row__desc">${description}</span>
-      </div>
-    </div>
-  `;
-}
-
 export function renderCollectionDefaultDescription(
   params: ConfigNodeRenderParams,
   effectiveValue: unknown,

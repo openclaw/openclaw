@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
 import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
@@ -29,6 +28,10 @@ import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
+import {
+  readExistingAgentSchemaMeta,
+  type ExistingAgentSchemaMeta,
+} from "./openclaw-agent-db-metadata.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
   ensureSessionAdditiveColumns,
@@ -57,11 +60,7 @@ import {
   STANDING_INTENTS_TABLE,
 } from "./openclaw-agent-standing-intents-schema.js";
 
-type ExistingAgentSchemaMeta = {
-  agentId: string | null;
-  role: string | null;
-  schemaVersion: number | null;
-};
+export { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 
 export function migratedSessionColumn(
   columns: ReadonlySet<string>,
@@ -286,26 +285,6 @@ export function assertCanonicalAgentPersistenceVersion(
       `OpenClaw agent database ${pathname} uses schema version ${userVersion}; stop active agents and run openclaw doctor --fix to migrate session identities before using it.`,
     );
   }
-}
-
-export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
-  const schemaMetaTable = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
-    .get();
-  if (!schemaMetaTable) {
-    return null;
-  }
-  const row = db
-    .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-    .get() as { agent_id?: unknown; role?: unknown; schema_version?: unknown } | undefined;
-  if (!row) {
-    return null;
-  }
-  return {
-    agentId: normalizeNullableString(row.agent_id),
-    role: typeof row.role === "string" ? row.role : null,
-    schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
-  };
 }
 
 export function assertExistingAgentSchemaOwner(

@@ -651,25 +651,31 @@ export async function executePreparedCliRun(
     });
   };
   try {
-    completedOutput = await enqueueCliRun(queueKey, async () => {
-      assertCurrent();
-      if (params.lifecycleGeneration) {
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-      }
-      diagnostics?.emitStarted();
-      if (params.forkCliSessionOnResume && useResume) {
-        if (!params.persistCliSessionForkSuccessor) {
-          throw new Error("CLI session fork successor persistence is unavailable");
+    completedOutput = await enqueueCliRun(queueKey, () => {
+      const runQueuedAttempt = async () => {
+        assertCurrent();
+        if (params.lifecycleGeneration) {
+          assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
         }
-        forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
-        if (!forkResumeClaimed) {
-          throw new Error("CLI session fork marker is no longer available");
+        diagnostics?.emitStarted();
+        if (params.forkCliSessionOnResume && useResume) {
+          if (!params.persistCliSessionForkSuccessor) {
+            throw new Error("CLI session fork successor persistence is unavailable");
+          }
+          forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
+          if (!forkResumeClaimed) {
+            throw new Error("CLI session fork marker is no longer available");
+          }
+          // The fork argument only applies at process startup; a cached warm child
+          // would run inside the source session. Force a fresh spawn.
+          await restartCliLiveSession(context);
         }
-        // The fork argument only applies at process startup; a cached warm child
-        // would run inside the source session. Force a fresh spawn.
-        await restartCliLiveSession(context);
-      }
-      return await executeAttempt();
+        return await executeAttempt();
+      };
+      // The retained consumer keeps every plugin call of this queued attempt, including
+      // a fork-on-resume live-session restart, admitted across a plugin hot reload.
+      const consumer = context.pluginExecutionConsumer;
+      return consumer ? consumer.run(runQueuedAttempt) : runQueuedAttempt();
     });
     if (completedOutput.sessionId) {
       observeForkSuccessor(completedOutput.sessionId);

@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   cleanupTempDirs,
   makeTempDir,
@@ -310,6 +311,109 @@ describe("session accessor readonly listing", () => {
         })),
       ),
     ).toEqual([exactReadFailure, exactReadFailure]);
+  });
+
+  it("batches shared-store recent payloads and participants without dropping saved entry fields", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-summary-batch-") };
+    const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
+    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
+    const agentIds = Array.from({ length: 8 }, (_, index) => `worker-${index}`);
+    const participant = database.db.prepare(
+      "INSERT INTO session_participants (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at) VALUES (?, ?, ?, 1, 1, 1)",
+    );
+    for (const agentId of agentIds) {
+      for (let index = 0; index < 6; index += 1) {
+        const sessionKey = `agent:${agentId}:session-${index}`;
+        replaceSessionEntrySync(
+          { agentId, env, storePath, sessionKey },
+          {
+            sessionId: `${agentId}-${index}`,
+            updatedAt: index,
+            skillsSnapshot: { prompt: "saved prompt", skills: [] },
+          },
+        );
+        participant.run(sessionKey, '{"type":"profile"}', "alice");
+      }
+    }
+    const scope = { agentId: "main", env, storePath };
+    const options = { recentLimit: 5, agentIds };
+    readSessionStoreSummaryReadOnly(scope, options);
+    const queries = trackSqliteStatementExecutions(
+      database.db,
+      ["payloads", "participants"],
+      (sql) => {
+        if (sql.includes('from "session_participants"')) {
+          return "participants";
+        }
+        if (sql.includes('select * from "session_nodes"')) {
+          return "payloads";
+        }
+        return null;
+      },
+    );
+    try {
+      const summary = readSessionStoreSummaryReadOnly(scope, options);
+      expect(summary.count).toBe(48);
+      expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(
+        agentIds.slice(0, 5).map((agentId) => `agent:${agentId}:session-5`),
+      );
+      for (const agentId of agentIds) {
+        const agent = expectDefined(summary.byAgent.get(agentId), "shared-store agent");
+        expect(agent.count).toBe(6);
+        expect(agent.recent.map(({ entry }) => entry.sessionId)).toEqual(
+          [5, 4, 3, 2, 1].map((index) => `${agentId}-${index}`),
+        );
+        for (const { entry } of agent.recent) {
+          expect(entry.skillsSnapshot?.prompt).toBe("saved prompt");
+          expect(entry.participants).toEqual([{ identity: { type: "profile", id: "alice" } }]);
+        }
+      }
+      expect(queries.counts.payloads).toBeLessThanOrEqual(2);
+      expect(queries.counts.participants).toBeLessThanOrEqual(2);
+    } finally {
+      queries.restore();
+    }
+  });
+
+  it("fills recent slots after unreadable settled rows and only decodes consumed participants", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-summary-fallback-") };
+    const scope = { agentId: "main", env };
+    const keys = Array.from({ length: 8 }, (_, index) => `agent:main:entry-${index}`);
+    const participantSessionKey = expectDefined(keys[5], "participant session key");
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { ...scope, sessionKey },
+        { sessionId: `entry-${index}`, updatedAt: 8 - index },
+      );
+    }
+    const options = { recentLimit: 2, agentIds: [scope.agentId] };
+    readSessionStoreSummaryReadOnly(scope, options);
+    const database = openOpenClawAgentDatabase(scope);
+    const invalidate = database.db.prepare(
+      "UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?",
+    );
+    const settle = database.db.prepare(
+      "UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?",
+    );
+    for (const sessionKey of keys.slice(0, 3)) {
+      invalidate.run(sessionKey);
+      settle.run(sessionKey);
+    }
+    database.db
+      .prepare(
+        "INSERT INTO session_participants (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at) VALUES (?, ?, ?, 1, 1, 1)",
+      )
+      .run(participantSessionKey, "invalid namespace", "alice");
+    const summary = readSessionStoreSummaryReadOnly(scope, options);
+    expect(summary.count).toBe(5);
+    expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(keys.slice(3, 5));
+    expect(summary.byAgent.get(scope.agentId)?.recent).toEqual(summary.recent);
+
+    // Pending rows are still parsed outside the recent window, including their participants.
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 0 WHERE session_key = ?")
+      .run(participantSessionKey);
+    expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow(SyntaxError);
   });
 
   it("surfaces missing canonical transcript tables through single and batched reads", async () => {

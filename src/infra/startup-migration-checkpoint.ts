@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { hostname } from "node:os";
-import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
@@ -12,6 +11,7 @@ import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/op
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { VERSION } from "../version.js";
+import { acquireWithWait } from "./acquire-with-wait.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -440,12 +440,6 @@ export async function acquireStartupMigrationLeaseWithWait(
 ): Promise<StartupMigrationLease> {
   const now = params.now ?? Date.now;
   const monotonicNow = params.monotonicNow ?? performance.now.bind(performance);
-  const sleep =
-    params.sleep ??
-    (async (ms: number) =>
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
   const timeoutMs = Math.max(
     0,
     Math.min(params.timeoutMs ?? STARTUP_MIGRATION_LEASE_TTL_MS, STARTUP_MIGRATION_LEASE_TTL_MS),
@@ -455,30 +449,21 @@ export async function acquireStartupMigrationLeaseWithWait(
     params.pollIntervalMs ?? STARTUP_MIGRATION_LEASE_POLL_INTERVAL_MS,
   );
   const owner = params.owner ?? randomUUID();
-  const deadlineMs = monotonicNow() + timeoutMs;
-
-  while (true) {
-    try {
-      return acquireStartupMigrationLease({
+  return acquireWithWait({
+    deadlineMs: monotonicNow() + timeoutMs,
+    pollIntervalMs,
+    now: monotonicNow,
+    sleep: params.sleep,
+    acquire: () =>
+      acquireStartupMigrationLease({
         env: params.env,
         nowMs: now(),
         owner,
         ownerPid: params.ownerPid,
-      });
-    } catch (error) {
-      if (
-        !(error instanceof StartupMigrationLeaseConflictError) ||
-        !error.canWaitForSameHostOwner
-      ) {
-        throw error;
-      }
-      const remainingMs = deadlineMs - monotonicNow();
-      if (remainingMs <= 0) {
-        throw error;
-      }
-      await sleep(Math.min(pollIntervalMs, remainingMs));
-    }
-  }
+      }),
+    shouldRetry: (error) =>
+      error instanceof StartupMigrationLeaseConflictError && error.canWaitForSameHostOwner,
+  });
 }
 
 function recordSuccessfulMigrationCheckpoints(

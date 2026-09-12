@@ -30,6 +30,9 @@ const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
+  if (!CJK_RE.test(lower)) {
+    return new Set(ascii);
+  }
 
   // Track CJK characters with their original positions
   const chars = Array.from(lower);

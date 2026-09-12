@@ -75,7 +75,10 @@ export type SessionEntryReadScope = SessionAccessScope & {
   projection?: "full" | "list";
 };
 
-export type SessionEntryListScope = Partial<Omit<SessionEntryReadScope, "sessionKey">>;
+export type SessionEntryListScope = Partial<Omit<SessionEntryReadScope, "sessionKey">> & {
+  /** Select exact persisted keys after validating the complete listing snapshot. */
+  sessionKeys?: readonly string[];
+};
 
 export type ResolvedSessionEntryAccessTarget = {
   /** Agent owner inferred from the canonical session key. */

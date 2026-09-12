@@ -3,10 +3,6 @@
 export const MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 export const MAX_BUFFERED_BYTES = 50 * 1024 * 1024; // per-connection send buffer limit (2x max payload)
 export const MAX_PREAUTH_PAYLOAD_BYTES = 64 * 1024;
-// Keep session/tool events and ordinary agent completions out of serial zlib
-// queues. Large transcript and roster responses still compress to keep cold
-// chat loads efficient.
-export const WS_COMPRESSION_THRESHOLD_BYTES = 32 * 1024;
 export const WEBSOCKET_OPEN_READY_STATE = 1;
 export const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 

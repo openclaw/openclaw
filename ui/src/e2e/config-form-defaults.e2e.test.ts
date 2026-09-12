@@ -152,7 +152,7 @@ suite.define(() => {
         await expect.poll(() => payloadRow.textContent()).toContain('Default: {"mode":"balanced"}');
         await expect
           .poll(() => profileBlock.textContent())
-          .toContain('Default: {"enabled":true,"mode":"balanced"}');
+          .not.toContain('{"enabled":true,"mode":"balanced"}');
         await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("9");
         await expect.poll(() => tagsBlock.textContent()).toContain('Default: ["stable","default"]');
 

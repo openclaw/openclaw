@@ -41,6 +41,21 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     });
   });
 
+  it.each([
+    ["recent path after long text", `${"x".repeat(1024)} C:/root`, "\\nfile\\ttab"],
+    ["path at the lookbehind boundary", `C:/${"x".repeat(157)}`, "\\nfile\ttab"],
+    ["path outside the lookbehind boundary", `C:/${"x".repeat(158)}`, "\nfile\ttab"],
+    ["old path in long text", `C:/${"x".repeat(1024)}`, "\nfile\ttab"],
+  ] as const)("uses the recent prefix for %s", (_name, prefix, suffix) => {
+    const input = `{"content":"${prefix}\\nfile\\ttab"}`;
+    const expected = { content: `${prefix}${suffix}` };
+    expect(parseStreamingJson(input)).toEqual(expected);
+    expect(parseJsonWithRepair(input)).toEqual(expected);
+    expect(JSON.parse(repairJson(input, { preserveValidControlEscapes: true }))).toEqual({
+      content: `${prefix}\nfile\ttab`,
+    });
+  });
+
   it("recovers streaming tool-call arguments instead of dropping them to {}", () => {
     // LaTeX-style \u (\underline) is a valid string value the model may emit in args.
     const args = '{"cmd":"\\underline{x}"}';

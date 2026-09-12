@@ -1,20 +1,23 @@
 import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
+import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const GATEWAY_HEAP_PROFILE_CHANNEL = "openclaw-gateway-bench-heap";
+export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
 export const GATEWAY_HEAP_SAMPLE_INTERVAL = 32 * 1024;
+export const GATEWAY_CPU_SAMPLE_INTERVAL_MICROS = 1_000;
 
-export type GatewayHeapProfileCommand = {
-  channel: typeof GATEWAY_HEAP_PROFILE_CHANNEL;
+export type GatewayProfileCommand = {
+  channel: typeof GATEWAY_PROFILE_CHANNEL;
+  kind: "heap" | "cpu";
   action: "start" | "stop";
   profilePath: string;
 };
 
-type GatewayHeapProfileReply = {
-  channel: typeof GATEWAY_HEAP_PROFILE_CHANNEL;
+type GatewayProfileReply = {
+  channel: typeof GATEWAY_PROFILE_CHANNEL;
+  kind: GatewayProfileCommand["kind"];
   action: "start" | "stop";
   error?: string;
 };
@@ -30,9 +33,17 @@ export type GatewayHeapProfile = {
   }>;
 };
 
-export async function controlGatewayHeapProfile(
+export type GatewayCpuProfile = {
+  profilePath: string;
+  samplingIntervalMicros: number;
+  durationMs: number;
+  sampleCount: number;
+};
+
+export async function controlGatewayProfile(
   child: ChildProcess,
-  action: GatewayHeapProfileCommand["action"],
+  kind: GatewayProfileCommand["kind"],
+  action: GatewayProfileCommand["action"],
   profilePath: string,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -47,17 +58,21 @@ export async function controlGatewayHeapProfile(
         resolve();
       }
     };
-    const onMessage = (message: GatewayHeapProfileReply) => {
-      if (message?.channel !== GATEWAY_HEAP_PROFILE_CHANNEL || message.action !== action) {
+    const onMessage = (message: GatewayProfileReply) => {
+      if (
+        message?.channel !== GATEWAY_PROFILE_CHANNEL ||
+        message.kind !== kind ||
+        message.action !== action
+      ) {
         return;
       }
       finish(message.error ? new Error(message.error) : undefined);
     };
-    const onExit = () => finish(new Error(`Gateway exited during heap profile ${action}`));
+    const onExit = () => finish(new Error(`Gateway exited during ${kind} profile ${action}`));
     const onDisconnect = () =>
-      finish(new Error(`Gateway disconnected during heap profile ${action}`));
+      finish(new Error(`Gateway disconnected during ${kind} profile ${action}`));
     const timer = setTimeout(
-      () => finish(new Error(`Gateway heap profile ${action} timed out after 30000ms`)),
+      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after 30000ms`)),
       30_000,
     );
     child.on("message", onMessage);
@@ -67,12 +82,22 @@ export async function controlGatewayHeapProfile(
       onDisconnect();
       return;
     }
-    child.send({ channel: GATEWAY_HEAP_PROFILE_CHANNEL, action, profilePath }, (error) => {
+    child.send({ channel: GATEWAY_PROFILE_CHANNEL, kind, action, profilePath }, (error) => {
       if (error) {
         finish(error);
       }
     });
   });
+}
+
+export function readGatewayCpuProfile(profilePath: string): GatewayCpuProfile {
+  const profile: Profiler.Profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  return {
+    profilePath,
+    samplingIntervalMicros: GATEWAY_CPU_SAMPLE_INTERVAL_MICROS,
+    durationMs: (profile.endTime - profile.startTime) / 1_000,
+    sampleCount: profile.samples?.length ?? 0,
+  };
 }
 
 export function readGatewayHeapProfile(profilePath: string): GatewayHeapProfile {

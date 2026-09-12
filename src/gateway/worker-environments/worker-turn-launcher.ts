@@ -55,7 +55,10 @@ type WorkerTurnLauncherOptions = {
     placement: WorkerSessionPlacementRecord,
     signal?: AbortSignal,
   ) => Promise<WorkerSessionPlacementRecord>;
-  redispatchReclaimed: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
+  redispatchReclaimed: (
+    placement: ReclaimedWorkerPlacement,
+    options: { assertCurrent: () => void; signal?: AbortSignal },
+  ) => Promise<ActiveWorkerPlacement>;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
@@ -203,7 +206,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             sessionKey: identity.sessionKey,
             agentId: identity.agentId,
           });
-          routablePlacement = await options.redispatchReclaimed(routablePlacement);
+          routablePlacement = await options.redispatchReclaimed(routablePlacement, {
+            assertCurrent: assertAdmissionCurrent,
+            signal: inputTurn.abortSignal,
+          });
           assertAdmissionCurrent();
           identity = resolvePlacementIdentity(
             { ...claim, agentId: identity.agentId, sessionKey: identity.sessionKey },

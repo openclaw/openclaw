@@ -34,6 +34,7 @@ import {
 } from "./agent-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
+import type { ExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 import { isPersistentOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js";
 import {
   assertCanonicalAgentPersistenceVersion,
@@ -579,17 +580,24 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       inspectedAgentTargets.add(inspectionKey);
       let agentVersion: number;
       let writerAppVersion: string | undefined;
-      if (
-        !options.requireStartupMigrationReadiness &&
-        !options.verifyCurrentSchemaShape &&
-        !options.agentAdmissionConfig
-      ) {
-        const header = await inspectSqliteSchemaHeader(realAgentPath, { signal: options.signal });
+      let agentSchemaMeta: ExistingAgentSchemaMeta | null | undefined;
+      const inspectOwnership =
+        options.agentAdmissionConfig !== undefined &&
+        row.agentId !== undefined &&
+        listAgentIds(options.agentAdmissionConfig).includes(row.agentId);
+      if (!options.requireStartupMigrationReadiness && !options.verifyCurrentSchemaShape) {
+        const header = await inspectSqliteSchemaHeader(realAgentPath, {
+          signal: options.signal,
+          ...(inspectOwnership
+            ? { agentSchemaVersionForOwnership: options.supportedVersions.agent }
+            : {}),
+        });
         options.signal?.throwIfAborted();
         agentVersion = header.userVersion;
         writerAppVersion = header.writerAppVersion;
+        agentSchemaMeta = header.agentSchemaMeta;
       } else {
-        // Full readiness and ownership admission retain their private snapshot.
+        // Full readiness retains its private snapshot; diagnostics need only bounded metadata.
         agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
           signal: options.signal,
         });
@@ -598,18 +606,15 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
         agentVersion = readSqliteUserVersion(agentDatabase);
         writerAppVersion = readWriterAppVersion(agentDatabase);
+        if (inspectOwnership && agentVersion <= options.supportedVersions.agent) {
+          agentSchemaMeta = readExistingAgentSchemaMeta(agentDatabase);
+        }
       }
-      if (
-        agentDatabase &&
-        agentVersion <= options.supportedVersions.agent &&
-        options.agentAdmissionConfig &&
-        row.agentId &&
-        listAgentIds(options.agentAdmissionConfig).includes(row.agentId)
-      ) {
+      if (agentVersion <= options.supportedVersions.agent && inspectOwnership && row.agentId) {
         const refusal = inspectAgentDatabaseAdmission({
           agentId: row.agentId,
           path: agentPath,
-          metadata: readExistingAgentSchemaMeta(agentDatabase),
+          metadata: agentSchemaMeta ?? null,
         });
         if (refusal) {
           (result.agentRefusals ??= []).push(refusal);

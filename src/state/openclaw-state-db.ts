@@ -50,6 +50,7 @@ import {
 } from "./openclaw-state-db-fast-path.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
+  assertOpenClawStateDatabaseOwner,
   markCurrentStateSchemaVersion,
   openClawStateMigrationAssertions,
   resolveDatabasePath,
@@ -155,6 +156,10 @@ function repairStateSchema(
         const applied = repairAdmittedSchema();
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
         const previousVersion = readStateSchemaMigrationVersion(db);
+        const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
+        if (preAuditSchema) {
+          assertOpenClawStateDatabaseOwner(db, { pathname });
+        }
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           for (const name of verifyAndRepairCanonicalSqliteIndexes(
             db,
@@ -202,7 +207,9 @@ function repairStateSchema(
           );
         }
         assertCanonicalStateSchemaShape(db, pathname);
-        if (tableExists(db, "audit_events")) {
+        // Recognized schema-1 stores predate audit; Doctor must finish their schema
+        // before its later read-only workspace and agent readers can consume it.
+        if (preAuditSchema || tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
           for (const migration of versionedStateMigrations) {
             if (migration.migrate(db, previousVersion)) {

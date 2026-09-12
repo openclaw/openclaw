@@ -2489,9 +2489,14 @@ describe("openclaw state database", () => {
     },
   );
 
-  it.each(["runtime open", "doctor repair"] as const)(
-    "migrates v12 wide rows to canonical JSON through %s without changing hydrated jobs",
-    (migrationPath) => {
+  it.each([
+    { migrationPath: "runtime open", hasPathAliases: true },
+    { migrationPath: "doctor repair", hasPathAliases: true },
+    { migrationPath: "runtime open", hasPathAliases: false },
+    { migrationPath: "doctor repair", hasPathAliases: false },
+  ] as const)(
+    "migrates legacy wide rows through $migrationPath with path aliases $hasPathAliases without changing hydrated jobs",
+    ({ migrationPath, hasPathAliases }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -2621,13 +2626,22 @@ describe("openclaw state database", () => {
       insertLegacyAttestation.run("wk-setup", 1_000, 1_100);
       insertLegacyAttestation.run("wk-alias", 2_000, 2_100);
       insertLegacyAttestation.run("wk-orphan", 3_000, 3_100);
-      legacy
-        .prepare(
-          `INSERT INTO workspace_path_aliases (
-             alias_key, alias_path, workspace_key, workspace_path, updated_at_ms
-           ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run("wk-alias-link", "/tmp/wk-alias-link", "wk-alias", "/tmp/wk-alias", 2_200);
+      if (hasPathAliases) {
+        legacy
+          .prepare(
+            `INSERT INTO workspace_path_aliases (
+               alias_key, alias_path, workspace_key, workspace_path, updated_at_ms
+             ) VALUES (?, ?, ?, ?, ?)`,
+          )
+          .run("wk-alias-link", "/tmp/wk-alias-link", "wk-alias", "/tmp/wk-alias", 2_200);
+      } else {
+        legacy.exec(`
+          DROP TABLE workspace_path_aliases;
+          PRAGMA user_version = 1;
+          UPDATE schema_meta SET schema_version = 1, app_version = '2026.6.35'
+           WHERE meta_key = 'primary';
+        `);
+      }
       const insertLegacyHash = legacy.prepare(
         "INSERT INTO workspace_generated_bootstrap_hashes (workspace_key, filename, sha256) VALUES (?, ?, ?)",
       );
@@ -2661,6 +2675,12 @@ describe("openclaw state database", () => {
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [
+            ...(!hasPathAliases
+              ? [
+                  "Migrated cloud worker placements to execution modes",
+                  "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
+                ]
+              : []),
             "Consolidated shared state tables (v13)",
             "Qualified historical cron creator attribution as unknown (v14)",
           ],
@@ -2811,7 +2831,7 @@ describe("openclaw state database", () => {
       ).toEqual([
         {
           workspace_key: "wk-alias",
-          workspace_path: "/tmp/wk-alias",
+          workspace_path: hasPathAliases ? "/tmp/wk-alias" : null,
           version: null,
           bootstrap_seeded_at: null,
           setup_completed_at: null,
@@ -5840,32 +5860,81 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it("lets normal open create an audit ledger for a pre-v2 database", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = createLegacyAuditStateDatabase(stateDir);
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec("DROP TABLE audit_events");
-    legacy.close();
+  it.each(["runtime open", "doctor repair"] as const)(
+    "completes a recognized pre-v2 schema through %s before read-only consumers",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const databasePath = createLegacyAuditStateDatabase(stateDir);
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(`
+      DROP TABLE audit_events;
+      CREATE TABLE workspace_setup_state (
+        workspace_key TEXT NOT NULL PRIMARY KEY, workspace_path TEXT NOT NULL,
+        version INTEGER NOT NULL, bootstrap_seeded_at TEXT, setup_completed_at TEXT,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO workspace_setup_state VALUES ('legacy-workspace', '/tmp/legacy-workspace', 1,
+        '2026-06-01T00:00:00.000Z', NULL, 100);
+    `);
+      legacy.close();
 
-    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [],
-      warnings: [],
-    });
-    const beforeOpen = new DatabaseSync(databasePath, { readOnly: true });
-    expect(readSqliteNumberPragma(beforeOpen, "user_version")).toBe(1);
-    beforeOpen.close();
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      } else {
+        openOpenClawStateDatabase(options);
+        closeOpenClawStateDatabaseForTest();
+      }
+      const repaired = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        assertOpenClawStateDatabaseForMaintenance(repaired, { pathname: databasePath });
+        expect(readSqliteNumberPragma(repaired, "user_version")).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
+        expect(
+          repaired
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'",
+            )
+            .get(),
+        ).toEqual({ name: "audit_events" });
+        expect(repaired.prepare("SELECT * FROM workspace_setup_state").get()).toMatchObject({
+          workspace_key: "legacy-workspace",
+          workspace_path: "/tmp/legacy-workspace",
+          version: 1,
+          bootstrap_seeded_at: "2026-06-01T00:00:00.000Z",
+          updated_at: 100,
+        });
+      } finally {
+        repaired.close();
+      }
+      expect(listOpenClawRegisteredAgentDatabases(options)).toEqual([]);
+    },
+  );
 
-    const opened = openOpenClawStateDatabase(options);
-    expect(
-      opened.db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'")
-        .get(),
-    ).toEqual({ name: "audit_events" });
-    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-  });
+  it.each(["missing", "foreign"] as const)(
+    "does not claim pre-v2 state with %s ownership metadata",
+    (ownership) => {
+      const stateDir = createTempStateDir();
+      const databasePath = createLegacyAuditStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec("DROP TABLE audit_events;");
+      legacy.exec(
+        ownership === "missing"
+          ? "DROP TABLE schema_meta;"
+          : "UPDATE schema_meta SET role = 'agent', agent_id = 'worker-1';",
+      );
+      legacy.close();
+      const before = fs.readFileSync(databasePath);
+      expect(
+        repairOpenClawStateDatabaseSchema({ env: { OPENCLAW_STATE_DIR: stateDir } }).warnings,
+      ).toEqual([expect.stringContaining("expected global")]);
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+    },
+  );
 
   it("refuses to rebuild a noncanonical audit table with unknown data columns", () => {
     const stateDir = createTempStateDir();

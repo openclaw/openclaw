@@ -321,8 +321,8 @@ Write a unit by hand only for a custom setup. Minimal user-unit example
 Description=OpenClaw Gateway (profile: <profile>)
 After=network-online.target
 Wants=network-online.target
-StartLimitBurst=5
-StartLimitIntervalSec=60
+StartLimitBurst=10
+StartLimitIntervalSec=300
 
 [Service]
 ExecStart=/usr/local/bin/openclaw gateway --port 18789

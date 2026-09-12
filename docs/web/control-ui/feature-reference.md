@@ -55,6 +55,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
   </Accordion>
   <Accordion title="Config">
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
+    - Structured settings show default hints on individual fields, without repeating the whole object's defaults as JSON above the controls.
     - Settings navigation starts with Ask OpenClaw, Profile, Appearance, and Notifications up top; Connections (Gateway, Channels, Communications, Talk, Devices); Agents & Tools (Agents, Labs, Models, MCP, Memory, Automation); Privacy & Security (Security, Secrets, Approvals); and System (Infrastructure, Advanced, Debug, Logs, About). Language leads the Appearance page, model defaults live on Models, and Gateway host details live on Gateway.
     - Privacy & Security: curated rows for gateway auth, exec policy, browser enablement, tool profile, device auth, and mobile pairing, above the schema-backed `security`/`approvals` sections.
     - Secrets (`/settings/secrets`) manages team-scoped secret and environment entries through `secrets.store.*`. Environment values remain visible, secret values are never returned after saving, Bulk Add accepts quoted multiline dotenv values, and mutation actions are hidden when the connected Gateway does not advertise them.

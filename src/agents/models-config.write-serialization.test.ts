@@ -5,6 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  resolveModelCostConfig,
+  resolveModelCostConfigFingerprint,
+} from "../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -192,6 +196,58 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("refreshes cached usage prices after publishing an agent's models.json", async () => {
+    await withModelsTempHome(async (home) => {
+      const configFor = (input: number) => ({
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid/v1",
+              models: [
+                {
+                  id: "priced",
+                  name: "Priced",
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input, output: 2, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      });
+      const firstDir = path.join(home, "first");
+      const secondDir = path.join(home, "second");
+      const config = configFor(1);
+      const options = { pluginMetadataSnapshot: createPluginMetadataSnapshot(home) };
+      const price = (agentDir: string) =>
+        resolveModelCostConfig({
+          config,
+          agentDir,
+          provider: "fixture",
+          model: "priced",
+          allowPluginNormalization: false,
+        })?.input;
+      await ensureOpenClawModelsJson(config, firstDir, options);
+      await ensureOpenClawModelsJson(configFor(5), secondDir, options);
+      expect([price(firstDir), price(secondDir)]).toEqual([1, 5]);
+      const firstFingerprint = resolveModelCostConfigFingerprint(config, firstDir);
+      const secondFingerprint = resolveModelCostConfigFingerprint(config, secondDir);
+
+      const updated = await ensureOpenClawModelsJson(configFor(9), firstDir, options);
+
+      expect(updated).toEqual({ agentDir: firstDir, wrote: true });
+      expect(await readGeneratedModelsJson(firstDir)).toEqual({
+        providers: configFor(9).models.providers,
+      });
+      expect([price(firstDir), price(secondDir)]).toEqual([9, 5]);
+      expect(resolveModelCostConfigFingerprint(config, firstDir)).not.toBe(firstFingerprint);
+      expect(resolveModelCostConfigFingerprint(config, secondDir)).toBe(secondFingerprint);
+    });
+  });
+
   it("materializes an authoritative plugin catalog replacement without mutating state", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");

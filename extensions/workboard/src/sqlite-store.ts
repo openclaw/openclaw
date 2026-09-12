@@ -36,6 +36,7 @@ import type {
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
   WorkboardCardStore,
+  WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
 } from "./persistence-types.js";
@@ -1359,6 +1360,68 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
       archived: requiredNumber(row, "archived"),
       updatedAt: requiredNumber(row, "updated_at"),
     }));
+  }
+
+  async listStatsAggregates(boardId?: string): Promise<WorkboardCardStatsAggregate[]> {
+    let query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
+      .selectFrom("workboard_cards")
+      .select((eb) => [
+        "status",
+        "agent_id",
+        eb.fn.countAll<number>().as("total"),
+        eb.fn
+          .sum<number>(
+            eb
+              .case()
+              .when(eb.and([eb("archived_at", "is not", null), eb("archived_at", "!=", 0)]))
+              .then(1)
+              .else(0)
+              .end(),
+          )
+          .as("archived"),
+        eb.fn.max<number>("updated_at").as("updated_at"),
+        eb.fn
+          .min<number>(
+            eb
+              .case()
+              .when(
+                eb.and([
+                  eb("status", "=", "ready"),
+                  eb.or([eb("archived_at", "is", null), eb("archived_at", "=", 0)]),
+                ]),
+              )
+              .then(eb.ref("updated_at"))
+              .else(null)
+              .end(),
+          )
+          .as("oldest_ready_at"),
+      ])
+      .groupBy(["status", "agent_id"]);
+    if (boardId !== undefined) {
+      query = query.where("board_id", "=", boardId);
+    }
+    return Array.from(iterateSqliteQuerySync(this.db, query), (row) => ({
+      // SAFETY: insertCard persists the normalized WorkboardCard status unchanged.
+      status: requiredString(row, "status") as WorkboardCard["status"],
+      agentId: stringValue(row, "agent_id"),
+      total: requiredNumber(row, "total"),
+      archived: requiredNumber(row, "archived"),
+      updatedAt: requiredNumber(row, "updated_at"),
+      oldestReadyAt: numberValue(row, "oldest_ready_at"),
+    }));
+  }
+
+  async hasCards(boardId: string): Promise<boolean> {
+    return (
+      executeSqliteQueryTakeFirstSync(
+        this.db,
+        getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
+          .selectFrom("workboard_cards")
+          .select("id")
+          .where("board_id", "=", boardId)
+          .limit(1),
+      ) !== undefined
+    );
   }
 }
 

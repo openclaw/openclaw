@@ -1,10 +1,7 @@
-import { getEventListeners, once } from "node:events";
-import type { AddressInfo } from "node:net";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { WS_COMPRESSION_THRESHOLD_BYTES } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { TerminalOutputController } from "./terminal/output-flow-control.js";
@@ -58,75 +55,6 @@ const liveText = (group: AbortSignal) => ({
 });
 
 describe("broadcast transport retirement", () => {
-  it("settles a compressed queue failure once while healthy peers keep ordered delivery", async () => {
-    const server = new WebSocketServer({
-      host: "127.0.0.1",
-      port: 0,
-      perMessageDeflate: {
-        serverNoContextTakeover: true,
-        clientNoContextTakeover: true,
-        threshold: WS_COMPRESSION_THRESHOLD_BYTES,
-      },
-    });
-    await once(server, "listening");
-    const peers: WebSocket[] = [];
-    try {
-      const connect = async () => {
-        const accepted = once(server, "connection");
-        const peer = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
-        peers.push(peer);
-        await once(peer, "open");
-        const [socket] = (await accepted) as [WebSocket];
-        expect(socket.extensions).toBe("permessage-deflate");
-        return { peer, socket };
-      };
-      const broken = await connect();
-      const healthy = await connect();
-      const clients = new GatewayClientRegistry([
-        clientFor("compressed-broken", broken.socket),
-        clientFor("compressed-healthy", healthy.socket),
-      ]);
-      const { broadcast, getBufferedAmount } = createGatewayBroadcaster({ clients });
-      const received: Array<{ seq: number; payload: { index: number } }> = [];
-      healthy.peer.on("message", (data) => received.push(JSON.parse(rawDataToString(data))));
-      const owner = new AbortController();
-      sendError.mockClear();
-      const terminate = vi.spyOn(broken.socket, "terminate");
-      const payload = "x".repeat(WS_COMPRESSION_THRESHOLD_BYTES * 2);
-      for (let index = 0; index < 165; index += 1) {
-        broadcast("skills.changed", { index, payload });
-      }
-      broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
-      expect(getEventListeners(owner.signal, "abort")).toHaveLength(2);
-      const closed = once(broken.peer, "close");
-      broken.socket.terminate();
-      await closed;
-      await vi.waitFor(() => expect(received).toHaveLength(166));
-      expect(received.map(({ seq }) => seq)).toEqual(
-        Array.from({ length: 166 }, (_, index) => index + 1),
-      );
-      expect(received.slice(0, 165).map(({ payload: value }) => value.index)).toEqual(
-        Array.from({ length: 165 }, (_, index) => index),
-      );
-      expect(sendError).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("The socket was closed while data was being compressed"),
-        { event: "skills.changed" },
-      );
-      expect(terminate).toHaveBeenCalledTimes(2); // External close and one delivery retirement.
-      expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
-      expect(broken.socket.bufferedAmount).toBeGreaterThan(0);
-      expect(getBufferedAmount("compressed-broken")).toBeUndefined();
-    } finally {
-      peers.forEach((peer) => peer.terminate());
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-
   it("keeps failed delivery terminal through late callbacks and permits a replacement socket", () => {
     const retired = controlledPeer("replacement");
     const replacement = controlledPeer("replacement");

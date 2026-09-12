@@ -20,6 +20,7 @@ import {
   resolveAgentDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
+import { MODELS_JSON_STATE, type ModelKeyNormalizer } from "../agents/models-config-state.js";
 import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import { mergeModelCost } from "../config/model-cost.js";
@@ -38,12 +39,6 @@ import {
 export { formatTokenCount } from "./token-format.js";
 export type { ModelCostConfig } from "@openclaw/llm-core";
 
-type ModelKeyNormalizer = (provider: string, model: string) => string;
-type ModelsJsonCostCache = {
-  providers: Record<string, ModelProviderConfig> | undefined;
-  entries: WeakMap<ModelKeyNormalizer, Map<string, RawModelCostConfig>>;
-};
-
 type ProviderCostIndexSource = {
   model: NonNullable<ModelProviderConfig["models"]>[number];
   providerKey: string;
@@ -59,7 +54,6 @@ type ProviderCostIndex = {
 const EMPTY_PROVIDER_COST_INDEX = new Map<string, RawModelCostConfig>();
 const MODELS_JSON_COST_CACHE_LIMIT = 128;
 
-let modelsJsonCostCacheByAgentDir = new Map<string, ModelsJsonCostCache>();
 let providerCostIndexByNormalizer = new WeakMap<
   ModelKeyNormalizer,
   WeakMap<Record<string, ModelProviderConfig>, ProviderCostIndex>
@@ -184,7 +178,7 @@ function loadModelsJsonCostIndex(options?: {
   }
   const modelsPath = path.join(agentDir, "models.json");
   try {
-    let modelsJsonCostCache = modelsJsonCostCacheByAgentDir.get(agentDir);
+    let modelsJsonCostCache = MODELS_JSON_STATE.costCache.get(agentDir);
     if (!modelsJsonCostCache) {
       const parsed = tryReadJsonSync<{
         providers?: Record<string, ModelProviderConfig>;
@@ -196,8 +190,8 @@ function loadModelsJsonCostIndex(options?: {
         providers: parsed?.providers,
         entries: new WeakMap(),
       };
-      pruneMapToMaxSize(modelsJsonCostCacheByAgentDir, MODELS_JSON_COST_CACHE_LIMIT - 1);
-      modelsJsonCostCacheByAgentDir.set(agentDir, modelsJsonCostCache);
+      pruneMapToMaxSize(MODELS_JSON_STATE.costCache, MODELS_JSON_COST_CACHE_LIMIT - 1);
+      MODELS_JSON_STATE.costCache.set(agentDir, modelsJsonCostCache);
     }
 
     const normalizeKey = options?.normalizeKey ?? normalizeRawModelKey;
@@ -395,6 +389,6 @@ export function estimateAggregateUsageCost(
 }
 
 export function resetUsageFormatCachesForTest(): void {
-  modelsJsonCostCacheByAgentDir = new Map();
+  MODELS_JSON_STATE.costCache.clear();
   providerCostIndexByNormalizer = new WeakMap();
 }

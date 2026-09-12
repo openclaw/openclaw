@@ -14,6 +14,8 @@ async function runWorker(): Promise<void> {
   const mode = process.argv[3];
   const pathname = process.argv[4];
   const stagingRoot = process.argv[5];
+  const agentSchemaVersionForOwnership =
+    process.argv[6] === undefined ? undefined : Number(process.argv[6]);
   if ((mode !== "sync" && mode !== "async" && mode !== "schema-header") || !pathname) {
     process.exitCode = 1;
     process.stdout.write(
@@ -26,7 +28,18 @@ async function runWorker(): Promise<void> {
   }
   try {
     if (mode === "schema-header") {
-      const header = await inspectSqliteSchemaHeaderInProcess(pathname, stagingRoot);
+      if (
+        agentSchemaVersionForOwnership !== undefined &&
+        (!Number.isSafeInteger(agentSchemaVersionForOwnership) ||
+          agentSchemaVersionForOwnership < 0)
+      ) {
+        throw new Error("SQLite schema header requires a valid supported agent schema version");
+      }
+      const header = await inspectSqliteSchemaHeaderInProcess(
+        pathname,
+        stagingRoot,
+        agentSchemaVersionForOwnership,
+      );
       process.stdout.write(JSON.stringify({ ok: true, header }));
       return;
     }

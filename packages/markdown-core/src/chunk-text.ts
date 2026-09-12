@@ -73,9 +73,9 @@ function findPreferredRangeEnd(text: string, start: number, end: number): number
     return paragraphEnd;
   }
 
-  const newlineIndex = text.lastIndexOf("\n", end - 1);
-  if (newlineIndex >= start) {
-    return newlineIndex + 1;
+  const newlineIndex = slice.lastIndexOf("\n");
+  if (newlineIndex >= 0) {
+    return start + newlineIndex + 1;
   }
 
   for (let index = end - 1; index > start; index -= 1) {

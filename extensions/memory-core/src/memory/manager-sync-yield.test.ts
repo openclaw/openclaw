@@ -137,6 +137,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   constructor(
     db: DatabaseSync,
     private readonly onIndexFile: (count: number) => void,
+    private readonly indexConcurrency: number,
   ) {
     super();
     this.publishedDatabase = new MemoryIndexDatabase(db);
@@ -178,7 +179,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return 1;
+    return this.indexConcurrency;
   }
 
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
@@ -217,33 +218,51 @@ describe("session sync responsiveness", () => {
     vi.clearAllMocks();
   });
 
-  it("yields to the event loop between session file batches", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const files = Array.from({ length: 11 }, (_value, index) =>
-      path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
-    );
-    let immediateRan = false;
-    const immediate = new Promise<void>((resolve) => {
-      setImmediate(() => {
-        immediateRan = true;
-        resolve();
+  it.each([
+    { concurrency: 1, fileCount: 4 },
+    { concurrency: 4, fileCount: 40 },
+  ])(
+    "serves queued work during slow session indexing with $concurrency workers",
+    async ({ concurrency, fileCount }) => {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      const files = Array.from({ length: fileCount }, (_value, index) =>
+        path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
+      );
+      let immediateRan = false;
+      const immediate = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          immediateRan = true;
+          resolve();
+        });
       });
-    });
-    const observedBeforeLastFile: boolean[] = [];
-    const db = createDb();
-    const harness = new SessionSyncYieldHarness(db, (count) => {
-      if (count === 11) {
-        observedBeforeLastFile.push(immediateRan);
-      }
-    });
+      const observedBeforeNextWave: boolean[] = [];
+      const db = createDb();
+      let elapsedMs = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const harness = new SessionSyncYieldHarness(
+        db,
+        (count) => {
+          // Model expensive synchronous indexing without sleeping or a timing-sensitive assertion.
+          elapsedMs += 20;
+          if (count === concurrency + 1) {
+            observedBeforeNextWave.push(immediateRan);
+          }
+        },
+        concurrency,
+      );
 
-    try {
-      await harness.syncTargetArchiveFiles(files);
-      expect(harness.indexedPaths).toHaveLength(files.length);
-      expect(observedBeforeLastFile).toEqual([true]);
-      await immediate;
-    } finally {
-      db.close();
-    }
-  });
+      try {
+        await harness.syncTargetArchiveFiles(files);
+        expect(harness.indexedPaths).toEqual(
+          files.map((file) => `sessions/${path.basename(file)}`),
+        );
+        expect(observedBeforeNextWave).toEqual([true]);
+        await immediate;
+      } finally {
+        clock.mockRestore();
+        await immediate;
+        db.close();
+      }
+    },
+  );
 });

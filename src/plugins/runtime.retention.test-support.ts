@@ -85,7 +85,7 @@ switch (process.argv[2]) {
       if (formatter) {
         Object.defineProperty(Error, "prepareStackTrace", formatter);
       } else {
-        delete Error.prepareStackTrace;
+        Reflect.deleteProperty(Error, "prepareStackTrace");
       }
     }
     assert.equal(calls, 1);
@@ -96,7 +96,7 @@ switch (process.argv[2]) {
     const { instance, reference } = await retireCapturedSource();
     await collect();
     assert.equal(reference.deref(), undefined, "Disposed instance retained its source lookup");
-    assert.throws(() => instance.hasModuleSource("captured-source"), /reloaded or disabled/);
+    assert.equal(instance.hasModuleSource("captured-source"), false);
     assert.throws(() => instance.loadModule("captured-source"), /reloaded or disabled/);
     const neverBound = new PluginInstance("never-bound");
     await neverBound.dispose();

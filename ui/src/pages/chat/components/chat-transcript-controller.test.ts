@@ -286,7 +286,44 @@ describe("chat transcript controller", () => {
     expect(app.parentElement?.parentElement).toBe(rowParent);
   });
 
+  it.each([false, true])(
+    "coalesces end geometry across commits and retires disconnected work=%s",
+    async (disconnect) => {
+      const flushFrames = stubAnimationFrames();
+      const { container, transcript } = await mountTestTranscript("coalesced-end", [
+        { kind: "content", key: "reply", content: html`<div>Reply</div>` },
+      ]);
+      try {
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 600 },
+          scrollHeight: { configurable: true, value: 1200 },
+        });
+        container.scrollTop = 600;
+        flushFrames();
+        transcript.hostUpdated();
+        flushFrames();
+        const readHeight = vi.fn(() => 1200);
+        Object.defineProperty(container, "scrollHeight", {
+          configurable: true,
+          get: readHeight,
+        });
+        for (let index = 0; index < 4; index++) {
+          transcript.hostUpdated();
+        }
+        expect(readHeight).not.toHaveBeenCalled();
+        if (disconnect) {
+          transcript.hostDisconnected();
+        }
+        flushFrames();
+        expect(readHeight).toHaveBeenCalledTimes(disconnect ? 0 : 1);
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
   it("reconciles an implicit end anchor when committed content has no scroll range", () => {
+    const flushFrames = stubAnimationFrames();
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const messages = Array.from({ length: 18 }, (_, index) => ({
@@ -306,6 +343,7 @@ describe("chat transcript controller", () => {
     transcript.hostConnected();
     transcript.scrollToEnd({ source: "auto" });
     transcript.hostUpdated();
+    flushFrames();
     render(renderChatThread(props, transcript), container);
     expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
     expect(container.textContent).toContain("message 0");

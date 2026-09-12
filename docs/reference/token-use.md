@@ -227,6 +227,10 @@ works. Agent-local `models.json` prices take precedence over explicit
 `models.providers.*.models[].cost` entries, and both override catalog estimates,
 including explicit flat and zero rates.
 
+When the Gateway writes updated agent-local `models.json` prices, subsequent
+local estimates use those rates without a restart. Recorded per-call costs keep
+their original amounts.
+
 OpenRouter `:nitro` and `:floor` routing shortcuts use the base model's catalog
 estimate when the exact shortcut has no price. Recorded costs and explicit
 prices keep their precedence. Private endpoints and other model variants do not

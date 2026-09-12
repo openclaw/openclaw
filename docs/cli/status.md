@@ -42,6 +42,18 @@ security audit, plugin compatibility, and memory-vector probes are left to
 `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
 and `openclaw memory status --deep`.
 
+Local agent ownership checks read schema and owner metadata from one consistent
+SQLite snapshot, including committed WAL changes. They do not copy the entire
+agent database unless its journal state requires private recovery. Startup and
+migration readiness checks retain their full validation.
+
+The CLI runs in a separate process and contacts the Gateway over WebSocket, even
+for a local loopback target. `--timeout` bounds probes, not the entire status
+command. Compare `openclaw gateway call status --json` with `openclaw status --json`
+to separate the Gateway response from local report collection. Gateway
+[Prometheus RPC timings](/gateway/prometheus) exclude CLI startup and connection
+setup; a slow CLI can finish without a slow Gateway handler.
+
 For Git installs, plain status compares cached remote-tracking refs without a
 network fetch. If the latest recorded update fetch failed and no later update
 run records a completed fetch, the Update row shows

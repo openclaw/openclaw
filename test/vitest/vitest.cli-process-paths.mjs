@@ -17,6 +17,7 @@ export const cliProcessTestFiles = [
   "src/cli/gateway-cli/run-loop.restart-liveness.process.test.ts",
   "src/cli/update-dry-run-state.process.test.ts",
   "src/cli/doctor-output.process.test.ts",
+  "src/cli/update-cli/update-command-executor-native.test.ts",
   "src/cli/update-cli/update-command-handoff.test.ts",
   "src/cli/update-cli/update-command-lease.test.ts",
   "src/cli/update-cli/update-command-migrated.test.ts",

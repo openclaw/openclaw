@@ -4,9 +4,11 @@
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-gateway-other.tsbuildinfo"
   },
   "include": [
-    "../../src/gateway/session-*.test.ts",
-    "../../src/gateway/session-*.test.tsx",
     "../../src/gateway/*/**/*.test.ts",
     "../../src/gateway/*/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../src/gateway/server/**/*.test.ts",
+    "../../src/gateway/server/**/*.test.tsx"
   ]
 }

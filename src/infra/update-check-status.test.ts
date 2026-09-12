@@ -38,6 +38,29 @@ async function commitGit(root: string, message: string): Promise<void> {
   await runGit(root, "commit", "--allow-empty", "--message", message);
 }
 
+async function createNpmInstallRoot(base: string): Promise<string> {
+  const prefix = path.join(base, ".npm-global");
+  const binDir = process.platform === "win32" ? prefix : path.join(prefix, "bin");
+  const root = path.join(
+    prefix,
+    ...(process.platform === "win32" ? [] : ["lib"]),
+    "node_modules",
+    "openclaw",
+  );
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\n");
+  if (process.platform === "win32") {
+    await fs.writeFile(
+      path.join(binDir, "openclaw.cmd"),
+      '@node "%~dp0\\node_modules\\openclaw\\openclaw.mjs" %*\r\n',
+    );
+  } else {
+    await fs.symlink("../lib/node_modules/openclaw/openclaw.mjs", path.join(binDir, "openclaw"));
+  }
+  return root;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -597,10 +620,11 @@ describe("checkUpdateStatus", () => {
   });
 
   it("detects package installs for non-git roots", async () => {
-    await withTestDir({ prefix: "openclaw-update-check-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-update-check-" }, async (base) => {
+      const root = await createNpmInstallRoot(base);
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: "npm@10.0.0" }),
         "utf8",
       );
       await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
@@ -663,7 +687,9 @@ describe("checkUpdateStatus", () => {
       expectedLockfile: "bun.lock",
     },
   ])("reports dependency status for Bun's $name", async ({ lockfiles, expectedLockfile }) => {
-    await withTestDir({ prefix: "openclaw-update-check-bun-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-update-check-bun-" }, async (base) => {
+      const root = path.join(base, ".bun", "install", "global", "node_modules", "openclaw");
+      await fs.mkdir(root, { recursive: true });
       await fs.writeFile(
         path.join(root, "package.json"),
         JSON.stringify({ name: "openclaw", packageManager: "bun@1.2.0" }),
@@ -705,7 +731,7 @@ describe("checkUpdateStatus", () => {
         const root =
           manager === "bun"
             ? path.join(bunInstall, "install", "global", "node_modules", "openclaw")
-            : path.join(base, "prefix", "node_modules", "openclaw");
+            : await createNpmInstallRoot(base);
         await fs.mkdir(root, { recursive: true });
         await fs.writeFile(
           path.join(root, "package.json"),
@@ -736,8 +762,7 @@ describe("checkUpdateStatus", () => {
 
   it("detects a metadata-free lockless OpenClaw npm install", async () => {
     await withTestDir({ prefix: "openclaw-update-check-lockless-npm-" }, async (base) => {
-      const root = path.join(base, "prefix", "node_modules", "openclaw");
-      await fs.mkdir(root, { recursive: true });
+      const root = await createNpmInstallRoot(base);
       await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
       const status = await checkUpdateStatus({
@@ -758,8 +783,33 @@ describe("checkUpdateStatus", () => {
     });
   });
 
+  it("does not invent npm ownership for an unmanaged copy with packed pnpm metadata", async () => {
+    await withTestDir({ prefix: "openclaw-update-check-unmanaged-" }, async (base) => {
+      const root = path.join(base, "copied", "node_modules", "openclaw");
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),
+      );
+
+      const status = await checkUpdateStatus({ root, includeRegistry: false, timeoutMs: 1000 });
+
+      expect(status).toMatchObject({
+        installKind: "package",
+        packageManager: "unknown",
+        deps: { manager: "unknown", reason: "unknown package manager" },
+      });
+    });
+  });
+
   it("reports a missing dependency marker and accepts an older valid marker", async () => {
-    await withTestDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-update-check-deps-" }, async (base) => {
+      const globalProject = path.join(base, "pnpm", "global", "5");
+      const globalRoot = path.join(globalProject, "node_modules");
+      const root = path.join(globalRoot, "openclaw");
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(path.join(globalProject, "pnpm-lock.yaml"), "lock");
+      await fs.writeFile(path.join(globalRoot, ".modules.yaml"), "marker");
       await fs.writeFile(
         path.join(root, "package.json"),
         JSON.stringify({ name: "openclaw", packageManager: PNPM_PACKAGE_MANAGER }),

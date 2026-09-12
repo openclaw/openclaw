@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  MissingPublicSurfaceError,
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSyncCore,
   resetFacadeLoaderStateForTest,
@@ -281,7 +282,7 @@ describe("managed plugin public surfaces", () => {
           { pluginRegistry: first.registry, isWebchatConnect: () => false },
           loadApi,
         ),
-      ).toThrow(/reloaded|disabled|retiring/);
+      ).toThrow(MissingPublicSurfaceError);
 
       const retained = loadApi();
       const nextRegistry = createEmptyPluginRegistry();
