@@ -111,13 +111,14 @@ async function retiredFallback<T>(
     queue: ReturnType<typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>>;
     prepared: { toolAuthorityFingerprint?: string };
   }) => Promise<T>,
+  params: Partial<typeof attempt> = {},
 ) {
   const retired = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
   retired.complete();
   return admitted(async ({ admittedRunContext }) =>
     withPreparedEmbeddedRunToolAuthority(
       { admittedRunContext, replyOperation: retired },
-      { ...attempt, toolAuthorityFingerprint: "stale-fingerprint" },
+      { ...attempt, toolAuthorityFingerprint: "stale-fingerprint", ...params },
       undefined,
       async (prepared) => {
         const queue = vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>(
@@ -156,14 +157,18 @@ describe("authority chain after the retired-operation fallback (#139847)", () =>
   });
 
   it("still rejects a weaker caller: the fallback does not amplify authority", async () => {
-    await retiredFallback(async ({ handle, queue }) => {
-      // Same fallback authority, but a caller that the configured policy ranks
-      // below the owner must not ride it.
-      await expect(
-        steer({ ...own, senderIsOwner: false }, handle.toolAuthorityFingerprint),
-      ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
-      expect(queue).not.toHaveBeenCalled();
-    });
+    await retiredFallback(
+      async ({ handle, queue }) => {
+        // Same fallback authority, but a caller that the configured policy ranks
+        // below the owner must not ride it. The policy fixture matches the
+        // production guard's own weaker-sender test (toolsBySender allow: []).
+        await expect(
+          steer({ ...own, senderIsOwner: false }, handle.toolAuthorityFingerprint),
+        ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+        expect(queue).not.toHaveBeenCalled();
+      },
+      { config: { tools: { toolsBySender: { "*": { allow: [] } } } } },
+    );
   });
 
   it("cancels the fallback authority when the admission closes mid-turn", async () => {
