@@ -30,6 +30,86 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it.each([
+    { timeoutMs: 55_000, elapsedMs: 31_000, incomplete: false },
+    { timeoutMs: 55_000, elapsedMs: 55_001, incomplete: true },
+    { timeoutMs: 1_800_000, elapsedMs: 300_001, incomplete: true },
+    { timeoutMs: 200, elapsedMs: 201, incomplete: true },
+  ])(
+    "bounds a $elapsedMs ms baseline scan by a $timeoutMs ms caller budget",
+    async ({ timeoutMs, elapsedMs, incomplete }) => {
+      await withTestDir({ prefix: "openclaw-baseline-budget-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const lstat = fs.lstat.bind(fs);
+        let delayed = false;
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
+          if (!delayed && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
+            delayed = true;
+            // Advance the deadline clock during a real tree walk, without a long wall-clock wait.
+            now += elapsedMs;
+          }
+          return stat;
+        });
+        const beforeActivate = vi.fn();
+        const result = await swapStagedPackageInstall({ ...params, timeoutMs, beforeActivate });
+        expect(delayed).toBe(true);
+        expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+        expect(beforeActivate).toHaveBeenCalledOnce();
+        expect(Boolean(result.step.advisory)).toBe(incomplete);
+        if (incomplete) {
+          expect(result.step.advisory?.message).toContain(
+            "baseline package fingerprint incomplete",
+          );
+        }
+        await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
+      });
+    },
+  );
+
+  it.each(["retained", "restored"] as const)(
+    "keeps a slow %s scan bounded after a long-budget baseline",
+    async (phase) => {
+      await withTestDir({ prefix: "openclaw-recovery-budget-" }, async (base) => {
+        const { params, packageRoot } = await createPackageSwapFixture(base);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...params,
+          timeoutMs: 1_800_000,
+          onTransaction: (value) => {
+            transaction = value;
+          },
+        });
+        expect(result.status).toBe("committed");
+        if (!transaction) {
+          throw new Error("Missing package transaction");
+        }
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const target = phase === "retained" ? transaction.backupRoot : packageRoot;
+        const lstat = fs.lstat.bind(fs);
+        let delayed = false;
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
+          if (!delayed && String(args[0]) === path.join(target, "dist", "index.js")) {
+            delayed = true;
+            now += 30_001;
+          }
+          return stat;
+        });
+        const restored = await transaction.rollback(() => {});
+        expect(delayed).toBe(true);
+        expect(restored.exitCode).toBe(1);
+        expect(restored.stderrTail).toContain("Package rollback verification timed out");
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain(phase === "retained" ? '"version":"2.0.0"' : '"version":"1.0.0"');
+      });
+    },
+  );
+
   it.each(["activation", "rollback", "changed identity", "changed version"] as const)(
     "handles %s after the baseline fingerprint times out",
     async (outcome) => {

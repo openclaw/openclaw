@@ -125,7 +125,7 @@ export async function swapStagedPackageInstall(
   let rootLink: ReturnType<typeof createNpmPackageRootLinkLifecycle> | undefined;
   let packageBackedUp = false;
   let displacedCandidateRoot: string | undefined;
-  const baseline = createPackageIntegrityReader(params.timeoutMs);
+  const baseline = createPackageIntegrityReader(params.timeoutMs, "baseline");
   const shims: Array<{
     source: string;
     destination: string;
