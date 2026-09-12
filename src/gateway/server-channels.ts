@@ -54,6 +54,7 @@ import {
   type PluginHttpRouteHandoff,
 } from "../plugins/http-registry.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
+import { runOutsidePluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -217,43 +218,9 @@ type ChannelManagerOptions = {
   getPluginRegistry: () => PluginRegistry;
   channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
   channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>>;
-  /**
-   * Optional channel runtime helpers for channel plugins.
-   *
-   * When provided, this value is passed to all channel plugins via the
-   * `channelRuntime` field in `ChannelGatewayContext`, enabling external
-   * plugins to access Plugin SDK channel features (AI dispatch, routing,
-   * session management, startup runtime contexts, text processing, etc.).
-   *
-   * This field is optional - omitting it maintains backward compatibility
-   * with existing channels. When provided, it must be a real
-   * `createPluginRuntime().channel` surface; partial stubs are not supported.
-   *
-   * @example
-   * ```typescript
-   * import { createPluginRuntime } from "../plugins/runtime/index.js";
-   *
-   * const channelManager = createChannelManager({
-   *   getRuntimeConfig,
-   *   getPluginRegistry,
-   *   channelLogs,
-   *   channelRuntimeEnvs,
-   *   channelRuntime: createPluginRuntime().channel,
-   * });
-   * ```
-   *
-   * @since Plugin SDK 2026.2.19
-   * @see {@link ChannelGatewayContext.channelRuntime}
-   */
+  /** Supply the complete createPluginRuntime().channel surface; partial stubs are unsupported. */
   channelRuntime?: PluginRuntimeChannel;
-  /**
-   * Lazily resolves optional channel runtime helpers for channel plugins.
-   *
-   * Use this when the caller wants to avoid instantiating the full plugin channel
-   * runtime during gateway startup. The manager only needs the runtime surface once
-   * a channel account actually starts. The resolved value must be a real
-   * `createPluginRuntime().channel` surface.
-   */
+  /** Resolve the same complete surface only when a channel account starts. */
   resolveChannelRuntime?: () => PluginRuntimeChannel | Promise<PluginRuntimeChannel>;
   startupTrace?: GatewayStartupTrace;
   deferStartupAccountStartsUntil?: Promise<void>;
@@ -1230,11 +1197,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return startOutcomes;
   };
 
-  // Detach stale request generations before selecting this Gateway's registry.
+  // Channel tasks outlive the reload lease and request generation that started them.
   const startChannelInternal: ChannelManager["startChannel"] = (...args) =>
-    runOutsideGatewayRootWorkAdmission(() =>
-      runOutsidePluginRuntimeGenerationScope(() =>
-        withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
+    runOutsidePluginLifecycleLease(() =>
+      runOutsideGatewayRootWorkAdmission(() =>
+        runOutsidePluginRuntimeGenerationScope(() =>
+          withRegistry((registry) => startChannelProcessOwned(registry, ...args)),
+        ),
       ),
     );
 
