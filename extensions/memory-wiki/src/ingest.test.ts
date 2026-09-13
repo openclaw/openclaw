@@ -137,7 +137,7 @@ hello from source
       [
         "--import",
         "tsx",
-        path.join(repoRoot, "src", "entry.ts"),
+        path.join(repoRoot, "scripts", "run-node.mts"),
         "wiki",
         "ingest",
         inputPath,
@@ -162,6 +162,7 @@ hello from source
           OPENCLAW_NO_RESPAWN: "1",
         },
         maxBuffer: 4 * 1024 * 1024,
+        timeout: 120_000,
       },
     );
     const cliResult = JSON.parse(result.stdout) as {
