@@ -2363,6 +2363,24 @@ describe("cron tool", () => {
     });
   });
 
+  it("stores a Telegram topic target only in delivery.to when adding from that topic", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-topic-context",
+        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+        currentDeliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          threadId: "99",
+        },
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:-1001234567890:topic:99",
+    });
+  });
+
   it("does not surface lowercased LINE recipients when current delivery context is unavailable (#81628)", async () => {
     // LINE chat IDs are case-sensitive; without current/persisted deliveryContext,
     // cron must not rebuild delivery.to from the lowercased session-key fragment.
@@ -2830,6 +2848,64 @@ describe("cron tool", () => {
           to: null,
           failureDestination: null,
           completionDestination: null,
+        },
+      },
+    });
+  });
+
+  it("drops split Telegram topic routing from updates made in a topic session", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+    });
+    await tool.execute("call-normalize-topic-update", {
+      action: "update",
+      id: "job-topic",
+      job: {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          threadId: "99",
+        },
+      },
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.update")).toEqual({
+      id: "job-topic",
+      patch: {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          threadId: "99",
+        },
+      },
+    });
+  });
+
+  it("preserves a differing explicit Telegram topic override in updates", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-preserve-topic-override", {
+      action: "update",
+      id: "job-topic",
+      job: {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          threadId: "42",
+        },
+      },
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.update")).toEqual({
+      id: "job-topic",
+      patch: {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:99",
+          threadId: "42",
         },
       },
     });

@@ -521,6 +521,21 @@ describe("normalizeCronJobCreate", () => {
   });
 });
 describe("normalizeCronJobPatch", () => {
+  it("preserves a redundant Telegram thread setter until it can be merged", () => {
+    const normalized = normalizePatch({
+      delivery: {
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:99",
+        threadId: "99",
+      },
+    });
+
+    expect(normalized.delivery).toEqual({
+      channel: "telegram",
+      to: "telegram:-1001234567890:topic:99",
+      threadId: "99",
+    });
+  });
   it("normalizes agentTurn model-only payload patches", () => {
     const { payload } = patchAgent({ model: "anthropic/claude-sonnet-4-6" });
     expect(payload.kind).toBe("agentTurn");
