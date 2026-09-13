@@ -47,6 +47,7 @@ describe("runEmbeddedAttempt abort races", () => {
     const unsubscribe = broker.subscribe((event) => {
       approvalEvents.push(event.event);
       if (event.event === "plugin.approval.requested") {
+        wallClockOffsetMs = 60_000;
         emitAgentEvent({
           runId: "run-context-engine-forwarding",
           sessionId: "embedded-session",
@@ -93,7 +94,6 @@ describe("runEmbeddedAttempt abort races", () => {
           if (!approval) {
             throw new Error("approval broker did not publish a pending request");
           }
-          wallClockOffsetMs = 60_000;
           if (!broker.resolve(approval.id, "allow-once")) {
             throw new Error("approval broker did not resolve the pending request");
           }
