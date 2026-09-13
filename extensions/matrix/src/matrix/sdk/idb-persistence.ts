@@ -311,6 +311,7 @@ export async function persistIdbToDisk(params?: {
   snapshotPath?: string;
   databasePrefix?: string;
   strict?: boolean;
+  requireCryptoAccount?: boolean;
   abortSignal?: AbortSignal;
   stateRuntime?: MatrixSyncStateRuntime;
 }): Promise<void> {
@@ -336,6 +337,18 @@ export async function persistIdbToDisk(params?: {
         }
         throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
+        if (
+          params?.requireCryptoAccount &&
+          !snapshot.some((database) =>
+            database.stores.some(
+              (store) =>
+                store.name === "core" &&
+                store.records.some((record) => record.key === "account" && record.value != null),
+            ),
+          )
+        ) {
+          throw new Error("Matrix key upload has no durable crypto account");
+        }
         if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;
         }

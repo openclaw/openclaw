@@ -211,9 +211,16 @@ export abstract class MatrixClientBase {
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
       fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
+<<<<<<< HEAD
         const pendingGuard = this.messageWireDispatchGuards.beforeRequest(resource, init);
         if (pendingGuard) {
           await pendingGuard;
+=======
+        await this.persistCryptoBeforeKeyUpload(resource, init);
+        const dispatch = resolveMessageWireDispatch(resource, init);
+        if (dispatch) {
+          await this.messageWireDispatchGuards.get(dispatch.transactionId)?.(dispatch);
+>>>>>>> e6dbd475b98 (fix(matrix): persist private crypto state before key uploads)
         }
         return await guardedFetch(resource, init);
       }) as typeof fetch,
@@ -226,6 +233,7 @@ export abstract class MatrixClientBase {
         VerificationMethod.Reciprocate,
       ],
     });
+<<<<<<< HEAD
     // SDK mappers and relations also call this method. Crypto retries belong to
     // the client generation, while their callers retain their own read authority.
     const decryptEventIfNeeded = this.client.decryptEventIfNeeded.bind(this.client);
@@ -233,6 +241,55 @@ export abstract class MatrixClientBase {
       this.captureRequestAuthority()?.();
       return this.withClientCryptoWork(() => decryptEventIfNeeded(event, options));
     };
+=======
+  }
+
+  private async persistCryptoBeforeKeyUpload(resource: RequestInfo | URL, init?: RequestInit) {
+    const method = init?.method ?? (resource instanceof Request ? resource.method : "GET");
+    const url = resource instanceof Request ? resource.url : String(resource);
+    if (
+      !this.encryptionEnabled ||
+      method.toUpperCase() !== "POST" ||
+      !/\/_matrix\/client\/(?:v3|r0|unstable)\/keys\/upload$/.test(new URL(url).pathname)
+    ) {
+      return;
+    }
+    if (!this.cryptoDatabasePrefix) {
+      throw new Error("Matrix key upload requires an account-scoped crypto database");
+    }
+    const signal = init?.signal ?? (resource instanceof Request ? resource.signal : undefined);
+    signal?.throwIfAborted();
+    const runtime = await loadMatrixCryptoRuntime();
+    // The server must never publish keys whose private account state can be
+    // lost before the periodic snapshot. A failed durable write denies I/O.
+    await runtime.persistIdbToDisk({
+      snapshotPath: this.idbSnapshotPath,
+      databasePrefix: this.cryptoDatabasePrefix,
+      strict: true,
+      requireCryptoAccount: true,
+      abortSignal: signal ?? undefined,
+    });
+    signal?.throwIfAborted();
+  }
+
+  protected async withMessageWireDispatchGuard<T>(params: {
+    transactionId?: string;
+    guard?: MatrixMessageWireDispatchGuard;
+    run: () => Promise<T>;
+  }): Promise<T> {
+    if (!params.transactionId || !params.guard) {
+      return await params.run();
+    }
+    if (this.messageWireDispatchGuards.has(params.transactionId)) {
+      throw new Error(`Matrix transaction ${params.transactionId} already has a dispatch guard`);
+    }
+    this.messageWireDispatchGuards.set(params.transactionId, params.guard);
+    try {
+      return await params.run();
+    } finally {
+      this.messageWireDispatchGuards.delete(params.transactionId);
+    }
+>>>>>>> e6dbd475b98 (fix(matrix): persist private crypto state before key uploads)
   }
 
   on<TEvent extends keyof MatrixClientEventMap>(
