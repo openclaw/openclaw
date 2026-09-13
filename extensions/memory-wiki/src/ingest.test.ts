@@ -133,7 +133,7 @@ hello from source
       process.execPath,
       [
         "--import",
-        path.join(repoRoot, "scripts", "tsx.mjs"),
+        "tsx",
         path.join(repoRoot, "src", "entry.ts"),
         "wiki",
         "ingest",
@@ -145,13 +145,17 @@ hello from source
         env: {
           ...process.env,
           CI: "1",
+          NODE_DISABLE_COMPILE_CACHE: "1",
           HOME: tempHome,
           USERPROFILE: tempHome,
           OPENCLAW_HOME: tempHome,
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
+          OPENCLAW_DEV_SOURCE_ROOT: repoRoot,
           OPENCLAW_DISABLE_UPDATE_CHECK: "1",
+          OPENCLAW_NO_RESPAWN: "1",
         },
+        maxBuffer: 4 * 1024 * 1024,
       },
     );
     const cliResult = JSON.parse(result.stdout) as {
