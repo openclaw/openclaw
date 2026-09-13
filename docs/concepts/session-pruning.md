@@ -97,9 +97,10 @@ Only `toolResult` messages are eligible; normal conversation text is left alone.
 OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
 
 - It preserves the **3 most recent completed turns** byte-for-byte so prompt cache prefixes for recent follow-ups stay stable. This count includes all completed turns, not just image-bearing ones, so text-only turns consume the window too.
-- The window advances only when a new user turn begins, never within a tool loop.
+- The window advances when a new user turn begins. Within a single long tool loop it also advances at coarse boundaries: after **6 completed tool rounds** the replay view evicts the turn-opening images and anything older, keeping the **4 most recent rounds** intact, and then advances only every **20 further rounds**. Between those steps the pruned view stays byte-stable, so each advance rewrites the cached prefix at most once. A round is one contiguous block of tool results, so parallel tool calls count as a single round.
+- Once a turn crosses that 6-round threshold, its eviction boundary supersedes the 3-completed-turn byte-for-byte preservation for messages older than the boundary.
 - In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
-- Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
+- Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images, until the turn crosses the 6-round eviction threshold above.
 - The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.
 - This is separate from normal cache-TTL pruning above. It exists to stop repeated image payloads or stale media refs from busting prompt caches on later turns.
 
