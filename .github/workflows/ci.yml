@@ -6778,6 +6778,14 @@ jobs:
     if: needs.preflight.outputs.run_android_job == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - page-size: 4096
+            image: google_apis
+          - page-size: 16384
+            image: google_apis_ps16k
     steps:
       - name: Checkout
         shell: bash
@@ -6809,17 +6817,20 @@ jobs:
 
       - name: Run packaged Access crypto on Android
         shell: bash
+        env:
+          EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
+          SYSTEM_IMAGE: system-images;android-36;${{ matrix.image }};x86_64
         run: |
           set -euo pipefail
           test "$RUNNER_OS/$RUNNER_ARCH" = Linux/X64
           test -c /dev/kvm
           /usr/bin/sudo /usr/bin/setfacl -m "u:$(id -un):rw" /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install emulator 'system-images;android-36;google_apis;x86_64'
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install emulator "$SYSTEM_IMAGE"
           acceleration="$(/usr/bin/timeout --signal=TERM --kill-after=2s 15s emulator -accel-check 2>&1)"
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
-          printf 'no\n' | avdmanager create avd --name openclaw-access --package 'system-images;android-36;google_apis;x86_64' --device pixel_6
+          printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
           emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; wait "$emulator_pid" || true' EXIT
@@ -6827,8 +6838,17 @@ jobs:
             adb -s emulator-5554 wait-for-device
             until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done
           '
+          test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d '\r')" = "$EXPECTED_PAGE_SIZE"
+          if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
+            # The ps16k image simulates 16 KiB on x86_64; compatibility mode must not hide loader failures.
+            adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
+            adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
+            test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
+            test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
+          fi
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             :app:connectedPlayDebugAndroidTest \
+            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
             -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           apk="$(python3 - <<'PY'
@@ -6861,7 +6881,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: android-access-native-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          name: android-access-native-${{ matrix.page-size }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
           path: |
             apps/android/app/build/outputs/androidTest-results/connected/**
             apps/android/app/build/reports/androidTests/connected/**

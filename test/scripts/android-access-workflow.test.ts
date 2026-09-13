@@ -64,6 +64,54 @@ describe("Android Access native workflow", () => {
     );
   });
 
+  it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      matrix: {
+        include: [
+          { "page-size": 4096, image: "google_apis" },
+          { "page-size": 16384, image: "google_apis_ps16k" },
+        ],
+      },
+    });
+    expect(step.env.EXPECTED_PAGE_SIZE).toBe("${{ matrix.page-size }}");
+    expect(step.env.SYSTEM_IMAGE).toBe("system-images;android-36;${{ matrix.image }};x86_64");
+    expect(step.run).toContain(
+      '-Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"',
+    );
+    const guard = step.run.slice(
+      step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
+      step.run.indexOf("node --import ./scripts/tsx.mjs"),
+    );
+    expect(guard).toContain("setprop bionic.linker.16kb.app_compat.enabled false");
+    expect(guard).toContain("setprop pm.16kb.app_compat.disabled true");
+    for (const [pageSize, linker, packageManager, passes] of [
+      [16384, "false", "true", true],
+      [4096, "false", "true", false],
+      [16384, "true", "true", false],
+      [16384, "false", "false", false],
+    ] as const) {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+EXPECTED_PAGE_SIZE=16384
+adb() {
+  case "$*" in
+    *"getconf PAGE_SIZE") echo ${pageSize} ;;
+    *"getprop bionic.linker.16kb.app_compat.enabled") echo ${linker} ;;
+    *"getprop pm.16kb.app_compat.disabled") echo ${packageManager} ;;
+  esac
+}
+${guard}`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status === 0, result.stderr).toBe(passes);
+    }
+  });
+
   it("accepts an executed passing native vector and all four packaged ABIs", () => {
     const result = verifyReports("passed");
     expect(result.status, result.stderr).toBe(0);

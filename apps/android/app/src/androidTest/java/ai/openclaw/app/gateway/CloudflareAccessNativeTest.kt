@@ -1,6 +1,9 @@
 package ai.openclaw.app.gateway
 
+import android.system.Os
+import android.system.OsConstants
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -14,6 +17,8 @@ class CloudflareAccessNativeTest {
   @Test
   fun packagedSodiumLoadsAndDecryptsTheGoTransferVector() =
     runBlocking {
+      val expectedPageSize = checkNotNull(InstrumentationRegistry.getArguments().getString("expectedPageSize")).toLong()
+      assertEquals(expectedPageSize, Os.sysconf(OsConstants._SC_PAGESIZE))
       assertEquals("1.0.22", CloudflareAccessBox.version())
       val keys = mutableListOf<String>()
       repeat(2) {
