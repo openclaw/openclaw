@@ -23,11 +23,11 @@ class CloudflareAccessTransferTest {
 
   @Before fun loadsPinnedLibraryFromTaskOutput() {
     val expected = System.getProperty("openclaw.sodium.test.library")
-    if (System.getProperty("os.name") == "Linux" && System.getProperty("os.arch") in setOf("amd64", "x86_64")) {
+    if (System.getProperty("os.name") == "Linux" && System.getProperty("os.arch").orEmpty() in setOf("amd64", "x86_64")) {
       checkNotNull(expected) { "Linux x64 CI must configure the pinned native transfer library." }
     }
     assumeTrue("No pinned libsodium interoperability fixture for this JVM host; JWT and lifecycle suites still run.", expected != null)
-    assertEquals(File(expected).canonicalFile, NativeLibrary.getInstance("sodium").file.canonicalFile)
+    assertEquals(File(checkNotNull(expected)).canonicalFile, NativeLibrary.getInstance("sodium").file.canonicalFile)
     assertEquals("1.0.22", CloudflareAccessBox.version())
   }
 
