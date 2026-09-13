@@ -774,6 +774,14 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
         stateversion: nil))
 }
 
+#if DEBUG
+extension GatewayChannelActor {
+    fileprivate func recordConnectRunCompletion(_ capture: StringCapture) {
+        self.testConnectRunFinishedHandler = { Task { await capture.set("finished") } }
+    }
+}
+#endif
+
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test func `authenticated invoke metadata reaches the native dispatcher unchanged`() async throws {
@@ -2165,30 +2173,41 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
+    #if DEBUG
     @Test
     func `disconnect fences a suspended upgrade authorization before creating a socket`() async throws {
         let session = FakeGatewayWebSocketSession()
-        let gateway = GatewayNodeSession()
         let gate = AsyncGate()
-        let options = nodeConnectOptions()
-        let pending = Task {
-            try await gateway.connectForTest(
-                testURL("wss://gateway.example.invalid"),
-                options: options,
-                session: session,
-                extraHeadersProvider: {
-                    await gate.wait()
-                    return ["Cf-Access-Token": "test-only-grant"]
-                })
+        let finished = StringCapture()
+        let channel = GatewayChannelActor(
+            url: testURL("wss://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
+            extraHeadersProvider: {
+                await gate.wait()
+                return ["Cf-Access-Token": "test-only-grant"]
+            })
+        await channel.recordConnectRunCompletion(finished)
+        let pending = Task { try await channel.connect() }
+        do {
+            try await waitUntil("upgrade authorization is suspended") { await gate.hasStarted() }
+            await channel.shutdown()
+            await gate.release()
+            // shutdown releases the public waiter first. Observe the owning run after
+            // the cancellation-ignoring provider returns before asserting no socket.
+            try await waitUntil("owning connect run finished") { await finished.get() == "finished" }
+            let result = await pending.result
+            if case .success = result { Issue.record("disconnected authorization unexpectedly connected") }
+            #expect(session.snapshotMakeCount() == 0)
+            #expect(await channel.currentConnectionGeneration() == nil)
+        } catch {
+            await gate.release()
+            await channel.shutdown()
+            pending.cancel()
+            _ = await pending.result
+            throw error
         }
-        try await waitUntil("upgrade authorization is suspended") { await gate.hasStarted() }
-        await gateway.disconnect()
-        await gate.release()
-        let result = await pending.result
-        if case .success = result { Issue.record("disconnected authorization unexpectedly connected") }
-        #expect(session.snapshotMakeCount() == 0)
-        #expect(await gateway.currentRoute() == nil)
     }
+    #endif
 
     @Test
     func `external authorization failure stays actionable without sending Gateway credentials`() async throws {
