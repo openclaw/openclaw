@@ -6,6 +6,7 @@ import java.net.URI
 import java.util.Locale
 
 /** Access credentials belong to an exact HTTPS authority, independently from Gateway pairing. */
+@ConsistentCopyVisibility
 internal data class CloudflareAccessOrigin private constructor(
   val uri: URI,
 ) {

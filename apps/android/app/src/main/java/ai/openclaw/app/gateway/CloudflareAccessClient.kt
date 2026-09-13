@@ -156,7 +156,7 @@ internal class CloudflareAccessClient(
           object : Callback {
             override fun onFailure(
               call: Call,
-              error: IOException,
+              e: IOException,
             ) {
               if (continuation.isActive) continuation.resumeWithException(CloudflareAccessException(CloudflareAccessException.Kind.ConnectionFailed))
             }
