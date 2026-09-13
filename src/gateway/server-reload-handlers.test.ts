@@ -3139,13 +3139,17 @@ describe("managed gateway reload context", () => {
       expect(getAsyncWorkSignal()).toBeUndefined();
       return new Map();
     });
-    const reloader = startManagedGatewayConfigReloader({
-      initialConfig,
-      readSnapshot: async () => createValidConfigSnapshot(nextConfig, "profile-change"),
-      subscribeToWrites: captureConfigWriteListener(writeListenerRef),
-      startChannel,
-    });
+    const startupWork = new AsyncWorkScope();
+    const reloader = startupWork.run(() =>
+      startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: async () => createValidConfigSnapshot(nextConfig, "profile-change"),
+        subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+        startChannel,
+      }),
+    );
     await reloader.ready;
+    await startupWork.drain();
     const application = createRuntimeConfigWriteApplication();
     const listener = writeListenerRef.current;
     if (!listener) {

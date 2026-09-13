@@ -11,6 +11,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { isNoopGatewayReloadPlan } from "./config-reload-plan.js";
@@ -364,9 +365,13 @@ export function startManagedGatewayConfigReloader(
     initialInternalWriteHash: params.initialInternalWriteHash,
     runTransaction: (run) =>
       runInGatewayReloadContext(() =>
-        runOutsideGatewayRootWorkAdmission(() =>
-          runWithGatewayIndependentRootWorkAdmission(run, "reload:config", lifecycle.signal).catch(
-            (error: unknown) => {
+        runOutsideAsyncWorkScope(() =>
+          runOutsideGatewayRootWorkAdmission(() =>
+            runWithGatewayIndependentRootWorkAdmission(
+              run,
+              "reload:config",
+              lifecycle.signal,
+            ).catch((error: unknown) => {
               // Only the admission wait wraps this stop reason; retain admitted work failures.
               if (
                 lifecycle.signal.reason instanceof GatewayConfigReloadSupersededError &&
@@ -376,7 +381,7 @@ export function startManagedGatewayConfigReloader(
                 throw lifecycle.signal.reason;
               }
               throw error;
-            },
+            }),
           ),
         ),
       ),
