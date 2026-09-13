@@ -4562,44 +4562,47 @@ test.each([false, true])(
 test("sessions.create inherits the parent group from its commit-current row", async () => {
   const { storePath } = await createSessionStoreDir();
   const parentSessionKey = "agent:main:main";
-  await writeSessionStore({
-    entries: {
-      [parentSessionKey]: sessionStoreEntry("sess-visible-spawn-parent", {
-        category: "Projects",
-      }),
-    },
-  });
+  const parent = sessionStoreEntry("sess-visible-spawn-parent", { category: "Projects" });
+  await writeSessionStore({ entries: { [parentSessionKey]: parent } });
   const { createGatewaySession } = await import("./session-create-service.js");
-  let parentMoved = false;
-
-  const created = await createGatewaySession({
-    cfg: getRuntimeConfig(),
-    agentId: "main",
-    parentSessionKey,
-    inheritParentGroup: true,
-    creation: { via: "spawn", actor: { type: "agent", id: "main" } },
-    commandSource: "test",
-    commitGuard: () => {
-      if (parentMoved) {
-        return;
-      }
-      parentMoved = true;
-      const parent = loadSessionEntry({ agentId: "main", sessionKey: parentSessionKey, storePath });
-      if (!parent) {
-        throw new Error("expected parent session");
-      }
+  const parentMutationStarted = createDeferredCore();
+  const moveParent = createDeferredCore();
+  const moving = runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities: [parentSessionKey, parent.sessionId],
+    run: async () => {
+      parentMutationStarted.resolve();
+      await moveParent.promise;
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: parentSessionKey, storePath },
         { ...parent, category: "Planning" },
       );
     },
   });
+  await parentMutationStarted.promise;
 
-  expect(created.ok, "error" in created ? JSON.stringify(created.error) : undefined).toBe(true);
-  if (!created.ok) {
-    return;
+  const creating = createGatewaySession({
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+    parentSessionKey,
+    inheritParentGroup: true,
+    creation: { via: "spawn", actor: { type: "agent", id: "main" } },
+    commandSource: "test",
+  });
+
+  try {
+    moveParent.resolve();
+    await moving;
+    const created = await creating;
+    expect(created.ok, "error" in created ? JSON.stringify(created.error) : undefined).toBe(true);
+    if (!created.ok) {
+      return;
+    }
+    expect(created.entry.category).toBe("Planning");
+  } finally {
+    moveParent.resolve();
+    await Promise.allSettled([moving, creating]);
   }
-  expect(created.entry.category).toBe("Planning");
 });
 
 test.each([false, true])(

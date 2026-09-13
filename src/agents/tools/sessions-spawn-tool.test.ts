@@ -795,13 +795,9 @@ describe("sessions_spawn tool", () => {
 
     expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible" });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(callGateway).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.not.objectContaining({
-        category: expect.anything(),
-        inheritParentGroup: expect.anything(),
-      }),
-    );
+    const createParams = mockCallArg(callGateway, 0, 1, "sessions.create");
+    expect(createParams).not.toHaveProperty("category");
+    expect(createParams).not.toHaveProperty("inheritParentGroup");
   });
 
   it("requests one-time parent group inheritance for a visible session", async () => {
