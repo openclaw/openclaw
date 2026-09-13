@@ -91,11 +91,5 @@ export function resolveCodexDynamicToolDirectNames(
   if (registeredTools.some((tool) => tool.name === "message")) {
     names.push("message");
   }
-  // Heartbeat outcomes control whether the current wake should notify the user.
-  // Keep the response tool direct so the ordinary heartbeat filter can observe
-  // its call/result pair instead of hiding it inside a code-mode exec wrapper.
-  if (registeredTools.some((tool) => tool.name === "heartbeat_respond")) {
-    names.push("heartbeat_respond");
-  }
   return names;
 }

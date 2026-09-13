@@ -2539,7 +2539,10 @@ describe("Codex app-server dynamic tool build", () => {
     runtimePlan.tools.normalize = planNormalize as typeof runtimePlan.tools.normalize;
     params.runtimePlan = runtimePlan;
     const messageTool = createRuntimeDynamicTool("message");
-    const heartbeatTool = createRuntimeDynamicTool("heartbeat_respond");
+    const heartbeatTool = {
+      ...createRuntimeDynamicTool("heartbeat_respond"),
+      catalogMode: "direct-only" as const,
+    };
     const invalidTool = {
       ...createRuntimeDynamicTool("invalid_registered_tool"),
       parameters: { type: "array", items: { type: "string" } },
@@ -2588,7 +2591,10 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.enableHeartbeatTool = true;
     params.forceHeartbeatTool = true;
-    const heartbeatTool = createRuntimeDynamicTool("heartbeat_respond");
+    const heartbeatTool = {
+      ...createRuntimeDynamicTool("heartbeat_respond"),
+      catalogMode: "direct-only" as const,
+    };
     setOpenClawCodingToolsFactoryForTests((options) =>
       options?.enableHeartbeatTool === true ? [heartbeatTool] : [],
     );
@@ -2598,6 +2604,7 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["heartbeat_respond"]);
+    expect(tools[0]?.catalogMode).toBe("direct-only");
   });
 
   it("passes runtime config into Codex exec dynamic tool construction", async () => {
