@@ -56,15 +56,20 @@ export function createDoctorHealthFlowContext(
 ): DoctorHealthFlowContext {
   const { configResult, ...contextOverrides } = overrides;
   const cfg = overrides.cfg ?? {};
+  const configPath = overrides.configPath ?? "/tmp/openclaw.json";
   return {
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     options: {},
     prompter: createDoctorPrompterFixture(),
-    configResult: { ...configResult, cfg: configResult?.cfg ?? cfg },
+    configResult: {
+      confirmedConfigSource: { path: configPath, hash: "planning-revision" },
+      ...configResult,
+      cfg: configResult?.cfg ?? cfg,
+    },
     cfg,
     cfgForPersistence: cfg,
     sourceConfigValid: true,
-    configPath: "/tmp/openclaw.json",
+    configPath,
     ...contextOverrides,
   };
 }

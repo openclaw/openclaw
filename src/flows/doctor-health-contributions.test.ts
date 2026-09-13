@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import type { ConfigMutationResult } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
 import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
@@ -526,13 +527,20 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   transformConfigFile: async ({
     transform,
     ...options
-  }: Parameters<typeof import("../config/config.js").transformConfigFile>[0]) => {
+  }: Parameters<typeof import("../config/config.js").transformConfigFile>[0]): Promise<
+    Pick<ConfigMutationResult<unknown>, "path" | "persistedHash">
+  > => {
     const { nextConfig } = await transform(
       {},
       { snapshot: createDoctorConfigSnapshot(), previousHash: null, attempt: 0 },
       {},
     );
-    return mocks.replaceConfigFile({ ...options, nextConfig });
+    await mocks.replaceConfigFile({ ...options, nextConfig });
+    const path = options.writeOptions?.expectedConfigPath;
+    if (!path) {
+      throw new Error("Doctor write fixture requires an expected config path");
+    }
+    return { path, persistedHash: "committed-revision" };
   },
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
@@ -4537,18 +4545,26 @@ describe("doctor health contributions", () => {
       1,
       expect.objectContaining({
         nextConfig: originalCfg,
+        baseHash: "planning-revision",
+        writeOptions: expect.objectContaining({ expectedConfigPath: ctx.configPath }),
       }),
     );
     expect(mocks.replaceConfigFile).toHaveBeenLastCalledWith(
       expect.objectContaining({
         nextConfig: repairedCfg,
+        baseHash: "committed-revision",
         writeOptions: expect.objectContaining({
+          expectedConfigPath: ctx.configPath,
           allowConfigSizeDrop: true,
           preservedLegacyRootKeys: ["defaultModel"],
           skipPluginValidation: true,
         }),
       }),
     );
+    expect(ctx.configResult.confirmedConfigSource).toEqual({
+      path: ctx.configPath,
+      hash: "committed-revision",
+    });
   });
 
   it("does not suggest --fix after a clean doctor run", async () => {
@@ -4636,6 +4652,7 @@ describe("doctor health contributions", () => {
         cfg,
         shouldWriteConfig: true,
         shouldRepairCronCodexModelRefsAfterConfigWrite: true,
+        confirmedConfigSource: { path: "/tmp/fake-openclaw.json", hash: "planning-revision" },
         blockedCodexModelIdentities: ["codex\u0000gpt-5.6-sol"],
       },
       configPath: "/tmp/fake-openclaw.json",
@@ -4667,6 +4684,7 @@ describe("doctor health contributions", () => {
           cfg,
           shouldWriteConfig: true,
           shouldRepairCronCodexModelRefsAfterConfigWrite: legacy,
+          confirmedConfigSource: { path: "/tmp/fake-openclaw.json", hash: "planning-revision" },
           retiredModelRefConfig,
           blockedCodexModelIdentities: ["codex\u0000gpt-5.6-sol"],
         },

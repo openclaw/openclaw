@@ -22,8 +22,8 @@ type DoctorConfigResult = {
   pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;
-  /** Source of the ordinary confirmed proposal, consumed by its initial write. */
-  confirmedConfigSource?: { path: string; hash: string };
+  /** Planning revision, advanced by committed writes; null fences later writes without a receipt. */
+  confirmedConfigSource?: { path: string; hash: string | null };
   /** Repair panels held back until the atomic config write commits. */
   pendingChangePanels?: readonly string[];
   /** Billing changes reported once after the model migration is durable. */

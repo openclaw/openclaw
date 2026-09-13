@@ -57,9 +57,7 @@ export async function runWriteConfigHealth(
   const { shortenHomePath } = await import("../utils.js");
   const configResultWritePending =
     ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
-  const confirmedConfigSource = configResultWritePending
-    ? ctx.configResult.confirmedConfigSource
-    : undefined;
+  const confirmedConfigSource = ctx.configResult.confirmedConfigSource;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
@@ -81,6 +79,12 @@ export async function runWriteConfigHealth(
     const { assertShippedPluginInstallConfigImportCurrent } =
       await import("../commands/doctor/shared/plugin-registry-migration.js");
     try {
+      if (!confirmedConfigSource?.hash) {
+        throw new ConfigMutationConflictError("Doctor config write has no source revision", {
+          retryable: false,
+        });
+      }
+      const { path, hash } = confirmedConfigSource;
       const authority = getUpdateDoctorConfigWriteAuthority(ctx.configPath);
       const includeSnapshot = authority
         ? await readConfigFileSnapshot({ skipPluginValidation: updateDoctorRun, observe: false })
@@ -96,12 +100,9 @@ export async function runWriteConfigHealth(
           explicitSetPaths: ctx.configResult.explicitSetPaths,
         });
       const includeWrite = includeBoundary ? includeSnapshot : undefined;
-      const writeSource =
-        confirmedConfigSource ??
-        (includeWrite ? { path: includeWrite.path, hash: includeWrite.hash } : undefined);
       const writeConfig = () =>
         transformConfigFile({
-          ...(writeSource ? { baseHash: writeSource.hash } : {}),
+          baseHash: hash,
           transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
             authority?.assertCurrent();
             // Revalidate the copied source under the config lock; never import after plugin repair.
@@ -137,7 +138,7 @@ export async function runWriteConfigHealth(
           },
           afterWrite: { mode: "auto" },
           writeOptions: {
-            ...(writeSource ? { expectedConfigPath: writeSource.path } : {}),
+            expectedConfigPath: path,
             auditOrigin: "doctor",
             allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
             skipPluginValidation:
@@ -154,35 +155,37 @@ export async function runWriteConfigHealth(
               : {}),
           },
         });
-      if (includeWrite) {
-        const keys = [
-          ...new Set(
-            collectChangedConfigPaths(includeWrite.sourceConfig, ctx.cfg).paths.flatMap(([key]) =>
-              key === undefined ? [] : [key],
-            ),
-          ),
-        ].toSorted();
-        await runUpdateDoctorIncludeWrite(
-          includeWrite.path,
-          hashConfigRaw(includeWrite.raw),
-          async () => {
-            const warning = `Doctor include-owned keys ${keys.join(", ")}: promotion unavailable for include-owned configuration.`;
-            recordDoctorHealthWarnings(ctx, [], [warning]);
-            createSubsystemLogger("update").warn(warning);
-            ctx.runtime.log(warning);
-            return await writeConfig();
-          },
-        );
-      } else {
-        await writeConfig();
-      }
+      const result = includeWrite
+        ? await runUpdateDoctorIncludeWrite(
+            includeWrite.path,
+            hashConfigRaw(includeWrite.raw),
+            async () => {
+              const keys = [
+                ...new Set(
+                  collectChangedConfigPaths(includeWrite.sourceConfig, ctx.cfg).paths.flatMap(
+                    ([key]) => (key === undefined ? [] : [key]),
+                  ),
+                ),
+              ].toSorted();
+              const warning = `Doctor include-owned keys ${keys.join(", ")}: promotion unavailable for include-owned configuration.`;
+              recordDoctorHealthWarnings(ctx, [], [warning]);
+              createSubsystemLogger("update").warn(warning);
+              ctx.runtime.log(warning);
+              return await writeConfig();
+            },
+          )
+        : await writeConfig();
+      ctx.configResult.confirmedConfigSource = {
+        path: result.path,
+        hash: result.persistedHash,
+      };
     } catch (error) {
       recordUpdateDoctorConfigWriteRefusal({
         reason: "config-write-refused",
         message: formatErrorMessage(error),
         keys: [],
       });
-      if (confirmedConfigSource && error instanceof ConfigMutationConflictError) {
+      if (error instanceof ConfigMutationConflictError) {
         const { note } = await import("../../packages/terminal-core/src/note.js");
         note(
           [
@@ -276,7 +279,6 @@ export async function runWriteConfigHealth(
     delete ctx.configResult.sourceConfigForWrite;
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;
-      delete ctx.configResult.confirmedConfigSource;
     }
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);

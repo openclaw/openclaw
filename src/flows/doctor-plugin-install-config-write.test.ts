@@ -71,6 +71,7 @@ describe("Doctor install-source write ownership", () => {
         configResult: {
           cfg,
           shouldWriteConfig: true,
+          confirmedConfigSource: { path: initial.path, hash: initial.hash },
           pluginInstallConfigImport: {
             source: { path: initial.path, hash: initial.hash, sourceConfig: initial.sourceConfig },
             databasePath: resolveInstalledPluginIndexStorePath(),
@@ -83,9 +84,8 @@ describe("Doctor install-source write ownership", () => {
         configPath: initial.path,
       };
 
-      await expect(runWriteConfigHealth(ctx)).rejects.toThrow(
-        "config changed after plugin install migration",
-      );
+      await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
+      expect(ctx.configWriteRefusal).toBe("config-conflict");
       expect(mocks.write).not.toHaveBeenCalled();
     },
   );
