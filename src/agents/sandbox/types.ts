@@ -127,7 +127,9 @@ export type SandboxContext = {
 export type SandboxWorkspaceInfo = {
   workspaceDir: string;
   containerWorkdir?: string;
+  agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
+  dockerBinds?: string[];
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
   readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;

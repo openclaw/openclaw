@@ -139,6 +139,20 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
   return dedupeMounts(mounts);
 }
 
+/** Every host root a configured bind spec mounts, regardless of write access. */
+export function resolveSandboxBindHostRoots(binds: readonly string[] | undefined): string[] {
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const parsed of parseSandboxBindMounts(binds)) {
+    if (seen.has(parsed.hostRoot)) {
+      continue;
+    }
+    seen.add(parsed.hostRoot);
+    roots.push(parsed.hostRoot);
+  }
+  return roots;
+}
+
 export function resolveWritableSandboxBindHostRoots(
   binds: readonly string[] | undefined,
 ): string[] {

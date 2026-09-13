@@ -389,6 +389,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionCwd,
           sessionKey,
           targetAgentId: sessionAgentId,
+          sandboxMountRootHandoff: sessionCreation.sandboxMountRootHandoff,
         });
     if (preparedRoot && !preparedRoot.ok) {
       respond(false, undefined, preparedRoot.error);
