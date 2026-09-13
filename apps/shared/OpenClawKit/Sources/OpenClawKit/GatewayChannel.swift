@@ -97,7 +97,7 @@ public actor GatewayChannelActor {
     private var persistedDeviceAuthRoles = Set<String>()
     private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
-    private let extraHeadersProvider: (@Sendable () -> [String: String])?
+    private let extraHeadersProvider: (@Sendable () async throws -> [String: String])?
     /// Fast state admission for clients that must inspect hello before their
     /// first request. General push delivery remains asynchronous.
     private let connectSnapshotAdmissionHandler: (@Sendable (HelloOk, UInt64) async -> Void)?
@@ -116,7 +116,7 @@ public actor GatewayChannelActor {
         pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil)
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil)
     {
         self.url = url
         self.token = token
@@ -237,13 +237,13 @@ public actor GatewayChannelActor {
         self.workerEdgeCredentials
     }
 
-    private func makeUpgradeRequest() -> URLRequest {
+    private func makeUpgradeRequest() async throws -> URLRequest {
         self.workerEdgeCredentials = nil
         var request = URLRequest(url: self.url)
         // Custom headers can contain service tokens or Authorization values. Do not even read
         // the provider for cleartext routes, where credentials would be exposed in transit.
         guard self.url.scheme?.lowercased() == "wss" else { return request }
-        guard let headers = self.extraHeadersProvider?(), !headers.isEmpty else { return request }
+        guard let headers = try await self.extraHeadersProvider?(), !headers.isEmpty else { return request }
         for (name, value) in GatewayCustomHeaders.sanitized(headers) {
             request.setValue(value, forHTTPHeaderField: name)
         }
@@ -348,11 +348,24 @@ public actor GatewayChannelActor {
             guard self.shouldReconnect else { throw CancellationError() }
         }
 
+        // External authorization can suspend. A canceled route must never create a socket
+        // with a grant returned after its disconnect or replacement.
+        let request: URLRequest
+        do {
+            request = try await self.makeUpgradeRequest()
+        } catch let error as GatewayExternalAuthorizationError {
+            // No physical socket exists yet; pause the watchdog at this admission boundary.
+            self.reconnectPausedForAuthFailure = true
+            throw error
+        }
+        try Task.checkCancellation()
+        guard self.shouldReconnect else { throw CancellationError() }
+        if let disconnectError { throw disconnectError }
         self.connectionGeneration &+= 1
         let connectionGeneration = self.connectionGeneration
         self.task?.cancel(with: .goingAway, reason: nil)
         let attemptID = UUID()
-        let connectTask = self.session.makeWebSocketTask(request: self.makeUpgradeRequest())
+        let connectTask = self.session.makeWebSocketTask(request: request)
         self.activeConnectAttemptID = attemptID
         self.task = connectTask
         connectTask.resume()
@@ -1313,6 +1326,7 @@ extension GatewayChannelActor {
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
+        if error is GatewayExternalAuthorizationError { return true }
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }

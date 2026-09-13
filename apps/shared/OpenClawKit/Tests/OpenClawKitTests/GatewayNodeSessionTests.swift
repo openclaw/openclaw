@@ -735,7 +735,7 @@ extension GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials = .init(),
         options: GatewayConnectOptions,
         session: FakeGatewayWebSocketSession,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void = {},
         onDisconnected: @escaping @Sendable (String) async -> Void = { _ in },
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse = {
@@ -2162,6 +2162,55 @@ struct GatewayNodeSessionTests {
         let reconnectRequest = try #require(session.latestRequest())
         #expect(reconnectRequest.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "second-secret")
 
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `disconnect fences a suspended upgrade authorization before creating a socket`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let gate = AsyncGate()
+        let options = nodeConnectOptions()
+        let pending = Task {
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"),
+                options: options,
+                session: session,
+                extraHeadersProvider: {
+                    await gate.wait()
+                    return ["Cf-Access-Token": "test-only-grant"]
+                })
+        }
+        try await waitUntil("upgrade authorization is suspended") { await gate.hasStarted() }
+        await gateway.disconnect()
+        await gate.release()
+        let result = await pending.result
+        if case .success = result { Issue.record("disconnected authorization unexpectedly connected") }
+        #expect(session.snapshotMakeCount() == 0)
+        #expect(await gateway.currentRoute() == nil)
+    }
+
+    @Test
+    func `external authorization failure stays actionable without sending Gateway credentials`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"),
+                credentials: .init(bootstrapToken: "unused-bootstrap"),
+                options: nodeConnectOptions(),
+                session: session,
+                extraHeadersProvider: { throw GatewayExternalAuthorizationError() })
+            Issue.record("unauthorized upgrade unexpectedly connected")
+        } catch {
+            let problem = GatewayConnectionProblemMapper.map(error: error)
+            #expect(problem?.kind == .externalAuthorizationRequired)
+            #expect(problem?.actionLabel == "Sign in")
+            #expect(problem?.pauseReconnect == true)
+            #expect(problem?.retryable == true)
+        }
+        #expect(session.snapshotMakeCount() == 0)
+        #expect(await gateway.currentRoute() == nil)
         await gateway.disconnect()
     }
 
