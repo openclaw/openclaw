@@ -159,6 +159,7 @@ hello from source
           OPENCLAW_DEV_SOURCE_ROOT: repoRoot,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+          OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192",
           OPENCLAW_DISABLE_UPDATE_CHECK: "1",
           OPENCLAW_NO_RESPAWN: "1",
         },
