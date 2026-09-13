@@ -47,6 +47,7 @@ import {
   prepareTalkSessionTarget,
   requirePreparedTalkSessionTarget,
 } from "../talk-session-target.js";
+import { unregisterTalkVoiceSession } from "../talk-voice-selection.js";
 import { formatForLog } from "../ws-log.js";
 import { createTalkClient } from "./talk-client-create.js";
 import {
@@ -265,6 +266,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       });
       const connId = normalizeOptionalString(client?.connId);
       if (connId) {
+        unregisterTalkVoiceSession(params.voiceSessionId, connId, agentId);
         forgetLegacyVoiceBinding(connId, params.sessionKey, params.voiceSessionId);
       }
       respond(true, { ok: true }, undefined);

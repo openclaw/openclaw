@@ -25,9 +25,9 @@ import {
   resolveTalkRealtimeRelayPresentation,
 } from "./talk-realtime-relay-issues.js";
 import {
+  adoptTalkRealtimeRelaySession,
   cancelTalkRealtimeRelayProviderToolCall,
   closeRelaySession,
-  closeTalkRealtimeRelaySessionsForConnection,
   enforceRelaySessionLimits,
   pruneInactiveRelayAgentRuns,
   registerTalkRealtimeRelayAgentRun,
@@ -55,7 +55,7 @@ import {
 } from "./talk-realtime-relay-tool-call-ledger.js";
 import { enqueueRelayVoiceTranscript } from "./talk-realtime-relay-voice.js";
 import { createTalkRealtimeRunControlOwner } from "./talk-realtime-run-control.js";
-import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
+import { markTalkVoiceSessionReady } from "./talk-voice-selection.js";
 
 // The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.
 const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
@@ -65,8 +65,8 @@ export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
   enforceRelaySessionLimits(params.connId);
-  const { publicModel, publicError } = resolveTalkRealtimeRelayPresentation(params);
-  const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
+  const { publicModel, publicError, voice, ...voiceSelection } =
+    resolveTalkRealtimeRelayPresentation(params);
   const relaySessionId = randomUUID();
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
   if (expiresAtMs === undefined) {
@@ -205,9 +205,8 @@ export function createTalkRealtimeRelaySession(
       }
     },
   });
-  const relayProvider = outputOwnership.bind(params.provider, runAgentConsult);
   const bridgeRequest: Parameters<typeof harness.createBridge>[0] = {
-    provider: relayProvider,
+    provider: outputOwnership.bind(params.provider, runAgentConsult),
     capabilities: params.capabilities,
     cfg: params.cfg,
     agentId: relayAgentId,
@@ -215,8 +214,8 @@ export function createTalkRealtimeRelaySession(
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
     language: params.language,
-    autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
-    interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
+    autoRespondToAudio: params.forceAgentConsultOnFinalTranscript !== true,
+    interruptResponseOnInputAudio: params.forceAgentConsultOnFinalTranscript !== true,
     tools: params.tools,
     ...(runControl.handleDelegationInput
       ? {
@@ -459,7 +458,7 @@ export function createTalkRealtimeRelaySession(
         if (runControl.handleSpoken(question)) {
           return;
         }
-        if (forceAgentConsultOnFinalTranscript) {
+        if (params.forceAgentConsultOnFinalTranscript === true) {
           scheduleForcedAgentConsult(relay, question);
         }
       }
@@ -531,6 +530,7 @@ export function createTalkRealtimeRelaySession(
         return;
       }
       ready = true;
+      markTalkVoiceSessionReady(relaySessionId, params.connId, relayAgentId);
       continuityResetActive = false;
       emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null });
     },
@@ -664,10 +664,10 @@ export function createTalkRealtimeRelaySession(
     failSession,
   };
   relayRef.current = relay;
-  relay.cleanupTimer.unref?.();
-  relaySessions.set(relaySessionId, relay);
-  registerTalkConnectionCleanup(params.connId, "realtime-relay", () => {
-    closeTalkRealtimeRelaySessionsForConnection(params.connId);
+  adoptTalkRealtimeRelaySession(relay, {
+    ...voiceSelection,
+    voiceChangeId: params.voiceChangeId,
+    providerReady: ready,
   });
   bridge.connect().catch((error: unknown) => {
     const active = relaySessions.get(relaySessionId);
@@ -700,7 +700,7 @@ export function createTalkRealtimeRelaySession(
       outputSampleRateHz: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ.sampleRateHz,
     },
     ...(publicModel ? { model: publicModel } : {}),
-    ...(params.voice ? { voice: params.voice } : {}),
+    ...(voice ? { voice } : {}),
     expiresAt: Math.floor(expiresAtMs / 1000),
   };
 }

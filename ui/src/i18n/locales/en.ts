@@ -4922,6 +4922,9 @@ export const en: TranslationMap & {
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
+      selectionFailed: "Could not change voices. Restart the call.",
+      selectionTimedOut: "Voice change timed out. Restart the call.",
+      selectionConfirmationFailed: "Voice change unconfirmed.",
     },
     selectors: {
       loadMoreSessions: "Show more",

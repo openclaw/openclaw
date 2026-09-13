@@ -58,6 +58,7 @@ export const GATEWAY_EVENTS = [
   "tick",
   "talk.mode",
   "talk.event",
+  "talk.voice.change",
   "shutdown",
   "gateway.suspension",
   "health",

@@ -107,6 +107,38 @@ describe("RealtimeTalkSession", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["webrtc", "gateway-relay"] as const)(
+    "claims a voice replacement once through its original %s create endpoint",
+    async (transport) => {
+      const request = vi.fn(async () => {
+        throw new Error("replacement rejected");
+      });
+      const session = new RealtimeTalkSession(
+        { request } as never,
+        "agent:main:voice",
+        {},
+        { transport, voice: "spruce", voiceChangeId: "change-1" },
+      );
+      await expect(session.start()).rejects.toThrow("replacement rejected");
+      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith(
+        transport === "gateway-relay" ? "talk.session.create" : "talk.client.create",
+        expect.objectContaining({
+          sessionKey: "agent:main:voice",
+          voice: "spruce",
+          voiceChangeId: "change-1",
+          transport,
+          capabilities:
+            transport === "gateway-relay"
+              ? ["voice-selection"]
+              : ["voice-transcript", "voice-selection"],
+        }),
+        requestTimeoutOptions,
+      );
+      session.stop();
+    },
+  );
+
   it("starts the Google Live WebSocket transport from a generic session result", async () => {
     const request = vi.fn(async () => ({
       provider: "google",
@@ -131,7 +163,7 @@ describe("RealtimeTalkSession", () => {
       "talk.client.create",
       {
         sessionKey: "main",
-        capabilities: ["voice-transcript"],
+        capabilities: ["voice-transcript", "voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -420,7 +452,7 @@ describe("RealtimeTalkSession", () => {
         sessionKey: "main",
         provider: "xai",
         transport: "gateway-relay",
-        capabilities: ["voice-transcript"],
+        capabilities: ["voice-transcript", "voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -433,6 +465,7 @@ describe("RealtimeTalkSession", () => {
         transport: "gateway-relay",
         mode: "realtime",
         brain: "agent-consult",
+        capabilities: ["voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -485,7 +518,7 @@ describe("RealtimeTalkSession", () => {
         sessionKey: "main",
         provider: "openai",
         transport: "gateway-relay",
-        capabilities: ["voice-transcript", "camera-frame"],
+        capabilities: ["voice-transcript", "voice-selection", "camera-frame"],
       },
       requestTimeoutOptions,
     );
@@ -498,6 +531,7 @@ describe("RealtimeTalkSession", () => {
         transport: "gateway-relay",
         mode: "realtime",
         brain: "agent-consult",
+        capabilities: ["voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -563,7 +597,7 @@ describe("RealtimeTalkSession", () => {
         silenceDurationMs: 650,
         prefixPaddingMs: 250,
         reasoningEffort: "low",
-        capabilities: ["voice-transcript"],
+        capabilities: ["voice-transcript", "voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -602,7 +636,7 @@ describe("RealtimeTalkSession", () => {
       "talk.client.create",
       {
         sessionKey: "main",
-        capabilities: ["voice-transcript", "camera-frame"],
+        capabilities: ["voice-transcript", "voice-selection", "camera-frame"],
       },
       requestTimeoutOptions,
     );
@@ -717,7 +751,7 @@ describe("RealtimeTalkSession", () => {
       "talk.client.create",
       {
         sessionKey: "main",
-        capabilities: ["voice-transcript"],
+        capabilities: ["voice-transcript", "voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -748,7 +782,7 @@ describe("RealtimeTalkSession", () => {
     expect(request.mock.calls).toEqual([
       [
         "talk.client.create",
-        { sessionKey: "main", capabilities: ["voice-transcript"] },
+        { sessionKey: "main", capabilities: ["voice-transcript", "voice-selection"] },
         requestTimeoutOptions,
       ],
       ["talk.config", {}, requestTimeoutOptions],
@@ -797,6 +831,7 @@ describe("RealtimeTalkSession", () => {
         mode: "realtime",
         transport: "gateway-relay",
         brain: "agent-consult",
+        capabilities: ["voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -839,6 +874,7 @@ describe("RealtimeTalkSession", () => {
         mode: "realtime",
         transport: "gateway-relay",
         brain: "agent-consult",
+        capabilities: ["voice-selection"],
       },
       requestTimeoutOptions,
     );
@@ -863,7 +899,7 @@ describe("RealtimeTalkSession", () => {
     expect(request.mock.calls).toEqual([
       [
         "talk.client.create",
-        { sessionKey: "main", capabilities: ["voice-transcript"] },
+        { sessionKey: "main", capabilities: ["voice-transcript", "voice-selection"] },
         requestTimeoutOptions,
       ],
       ["talk.config", {}, requestTimeoutOptions],
@@ -889,7 +925,7 @@ describe("RealtimeTalkSession", () => {
     expect(request.mock.calls).toEqual([
       [
         "talk.client.create",
-        { sessionKey: "main", capabilities: ["voice-transcript"] },
+        { sessionKey: "main", capabilities: ["voice-transcript", "voice-selection"] },
         requestTimeoutOptions,
       ],
       ["talk.config", {}, requestTimeoutOptions],

@@ -648,12 +648,12 @@ describe("RealtimeTalkSession lifecycle", () => {
     expect(creates).toEqual([
       [
         "talk.client.create",
-        { sessionKey: "agent:main:main", capabilities: ["voice-transcript"] },
+        { sessionKey: "agent:main:main", capabilities: ["voice-transcript", "voice-selection"] },
         requestTimeoutOptions,
       ],
       [
         "talk.client.create",
-        { sessionKey: "agent:main:main", capabilities: ["voice-transcript"] },
+        { sessionKey: "agent:main:main", capabilities: ["voice-transcript", "voice-selection"] },
         requestTimeoutOptions,
       ],
     ]);

@@ -33,6 +33,7 @@ type RealtimeTalkLaunchOptions = {
   provider?: string;
   model?: string;
   voice?: string;
+  voiceChangeId?: string;
   transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
   vadThreshold?: number;
   silenceDurationMs?: number;
@@ -100,6 +101,7 @@ function compactLaunchParams(
     sessionKey: string;
     mode?: string;
     brain?: string;
+    capabilities?: Array<"camera-frame" | "voice-transcript" | "voice-selection">;
   },
 ): Record<string, unknown> {
   return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
@@ -107,6 +109,7 @@ function compactLaunchParams(
 
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
+  private selectedTransport: RealtimeTalkLaunchTransport | undefined;
   private pendingStartup: Pick<RealtimeTalkTransport, "stop"> | null = null;
   private closed = false;
   private lifecycleGeneration = 0;
@@ -164,7 +167,10 @@ export class RealtimeTalkSession {
       input.requireStream();
       // Declaring voice-transcript arms the server-side spoken-confirmation gate;
       // this client reports every finalized utterance, so the gate is completable.
-      const capabilities: Array<"camera-frame" | "voice-transcript"> = ["voice-transcript"];
+      const capabilities: Array<"camera-frame" | "voice-transcript" | "voice-selection"> = [
+        "voice-transcript",
+        "voice-selection",
+      ];
       if (providerVideoCapable) {
         capabilities.push("camera-frame");
       }
@@ -269,6 +275,7 @@ export class RealtimeTalkSession {
         return;
       }
       this.transport = nextTransport;
+      this.selectedTransport = normalizeLaunchTransport(transport);
       if (transport === "gateway-relay") {
         this.voiceSessionId = voiceSessionId;
         this.transportGeneration = nextTransportGeneration;
@@ -329,10 +336,13 @@ export class RealtimeTalkSession {
 
   private async createSession(
     options: RealtimeTalkLaunchOptions & {
-      capabilities?: Array<"camera-frame" | "voice-transcript">;
+      capabilities?: Array<"camera-frame" | "voice-transcript" | "voice-selection">;
     },
   ): Promise<RealtimeTalkSessionResult> {
     const launchOptions = { ...options };
+    if (launchOptions.voiceChangeId && launchOptions.transport === "gateway-relay") {
+      return this.createRelaySession(launchOptions);
+    }
     try {
       return await this.client.request<RealtimeTalkSessionResult>(
         "talk.client.create",
@@ -343,6 +353,9 @@ export class RealtimeTalkSession {
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
     } catch (error) {
+      if (launchOptions.voiceChangeId) {
+        throw error;
+      }
       let transport = launchOptions.transport;
       if (!transport) {
         let result: RealtimeTalkConfigResult;
@@ -369,31 +382,33 @@ export class RealtimeTalkSession {
       if (transport && transport !== "gateway-relay") {
         throw error;
       }
-      const gatewayOptions = { ...launchOptions };
-      delete gatewayOptions.capabilities;
       try {
-        const relaySession = await this.client.request<RealtimeTalkSessionResult>(
-          "talk.session.create",
-          compactLaunchParams({
-            sessionKey: this.sessionKey,
-            ...gatewayOptions,
-            mode: "realtime",
-            transport: transport ?? "gateway-relay",
-            brain: "agent-consult",
-          }),
-          { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-        );
-        return resolveRealtimeTalkTransport(relaySession) === "gateway-relay"
-          ? {
-              ...relaySession,
-              voiceSessionId: (relaySession as RealtimeTalkGatewayRelaySessionResult)
-                .relaySessionId,
-            }
-          : relaySession;
+        return await this.createRelaySession(launchOptions);
       } catch {
         throw error;
       }
     }
+  }
+
+  private async createRelaySession(options: RealtimeTalkLaunchOptions) {
+    const relaySession = await this.client.request<RealtimeTalkSessionResult>(
+      "talk.session.create",
+      compactLaunchParams({
+        sessionKey: this.sessionKey,
+        ...options,
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        capabilities: ["voice-selection"],
+      }),
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
+    return resolveRealtimeTalkTransport(relaySession) === "gateway-relay"
+      ? {
+          ...relaySession,
+          voiceSessionId: (relaySession as RealtimeTalkGatewayRelaySessionResult).relaySessionId,
+        }
+      : relaySession;
   }
 
   stop(): void {
@@ -402,6 +417,14 @@ export class RealtimeTalkSession {
     } finally {
       this.callbacks.onStatus?.("idle");
     }
+  }
+
+  getVoiceSessionId(): string | undefined {
+    return this.closed ? undefined : this.voiceSessionId;
+  }
+
+  getTransport(): RealtimeTalkLaunchTransport | undefined {
+    return this.closed ? undefined : this.selectedTransport;
   }
 
   private retireTransport(): void {
@@ -413,6 +436,7 @@ export class RealtimeTalkSession {
     const detached = this.detachVoiceSession();
     const transport = this.transport;
     this.transport = null;
+    this.selectedTransport = undefined;
     try {
       this.stopPendingStartup();
     } finally {

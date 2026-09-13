@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -29,7 +30,7 @@ function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSessio
 
 function createState(): ChatRealtimeState {
   const state = {
-    client: {},
+    client: { addEventListener: vi.fn(() => () => undefined) },
     connected: true,
     settings: loadSettings(),
     sessionKey: "main",
@@ -60,6 +61,120 @@ describe("chat realtime actions", () => {
     localStorage.clear();
     vi.unstubAllGlobals();
   });
+
+  it.each([false, true])(
+    "changes only audio while retaining captions and effective microphone (default recovery: %s)",
+    async (useSystemDefault) => {
+      saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+      const state = createState();
+      const listeners = new Set<(event: GatewayEventFrame) => void>();
+      const request = vi.fn(async () => ({ ok: true }));
+      state.client = {
+        request,
+        addEventListener: (listener: (event: GatewayEventFrame) => void) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      } as unknown as ChatRealtimeState["client"];
+      let creates = 0;
+      const ids = new WeakMap<RealtimeTalkSession, string>();
+      startSpy.mockImplementation(async function (this: RealtimeTalkSession) {
+        ids.set(this, `voice-${++creates}`);
+      });
+      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(
+        function (this: RealtimeTalkSession) {
+          return ids.get(this);
+        },
+      );
+      vi.spyOn(RealtimeTalkSession.prototype, "getTransport").mockReturnValue("webrtc");
+      if (useSystemDefault) {
+        startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
+      }
+      await state.toggleRealtimeTalk();
+      if (useSystemDefault) {
+        await state.realtimeTalkUseSystemDefault!();
+      }
+      const oldSession = state.realtimeTalkSession!;
+      const old = inspectSession(state);
+      old.callbacks.onTranscript?.({
+        role: "user",
+        text: "Old speech",
+        final: true,
+        itemId: "same",
+        order: 0,
+      });
+      old.callbacks.onTranscript?.({ role: "assistant", text: "Still speaking", final: false });
+      for (const listener of listeners) {
+        listener({
+          type: "event",
+          event: "talk.voice.change",
+          payload: {
+            sessionKey: "main",
+            voiceSessionId: "voice-1",
+            voice: "spruce",
+            changeId: "change-1",
+            phase: "requested",
+          },
+        });
+      }
+      await vi.waitFor(() => expect(creates).toBe(2));
+      expect(state.sessionKey).toBe("main");
+      expect(state.realtimeTalkSession).not.toBe(oldSession);
+      expect(inspectSession(state).options).toMatchObject({
+        voice: "spruce",
+        voiceChangeId: "change-1",
+        transport: "webrtc",
+      });
+      const replacement = inspectSession(state);
+      expect(replacement.localOptions.inputDeviceId).toBe(useSystemDefault ? undefined : "usb-mic");
+      replacement.callbacks.onTranscript?.({
+        role: "user",
+        text: "New speech",
+        final: true,
+        itemId: "same",
+        order: 0,
+      });
+      replacement.callbacks.onTranscriptOrder?.([{ itemId: "same", order: 0 }]);
+      old.callbacks.onTranscript?.({
+        role: "user",
+        text: "Late old speech",
+        final: true,
+        itemId: "same",
+        order: 0,
+      });
+      expect(state.realtimeTalkConversation.map(({ text }) => text)).toEqual([
+        "Old speech",
+        "Still speaking",
+        "New speech",
+      ]);
+      expect(new Set(state.realtimeTalkConversation.map(({ id }) => id)).size).toBe(3);
+      expect(state.realtimeTalkConversation.every(({ isStreaming }) => !isStreaming)).toBe(true);
+      expect(request.mock.calls).toEqual([]);
+      replacement.callbacks.onTalkEvent?.({
+        id: "ready",
+        type: "session.ready",
+        sessionId: "voice-2",
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        mode: "realtime",
+        transport: "webrtc",
+        brain: "agent-consult",
+        payload: undefined,
+      });
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "talk.voice.complete",
+          { changeId: "change-1", voiceSessionId: "voice-2", outcome: "ready" },
+          { timeoutMs: 70_000 },
+        ),
+      );
+      await state.toggleRealtimeTalk();
+      expect(state.realtimeTalkConversation).toEqual([]);
+      expect(listeners.size).toBe(0);
+    },
+  );
 
   it("launches with the microphone persisted from the Settings page", async () => {
     saveSettings({

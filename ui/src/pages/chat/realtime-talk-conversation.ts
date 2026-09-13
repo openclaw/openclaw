@@ -42,6 +42,16 @@ export function createRealtimeTalkConversationState(): RealtimeTalkConversationS
   };
 }
 
+export function continueRealtimeTalkConversation(
+  state: RealtimeTalkConversationState,
+): RealtimeTalkConversationState {
+  return {
+    ...createRealtimeTalkConversationState(),
+    nextEntryId: state.nextEntryId,
+    entries: state.entries.map((entry, order) => ({ ...entry, order, isStreaming: false })),
+  };
+}
+
 export function updateRealtimeTalkConversation(
   state: RealtimeTalkConversationState,
   update: RealtimeTalkTranscriptUpdate,

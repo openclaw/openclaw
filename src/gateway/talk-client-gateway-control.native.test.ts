@@ -1,3 +1,4 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTalkClientGatewayControlOwner } from "./talk-client-gateway-control.js";
@@ -7,6 +8,12 @@ import {
   sessionTarget,
 } from "./talk-client-gateway-control.test-support.js";
 import { createTalkRealtimeRunControlOwner } from "./talk-realtime-run-control.js";
+import { cleanupTalkConnection } from "./talk-session-registry.js";
+import {
+  registerTalkVoiceSession,
+  requestTalkVoiceChange,
+  resolveTalkVoiceSession,
+} from "./talk-voice-selection.js";
 
 const statusResult = {
   ok: true,
@@ -153,6 +160,112 @@ describe("native Talk control admission", () => {
 });
 
 describe("Talk client reusable Gateway consults", () => {
+  it.each([
+    { ending: "explicit-close", replacing: true, preserveRuns: undefined },
+    { ending: "provider-close", replacing: true, preserveRuns: undefined },
+    { ending: "explicit-close", replacing: false, preserveRuns: undefined },
+    { ending: "provider-close", replacing: false, preserveRuns: undefined },
+    { ending: "explicit-close", replacing: true, preserveRuns: false },
+  ] as const)(
+    "retires function-tool transport after $ending (replacement=$replacing, preserveRuns=$preserveRuns)",
+    async ({ ending, replacing, preserveRuns }) => {
+      const finish = createDeferred<{ text: string }>();
+      const runToolAgentConsult = vi.fn(
+        async (_args: unknown, _signal: AbortSignal) => finish.promise,
+      );
+      const revokeRequesterFinal = vi.fn();
+      const runAgentConsult = Object.assign(
+        vi.fn(async () => ({ text: "unused" })),
+        {
+          claimAppend: vi.fn(() => true),
+          revokeRequesterFinal,
+        },
+      );
+      const voiceSessionId = `voice-function-tool-${ending}-${replacing}-${preserveRuns}`;
+      const connId = `conn-${voiceSessionId}`;
+      const closeProvider = vi.fn(async () => undefined);
+      const owner = createTalkClientGatewayControlOwner({
+        voiceSessionId,
+        sessionTarget,
+        connId,
+        context: controlContext(),
+        supportsToolCalls: true,
+        runToolAgentConsult,
+        runAgentConsult,
+        appendTranscript: vi.fn(async () => undefined),
+        flushTranscript: vi.fn(async () => undefined),
+        closeLogicalSession: vi.fn(async () => undefined),
+      });
+      const bridge = controlBridge();
+      owner.control.bindBridge(bridge);
+      await owner.adoptProvider(closeProvider);
+      owner.activate();
+      const unregister = registerTalkVoiceSession({
+        voiceSessionId,
+        connId,
+        sessionTarget,
+        selection: {
+          provider: "openai",
+          voice: "marin",
+          voices: ["marin", "cedar"],
+          canChange: true,
+        },
+        launch: { provider: "openai", model: "gpt-realtime-2.1" },
+        providerReady: true,
+      });
+      let changing: ReturnType<typeof requestTalkVoiceChange> | undefined;
+      let authorityCurrent = true;
+      try {
+        owner.control.onToolCall?.({
+          itemId: "item-voice-change",
+          callId: "call-voice-change",
+          name: "openclaw_agent_consult",
+          args: { question: "Change your voice and keep working" },
+        });
+        await vi.waitFor(() => expect(runToolAgentConsult).toHaveBeenCalledOnce());
+        const runSignal = runToolAgentConsult.mock.calls[0]?.[1];
+        expect(runSignal?.aborted).toBe(false);
+        if (replacing) {
+          changing = requestTalkVoiceChange({
+            session: resolveTalkVoiceSession({ kind: "client", connId, voiceSessionId }),
+            voice: "cedar",
+            requesterConnId: connId,
+            assertCurrent: () => {
+              if (!authorityCurrent) {
+                throw new Error("Voice requester retired");
+              }
+            },
+            send: vi.fn(),
+          });
+          void changing.catch(() => {});
+        }
+        if (ending === "provider-close") {
+          owner.control.onClose?.("completed");
+        } else {
+          void owner.close({ preserveRuns });
+        }
+        // Close captures the current replacement before asynchronous teardown yields.
+        authorityCurrent = false;
+        expect(() => owner.assertOpen()).toThrow("closed");
+        expect(() => owner.control.bindBridge(bridge)).toThrow("closed");
+        expect(revokeRequesterFinal).toHaveBeenCalledOnce();
+        expect(owner.runAgentConsult.claimAppend?.()).toBe(false);
+        await nextEventLoopTurn();
+        expect(runSignal?.aborted).toBe(!replacing || preserveRuns === false);
+        finish.resolve({ text: "Accepted work finished" });
+        await owner.close();
+        expect(bridge.submitToolResult).not.toHaveBeenCalled();
+        expect(closeProvider).toHaveBeenCalledTimes(ending === "provider-close" ? 0 : 1);
+      } finally {
+        finish.resolve({ text: "Test cleanup" });
+        await owner.close();
+        unregister();
+        cleanupTalkConnection(connId, { warn: vi.fn() });
+        await changing?.catch(() => {});
+      }
+    },
+  );
+
   it.each(["success", "failure"] as const)(
     "keeps an unadopted provider callback reusable after %s",
     async (outcome) => {

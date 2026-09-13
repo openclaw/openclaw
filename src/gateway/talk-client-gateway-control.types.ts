@@ -13,6 +13,7 @@ type GatewayTalkAgentConsultRunner = (
 ) => ReturnType<RealtimeVoiceAgentConsultRunner>;
 
 export type GatewayControlOwner = {
+  readonly signal: AbortSignal;
   adoptProvider: (closeProvider: () => Promise<void>) => Promise<void>;
   activate: () => void;
   assertOpen: () => void;

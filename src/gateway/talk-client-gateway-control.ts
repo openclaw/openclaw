@@ -44,6 +44,7 @@ import {
 } from "./talk-realtime-run-control.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
+import { isTalkVoiceSessionReplacing } from "./talk-voice-selection.js";
 
 const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
@@ -456,6 +457,7 @@ export function createTalkClientGatewayControlOwner(params: {
   };
 
   const owner: GatewayControlOwner = {
+    signal,
     connId: params.connId,
     sessionTarget: params.sessionTarget,
     voiceSessionId: params.voiceSessionId,
@@ -567,6 +569,13 @@ export function createTalkClientGatewayControlOwner(params: {
       if (closing) {
         return closing;
       }
+      const preserveRuns =
+        options?.preserveRuns ??
+        isTalkVoiceSessionReplacing(
+          params.voiceSessionId,
+          params.connId,
+          params.sessionTarget.agentId,
+        );
       acceptingProviderTranscripts = !options?.skipProvider && closeProvider !== undefined;
       // Fence admission synchronously, then defer teardown so provider callbacks
       // can re-enter close after the closing promise has been assigned.
@@ -576,7 +585,7 @@ export function createTalkClientGatewayControlOwner(params: {
         if (owners.get(params.voiceSessionId) === owner) {
           owners.delete(params.voiceSessionId);
         }
-        if (!options?.preserveRuns) {
+        if (!preserveRuns) {
           for (const { controller, closeDisposition } of consultControllers.values()) {
             if (closeDisposition === "abort") {
               controller.abort(new Error("Realtime voice session closed"));

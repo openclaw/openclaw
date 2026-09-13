@@ -46,6 +46,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.send", ["key"]],
   ["sessions.steer", ["key"]],
   ["sessions.branches.switch", ["sessionKey"]],
+  ["talk.voice.set", ["sessionKey"]],
   ...(
     [
       "taskSuggestions.create",

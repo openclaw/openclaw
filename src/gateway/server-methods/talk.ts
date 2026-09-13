@@ -84,6 +84,7 @@ import {
   listTalkTranscriptionProviders,
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "./talk-shared.js";
+import { talkVoiceHandlers } from "./talk-voice.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -848,6 +849,7 @@ function stripUnresolvedSecretApiKeyFromRecord(
 
 /** Gateway request handlers for Talk config, catalog, sessions, and speech. */
 export const talkHandlers: GatewayRequestHandlers = {
+  ...talkVoiceHandlers,
   ...talkSessionHandlers,
   ...talkClientHandlers,
   "talk.catalog": async ({ params, respond, context }) => {

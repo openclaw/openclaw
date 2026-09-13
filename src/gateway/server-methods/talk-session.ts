@@ -46,6 +46,7 @@ import {
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
 } from "../talk-transcription-relay.js";
+import { prepareTalkVoiceReplacement } from "../talk-voice-selection.js";
 import { formatForLog } from "../ws-log.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
@@ -160,6 +161,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     }
     try {
       sessionMutationAuthorization?.assertCurrent();
+      if (params.voiceChangeId && (mode !== "realtime" || transport !== "gateway-relay")) {
+        respondInvalidRequest(respond, "A voice replacement requires a realtime relay session");
+        return;
+      }
       if (transport === "managed-room") {
         if (brain === "direct-tools" && !canUseTalkDirectTools(client)) {
           respondInvalidRequest(
@@ -248,23 +253,38 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             `realtime talk.session.create requires transport="gateway-relay" and brain="agent-consult"`,
           );
         }
+        const replacement = prepareTalkVoiceReplacement({
+          voiceChangeId: params.voiceChangeId,
+          connId,
+          sessionKey: params.sessionKey,
+        });
+        const requested = replacement
+          ? {
+              ...params,
+              provider: replacement.provider,
+              model: replacement.model,
+              voice: replacement.voice,
+            }
+          : params;
         const runtimeConfig = context.getRuntimeConfig();
         const realtimeConfig = buildTalkRealtimeConfig(
           runtimeConfig,
-          params.provider,
-          params.model,
+          requested.provider,
+          requested.model,
         );
         const launchOptions = buildRealtimeVoiceLaunchOptions({
-          requested: params,
+          requested,
           defaults: realtimeConfig,
         });
         const target = requirePreparedTalkSessionTarget(
           sessionMutationAuthorization?.talkSessionTarget,
         );
+        replacement?.assertCurrent(target);
         const { agentId } = target;
         const assertCommitAllowed = () => {
           sessionMutationCommitGuard?.();
           sessionMutationAuthorization?.assertCurrent();
+          replacement?.assertCurrent(target);
         };
         assertCommitAllowed();
         assertSecretOwnerAvailable("capability", "talk:realtime");
@@ -314,6 +334,16 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           sessionKey: target.canonicalKey,
           ensuredSessionId,
         });
+        replacement?.assertCurrent(target);
+        const model =
+          normalizeOptionalString(relayLaunch.providerConfig.model) ??
+          resolution.provider.defaultModel;
+        const voices = [
+          ...(capabilities?.voices ??
+            (model ? capabilities?.voicesByModel?.[model] : undefined) ??
+            resolution.provider.voices ??
+            []),
+        ];
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
@@ -323,6 +353,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           providerConfig: relayLaunch.providerConfig,
           controlSource,
           capabilities,
+          clientCapabilities: params.capabilities,
+          voiceChangeId: params.voiceChangeId,
+          voiceSelectionVoices: voices,
           instructions:
             controlSource === "delegation"
               ? (providerInstructions ?? "")

@@ -233,6 +233,9 @@ export type CreateTalkRealtimeRelaySessionParams = {
   providerConfig: RealtimeVoiceProviderConfig;
   controlSource: "delegation" | "transcript";
   capabilities?: InternalRealtimeVoiceProviderCapabilities;
+  clientCapabilities?: readonly "voice-selection"[];
+  voiceChangeId?: string;
+  voiceSelectionVoices?: readonly string[];
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;
@@ -319,6 +322,32 @@ function relayEventDeliveryOptions(
     default:
       return { dropIfSlow: false };
   }
+}
+
+export function broadcastRelaySessionClosed(
+  session: RelaySession,
+  reason: "completed" | "error",
+  eventReason?: "output-cancelled",
+): void {
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "close",
+    reason,
+    talkEvent: session.harness.talk.emit({
+      type: "session.closed",
+      payload: { reason: reason === "error" ? "error" : (eventReason ?? reason) },
+      final: true,
+    }),
+  });
+}
+
+export function cancelRelayTurn(session: RelaySession, turnId: string, reason: string): void {
+  const cancelled = session.harness.talk.cancelTurn({ turnId, payload: { reason } });
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "clear",
+    talkEvent: cancelled.ok ? cancelled.event : undefined,
+  });
 }
 
 export function ensureRelayTurn(session: RelaySession): string {

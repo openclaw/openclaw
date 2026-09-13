@@ -1,19 +1,43 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { projectInternalRealtimeVoicePublicConfig } from "../talk/provider-internal.js";
 import type { CreateTalkRealtimeRelaySessionParams } from "./talk-realtime-relay-state.js";
 
 export function resolveTalkRealtimeRelayPresentation(
-  params: Pick<CreateTalkRealtimeRelaySessionParams, "provider" | "providerConfig" | "model">,
+  params: Pick<
+    CreateTalkRealtimeRelaySessionParams,
+    | "provider"
+    | "providerConfig"
+    | "model"
+    | "voice"
+    | "clientCapabilities"
+    | "voiceSelectionVoices"
+  >,
 ) {
+  const providerModel = normalizeOptionalString(params.providerConfig.model);
+  const model =
+    normalizeOptionalString(params.model) ?? providerModel ?? params.provider.defaultModel;
+  const voice =
+    normalizeOptionalString(params.voice) ?? normalizeOptionalString(params.providerConfig.voice);
+  const voices = [...(params.voiceSelectionVoices ?? [])];
   const publicModel = projectInternalRealtimeVoicePublicConfig({
     provider: params.provider,
     providerConfig: params.providerConfig,
-    config: { model: params.model },
+    config: { model },
   }).model;
-  const opaqueRoute =
-    typeof params.model === "string" && params.model.length > 0 && publicModel !== params.model;
+  const opaqueRoute = Boolean(model && publicModel !== model);
   return {
     publicModel,
+    voice,
+    selection: {
+      provider: params.provider.id,
+      model: publicModel,
+      voice,
+      voices,
+      canChange:
+        params.clientCapabilities?.includes("voice-selection") === true && voices.length > 0,
+    },
+    launch: { provider: params.provider.id, model: providerModel ?? model },
     publicError: (error: unknown) =>
       new Error(projectTalkRealtimeRelayProviderError(params.provider.id, opaqueRoute, error)),
   };

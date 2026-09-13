@@ -10,7 +10,16 @@ sidebarTitle: "Realtime sessions"
 
 ## Choose a Talk voice from chat
 
-After setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
+During an active browser Talk call, choose a voice beside the call controls or
+ask the assistant to list the available voices or switch to one. The `talk_voice`
+tool lists the current provider, model, voice,
+and supported voice IDs for the call in the current conversation. Setting a
+voice reconnects that call while preserving its chat and captions. The assistant
+reports success only after the replacement call is ready; unsupported changes or
+connection failures return an error. **Settings → Talk** sets the voice default
+for future calls.
+
+For Talk TTS playback, after setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
 
 Status and list are read-only. Setting a voice requires the message-channel owner or a Gateway client with `operator.admin`. Configuration, provider lookup, unknown-voice, and permission failures are returned visibly in chat. A masked API-key value in `/voice status` describes config only; it does not verify credential availability.
 

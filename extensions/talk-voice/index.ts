@@ -1,6 +1,7 @@
 // Talk Voice plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
@@ -119,8 +120,25 @@ function requiresAdminToSetVoice(params: {
 export default definePluginEntry({
   id: "talk-voice",
   name: "Talk Voice",
-  description: "Command helpers for managing Talk voice configuration",
+  description: "Select the active Talk voice and manage Talk voice configuration",
   register(api: OpenClawPluginApi) {
+    const loadTool = createLazyRuntimeModule(() => import("./tool.js"));
+    api.registerTool({
+      name: "talk_voice",
+      label: "Talk Voice",
+      description:
+        "List or change the voice of the active Talk call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving chat and captions. Success means the replacement call is ready. Settings Talk controls the default for future calls.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["list", "set"] },
+          voice: { type: "string", description: "Voice ID from list; required for set." },
+        },
+        required: ["action"],
+        additionalProperties: false,
+      },
+      execute: async (...args) => await (await loadTool()).executeTalkVoiceTool(...args),
+    });
     api.registerCommand({
       name: "voice",
       nativeNames: {
