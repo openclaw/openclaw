@@ -165,6 +165,7 @@ export function createFixture(
   const runtimeEntryOwners = new Set([
     "src/infra/runtime-process-entrypoints.ts",
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
+    "src/infra/package-update-activation-runtime-assets.ts",
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
     "packages/normalization-core/src/record-coerce.ts",

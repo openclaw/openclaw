@@ -10,7 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
-import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -842,7 +842,11 @@ const configs: UserConfig[] = [
     false,
   ),
   workerDeployBuildConfig(),
-  { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
+  ...createManagedHandoffBuildConfigs().map((config) => ({
+    ...config,
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
+    env,
+  })),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,

@@ -88,6 +88,7 @@ export async function copyPackagePathEntry(
   source: string,
   destination: string,
   assertCurrent = () => {},
+  beforePublish?: (staged: string) => void,
 ): Promise<void> {
   const stat = await fs.lstat(source);
   assertCurrent();
@@ -112,6 +113,7 @@ export async function copyPackagePathEntry(
       assertCurrent();
       await fs.chmod(staged, stat.mode);
     }
+    beforePublish?.(staged);
     assertCurrent();
     await fs.rename(staged, destination);
   } finally {

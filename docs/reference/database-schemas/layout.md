@@ -268,3 +268,23 @@ Both tables are additive, lazily ensured on first use, and leave the numeric dat
 Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.git`, next to the shared database. These are bare repositories containing complete file manifests, cumulative changed-file blobs, and publication snapshots; they are not working checkouts or a backup of upstream Git history. Restoring an entire checkout still requires access to the pinned upstream commit. Back up these artifacts together with the shared and per-agent databases.
 
 Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
+
+## Package-publication recovery receipt
+
+The package-only activation owner keeps one operation in
+`<installation-parent>/.openclaw.package-activation-<install-key-hash>.control/operation.sqlite`.
+This is the existing single-slot `package_activation` table, not the shared
+state database. Its columns and numeric schema version are unchanged. The
+strict descriptor records the original executor database identity, exact
+package/launcher identities, pre-move custody, helper identity and a revision.
+The control directory also holds the operation-scoped `recovery.mjs` until
+retirement. It is published once with the complete journal and helper; the
+disposable package directory is a separate sibling. The descriptor distinguishes
+the installation parent, control directory, and original executor database parent.
+
+An existing journal is opened without creation or migration. The external-helper
+layout is explicit in the descriptor; legacy flat and in-directory journals are refused
+and remain with their original recovery owner. A successful retirement retains
+one bounded completion receipt after the directory and helper are gone. Only a
+new original-store-admitted operation can replace that slot. Status reads do
+not grant admission or perform cleanup.

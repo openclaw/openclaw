@@ -32,6 +32,7 @@ export type StagedPackageInstall = {
   packageRoot: string;
   installTarget: ResolvedGlobalInstallTarget;
   native?: NativePackageStage;
+  activationCustody?: boolean;
 };
 
 export type StagedPackageSwapResult =

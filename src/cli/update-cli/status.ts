@@ -9,11 +9,14 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -60,6 +63,15 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateAvailability = resolveUpdateAvailability(update);
 
   const runStatus = readUpdateRunStatus();
+  let packageActivation;
+  let packageActivationError: string | undefined;
+  try {
+    if (root) {
+      packageActivation = readPackageActivationReceipt(resolveUpdateInstallRoot(root));
+    }
+  } catch (error) {
+    packageActivationError = formatErrorMessage(error);
+  }
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -73,6 +85,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       availability: updateAvailability,
       ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
       ...runStatus,
+      ...(packageActivation ? { packageActivation } : {}),
+      ...(packageActivationError ? { packageActivationError } : {}),
     });
     return;
   }
@@ -90,6 +104,17 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...(packageActivation
+      ? [
+          {
+            Item: "Package recovery",
+            Value: `${packageActivation.phase} (${packageActivation.operationId})`,
+          },
+        ]
+      : []),
+    ...(packageActivationError
+      ? [{ Item: "Package recovery", Value: packageActivationError }]
+      : []),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
