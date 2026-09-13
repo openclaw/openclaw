@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -78,11 +78,9 @@ import {
 } from "./doctor/shared/update-phase.js";
 
 type GatewayServiceConfigRepairOptions = {
-  allowConfigSizeDrop?: boolean;
   allowExecSecretRefs?: boolean;
-  lastTouchedVersionOverride?: string;
-  preservedLegacyRootKeys?: readonly string[];
-  skipPluginValidation?: boolean;
+  /** Resolves with the persisted candidate; refusal must reject before service mutation. */
+  writeConfig: (nextConfig: OpenClawConfig) => Promise<OpenClawConfig>;
 };
 
 function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolean {
@@ -506,7 +504,7 @@ export async function maybeRepairGatewayServiceConfig(
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
-  options: GatewayServiceConfigRepairOptions = {},
+  options: GatewayServiceConfigRepairOptions,
 ): Promise<OpenClawConfig> {
   if (!isDefaultInstallIdentity(process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
@@ -899,20 +897,7 @@ export async function maybeRepairGatewayServiceConfig(
       },
     };
     try {
-      await replaceConfigFile({
-        nextConfig: nextCfg,
-        afterWrite: { mode: "auto" },
-        writeOptions: {
-          auditOrigin: "doctor",
-          allowConfigSizeDrop: options.allowConfigSizeDrop === true || updateRepairMode,
-          skipPluginValidation: options.skipPluginValidation === true || updateRepairMode,
-          preservedLegacyRootKeys: options.preservedLegacyRootKeys,
-          ...(options.lastTouchedVersionOverride
-            ? { lastTouchedVersionOverride: options.lastTouchedVersionOverride }
-            : {}),
-        },
-      });
-      cfgForServiceInstall = nextCfg;
+      cfgForServiceInstall = await options.writeConfig(nextCfg);
       note(
         expectedGatewayToken
           ? "Persisted gateway.auth.token from environment before reinstalling service."

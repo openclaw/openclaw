@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import * as gatewayService from "../daemon/service.js";
 import {
@@ -295,7 +295,12 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             },
           });
         }
-        const result = await maybeRepairGatewayServiceConfig(cfg, "local", runtime, prompter);
+        const result = await maybeRepairGatewayServiceConfig(cfg, "local", runtime, prompter, {
+          async writeConfig(nextConfig) {
+            await replaceConfigFile({ nextConfig, afterWrite: { mode: "auto" } });
+            return nextConfig;
+          },
+        });
         const configBytes = await fs.readFile(configPath, "utf8");
         const persisted: OpenClawConfig = JSON.parse(configBytes);
         const diagnostics = [...edges.note.mock.calls.map(([message]) => message), ...errors].join(

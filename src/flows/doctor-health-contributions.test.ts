@@ -4489,7 +4489,7 @@ describe("doctor health contributions", () => {
     const gatewayServicesContribution = requireDoctorContribution("doctor:gateway-services");
     const writeConfigContribution = requireDoctorContribution("doctor:write-config");
     const originalCfg = { gateway: {} };
-    const repairedCfg = {
+    const repairedCfg: OpenClawConfig = {
       gateway: {
         auth: {
           mode: "token",
@@ -4497,7 +4497,13 @@ describe("doctor health contributions", () => {
         },
       },
     };
-    mocks.maybeRepairGatewayServiceConfig.mockResolvedValueOnce(repairedCfg);
+    mocks.maybeRepairGatewayServiceConfig.mockImplementationOnce(
+      async (
+        ...args: Parameters<
+          typeof import("../commands/doctor-gateway-services.js").maybeRepairGatewayServiceConfig
+        >
+      ) => args[4].writeConfig(repairedCfg),
+    );
 
     const ctx = createDoctorContext({
       cfg: originalCfg,
@@ -4523,9 +4529,7 @@ describe("doctor health contributions", () => {
       ctx.runtime,
       ctx.prompter,
       expect.objectContaining({
-        allowConfigSizeDrop: true,
-        preservedLegacyRootKeys: ["defaultModel"],
-        skipPluginValidation: true,
+        writeConfig: expect.any(Function),
       }),
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
@@ -4538,6 +4542,11 @@ describe("doctor health contributions", () => {
     expect(mocks.replaceConfigFile).toHaveBeenLastCalledWith(
       expect.objectContaining({
         nextConfig: repairedCfg,
+        writeOptions: expect.objectContaining({
+          allowConfigSizeDrop: true,
+          preservedLegacyRootKeys: ["defaultModel"],
+          skipPluginValidation: true,
+        }),
       }),
     );
   });

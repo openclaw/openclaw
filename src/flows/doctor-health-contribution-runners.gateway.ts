@@ -3,12 +3,9 @@ import { shouldManageGatewayService } from "../commands/doctor-service-repair-po
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
+import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
-import {
-  isUpdateDoctorRun,
-  resolveDoctorMode,
-  resolveLegacyParentVersionOverride,
-} from "./doctor-health-contribution-utils.js";
+import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 
 export async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -47,7 +44,6 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
-  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
     ctx.cfg,
     resolveDoctorMode(ctx.cfg),
@@ -55,11 +51,23 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     ctx.prompter,
     {
       allowExecSecretRefs: ctx.options.allowExec === true,
-      allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-      skipPluginValidation:
-        ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-      preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-      ...resolveLegacyParentVersionOverride(ctx),
+      async writeConfig(nextConfig) {
+        const previous = ctx.cfg;
+        ctx.cfg = nextConfig;
+        try {
+          // Service installation needs the token persisted and Doctor's saved baseline
+          // advanced. A normal-return refusal must not authorize the service change.
+          if (!(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false }))) {
+            throw new Error(
+              "Doctor did not persist the gateway token; service repair was skipped.",
+            );
+          }
+          return ctx.cfg;
+        } catch (error) {
+          ctx.cfg = previous;
+          throw error;
+        }
+      },
     },
   );
   await noteMacLaunchAgentOverrides();
