@@ -104,8 +104,10 @@ hello from source
     const inputPath = path.join(rootDir, "meeting-notes.txt");
     const externalPath = path.join(rootDir, "outside.md");
     const vaultPath = path.join(rootDir, "vault");
+    const workspacePath = path.join(rootDir, "workspace");
     const configPath = path.join(tempHome, "openclaw.json");
     await fs.mkdir(tempHome, { recursive: true });
+    await fs.mkdir(workspacePath, { recursive: true });
     await fs.writeFile(inputPath, "updated source\n", "utf8");
     await fs.writeFile(externalPath, "keep external content\n", "utf8");
     const { config } = await createVault({ rootDir: vaultPath, initialize: true });
@@ -114,6 +116,7 @@ hello from source
     await fs.writeFile(
       configPath,
       JSON.stringify({
+        agents: { defaults: { workspace: workspacePath } },
         plugins: {
           enabled: true,
           load: { paths: [path.join(repoRoot, "extensions", "memory-wiki")] },
