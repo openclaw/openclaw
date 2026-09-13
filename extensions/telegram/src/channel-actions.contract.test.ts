@@ -50,6 +50,9 @@ describe("telegram actions contract", () => {
     ] as const) {
       const actions = describeActions(cfg, accountId)?.actions;
       expect(actions?.includes("send")).toBe(sends);
+      // Dice has no gate of its own: it is an ordinary outbound message, so it must appear and
+      // disappear with sendMessage rather than stay reachable through the tool surface.
+      expect(actions?.includes("dice")).toBe(sends);
       expect(actions).not.toContain("poll");
     }
   });
