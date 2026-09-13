@@ -50,6 +50,28 @@ describe("live provider catalog projection", () => {
     expect(snapshot.get(model.id)).toMatchObject({ status: "preview" });
     expect(
       projectProviderCatalogSnapshotRows([{ id: model.id, object: "model" }], snapshot),
+    ).toEqual([expect.objectContaining({ id: model.id })]);
+
+    const explicitPreview = projectUpstreamProviderCatalogSnapshot({
+      providerId: "opencode-go",
+      provider: {
+        id: "opencode-go",
+        api: "https://opencode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+        models: {
+          [model.id]: {
+            id: model.id,
+            status: "preview",
+            limit: { context: model.contextWindow, output: model.maxTokens },
+          },
+        },
+      },
+      seed,
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+      defaultBaseUrl: "https://opencode.ai/zen/go/v1",
+    });
+    expect(
+      projectProviderCatalogSnapshotRows([{ id: model.id, object: "model" }], explicitPreview),
     ).toEqual([]);
   });
 

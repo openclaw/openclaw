@@ -12,6 +12,8 @@ export type ProviderCatalogSnapshot = ReadonlyMap<
   {
     model: ProjectedUpstreamProviderCatalogModel;
     status?: "deprecated" | "preview";
+    statusSource?: "seed" | "upstream";
+    upstreamPresent?: boolean;
     replacedBy?: string;
   }
 >;
@@ -43,16 +45,20 @@ export function projectUpstreamProviderCatalogSnapshot(params: {
     // SAFETY: Normalization preserves the projector's validated transport and model shape.
     const model = normalizeModelCompat(decorated) as ProjectedUpstreamProviderCatalogModel;
     const seed = params.seed.get(model.id.toLowerCase());
-    const status =
+    const upstreamStatus =
       upstreamModel.status === "deprecated" || upstreamModel.status === "preview"
         ? upstreamModel.status
-        : seed?.status;
+        : undefined;
+    const status = upstreamStatus ?? seed?.status;
+    const statusSource = upstreamStatus ? "upstream" : seed?.status ? "seed" : undefined;
     const replacedBy =
       typeof upstreamModel.replacedBy === "string" ? upstreamModel.replacedBy : seed?.replacedBy;
     // Preserve provider-owned lifecycle when upstream metadata omits it.
     snapshot.set(model.id.toLowerCase(), {
       model,
       ...(status ? { status } : {}),
+      ...(statusSource ? { statusSource } : {}),
+      upstreamPresent: true,
       ...(replacedBy ? { replacedBy } : {}),
     });
   }
@@ -73,7 +79,13 @@ export function projectProviderCatalogSnapshotRows(
     }
     seen.add(id);
     const entry = snapshot.get(id);
-    if (entry && !entry.status) {
+    if (
+      entry &&
+      (!entry.status ||
+        (entry.status === "preview" &&
+          entry.statusSource !== "upstream" &&
+          entry.upstreamPresent === true))
+    ) {
       models.push(entry.model);
     }
   }

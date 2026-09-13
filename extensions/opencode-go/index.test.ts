@@ -294,7 +294,7 @@ describe("opencode-go provider plugin", () => {
     expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
   });
 
-  it("keeps preview lifecycle out of the authenticated live catalog", async () => {
+  it("promotes a seed preview advertised by the authenticated live catalog", async () => {
     const fetchGuard = createCatalogFetchGuard({
       upstreamModels: {
         "hy3-preview": upstreamModel("hy3-preview"),
@@ -307,7 +307,7 @@ describe("opencode-go provider plugin", () => {
         discoveryApiKey: "resolved-opencode-key",
         fetchGuard,
       }),
-    ).resolves.toMatchObject({ models: [] });
+    ).resolves.toMatchObject({ models: [expect.objectContaining({ id: "hy3-preview" })] });
 
     const provider = await registerSingleProviderPlugin(plugin);
     const entries = await provider.augmentModelCatalog?.({ entries: [] } as never);
