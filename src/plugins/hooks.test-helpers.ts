@@ -14,6 +14,7 @@ export function createMockPluginRegistry(
     priority?: number;
     registrationId?: string;
     timeoutMs?: number;
+    failClosed?: true;
     eligibleTriggers?: readonly PluginHookAgentTrigger[];
     requiresToolAuthority?: true;
   }>,
@@ -41,6 +42,7 @@ export function createMockPluginRegistry(
       priority: h.priority ?? 0,
       ...(h.registrationId ? { registrationId: h.registrationId } : {}),
       ...(h.timeoutMs !== undefined ? { timeoutMs: h.timeoutMs } : {}),
+      ...(h.failClosed ? { failClosed: true } : {}),
       ...(h.eligibleTriggers !== undefined ? { eligibleTriggers: h.eligibleTriggers } : {}),
       ...(h.requiresToolAuthority ? { requiresToolAuthority: true } : {}),
       source: "test",
@@ -56,6 +58,7 @@ export function addTestHook(params: {
   priority?: number;
   registrationId?: string;
   timeoutMs?: number;
+  failClosed?: true;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   requiresToolAuthority?: true;
 }) {
@@ -67,6 +70,7 @@ export function addTestHook(params: {
     priority: params.priority ?? 0,
     ...(params.registrationId ? { registrationId: params.registrationId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.failClosed ? { failClosed: true } : {}),
     ...(params.eligibleTriggers !== undefined ? { eligibleTriggers: params.eligibleTriggers } : {}),
     ...(params.requiresToolAuthority ? { requiresToolAuthority: true } : {}),
     source: "test",

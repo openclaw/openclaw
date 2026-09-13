@@ -1003,6 +1003,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
   "plugins.entries.*.hooks.timeoutMs": "Plugin Hook Timeout (ms)",
   "plugins.entries.*.hooks.timeouts": "Plugin Hook Timeout Overrides",
+  "plugins.entries.*.hooks.failClosed": "Fail-Closed Delivery Hooks",
   "plugins.entries.*.subagent": "Plugin Subagent Policy",
   "plugins.entries.*.subagent.allowModelOverride": "Allow Plugin Subagent Model Override",
   "plugins.entries.*.subagent.allowedModels": "Plugin Subagent Allowed Models",

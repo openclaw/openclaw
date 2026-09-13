@@ -56,6 +56,7 @@ export function createHookRunnerWithRegistry(
     pluginId?: string;
     priority?: number;
     timeoutMs?: number;
+    failClosed?: true;
     eligibleTriggers?: readonly PluginHookAgentTrigger[];
     requiresToolAuthority?: true;
   }>,

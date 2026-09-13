@@ -1398,6 +1398,12 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   matcher?: PluginToolMatcher;
   priority?: number;
   timeoutMs?: number;
+  /**
+   * Operator opt-in from `plugins.entries.<id>.hooks.failClosed`. When set, a delivery hook
+   * handler error or timeout is treated as `{ cancel: true }` for that one delivery instead of
+   * being logged and skipped.
+   */
+  failClosed?: true;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   eligibleDispatchKinds?: readonly PluginHookReplyDispatchKind[];
   requiresToolAuthority?: true;

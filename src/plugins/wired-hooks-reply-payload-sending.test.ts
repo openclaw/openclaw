@@ -171,6 +171,123 @@ describe("reply_payload_sending hook runner", () => {
     ]);
   });
 
+  it("cancels delivery when an opted-in handler throws", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const failing = vi.fn().mockRejectedValue(new Error("ledger write failed"));
+    const later = vi.fn();
+    const { runner } = createHookRunnerWithRegistry(
+      [
+        { hookName: "reply_payload_sending", handler: failing, failClosed: true },
+        { hookName: "reply_payload_sending", handler: later },
+      ],
+      { logger },
+    );
+
+    const result = await runner.runReplyPayloadSending(
+      replyPayloadSendingEvent,
+      replyPayloadSendingCtx,
+    );
+
+    expect(result).toEqual({
+      payload: { text: "hello" },
+      cancel: true,
+      reason: "plugin test-plugin reply_payload_sending failed: ledger write failed",
+    });
+    expect(later).not.toHaveBeenCalled();
+    expect(firstErrorLog(logger)).toEqual([
+      "[hooks] reply_payload_sending handler from test-plugin failed: ledger write failed; fail-closed opt-in cancels this delivery",
+    ]);
+  });
+
+  it("cancels delivery when an opted-in handler times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const stalledStarted = createDeferred();
+      const stalled = vi.fn(() => {
+        stalledStarted.resolve();
+        return new Promise<never>(() => {});
+      });
+      const later = vi.fn();
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          { hookName: "reply_payload_sending", handler: stalled, failClosed: true },
+          { hookName: "reply_payload_sending", handler: later },
+        ],
+        { logger },
+      );
+
+      const resultPromise = runner.runReplyPayloadSending(
+        replyPayloadSendingEvent,
+        replyPayloadSendingCtx,
+      );
+      await stalledStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(resultPromise).resolves.toEqual({
+        payload: { text: "hello" },
+        cancel: true,
+        reason: "plugin test-plugin reply_payload_sending failed: timed out after 15000ms",
+      });
+      expect(later).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps earlier handler results when an opted-in handler fails", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const rewriting = vi
+      .fn()
+      .mockResolvedValue({ payload: { text: "rewritten" } satisfies ReplyPayload });
+    const failing = vi.fn().mockRejectedValue(new Error("ledger write failed"));
+    const { runner } = createHookRunnerWithRegistry(
+      [
+        { hookName: "reply_payload_sending", handler: rewriting, pluginId: "rewriter" },
+        {
+          hookName: "reply_payload_sending",
+          handler: failing,
+          pluginId: "recorder",
+          failClosed: true,
+        },
+      ],
+      { logger },
+    );
+
+    const result = await runner.runReplyPayloadSending(
+      replyPayloadSendingEvent,
+      replyPayloadSendingCtx,
+    );
+
+    expect(result).toEqual({
+      payload: { text: "rewritten" },
+      cancel: true,
+      reason: "plugin recorder reply_payload_sending failed: ledger write failed",
+    });
+  });
+
+  it("leaves handlers without the opt-in fail-open", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const failing = vi.fn().mockRejectedValue(new Error("ledger write failed"));
+    const later = vi.fn().mockResolvedValue({ payload: { text: "ok" } satisfies ReplyPayload });
+    const { runner } = createHookRunnerWithRegistry(
+      [
+        { hookName: "reply_payload_sending", handler: failing },
+        { hookName: "reply_payload_sending", handler: later },
+      ],
+      { logger },
+    );
+
+    const result = await runner.runReplyPayloadSending(
+      replyPayloadSendingEvent,
+      replyPayloadSendingCtx,
+    );
+
+    expect(result).toEqual({ payload: { text: "ok" }, cancel: undefined, reason: undefined });
+    expect(later).toHaveBeenCalledTimes(1);
+  });
+
   it("does not expose trusted local media to plugins", async () => {
     const handler = vi
       .fn()

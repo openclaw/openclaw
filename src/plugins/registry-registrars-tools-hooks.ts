@@ -21,6 +21,7 @@ import {
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
 import {
+  resolveTypedHookFailClosed,
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
   type PluginTypedHookPolicy,
@@ -388,6 +389,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
+    const failClosed = resolveTypedHookFailClosed({ hookName, policy });
     const eligibleTriggers =
       hookName === "before_agent_reply"
         ? normalizeHookEligibility(opts?.eligibleTriggers, isPluginHookAgentTrigger)
@@ -412,6 +414,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       ...(matcher ? { matcher } : {}),
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(failClosed ? { failClosed: true } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
       ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true

@@ -204,6 +204,15 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult = HookResult<K>> = {
     result: TResult | undefined;
   }) => void;
   onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
+  /**
+   * Result substituted for a handler that failed or timed out while the registration opted into
+   * `plugins.entries.<id>.hooks.failClosed`. Delivery hooks return their documented
+   * `{ cancel: true }` decision here so one plugin failure cancels only that delivery.
+   */
+  failClosedResult?: (params: {
+    hook: PluginHookRegistration<K>;
+    error: unknown;
+  }) => TResult | undefined;
 };
 
 type PluginTargetedInboundClaimOutcome =
@@ -924,7 +933,22 @@ export function createHookRunner(
         if (err instanceof HookIsolationError) {
           throw err;
         }
-        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+        const failClosedResult = hook.failClosed
+          ? policy.failClosedResult?.({ hook, error: err })
+          : undefined;
+        if (failClosedResult === undefined) {
+          handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+        } else {
+          logger?.error(
+            `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${sanitizeHookError(err)}; ` +
+              `fail-closed opt-in cancels this delivery`,
+          );
+          result = policy.mergeResults
+            ? policy.mergeResults(result, failClosedResult, hook, dispatchEvent)
+            : failClosedResult;
+          policy.onTerminal?.({ hookName, pluginId: hook.pluginId, result });
+          shouldStop = true;
+        }
       }
       policy.assertHandlerBoundaryActive?.();
       if (shouldStop) {
@@ -1543,6 +1567,10 @@ export function createHookRunner(
       }),
       shouldStop: (result) => result.cancel === true,
       terminalLabel: "cancel=true",
+      failClosedResult: ({ hook, error }) => ({
+        cancel: true,
+        reason: `plugin ${hook.pluginId} reply_payload_sending failed: ${sanitizeHookError(error)}`,
+      }),
     }),
     runMessageSending: async (
       event: HookEvent<"message_sending">,
@@ -1561,6 +1589,10 @@ export function createHookRunner(
           }),
           shouldStop: (decision) => decision.cancel === true,
           terminalLabel: "cancel=true",
+          failClosedResult: ({ hook, error }) => ({
+            cancel: true,
+            cancelReason: `plugin ${hook.pluginId} message_sending failed: ${sanitizeHookError(error)}`,
+          }),
         },
       );
       const original = result?.cancel ? undefined : (result?.content ?? event.content);

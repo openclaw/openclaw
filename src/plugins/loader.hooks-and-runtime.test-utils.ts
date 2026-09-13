@@ -1265,6 +1265,40 @@ ${channelPluginSource({
     });
   });
 
+  it("marks only delivery hooks fail-closed for an opted-in plugin", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-fail-closed",
+      filename: "hook-fail-closed.cjs",
+      registration: `api.on("message_sending", () => undefined);
+      api.on("reply_payload_sending", () => undefined);
+      api.on("before_prompt_build", () => ({ prependContext: "prepend" }));`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-fail-closed"],
+        entries: {
+          "hook-fail-closed": {
+            hooks: {
+              allowConversationAccess: true,
+              failClosed: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      Object.fromEntries(registry.typedHooks.map((entry) => [entry.hookName, entry.failClosed])),
+    ).toEqual({
+      message_sending: true,
+      reply_payload_sending: true,
+      before_prompt_build: undefined,
+    });
+  });
+
   it.each([
     {
       label: "per-hook timeout over the global timeout",

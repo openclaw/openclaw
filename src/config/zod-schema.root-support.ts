@@ -153,6 +153,12 @@ export const PluginEntrySchema = z.strictObject({
       timeoutMs: z.number().int().positive().max(600_000).optional(),
       /** Per typed-hook timeout overrides in milliseconds. */
       timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
+      /**
+       * Treats this plugin's delivery hook errors and timeouts as `cancel: true` for that one
+       * delivery instead of logging and skipping them. Covers `message_sending` and
+       * `reply_payload_sending`, the delivery hooks that already return that decision.
+       */
+      failClosed: z.boolean().optional(),
     })
     .optional(),
   subagent: z

@@ -40,6 +40,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
   "plugins.entries.*.hooks.timeouts":
     "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+  "plugins.entries.*.hooks.failClosed":
+    "Treat this plugin's delivery hook error or timeout as `cancel: true` for that one delivery instead of logging and skipping it, so a plugin that must record a reply before it is sent cannot be bypassed by its own crash. Covers message_sending and reply_payload_sending; other hooks and other plugins stay fail-open.",
   "plugins.entries.*.subagent":
     "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
   "plugins.entries.*.subagent.allowModelOverride":

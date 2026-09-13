@@ -103,7 +103,8 @@ An emitter can impose a tighter overall lifecycle budget, such as the
 shutdown `session_end` drain below. A timeout only bounds an asynchronous
 await; it cannot interrupt synchronous JavaScript. For a policy requirement,
 use a fail-closed gate rather than assuming an observation or delivery hook
-will reject the operation on failure.
+will reject the operation on failure, or opt that plugin's delivery hooks into
+fail-closed failures as described below.
 
 For claim hooks, continuing means trying the next handler. The caller decides
 what happens if nobody claims; a failed `inbound_claim` for a bound
@@ -114,6 +115,43 @@ positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
 appending work with `dispatcher.appendBeforeDeliver(handler, { timeoutMs })`.
 Without an owner-declared budget, those callbacks use the same 15-second
 default so a hung callback cannot retain the serialized delivery lane.
+
+### Opting delivery hooks into fail-closed failures
+
+`message_sending` and `reply_payload_sending` can already cancel a delivery by
+returning `{ cancel: true }`, but a handler that throws or times out is logged
+and skipped, so the delivery continues. A plugin that must persist a record
+before its reply leaves the Gateway cannot enforce that from plugin code alone,
+because the failure policy lives in the runner.
+
+Operators can opt one plugin's delivery hooks into fail-closed failures:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "my-plugin": {
+        "hooks": {
+          "failClosed": true
+        }
+      }
+    }
+  }
+}
+```
+
+With the opt-in, a thrown error or timeout in that plugin's `message_sending` or
+`reply_payload_sending` handler is treated as the hook's documented
+`{ cancel: true }` result: that one delivery is cancelled, the cancel reason
+names the plugin and its error, and remaining handlers are skipped exactly as
+they are after an explicit cancel. Results already merged from earlier handlers
+are kept. The flag covers only those two delivery hooks; the plugin's other
+hooks, and every other plugin, keep today's fail-open behavior. It is unset by
+default.
+
+The opt-in does not cancel the handler's own in-flight work, and it does not
+change what the failure policy table above says for plugins without the
+opt-in.
 
 ## Hook catalog
 

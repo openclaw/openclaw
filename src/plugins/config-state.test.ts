@@ -95,6 +95,7 @@ describe("normalizePluginsConfig", () => {
             before_prompt_build: 90_000,
             agent_end: 60_000,
           },
+          failClosed: true,
         },
       },
       expectedHooks: {
@@ -105,6 +106,7 @@ describe("normalizePluginsConfig", () => {
           before_prompt_build: 90_000,
           agent_end: 60_000,
         },
+        failClosed: true,
       },
     },
     {
@@ -117,6 +119,7 @@ describe("normalizePluginsConfig", () => {
           timeouts: {
             before_prompt_build: 900_000,
           },
+          failClosed: "yes",
         } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,

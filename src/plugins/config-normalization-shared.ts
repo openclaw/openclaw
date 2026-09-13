@@ -25,6 +25,7 @@ export type NormalizedPluginsConfig = {
         allowConversationAccess?: boolean;
         timeoutMs?: number;
         timeouts?: Record<string, number>;
+        failClosed?: boolean;
       };
       subagent?: {
         allowModelOverride?: boolean;
@@ -103,6 +104,7 @@ function normalizePluginEntries(
           allowConversationAccess: hooksRaw.allowConversationAccess,
           timeoutMs: normalizeHookTimeoutMs(hooksRaw.timeoutMs),
           timeouts: normalizeHookTimeouts(hooksRaw.timeouts),
+          failClosed: hooksRaw.failClosed,
         }
       : undefined;
     const normalizedHooks =
@@ -110,7 +112,8 @@ function normalizePluginEntries(
       (typeof hooks.allowPromptInjection === "boolean" ||
         typeof hooks.allowConversationAccess === "boolean" ||
         hooks.timeoutMs !== undefined ||
-        hooks.timeouts !== undefined)
+        hooks.timeouts !== undefined ||
+        typeof hooks.failClosed === "boolean")
         ? {
             ...(typeof hooks.allowPromptInjection === "boolean"
               ? { allowPromptInjection: hooks.allowPromptInjection }
@@ -120,6 +123,7 @@ function normalizePluginEntries(
               : {}),
             ...(hooks.timeoutMs !== undefined ? { timeoutMs: hooks.timeoutMs } : {}),
             ...(hooks.timeouts !== undefined ? { timeouts: hooks.timeouts } : {}),
+            ...(typeof hooks.failClosed === "boolean" ? { failClosed: hooks.failClosed } : {}),
           }
         : undefined;
     const subagentRaw = entry.subagent;

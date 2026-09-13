@@ -12,7 +12,25 @@ export type PluginTypedHookPolicy = {
   allowConversationAccess?: boolean;
   timeoutMs?: number;
   timeouts?: Record<string, number>;
+  failClosed?: boolean;
 };
+
+/**
+ * Delivery hooks the fail-closed opt-in covers. Both already return `{ cancel: true }`, so an
+ * opted-in failure reuses that documented terminal result instead of a new decision shape.
+ */
+const FAIL_CLOSED_ELIGIBLE_HOOK_NAMES: ReadonlySet<PluginHookName> = new Set([
+  "message_sending",
+  "reply_payload_sending",
+] satisfies readonly PluginHookName[]);
+
+/** Resolves the operator's per-plugin fail-closed opt-in for one typed hook registration. */
+export function resolveTypedHookFailClosed(params: {
+  hookName: PluginHookName;
+  policy?: PluginTypedHookPolicy;
+}): boolean {
+  return params.policy?.failClosed === true && FAIL_CLOSED_ELIGIBLE_HOOK_NAMES.has(params.hookName);
+}
 
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */

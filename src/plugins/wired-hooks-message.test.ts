@@ -103,6 +103,73 @@ describe("message_sending hook runner", () => {
     }
   });
 
+  it("cancels delivery when an opted-in handler throws", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const failing = vi.fn().mockRejectedValue(new Error("ledger write failed"));
+    const later = vi.fn();
+    const { runner } = createHookRunnerWithRegistry(
+      [
+        { hookName: "message_sending", handler: failing, failClosed: true },
+        { hookName: "message_sending", handler: later },
+      ],
+      { logger },
+    );
+
+    const result = await runner.runMessageSending(
+      { to: "user-123", content: "original content" },
+      demoChannelCtx,
+    );
+
+    expect(result).toEqual({
+      content: undefined,
+      cancel: true,
+      cancelReason: "plugin test-plugin message_sending failed: ledger write failed",
+      metadata: undefined,
+    });
+    expect(later).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      "[hooks] message_sending handler from test-plugin failed: ledger write failed; fail-closed opt-in cancels this delivery",
+    );
+  });
+
+  it("cancels delivery when an opted-in handler times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const stalledStarted = createDeferred();
+      const stalled = vi.fn(() => {
+        stalledStarted.resolve();
+        return new Promise<PluginHookMessageSendingResult>(() => {});
+      });
+      const later = vi.fn();
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          { hookName: "message_sending", handler: stalled, failClosed: true },
+          { hookName: "message_sending", handler: later },
+        ],
+        { logger },
+      );
+
+      const resultPromise = runner.runMessageSending(
+        { to: "user-123", content: "original content" },
+        demoChannelCtx,
+      );
+      await stalledStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(resultPromise).resolves.toEqual({
+        content: undefined,
+        cancel: true,
+        cancelReason: "plugin test-plugin message_sending failed: timed out after 15000ms",
+        metadata: undefined,
+      });
+      expect(later).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a handler-specific timeout longer than the default", async () => {
     vi.useFakeTimers();
     try {
