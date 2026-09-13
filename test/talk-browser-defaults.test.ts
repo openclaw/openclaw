@@ -4,14 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../src/gateway/local-request-context.js";
-import { talkHandlers } from "../src/gateway/server-methods/talk.js";
+import { talkHandlers } from "../src/gateway/talk/handlers/index.js";
 import { getPluginRuntimeGatewayRequestScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../src/plugins/types.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 import type { GatewayBrowserClient } from "../ui/src/api/gateway.js";
-import { useRealtimeTalkMicrophoneFixture } from "../ui/src/pages/chat/realtime-talk-input.test-support.js";
-import type { RealtimeTalkTransport } from "../ui/src/pages/chat/realtime-talk-shared.js";
-import { RealtimeTalkSession } from "../ui/src/pages/chat/realtime-talk.js";
+import { useRealtimeTalkMicrophoneFixture } from "../ui/src/pages/chat/talk/input.test-support.js";
+import { RealtimeTalkSession } from "../ui/src/pages/chat/talk/session.js";
+import type { RealtimeTalkTransport } from "../ui/src/pages/chat/talk/shared.js";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as RealtimeVoiceProviderPlugin[],
@@ -62,7 +62,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 vi.mock("../src/agents/realtime-bootstrap-context.js", () => ({
   resolveRealtimeBootstrapContextInstructions: async () => undefined,
 }));
-vi.mock("../src/gateway/talk-client-agent-consult.js", () => ({
+vi.mock("../src/gateway/talk/client-agent-consult.js", () => ({
   createTalkClientAgentConsultRunner: () => ({
     runArgs: async () => ({ text: "Done" }),
     runOwnedArgs: async () => ({ text: "Done" }),
@@ -70,8 +70,8 @@ vi.mock("../src/gateway/talk-client-agent-consult.js", () => ({
     getToolAuthorityOverlay: () => undefined,
   }),
 }));
-vi.mock("../src/gateway/talk-client-gateway-control.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/gateway/talk-client-gateway-control.js")>()),
+vi.mock("../src/gateway/talk/client-gateway-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/gateway/talk/client-gateway-control.js")>()),
   createTalkClientGatewayControlOwner: () => ({
     control: { bindBridge: () => undefined },
     runAgentConsult: async () => ({ text: "Done" }),
@@ -88,8 +88,8 @@ vi.mock("../src/talk/client-voice-session.js", async (importOriginal) => ({
   createOrResumeClientVoiceSession: () => "test-voice-session",
   closeStaleClientVoiceSessions: async () => 0,
 }));
-vi.mock("../ui/src/pages/chat/realtime-talk-transport.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../ui/src/pages/chat/realtime-talk-transport.js")>()),
+vi.mock("../ui/src/pages/chat/talk/transport.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ui/src/pages/chat/talk/transport.js")>()),
   createRealtimeTalkTransport: (): RealtimeTalkTransport => ({
     start: async () => "ready",
     stop: () => undefined,
@@ -266,7 +266,9 @@ describe("OpenAI browser Talk catalog defaults", () => {
           expect(mocks.createSession).toHaveBeenCalledWith({
             sessionKey: "agent:main:main",
             ...(launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {}),
-            capabilities: camera ? ["voice-transcript", "camera-frame"] : ["voice-transcript"],
+            capabilities: camera
+              ? ["voice-transcript", "voice-selection", "camera-frame"]
+              : ["voice-transcript", "voice-selection"],
           });
           expect(mocks.providerRequests).toHaveLength(1);
           expect(mocks.providerRequests[0]?.model).toBe(expected);

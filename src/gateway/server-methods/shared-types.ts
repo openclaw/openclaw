@@ -445,7 +445,7 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
-  talkSessionTarget?: import("../talk-session-target.types.js").PreparedTalkSessionTarget;
+  talkSessionTarget?: import("../talk/session-target.types.js").PreparedTalkSessionTarget;
   assertCurrent: () => void;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;

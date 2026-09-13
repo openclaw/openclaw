@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { renderPicker } from "../../../components/select-picker.ts";
 import { t } from "../../../i18n/index.ts";
-import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 
 type ChatRealtimeTalkConversationProps = {
   assistantName: string;

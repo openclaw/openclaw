@@ -193,10 +193,10 @@ describe("gateway startup import boundaries", () => {
       path.join(repoRoot, "src/gateway/server/ws-connection/message-handler.ts"),
     );
     for (const source of [connection, wsConnection]) {
-      expect(source).not.toContain('from "../talk-realtime-relay.js"');
-      expect(source).not.toContain('from "../talk-transcription-relay.js"');
+      expect(source).not.toContain('from "../talk/relay/index.js"');
+      expect(source).not.toContain('from "../talk/transcription-relay.js"');
     }
-    expect(connection).toContain('from "../talk-session-registry.js"');
+    expect(connection).toContain('from "../talk/session-registry.js"');
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
       /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
     );

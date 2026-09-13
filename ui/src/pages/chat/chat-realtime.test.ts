@@ -10,9 +10,9 @@ import {
   stopChatRealtimeTalk,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import { RealtimeTalkSelectedMicrophoneError } from "./realtime-talk-input.ts";
-import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
-import { RealtimeTalkSession } from "./realtime-talk.ts";
+import { RealtimeTalkSelectedMicrophoneError } from "./talk/input.ts";
+import { RealtimeTalkSession } from "./talk/session.ts";
+import type { RealtimeTalkCallbacks } from "./talk/shared.ts";
 
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;

@@ -10,18 +10,18 @@ import {
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
-} from "./realtime-talk-conversation.ts";
+} from "./talk/conversation.ts";
 import {
   discoverRealtimeTalkCameras,
   RealtimeTalkSelectedMicrophoneError,
   type RealtimeTalkCameraDevice,
-} from "./realtime-talk-input.ts";
-import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+} from "./talk/input.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+import { RealtimeTalkSession, type RealtimeTalkStatus } from "./talk/session.ts";
 import {
   RealtimeTalkVoiceSelection,
   type RealtimeVoiceSelectionState,
-} from "./realtime-talk-voice-selection.ts";
-import { RealtimeTalkSession, type RealtimeTalkStatus } from "./realtime-talk.ts";
+} from "./talk/voice-selection.ts";
 
 export type ChatRealtimeState = {
   client: GatewayBrowserClient | null;

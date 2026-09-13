@@ -12,10 +12,10 @@ import {
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
-} from "../realtime-talk-input.ts";
-import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
-import type { RealtimeVoiceSelectionState } from "../realtime-talk-voice-selection.ts";
-import type { RealtimeTalkStatus } from "../realtime-talk.ts";
+} from "../talk/input.ts";
+import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import type { RealtimeTalkStatus } from "../talk/session.ts";
+import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
 import { renderRealtimeVoicePicker } from "./chat-realtime-controls.ts";
 import {
   renderChatVoiceStatus,

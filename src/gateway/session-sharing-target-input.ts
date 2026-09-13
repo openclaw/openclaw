@@ -15,7 +15,7 @@ import {
 } from "./session-method-policy.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
-import { resolveUnifiedTalkSessionTarget } from "./talk-session-registry.js";
+import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
