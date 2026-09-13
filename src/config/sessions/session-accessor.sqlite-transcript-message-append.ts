@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripRedactionProvenance } from "@openclaw/normalization-core/redaction-provenance";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   TranscriptMessageAppendOptions,
@@ -41,7 +42,13 @@ function messagesMatchForIdempotentReplay(stored: unknown, candidate: unknown): 
       return message;
     }
     const { timestamp: _timestamp, ...stable } = message;
-    const serialized = JSON.stringify(stable);
+    // Storage encodings change across releases, so identity compares the canonical form:
+    // `stripRedactionProvenance` removes this release's mask markers and restores escaped
+    // literal bytes, which leaves a pre-upgrade row (bare masks) equal to the retry that
+    // encodes it. Different payloads still differ and still conflict.
+    const serialized = JSON.stringify(stable, (_key, value: unknown) =>
+      typeof value === "string" ? stripRedactionProvenance(value) : value,
+    );
     return serialized === undefined ? undefined : JSON.parse(serialized);
   };
   return isDeepStrictEqual(serializedShape(stored), serializedShape(candidate));

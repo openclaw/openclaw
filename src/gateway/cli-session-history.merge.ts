@@ -2,6 +2,7 @@
 // Deduplicates external history messages against local OpenClaw transcripts.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripRedactionProvenance } from "@openclaw/normalization-core/redaction-provenance";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -133,11 +134,16 @@ function extractComparableText(
     ).text;
     return visible.replace(/\s+/g, " ").trim();
   };
-  const normalized = normalizeText(stripResult.text);
+  // Stored transcripts carry mask markers (#142821): compare canonical bytes so a local row
+  // this release redacted still matches the import that copies its masked text. Both the
+  // primary text and the drift-note view use the canonical form, or the note path would
+  // compare marked bytes against unmarked ones.
+  const canonicalize = (value: string) => stripRedactionProvenance(value);
+  const normalized = normalizeText(canonicalize(stripResult.text));
   const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
   const driftNoteText =
     withoutDriftNote !== rawText
-      ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
+      ? normalizeText(canonicalize(stripTrailingCliImageMentions(withoutDriftNote.trim()).text))
       : undefined;
   const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);

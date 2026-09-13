@@ -7,6 +7,7 @@ import {
   asFiniteNumber,
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { stripRedactionProvenance } from "@openclaw/normalization-core/redaction-provenance";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   readCliImageTurnContext,
@@ -66,11 +67,55 @@ export function decodeClaudeCliProjectEntry(line: string): ClaudeCliProjectEntry
   return JSON.parse(line) as ClaudeCliProjectEntry;
 }
 
+function decodeStoredRedactionProvenance<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value === "string") {
+    // SAFETY: T is string in this branch; the codec returns a string.
+    return stripRedactionProvenance(value) as T;
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    seen.add(value);
+    let next: unknown[] | undefined;
+    value.forEach((item, index) => {
+      const decoded = decodeStoredRedactionProvenance(item, seen);
+      if (decoded !== item && next === undefined) {
+        next = [...value];
+      }
+      if (next !== undefined) {
+        next[index] = decoded;
+      }
+    });
+    // SAFETY: next is a same-shape copy, or value itself when untouched.
+    return (next ?? value) as T;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return value;
+  }
+  seen.add(value);
+  let next: Record<string, unknown> | undefined;
+  for (const [key, item] of Object.entries(value)) {
+    const decoded = decodeStoredRedactionProvenance(item, seen);
+    if (decoded !== item) {
+      next ??= { ...(value as Record<string, unknown>) };
+      next[key] = decoded;
+    }
+  }
+  // SAFETY: next is a same-shape copy, or value itself when untouched.
+  return (next ?? value) as T;
+}
+
 export function redactClaudeCliHistoryMessage(
   message: TranscriptLikeMessage,
 ): TranscriptLikeMessage {
+  // An imported row may already be a copy of our own persisted transcript, markers and all.
+  // Decoding first keeps its mask bodies intact — re-redacting marked bytes would collapse a
+  // diagnostic hint into a placeholder — and the redaction below still re-applies the
+  // current policy to every visible byte (#142821).
   return redactTranscriptMessage(
-    message as unknown as AgentMessage,
+    decodeStoredRedactionProvenance(message) as unknown as AgentMessage,
   ) as unknown as TranscriptLikeMessage;
 }
 

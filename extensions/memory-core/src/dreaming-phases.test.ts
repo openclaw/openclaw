@@ -1641,7 +1641,10 @@ describe("memory-core dreaming phases", () => {
     );
     const corpus = await fs.readFile(corpusPath, "utf-8");
     expect(corpus).not.toContain("OPENAI_API_KEY=sk-1234567890abcdef");
+    // The corpus renderer is its own redaction owner: it re-masks stored text with the
+    // bare-mask dialect, so provenance markers never reach the ingested corpus.
     expect(corpus).toContain("OPENAI_API_KEY=***");
+    expect(corpus).not.toContain("⟦openclaw:redacted:1⟧");
   });
 
   it("skips dreaming-generated narrative transcripts during session ingestion", async () => {

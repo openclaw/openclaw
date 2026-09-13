@@ -1,4 +1,8 @@
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+import {
+  containsRedactionProvenanceSyntax,
+  markRedactionProvenance,
+} from "@openclaw/normalization-core/redaction-provenance";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -76,6 +80,27 @@ const formAwareEqualsAssignmentPatterns = new WeakSet<ResolvedRedactPattern>();
 const sourceAssignmentPatterns = new WeakSet<ResolvedRedactPattern>();
 let defaultResolvedPatterns: ResolvedRedactPattern[] | undefined;
 let toolPayloadResolvedPatterns: ResolvedRedactPattern[] | undefined;
+
+// Persistence opts in so stored masks carry explicit provenance (#142821); log and UI
+// masking keeps the bare mask, and the default path stays byte-identical.
+let maskProvenanceDepth = 0;
+
+/**
+ * Runs `run` with every mask it produces wrapped in redaction provenance markers.
+ * Synchronous by design: the flag is process state, and redaction never awaits.
+ */
+export function withRedactionProvenance<T>(run: () => T): T {
+  maskProvenanceDepth += 1;
+  try {
+    return run();
+  } finally {
+    maskProvenanceDepth -= 1;
+  }
+}
+
+function maskProvenance(mask: string): string {
+  return maskProvenanceDepth > 0 ? markRedactionProvenance(mask) : mask;
+}
 
 const FORM_BODY_KEY_OBFUSCATION_RE = new RegExp(
   String.raw`[${FORM_BODY_KEY_INVISIBLE_CHARS}+]`,
@@ -246,15 +271,24 @@ function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
 }
 
 function maskToken(token: string): string {
+  // Shape never proves trusted producer output (#142821 review): raw sensitive
+  // fields and registered-secret matches are untrusted input, so even a whole
+  // value that looks like a complete mark is masked like any other value. Only
+  // masks this pass just built (via maskProvenance/markRedactionProvenance) may
+  // carry provenance; bare "***" stays bare for idempotence.
   if (token === "***") {
+    // Already-masked input is not a mask this pass produced, so it carries no
+    // provenance: only bytes we redact now can claim to be redaction output.
     return token;
   }
-  if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
-    return "***";
+  if (token.length < DEFAULT_REDACT_MIN_LENGTH || containsRedactionProvenanceSyntax(token)) {
+    // The grammar reserves its own bytes: a value carrying them is masked whole so no
+    // marker byte can survive into a hint and forge a mark (#142821 review).
+    return maskProvenance("***");
   }
   const start = sliceUtf16Safe(token, 0, DEFAULT_REDACT_KEEP_START);
   const end = sliceUtf16Safe(token, -DEFAULT_REDACT_KEEP_END);
-  return `${start}…${end}`;
+  return maskProvenance(`${start}…${end}`);
 }
 
 function splitSecretValueForMask(token: string): {
@@ -318,7 +352,7 @@ function splitFormAwareCredentialValue(token: string): { secret: string; suffix:
 
 function maskSecretValue(token: string, options?: { hinted?: boolean }): string {
   const { maskable, suffix } = splitSecretValueForMask(token);
-  return `${options?.hinted ? maskToken(maskable) : "***"}${suffix}`;
+  return `${options?.hinted ? maskToken(maskable) : maskProvenance("***")}${suffix}`;
 }
 
 function normalizeSensitiveKeyName(value: string): string {
@@ -421,7 +455,7 @@ function redactAssignmentValues(
   const edits: RedactionEdit[] = [];
   let cursor = 0;
   visitSensitiveAssignments(text, kind, (start, end, maskable) => {
-    const replacement = kind === "url" ? maskToken(maskable) : "***";
+    const replacement = kind === "url" ? maskToken(maskable) : maskProvenance("***");
     parts.push(text.slice(cursor, start), replacement);
     if (onEdits) {
       edits.push({ start, end, replacement });
@@ -779,7 +813,7 @@ export function redactText(
   },
 ): string {
   let next = redactFormBody(
-    redactAssignmentValues(redactStructuredAuthHeaders(text, "***"), "url"),
+    redactAssignmentValues(redactStructuredAuthHeaders(text, maskProvenance("***")), "url"),
   );
   let pattern: ResolvedRedactPattern;
   const replace = (match: RedactMatch) =>
@@ -1158,7 +1192,7 @@ function redactStructuredSecretValue(
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return shouldRedactStructuredPrimitiveField(key, path) ? "***" : value;
+    return shouldRedactStructuredPrimitiveField(key, path) ? maskProvenance("***") : value;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {

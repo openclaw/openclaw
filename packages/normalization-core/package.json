@@ -94,6 +94,11 @@
       "import": "./dist/record-coerce.mjs",
       "default": "./dist/record-coerce.mjs"
     },
+    "./redaction-provenance": {
+      "types": "./dist/redaction-provenance.d.mts",
+      "import": "./dist/redaction-provenance.mjs",
+      "default": "./dist/redaction-provenance.mjs"
+    },
     "./result": {
       "types": "./dist/result.d.mts",
       "import": "./dist/result.mjs",
@@ -126,7 +131,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/agent-id.ts src/agent-run-terminal-outcome.ts src/boolean-coercion.ts src/cjk-chars.ts src/code-points.ts src/error-coercion.ts src/expect.ts src/json-coercion.ts src/json-schema.ts src/markdown-plain-text.ts src/mountinfo-path.ts src/node-crypto.ts src/number-coercion.ts src/phone-presentation.ts src/promise-like.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/agent-run-terminal-outcome.ts src/boolean-coercion.ts src/cjk-chars.ts src/code-points.ts src/error-coercion.ts src/expect.ts src/json-coercion.ts src/json-schema.ts src/markdown-plain-text.ts src/mountinfo-path.ts src/node-crypto.ts src/number-coercion.ts src/phone-presentation.ts src/promise-like.ts src/record-coerce.ts src/redaction-provenance.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "libphonenumber-js": "1.13.12",

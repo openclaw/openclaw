@@ -1,6 +1,10 @@
 // Verifies session tool-result guard inserts, truncates, and repairs tool results.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  REDACTION_PROVENANCE_END,
+  REDACTION_PROVENANCE_START,
+} from "@openclaw/normalization-core/redaction-provenance";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
@@ -657,9 +661,19 @@ describe("installSessionToolResultGuard", () => {
     expect(serializedToolResult).not.toContain("plainsecretvalue123");
     expect(serializedToolResult).not.toContain("hunter2");
     expect(serializedToolResult).not.toContain("nestedplainsecret123");
-    expect(toolResult.details.apiKey).toBe("***");
-    expect(toolResult.details.password).toBe("***");
-    expect(toolResult.details.nested.accessToken[0]).toBe("***");
+    // Persisted masks carry explicit provenance so replay never has to guess (#142821).
+    const provenanceMarked = (value: unknown) =>
+      typeof value === "string" &&
+      value.startsWith(REDACTION_PROVENANCE_START) &&
+      value.endsWith(REDACTION_PROVENANCE_END);
+    // Short values persist the bare mask form; longer ones keep their hint bytes.
+    expect(toolResult.details.password).toBe(
+      `${REDACTION_PROVENANCE_START}***${REDACTION_PROVENANCE_END}`,
+    );
+    expect(provenanceMarked(toolResult.details.apiKey)).toBe(true);
+    expect(provenanceMarked(toolResult.details.nested.accessToken[0])).toBe(true);
+    // Marked or not, the hint bytes must never be the raw secret.
+    expect(serializedToolResult).not.toContain("plainsecretvalue123");
     expect(serializedToolResult).toContain("visible");
   });
 

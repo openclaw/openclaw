@@ -156,7 +156,10 @@ describe("memory-core redaction product boundaries", () => {
     );
     expect(corpus).toContain(safeControlText);
     expect(corpus).not.toContain(RAW_DREAMING_SECRET);
+    // The corpus renderer is its own redaction owner: it re-masks stored text with the
+    // bare-mask dialect, so provenance markers never reach the ingested corpus.
     expect(corpus).toContain("OPENAI_API_KEY=***");
+    expect(corpus).not.toContain("⟦openclaw:redacted:1⟧");
   });
 
   it("promotes only clean trusted content across contamination and provenance gates", async () => {
@@ -225,6 +228,6 @@ describe("memory-core redaction product boundaries", () => {
     expect(memory).not.toContain(`openclaw-memory-promotion:${untrustedKey}`);
     expect(memory).not.toContain(untrustedText);
     expect(memory).not.toContain(RAW_PROMOTION_SECRET);
-    expect(memory).not.toContain("OPENAI_API_KEY=***");
+    expect(memory).not.toContain("⟦openclaw:redacted:1⟧");
   });
 });

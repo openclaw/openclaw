@@ -1,4 +1,8 @@
 // Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
+import {
+  hasRedactionProvenance,
+  stripRedactionProvenance,
+} from "@openclaw/normalization-core/redaction-provenance";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -799,7 +803,12 @@ async function findLatestEquivalentAssistantMessageId(
   message: SessionTranscriptAssistantMessage,
   config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(redactTranscriptMessage(message, config));
+  // Stored masks carry redaction provenance (#142821), so comparing a fresh delivery with
+  // the last stored mirror compares canonical bytes: a row this release wrote is compared
+  // as stored, and only an unmarked row from an earlier release is re-redacted first.
+  const expectedRedacted = extractAssistantMessageText(redactTranscriptMessage(message, config));
+  const expectedText =
+    expectedRedacted === null ? undefined : stripRedactionProvenance(expectedRedacted);
   if (!expectedText) {
     return undefined;
   }
@@ -815,8 +824,13 @@ async function findLatestEquivalentAssistantMessageId(
     if (latestMessage?.role !== "assistant") {
       return undefined;
     }
-    const candidateText = latest
-      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
+    const storedText = latest ? extractAssistantMessageText(latest.message as AgentMessage) : null;
+    const candidateText = storedText
+      ? hasRedactionProvenance(storedText)
+        ? stripRedactionProvenance(storedText)
+        : extractAssistantMessageText(
+            redactTranscriptMessage(latest?.message as AgentMessage, config),
+          )
       : undefined;
     return candidateText === expectedText ? latest?.id : undefined;
   }

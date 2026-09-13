@@ -11,7 +11,6 @@ import {
   copyPreparedModelVisibleToolText,
   isPreparedModelVisibleToolText,
 } from "../logging/redact-internal.js";
-import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
@@ -30,6 +29,7 @@ import {
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 import {
+  redactTranscriptSourceInputText,
   redactTranscriptStructuredFieldValue,
   redactTranscriptText,
   resolveTranscriptLoggingConfig,
@@ -658,7 +658,7 @@ function redactTranscriptStructuredValue(
     }
     const redacted =
       typeof item === "string" && sourceFields?.get(key) === item
-        ? redactSourceInputTextWithConfig(item, resolveTranscriptLoggingConfig(cfg))
+        ? redactTranscriptSourceInputText(item, cfg)
         : redactTranscriptStructuredValue(
             item,
             cfg,
@@ -733,7 +733,7 @@ export function redactTranscriptMessage(
     readCodeModeSourceFields(message, sourceAppend),
   ) as AgentMessage;
   copyCodeModeSourceAppend(message, redacted, sourceAppend, (source) =>
-    redactSourceInputTextWithConfig(source, resolveTranscriptLoggingConfig(cfg)),
+    redactTranscriptSourceInputText(source, cfg),
   );
   return redacted;
 }
