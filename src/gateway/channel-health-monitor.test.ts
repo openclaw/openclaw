@@ -364,6 +364,22 @@ describe("channel-health-monitor", () => {
     await expectRestartedChannel(manager, "discord");
   });
 
+  it("does not restart busy channels while a validated typed disconnect is inside reconnect grace", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: disconnectedAccount(now - 300_000, {
+          activeRuns: 4,
+          busy: true,
+          activeRunStartedAt: now - 26 * 60_000,
+          lastRunActivityAt: now - 1_000,
+          lastDisconnect: { at: now - 4, error: "socket closed" },
+        }),
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
   it("caps an account stuck in pending restart instead of thrashing forever", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
