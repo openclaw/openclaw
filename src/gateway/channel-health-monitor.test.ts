@@ -97,15 +97,18 @@ function createSlackSnapshotManager(
   );
 }
 
-function createBusyDisconnectedManager(lastRunActivityAt: number): ChannelManager {
-  const now = Date.now();
+function createBusyDisconnectedManager(
+  lastRunActivityAt: number,
+  overrides: Partial<ChannelAccountSnapshot> = {},
+): ChannelManager {
   return createSnapshotManager({
     discord: {
       default: {
-        ...disconnectedAccount(now - 300_000),
+        ...disconnectedAccount(Date.now() - 300_000),
         activeRuns: 1,
         busy: true,
         lastRunActivityAt,
+        ...overrides,
       },
     },
   });
@@ -365,17 +368,9 @@ describe("channel-health-monitor", () => {
   });
 
   it("does not restart busy channels while a validated typed disconnect is inside reconnect grace", async () => {
-    const now = Date.now();
-    const manager = createSnapshotManager({
-      discord: {
-        default: disconnectedAccount(now - 300_000, {
-          activeRuns: 4,
-          busy: true,
-          activeRunStartedAt: now - 26 * 60_000,
-          lastRunActivityAt: now - 1_000,
-          lastDisconnect: { at: now - 4, error: "socket closed" },
-        }),
-      },
+    const manager = createBusyDisconnectedManager(Date.now() - 1_000, {
+      activeRunStartedAt: Date.now() - 26 * 60_000,
+      lastDisconnect: { at: Date.now() - 4, error: "socket closed" },
     });
     await expectNoRestart(manager);
   });
