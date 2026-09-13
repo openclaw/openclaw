@@ -1,12 +1,19 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { sessionLog } from "./sessions-shared.js";
 
 export function registerCreatedSessionCategory(
-  category: string | undefined,
+  request: { category?: string; inheritParentGroup?: boolean },
+  createdCategory: string | undefined,
   context: Parameters<typeof emitSessionsChanged>[0],
 ): void {
+  const category = normalizeOptionalString(
+    request.category === undefined && request.inheritParentGroup === true
+      ? createdCategory
+      : request.category,
+  );
   if (!category) {
     return;
   }
