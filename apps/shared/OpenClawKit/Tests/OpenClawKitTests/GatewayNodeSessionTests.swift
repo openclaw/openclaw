@@ -2233,6 +2233,34 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
+    @Test(arguments: [false, true])
+    func `public request and send preserve actionable upgrade denial`(send: Bool) async throws {
+        let session = FakeGatewayWebSocketSession()
+        let url = try testURL("wss://gateway.example.invalid")
+        let channel = GatewayChannelActor(
+            url: url, token: nil,
+            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
+            extraHeadersProvider: { throw GatewayExternalAuthorizationError() })
+        do {
+            if send {
+                try await channel.send(method: "status", params: nil)
+            } else {
+                _ = try await channel.request(method: "status", params: nil)
+            }
+            Issue.record("unauthorized operation unexpectedly connected")
+        } catch {
+            #expect(error is GatewayExternalAuthorizationError)
+            let problem = GatewayConnectionProblemMapper.map(error: error)
+            #expect(problem?.kind == .externalAuthorizationRequired)
+            #expect(problem?.actionLabel == "Sign in")
+            #expect(problem?.pauseReconnect == true)
+            #expect(problem?.retryable == true)
+        }
+        #expect(session.snapshotMakeCount() == 0)
+        #expect(await channel.currentConnectionGeneration() == nil)
+        await channel.shutdown()
+    }
+
     @Test
     func `cleartext upgrade never reads or attaches custom headers`() async throws {
         let session = FakeGatewayWebSocketSession()
