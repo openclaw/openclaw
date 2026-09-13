@@ -377,7 +377,11 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
       signal: AbortSignal.timeout(SESSION_TERMINATION_TIMEOUT_MS),
     });
     void response.body?.cancel().catch(() => undefined);
-    if (!response.ok && response.status !== 405) {
+    // The MCP spec has the server respond with 404 to requests carrying a
+    // terminated session id, so a 404 on DELETE means the session is already
+    // gone — treat it the same as a successful cleanup. 405 indicates the
+    // server does not implement client-initiated termination.
+    if (!response.ok && response.status !== 404 && response.status !== 405) {
       throw new StreamableHTTPError(
         response.status,
         `Failed to terminate session: ${response.statusText}`,
