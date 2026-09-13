@@ -237,6 +237,20 @@ const POLL_SCHEMA_BUILDERS = {
   boolean: optionalBooleanSchema,
 };
 
+// Scoped groups merge into one flat object, so a key contributed by two groups keeps only
+// the last description. `emoji` belongs to reactions; dice carries its own key instead, or
+// enabling dice would silently retitle the reaction parameter wherever both are in scope.
+function buildDiceSchema() {
+  return {
+    diceEmoji: Type.Optional(
+      Type.String({
+        description:
+          "Dice face: \u{1F3B2} \u{1F3AF} \u{1F3C0} \u{26BD} \u{1F3B3} \u{1F3B0} (default \u{1F3B2}). The platform rolls the outcome and returns it; it cannot be requested.",
+      }),
+    ),
+  };
+}
+
 function buildPollSchema() {
   const props: Record<string, TSchema> = {
     pollId: optionalStringSchema(),
@@ -338,6 +352,7 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
     actions: ["search", "sticker-search", "channel-list"],
   },
   { build: buildPollSchema, actions: ["poll", "poll-vote"] },
+  { build: buildDiceSchema, actions: ["dice"] },
   {
     build: () => ({
       channelId: optionalStringSchema("Channel id filter."),
