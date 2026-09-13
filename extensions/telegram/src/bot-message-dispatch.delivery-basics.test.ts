@@ -65,7 +65,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       streamMode: "off",
       telegramDeps: {
         ...telegramDepsForTest,
-        deliverInboundReplyWithMessageSendContext: undefined,
+        deliverStructuredInboundReplyWithMessageSendContext: undefined,
       },
     });
 

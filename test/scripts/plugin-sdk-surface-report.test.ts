@@ -138,6 +138,18 @@ describe("plugin SDK surface report", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
   });
 
+  it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
+    expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
+    const report = {
+      ...surfaceReport,
+      deprecatedBarrelWithoutReexports: ["channel-message"],
+    };
+
+    expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toContain(
+      "deprecated barrel entrypoints without reexports: channel-message",
+    );
+  });
+
   it("keeps approval store internals out of the deprecated infra barrel", () => {
     const source = fs.readFileSync("src/plugin-sdk/infra-runtime.ts", "utf8");
     expect(source).not.toMatch(/export\s+(?:type\s+)?\*\s+from\s+["'][^"']*exec-approvals/u);

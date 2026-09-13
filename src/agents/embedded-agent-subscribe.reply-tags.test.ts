@@ -150,7 +150,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     {
       name: "literal brackets",
       text: "Hello [[",
-      expectedTexts: ["Hello", " [["],
+      expectedTexts: ["Hello [["],
+      textEndComplete: true,
       repeatFinal: true,
     },
     {
@@ -173,7 +174,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     {
       name: "literal media inside an unclosed fence",
       text: "```text\nMEDIA:https://example.com/a.png",
-      expectedTexts: ["```text\n", "MEDIA:https://example.com/a.png"],
+      expectedTexts: ["```text\nMEDIA:https://example.com/a.png"],
+      textEndComplete: true,
     },
   ])("flushes trailing directive tails on stream end: $name", (scenario) => {
     const { emit, onBlockReply } = createBlockReplyHarness();
@@ -182,14 +184,18 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     emitAssistantTextDelta({ emit, delta: scenario.text });
     emitAssistantTextEnd({ emit });
 
+    if (scenario.textEndComplete) {
+      expect(replyTexts(onBlockReply)).toEqual(scenario.expectedTexts);
+    }
+
     const assistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: scenario.finalText ?? scenario.text }],
     } as AssistantMessage;
     emit({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(scenario.expectedTexts.length);
     expect(replyTexts(onBlockReply)).toEqual(scenario.expectedTexts);
+    expect(onBlockReply).toHaveBeenCalledTimes(scenario.expectedTexts.length);
     expect(onBlockReply.mock.calls.flatMap(([payload]) => payload.mediaUrls ?? [])).toEqual(
       scenario.mediaUrls ?? [],
     );
@@ -197,7 +203,7 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     if (scenario.repeatFinal) {
       expect(replyTexts(onBlockReply).join("")).toBe("Hello [[");
       emit({ type: "message_end", message: assistantMessage });
-      expect(replyTexts(onBlockReply)).toEqual(["Hello", " [["]);
+      expect(replyTexts(onBlockReply)).toEqual(["Hello [["]);
     }
   });
 

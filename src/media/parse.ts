@@ -45,7 +45,10 @@ type SplitMediaFromOutputOptions = {
   extractAudioDirectives?: boolean;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
+  preserveTrailingWhitespace?: boolean;
   markdownImageAllowlist?: readonly string[];
+  /** Observes accepted audio directives after media extraction. */
+  onAudioDirective?: () => void;
 };
 
 const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
@@ -276,11 +279,63 @@ function isRemoteMarkdownImageMedia(candidate: string): boolean {
   return hasHttpUrlPrefix(candidate) && isValidMedia(candidate);
 }
 
+function removeMarkdownImageSpans(line: string, matches: MarkdownImageMatch[]): string {
+  const pieces: string[] = [];
+  let cursor = 0;
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = expectDefined(matches[index], "Markdown image span");
+    let end = match.end;
+    let next = matches[index + 1];
+    let internalGap = "";
+    // A gap inside the removed group may be the only separator between caption words.
+    while (next) {
+      const gap = line.slice(end, next.start);
+      if (!/^[ \t]*$/.test(gap)) {
+        break;
+      }
+      internalGap ||= gap;
+      end = next.end;
+      index += 1;
+      next = matches[index + 1];
+    }
+    let start = match.start;
+    let left = start;
+    while (left > cursor && /[ \t]/.test(line.charAt(left - 1))) {
+      left -= 1;
+    }
+    let right = end;
+    while (right < line.length && /[ \t]/.test(line.charAt(right))) {
+      right += 1;
+    }
+    const hasTextBefore = left > 0 && line.charAt(left - 1) !== "\r";
+    const hasTextAfter = right < line.length && line.charAt(right) !== "\r";
+    let separator = "";
+    if (!hasTextBefore) {
+      // Retain authored prefix indentation, but do not promote the image's gap to indentation.
+      if (hasTextAfter) {
+        end = right;
+      }
+    } else {
+      start = left;
+      if (hasTextAfter) {
+        separator = line.slice(end, right) || line.slice(left, match.start) || internalGap;
+        end = right;
+      }
+      // At line end, leave the original post-image suffix intact, including hard-break spaces.
+    }
+    pieces.push(line.slice(cursor, start), separator);
+    cursor = end;
+  }
+  pieces.push(line.slice(cursor));
+  return pieces.join("");
+}
+
 function collectMarkdownImageSegments(params: {
   line: string;
   matches: MarkdownImageMatch[];
   media: string[];
   allowlist?: ReadonlyMap<string, string>;
+  preserveTrailingWhitespace?: boolean;
 }): {
   cleanedLine?: string;
   lineSegments: ParsedMediaOutputSegment[];
@@ -293,6 +348,7 @@ function collectMarkdownImageSegments(params: {
 
   const segmentPieces: string[] = [];
   const visiblePieces: string[] = [];
+  const extractedImages: MarkdownImageMatch[] = [];
   const lineSegments: ParsedMediaOutputSegment[] = [];
   let cursor = 0;
   let foundMedia = false;
@@ -305,8 +361,11 @@ function collectMarkdownImageSegments(params: {
     const target = normalizeMarkdownImageDestination(match.destination);
     const selectedTarget = params.allowlist?.get(target);
     if (selectedTarget || (!params.allowlist && isRemoteMarkdownImageMedia(target))) {
-      const beforeText = cleanLineText(segmentPieces.join(""));
-      if (beforeText) {
+      extractedImages.push(match);
+      const beforeText = params.preserveTrailingWhitespace
+        ? segmentPieces.join("")
+        : cleanLineText(segmentPieces.join(""));
+      if (beforeText.trim()) {
         lineSegments.push({ type: "text", text: beforeText });
       }
       segmentPieces.length = 0;
@@ -326,14 +385,19 @@ function collectMarkdownImageSegments(params: {
   const after = params.line.slice(cursor);
   segmentPieces.push(after);
   visiblePieces.push(after);
-  const trailingText = cleanLineText(segmentPieces.join(""));
-  if (trailingText) {
+  const trailingText = params.preserveTrailingWhitespace
+    ? segmentPieces.join("")
+    : cleanLineText(segmentPieces.join(""));
+  if (trailingText.trim()) {
     lineSegments.push({ type: "text", text: trailingText });
   }
-  const cleanedLine = cleanLineText(visiblePieces.join(""));
+  // Prepared projection cleans only gaps attached to removed images, preserving all other source.
+  const cleanedLine = params.preserveTrailingWhitespace
+    ? removeMarkdownImageSpans(params.line, extractedImages)
+    : cleanLineText(visiblePieces.join(""));
 
   return {
-    cleanedLine: cleanedLine || undefined,
+    cleanedLine: params.preserveTrailingWhitespace ? cleanedLine : cleanedLine || undefined,
     lineSegments,
     foundMedia,
   };
@@ -351,9 +415,9 @@ export function splitMediaFromOutput(
 } {
   // KNOWN: Leading whitespace is semantically meaningful in Markdown (lists, indented fences).
   // We only trim the end; token cleanup below handles removing `MEDIA:` lines.
-  const trimmedRaw = raw.trimEnd();
+  const trimmedRaw = options.preserveTrailingWhitespace ? raw : raw.trimEnd();
   if (!trimmedRaw.trim()) {
-    return { text: "" };
+    return { text: options.preserveTrailingWhitespace ? trimmedRaw : "" };
   }
   const markdownImageAllowlist =
     options.markdownImageAllowlist === undefined
@@ -452,6 +516,7 @@ export function splitMediaFromOutput(
             matches: lineImages,
             media,
             allowlist: markdownImageAllowlist,
+            preserveTrailingWhitespace: options.preserveTrailingWhitespace,
           })
         : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
@@ -459,7 +524,7 @@ export function splitMediaFromOutput(
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
-        if (markdownImageResult.cleanedLine) {
+        if (markdownImageResult.cleanedLine !== undefined) {
           keptLines.push(markdownImageResult.cleanedLine);
         }
         for (const segment of markdownImageResult.lineSegments) {
@@ -599,8 +664,14 @@ export function splitMediaFromOutput(
   const audioTagResult =
     options.extractAudioDirectives === false
       ? { text: visibleText, audioAsVoice: false }
-      : parseInlineDirectives(visibleText, { stripReplyTags: false });
-  const cleanedText = audioTagResult.text.trimEnd();
+      : parseInlineDirectives(visibleText, {
+          stripReplyTags: false,
+          preserveTrailingWhitespace: options.preserveTrailingWhitespace,
+          onAudioDirective: options.onAudioDirective,
+        });
+  const cleanedText = options.preserveTrailingWhitespace
+    ? audioTagResult.text
+    : audioTagResult.text.trimEnd();
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
 
   if (media.length === 0) {

@@ -58,6 +58,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -4956,6 +4957,71 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }),
     );
   });
+
+  it.each([
+    { delivery: "direct", blockStreamingEnabled: false, reasoning: "enabled", enabled: true },
+    { delivery: "pipeline", blockStreamingEnabled: true, reasoning: "enabled", enabled: true },
+    {
+      delivery: "direct",
+      blockStreamingEnabled: false,
+      reasoning: "default-off",
+      enabled: undefined,
+    },
+    {
+      delivery: "pipeline",
+      blockStreamingEnabled: true,
+      reasoning: "default-off",
+      enabled: undefined,
+    },
+  ])(
+    "keeps $reasoning reasoning separate from the final fallback through prepared $delivery delivery",
+    async ({ blockStreamingEnabled, enabled }) => {
+      const reasoning = { text: "Thinking\n\n_Checking the result._", isReasoning: true };
+      const delivered = vi.fn(async (_payload: ReplyPayload) => {});
+      const onBlockReply = vi.fn();
+      const dispatcher = createReplyDispatcher({
+        deliver: delivered,
+        deliverPrepared: async (plan) => delivered(plan.payload),
+      });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onBlockReply?.(reasoning);
+        return { payloads: [], meta: {} };
+      });
+      const { run } = createMinimalRun({
+        blockStreamingEnabled,
+        opts: {
+          onBlockReply,
+          onPreparedBlockReply: async (plan) => {
+            dispatcher.sendPreparedReply("block", plan);
+            await dispatcher.waitForIdle();
+          },
+          ...(enabled ? { reasoningPayloadsEnabled: true } : {}),
+        },
+      });
+
+      try {
+        const result = await run();
+        await dispatcher.waitForIdle();
+        const payloads = Array.isArray(result) ? result : [result];
+
+        expect(onBlockReply).not.toHaveBeenCalled();
+        if (enabled) {
+          expect(delivered).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(reasoning));
+        } else {
+          expect(delivered).not.toHaveBeenCalled();
+        }
+        expect(payloads).toContainEqual(
+          expect.objectContaining({
+            text: expect.stringContaining("did not produce a visible reply"),
+            isError: true,
+          }),
+        );
+      } finally {
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+    },
+  );
 
   it.each([
     {

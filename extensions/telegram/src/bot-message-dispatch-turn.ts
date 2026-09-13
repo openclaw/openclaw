@@ -38,6 +38,7 @@ import {
 } from "./bot-message-dispatch-progress.js";
 import {
   deliverReply,
+  deliverPreparedReply,
   formatTelegramGroupThreadReply,
   handleBeforeDeliverCancelled,
   handleReplyError,
@@ -135,6 +136,8 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           delivery: {
             deliverWithProviderMessageSending: async (payload, info) =>
               await deliverReply(turn, payload, info),
+            deliverPreparedWithProviderMessageSending: async (plan, info) =>
+              await deliverPreparedReply(turn, plan, info),
             // The shipped SDK declaration stays void; core still awaits the runtime promise.
             onError: handleDeliveryError as NonNullable<
               ChannelInboundTurnPlan["delivery"]["onError"]

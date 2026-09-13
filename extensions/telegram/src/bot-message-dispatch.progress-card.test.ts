@@ -75,7 +75,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
           "./bot/delivery.replies.js",
         );
         const actualEdit = await vi.importActual<typeof import("./send-edit.js")>("./send-edit.js");
-        deliverReplies.mockImplementation(actualDelivery.deliverReplies);
+        deliverReplies.mockImplementation(actualDelivery.deliverStructuredReplies);
         editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
         let draft: TelegramDraftStream | undefined;
         createTelegramDraftStream.mockImplementation((params) => {

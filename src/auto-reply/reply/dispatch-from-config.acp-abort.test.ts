@@ -7,6 +7,7 @@ import type {
 } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
@@ -1105,6 +1106,13 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           try {
             await options?.onToolResult?.({ text: "late tool should not send" });
             await options?.onBlockReply?.({ text: "late block should not send" });
+            const [plan] = createStructuredOutboundPayloadPlan([
+              { text: "late prepared block should not send" },
+            ]);
+            if (!plan || !options?.onPreparedBlockReply) {
+              throw new Error("Prepared block callback unavailable");
+            }
+            await options.onPreparedBlockReply(plan);
             return { text: "late final should not send" };
           } finally {
             resolverFinished.resolve();

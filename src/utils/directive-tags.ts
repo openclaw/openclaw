@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
+import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 
 export type InlineDirectiveParseResult = {
   text: string;
@@ -17,6 +18,9 @@ type InlineDirectiveParseOptions = {
   currentMessageId?: string;
   stripAudioTag?: boolean;
   stripReplyTags?: boolean;
+  preserveTrailingWhitespace?: boolean;
+  /** Observes each audio directive accepted outside canonical code regions. */
+  onAudioDirective?: () => void;
 };
 
 // TRANSITIONAL(marker-retirement): inline reply/audio markers are the last text
@@ -68,7 +72,12 @@ export function replaceOutsideCodeRegions(
   });
 }
 
-function normalizeDirectiveWhitespace(text: string): string {
+type DirectiveWhitespaceTailMode = "trim" | "preserve" | "normalize";
+
+function normalizeDirectiveWhitespace(
+  text: string,
+  tailMode: DirectiveWhitespaceTailMode = "trim",
+): string {
   // Stash canonical code regions before normalizing prose. Indented code also
   // occurs inside Markdown containers without any backtick or tilde delimiter.
   const blockSentinel = createBlockSentinel(text);
@@ -85,17 +94,20 @@ function normalizeDirectiveWhitespace(text: string): string {
   }
   masked += text.slice(cursor);
 
+  const suffixStart = tailMode === "preserve" ? masked.trimEnd().length : masked.length;
+  const suffix = masked.slice(suffixStart);
   const normalized = masked
+    .slice(0, suffixStart)
     .replace(/\r\n/g, "\n")
     .replace(/([^\s])[ \t]{2,}([^\s])/g, "$1 $2")
     .replace(/^\n+/, "")
     .replace(/^[ \t](?=\S)/, "")
     .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd();
+    .replace(/\n{3,}/g, "\n\n");
 
-  return normalized.replace(blockPlaceholderRe, (_, i) =>
-    expectDefined(blocks[Number(i)], "blocks entry at number(i)"),
+  return (tailMode === "trim" ? normalized.trimEnd() : normalized + suffix).replace(
+    blockPlaceholderRe,
+    (_, i) => expectDefined(blocks[Number(i)], "blocks entry at number(i)"),
   );
 }
 
@@ -131,7 +143,10 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
     : truncateCodePoints(sanitized, MAX_REPLY_DIRECTIVE_ID_LENGTH);
 }
 
-export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
+export function stripInlineDirectiveTagsForDelivery(
+  text: string,
+  options?: { preserveTrailingWhitespace?: boolean },
+): StripInlineDirectiveTagsResult {
   if (!text.includes("[[")) {
     return { text, changed: false };
   }
@@ -163,24 +178,45 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
     if (isInsideCode(marker, (codeRegions ??= findCodeRegions(text)))) {
       continue;
     }
-    parts.push(text.slice(cursor, start), match[0].includes("]]") ? " " : "");
-    cursor = searchFrom;
+    // Padding before the next code block owns its line break and indentation.
+    const preserveCodePadding = codeRegions.some(
+      (region) => region.block && region.start > marker && region.start <= searchFrom,
+    );
+    parts.push(
+      text.slice(cursor, start),
+      !preserveCodePadding && match[0].includes("]]") ? " " : "",
+    );
+    cursor = preserveCodePadding ? start + match[0].trimEnd().length : searchFrom;
   }
-  return cursor === 0
-    ? { text, changed: false }
-    : { text: [...parts, text.slice(cursor)].join("").trim(), changed: true };
+  if (cursor === 0) {
+    return { text, changed: false };
+  }
+  const stripped = [...parts, text.slice(cursor)].join("");
+  return {
+    text: trimTextPreservingCode(stripped, options?.preserveTrailingWhitespace ? "start" : "both"),
+    changed: true,
+  };
 }
 
 export function parseInlineDirectives(
   text?: string,
   options: InlineDirectiveParseOptions = {},
 ): InlineDirectiveParseResult {
-  const { currentMessageId, stripAudioTag = true, stripReplyTags = true } = options;
+  const {
+    currentMessageId,
+    stripAudioTag = true,
+    stripReplyTags = true,
+    preserveTrailingWhitespace = false,
+    onAudioDirective,
+  } = options;
   if (!text) {
     return { text: "", ...NO_INLINE_DIRECTIVES };
   }
   if (!text.includes("[[")) {
-    return { text: normalizeDirectiveWhitespace(text), ...NO_INLINE_DIRECTIVES };
+    return {
+      text: normalizeDirectiveWhitespace(text, preserveTrailingWhitespace ? "preserve" : "trim"),
+      ...NO_INLINE_DIRECTIVES,
+    };
   }
 
   let cleaned = text;
@@ -189,13 +225,29 @@ export function parseInlineDirectives(
   let hasReplyTag = false;
   let sawCurrent = false;
   let lastExplicitId: string | undefined;
+  let removedTrailingDirectiveLine = false;
+  let trailingContentEnd = preserveTrailingWhitespace ? cleaned.trimEnd().length : 0;
+  const stripDirective = (match: string, offset: number, source: string) => {
+    if (
+      preserveTrailingWhitespace &&
+      !removedTrailingDirectiveLine &&
+      offset + match.length === trailingContentEnd
+    ) {
+      const lineStart =
+        Math.max(source.lastIndexOf("\n", offset - 1), source.lastIndexOf("\r", offset - 1)) + 1;
+      removedTrailingDirectiveLine = /^[\t ]*$/.test(source.slice(lineStart, offset));
+    }
+    return replacementPreservesWordBoundary(source, offset, match.length);
+  };
 
   cleaned = replaceOutsideCodeRegions(cleaned, AUDIO_TAG_RE, (match, _captures, offset, source) => {
     audioAsVoice = true;
     hasAudioTag = true;
-    return stripAudioTag ? replacementPreservesWordBoundary(source, offset, match.length) : match;
+    onAudioDirective?.();
+    return stripAudioTag ? stripDirective(match, offset, source) : match;
   });
 
+  trailingContentEnd = preserveTrailingWhitespace ? cleaned.trimEnd().length : 0;
   cleaned = replaceOutsideCodeRegions(cleaned, REPLY_TAG_RE, (match, captures, offset, source) => {
     const idRaw = typeof captures[0] === "string" ? captures[0] : undefined;
     hasReplyTag = true;
@@ -207,14 +259,20 @@ export function parseInlineDirectives(
         lastExplicitId = id;
       }
     }
-    return stripReplyTags ? replacementPreservesWordBoundary(source, offset, match.length) : match;
+    return stripReplyTags ? stripDirective(match, offset, source) : match;
   });
 
   if (!hasAudioTag && !hasReplyTag) {
     return { text, ...NO_INLINE_DIRECTIVES };
   }
 
-  cleaned = normalizeDirectiveWhitespace(cleaned);
+  // Removing a trailing directive-only line exposes separators, not an authored text suffix.
+  const tailMode = preserveTrailingWhitespace
+    ? removedTrailingDirectiveLine
+      ? "normalize"
+      : "preserve"
+    : "trim";
+  cleaned = normalizeDirectiveWhitespace(cleaned, tailMode);
 
   const replyToId =
     lastExplicitId ?? (sawCurrent ? normalizeOptionalString(currentMessageId) : undefined);

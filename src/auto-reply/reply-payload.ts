@@ -193,6 +193,8 @@ export type SessionWriterDeliveryAuthority = {
 };
 
 export type ReplyPayloadMetadata = {
+  /** Raw parsing classified the text as silent before removing its control token. */
+  silentReply?: true;
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;

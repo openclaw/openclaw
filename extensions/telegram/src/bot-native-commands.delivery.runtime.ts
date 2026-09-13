@@ -1,4 +1,8 @@
 // Telegram plugin module implements bot native commandselivery behavior.
-import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
+import {
+  deliverReplies,
+  deliverStructuredReplies,
+  emitTelegramMessageSentHooks,
+} from "./bot/delivery.js";
 
-export { deliverReplies, emitTelegramMessageSentHooks };
+export { deliverReplies, deliverStructuredReplies, emitTelegramMessageSentHooks };

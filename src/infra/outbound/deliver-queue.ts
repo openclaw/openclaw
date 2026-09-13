@@ -11,7 +11,10 @@ import { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import { buildPayloadSummary } from "./deliver-payload.js";
-import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
+import {
+  prepareOutboundPayloadBatch,
+  prepareStructuredOutboundPayloadBatch,
+} from "./deliver-prepare.js";
 import {
   restoreQueuedDeliveryCustody,
   stageAndEnqueueOutboundDelivery,
@@ -39,6 +42,7 @@ import {
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const log = createSubsystemLogger("outbound/deliver");
@@ -62,6 +66,28 @@ export async function runOutboundDelivery(
 export async function runOutboundDeliveryInternal(
   input: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  return await runDelivery(input, prepareOutboundPayloadBatch);
+}
+
+export async function runStructuredOutboundDeliveryInternal(
+  input: Omit<DeliverOutboundPayloadsParams, "payloads"> & {
+    plan: readonly OutboundPayloadPlan[];
+  },
+): Promise<OutboundDeliveryResult[]> {
+  const { plan, ...params } = input;
+  // This batch owns the supplied entries; queue outcome indexes refer to this
+  // batch rather than the earlier producer array from which entries were selected.
+  const batchPlan = plan.map((entry, sourceIndex) => Object.assign({}, entry, { sourceIndex }));
+  return await runDelivery(
+    { ...params, payloads: batchPlan.map((entry) => entry.payload) },
+    (delivery, options) => prepareStructuredOutboundPayloadBatch(delivery, batchPlan, options),
+  );
+}
+
+async function runDelivery(
+  input: DeliverOutboundPayloadsParams,
+  prepare: typeof prepareOutboundPayloadBatch,
+): Promise<OutboundDeliveryResult[]> {
   const owner =
     input.deliveryQueueOwner ??
     (input.deliveryQueueId
@@ -73,7 +99,7 @@ export async function runOutboundDeliveryInternal(
       : undefined);
   try {
     return await runWithQuestionChannelDeliveries(input.payloads.map(readAskUserQuestionId), () =>
-      runOutboundDeliveryWithIntent({ ...input, deliveryQueueOwner: owner }),
+      runOutboundDeliveryWithIntent({ ...input, deliveryQueueOwner: owner }, prepare),
     );
   } catch (error) {
     throw owner ? owner.project(error) : error;
@@ -82,6 +108,7 @@ export async function runOutboundDeliveryInternal(
 
 async function runOutboundDeliveryWithIntent(
   input: DeliverOutboundPayloadsParams,
+  prepare: typeof prepareOutboundPayloadBatch,
 ): Promise<OutboundDeliveryResult[]> {
   const { replyToId, replyToMode, ...currentParams } = input;
   const reply = normalizeOutboundReplyFacts({ reply: input.reply, replyToId, replyToMode });
@@ -97,11 +124,12 @@ async function runOutboundDeliveryWithIntent(
     const claim = await withActiveDeliveryClaim(stableIntentId, async () => {
       const preparation = await withStableDeliveryPreparation({
         id: stableIntentId,
-        run: async (owner) => await runOutboundDeliveryWithQueue(stableParams, true, owner),
+        run: async (owner) =>
+          await runOutboundDeliveryWithQueue(stableParams, prepare, true, owner),
       });
       return preparation.status === "claimed"
         ? preparation.value
-        : await runOutboundDeliveryWithQueue(stableParams, true, undefined, false);
+        : await runOutboundDeliveryWithQueue(stableParams, prepare, true, undefined, false);
     });
     if (claim.status === "claimed") {
       return claim.value;
@@ -114,7 +142,7 @@ async function runOutboundDeliveryWithIntent(
     }
     throw new Error(`Stable delivery intent is already queued: ${stableIntentId}`);
   }
-  return await runOutboundDeliveryWithQueue(params, false);
+  return await runOutboundDeliveryWithQueue(params, prepare, false);
 }
 
 async function deliverWithProducerLease(
@@ -169,6 +197,7 @@ async function deliverWithProducerLease(
 
 async function runOutboundDeliveryWithQueue(
   params: DeliverOutboundPayloadsParams,
+  prepare: typeof prepareOutboundPayloadBatch,
   stableIntentClaimHeld: boolean,
   stablePreparationOwner?: StableDeliveryPreparationOwner,
   allowFreshPreparation = true,
@@ -243,7 +272,7 @@ async function runOutboundDeliveryWithQueue(
     preparedBatch =
       existingStableDelivery?.preparedBatch ??
       params.preparedBatch ??
-      (await prepareOutboundPayloadBatch(params, {
+      (await prepare(params, {
         onBeforeFirstModifier: stablePreparationOwner?.beforeFirstModifier,
       }));
     stablePreparationOwner?.markPrepared();

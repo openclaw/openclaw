@@ -121,6 +121,7 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
 }));
 vi.mock("./bot-native-commands.delivery.runtime.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
+  deliverStructuredReplies: deliveryMocks.deliverReplies,
   emitTelegramMessageSentHooks: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", () => ({
@@ -144,8 +145,14 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   })),
   isPluginOwnedSessionBindingRecord: vi.fn(() => false),
 }));
-vi.mock("./bot/delivery.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
-vi.mock("./bot/delivery.replies.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
+vi.mock("./bot/delivery.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+  deliverStructuredReplies: deliveryMocks.deliverReplies,
+}));
+vi.mock("./bot/delivery.replies.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+  deliverStructuredReplies: deliveryMocks.deliverReplies,
+}));
 
 export function createNativeCommandsHarness(params?: {
   cfg?: OpenClawConfig;

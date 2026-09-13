@@ -23,10 +23,9 @@ type PromptContextRecord = Parameters<
 function createHarness(params?: {
   answerMessageId?: number;
   answerStream?: DraftLaneState["stream"] | null;
-  resolveFinalTextCandidate?: (params: {
-    finalText: string;
-    laneName: LaneName;
-  }) => string | undefined;
+  resolveFinalPayloadCandidate?: Parameters<
+    typeof createLaneTextDeliverer
+  >[0]["resolveFinalPayloadCandidate"];
 }) {
   const answer =
     params?.answerStream === null
@@ -75,7 +74,7 @@ function createHarness(params?: {
     clearDraftLane,
     editStreamMessage,
     createPromptContextSequence,
-    resolveFinalTextCandidate: params?.resolveFinalTextCandidate,
+    resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
     log,
     markDelivered,
   });
@@ -298,7 +297,7 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockReturnValue(nextAssistantBlock);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => nextAssistantBlock,
+      resolveFinalPayloadCandidate: ({ payload }) => ({ ...payload, text: nextAssistantBlock }),
     });
     harness.lanes.answer.lastPartialText = previousBlock;
     harness.lanes.answer.hasStreamedMessage = true;
@@ -413,7 +412,8 @@ describe("createLaneTextDeliverer", () => {
     answer.currentMessageSnapshot.mockReturnValue({ text: fullAnswer, sourceText: fullAnswer });
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
 
     const result = await deliverFinalAnswer(harness, truncatedFinal);
@@ -464,7 +464,8 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockImplementation(() => deliveredText);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
 
     answer.update(fullAnswer);
@@ -494,7 +495,8 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockImplementation(() => deliveredText);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
 
     answer.update(fullAnswer);
@@ -518,7 +520,8 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockReturnValue("older preview");
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
     harness.lanes.answer.lastPartialText = fullAnswer;
     harness.lanes.answer.hasStreamedMessage = true;
@@ -686,6 +689,82 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
+  it("routes a freshly recovered final payload with its media and reply fields", async () => {
+    const truncatedFinal = "A recovered final answer includes a voice note after this opening...";
+    const fullAnswer =
+      "A recovered final answer includes a voice note after this opening paragraph with the remaining explanation and its attachment.";
+    const harness = createHarness({
+      answerMessageId: 999,
+      resolveFinalPayloadCandidate: async ({ payload }) => ({
+        ...payload,
+        text: fullAnswer,
+        mediaUrl: "https://example.invalid/note.ogg",
+        audioAsVoice: true,
+        replyToId: "321",
+        replyToTag: true,
+      }),
+    });
+
+    const result = await deliverFinalAnswer(harness, truncatedFinal);
+
+    expect(result.kind).toBe("sent");
+    expect(harness.answer?.update).not.toHaveBeenCalled();
+    expectSentPayload(
+      harness,
+      {
+        text: fullAnswer,
+        mediaUrl: "https://example.invalid/note.ogg",
+        audioAsVoice: true,
+        replyToId: "321",
+        replyToTag: true,
+      },
+      true,
+    );
+    expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("sends a recovered text final separately when its explicit reply target changes", async () => {
+    const truncatedFinal = "The final answer continues after this sufficiently long opening...";
+    const fullAnswer =
+      "The final answer continues after this sufficiently long opening paragraph and replies to the selected message.";
+    let deliveredText = truncatedFinal;
+    const answer = createTestDraftStream({
+      messageId: 999,
+      onStop: () => {
+        deliveredText = fullAnswer;
+      },
+    });
+    answer.lastDeliveredText.mockImplementation(() => deliveredText);
+    answer.currentMessageSnapshot.mockReturnValue({ text: fullAnswer, sourceText: fullAnswer });
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalPayloadCandidate: async ({ payload }) => ({
+        ...payload,
+        text: fullAnswer,
+        replyToId: "321",
+        replyToTag: true,
+      }),
+    });
+    harness.lanes.answer.lastPartialText = truncatedFinal;
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: truncatedFinal,
+      payload: { text: truncatedFinal, replyToCurrent: true },
+      infoKind: "final",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).not.toHaveBeenCalled();
+    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
+    expectSentPayload(
+      harness,
+      { text: fullAnswer, replyToId: "321", replyToTag: true, replyToCurrent: true },
+      true,
+    );
+  });
+
   it("uses normal media final delivery when no preview has streamed", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 
@@ -798,7 +877,8 @@ describe("createLaneTextDeliverer", () => {
     answer.currentMessageSnapshot.mockReturnValue({ text: fullAnswer, sourceText: fullAnswer });
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
     harness.lanes.answer.hasStreamedMessage = true;
 

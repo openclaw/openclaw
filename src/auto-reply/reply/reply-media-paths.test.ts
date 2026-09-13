@@ -6,7 +6,11 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../reply-payload.js";
 
 const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrl = vi.hoisted(() => vi.fn());
@@ -518,20 +522,57 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("keeps surviving media and appends a named receipt for each dropped item", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
-      new LocalMediaAccessError("not-found", "missing test fixture"),
-    );
+    const localSource = "./out/clip.mp4";
+    const stagedSource = "/tmp/outbound-media/clip.mp4";
+    const remoteSource = "https://example.com/ok.png";
+    resolveOutboundAttachmentFromUrl
+      .mockRejectedValueOnce(new LocalMediaAccessError("not-found", "missing test fixture"))
+      .mockResolvedValueOnce({ path: stagedSource, contentType: "video/mp4" });
     const normalize = createTestReplyMediaNormalizer();
-
-    const result = await normalize({
+    const payload: ReplyPayload = {
       text: "Here is the surviving attachment",
-      mediaUrls: ["./out/missing.png", "https://example.com/ok.png"],
-    });
+      mediaUrls: ["./out/missing.png", remoteSource, localSource],
+      attachments: [
+        {
+          type: "video",
+          path: localSource,
+          url: localSource,
+          mediaUrl: localSource,
+          filePath: localSource,
+          name: "Local clip.mp4",
+          mimeType: "video/mp4",
+          durationMs: 1_500,
+          width: 640,
+          height: 360,
+        },
+        { url: remoteSource, name: "Remote chart.png", mimeType: "image/png" },
+      ],
+    };
+    const original = structuredClone(payload);
+
+    const result = await normalize(payload);
 
     expect(result.text).toBe(
       "Here is the surviving attachment\n⚠️ missing.png: File not found. Check the path and try again.",
     );
-    expectMedia(result, "https://example.com/ok.png", ["https://example.com/ok.png"]);
+    expectMedia(result, remoteSource, [remoteSource, stagedSource]);
+    expect(result.attachments).toEqual([
+      { url: remoteSource, name: "Remote chart.png", mimeType: "image/png" },
+      {
+        type: "video",
+        path: stagedSource,
+        url: stagedSource,
+        mediaUrl: stagedSource,
+        filePath: stagedSource,
+        name: "Local clip.mp4",
+        mimeType: "video/mp4",
+        durationMs: 1_500,
+        width: 640,
+        height: 360,
+        trustedLocalMedia: true,
+      },
+    ]);
+    expect(payload).toEqual(original);
   });
 
   it("returns a warning-only text reply when media-only output is dropped upstream", async () => {

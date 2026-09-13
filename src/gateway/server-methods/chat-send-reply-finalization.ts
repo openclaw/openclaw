@@ -10,7 +10,7 @@ import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachment
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  buildAssistantReplyContent,
+  buildAssistantReplyContentFromInputs,
   combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
@@ -24,20 +24,20 @@ import {
   isBtwReplyPayload,
 } from "./chat-broadcast.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
-import { selectChatSendFinalReplyPayloads } from "./chat-send-command-replies.js";
+import {
+  readChatSendReplyPayload,
+  replaceChatSendReplyPayload,
+  selectChatSendFinalReplyInputs,
+  type DeliveredChatSendReply,
+} from "./chat-send-command-replies.js";
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import { buildTranscriptReplyText } from "./chat-send-reply-dispatch.js";
+import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import { buildMediaOnlyTtsSupplementTranscriptMarker } from "./chat-tts-markers.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 import type { GatewayRequestContext } from "./types.js";
-
-type DeliveredReply = {
-  payload: ReplyPayload;
-  kind: "block" | "final";
-};
 
 type TranscriptMirrorOwner = {
   agentId?: string;
@@ -120,8 +120,10 @@ function resolveTranscriptMirrorOwner(
   };
 }
 
-function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[]) {
-  const replies = deliveredReplies.map((entry) => entry.payload).filter(isBtwReplyPayload);
+function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredChatSendReply[]) {
+  const replies = deliveredReplies
+    .map((entry) => readChatSendReplyPayload(entry.input))
+    .filter(isBtwReplyPayload);
   const text = combineNonStreamingReplyParts(replies.map((payload) => payload.text));
   if (replies.length === 0 || !text) {
     return undefined;
@@ -137,7 +139,7 @@ function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[])
 export async function finalizeChatSendDispatchedReplies(params: {
   accountId: string | undefined;
   context: GatewayRequestContext;
-  deliveredReplies: readonly DeliveredReply[];
+  deliveredReplies: readonly DeliveredChatSendReply[];
   emitFirstAssistantServerTiming: () => void;
   foldCommandBlocks: boolean;
   persistUserTurnTranscript: () => Promise<void>;
@@ -184,11 +186,12 @@ export async function finalizeChatSendDispatchedReplies(params: {
     return;
   }
 
-  const rawFinalPayloads = selectChatSendFinalReplyPayloads({
+  const selectedInputs = selectChatSendFinalReplyInputs({
     deliveredReplies,
     foldCommandBlocks,
     suppressReplies,
   });
+  const rawFinalPayloads = selectedInputs.map(readChatSendReplyPayload);
   const deliveryAuthorized = () =>
     rawFinalPayloads.every((payload) =>
       isChatSendReplyDeliveryAuthorized({ agentId, payload, sessionLoadOptions }),
@@ -211,6 +214,10 @@ export async function finalizeChatSendDispatchedReplies(params: {
     agentId,
     accountId,
     payloads: rawFinalPayloads,
+  });
+  const finalInputs = selectedInputs.flatMap((input, index) => {
+    const payload = finalPayloads[index];
+    return payload ? replaceChatSendReplyPayload(input, payload) : [];
   });
   const requestedTranscriptSession = transcriptMirrorOwner
     ? loadSessionEntry(transcriptMirrorOwner.sessionKey, {
@@ -262,28 +269,32 @@ export async function finalizeChatSendDispatchedReplies(params: {
     latestStorePath ? [latestStorePath] : undefined,
   );
   let managedMediaPrepareFailed = false;
-  const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(finalPayloads, {
-    localRoots: mediaLocalRoots,
-    onLocalAudioAccessDenied: (err) => {
-      context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
+  const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
+    finalInputs.map(readChatSendReplyPayload),
+    {
+      localRoots: mediaLocalRoots,
+      onLocalAudioAccessDenied: (err) => {
+        context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
+      },
     },
-  });
-  const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
-    sessionKey: transcriptSessionKey,
-    agentId: transcriptAgentId,
-    payloads: finalPayloads,
-    transcriptMediaMessage: mediaMessage,
-    managedMediaLocalRoots: mediaLocalRoots,
-    includeSensitiveMedia: false,
-    includeSensitiveDisplay: true,
-    onManagedMediaPrepareError: (message) => {
-      managedMediaPrepareFailed = true;
-      context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-    },
-    onSensitiveDisplayPrepareError: (message) => {
-      context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
-    },
-  });
+  );
+  const { assistantContent, persistedAssistantContent } =
+    await buildAssistantReplyContentFromInputs({
+      sessionKey: transcriptSessionKey,
+      agentId: transcriptAgentId,
+      inputs: finalInputs,
+      transcriptMediaMessage: mediaMessage,
+      managedMediaLocalRoots: mediaLocalRoots,
+      includeSensitiveMedia: false,
+      includeSensitiveDisplay: true,
+      onManagedMediaPrepareError: (message) => {
+        managedMediaPrepareFailed = true;
+        context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
+      },
+      onSensitiveDisplayPrepareError: (message) => {
+        context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
+      },
+    });
   const ttsSupplementMarker = finalPayloads
     .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
     .find((marker): marker is GatewayInjectedTtsSupplementMarker => Boolean(marker));
@@ -296,13 +307,14 @@ export async function finalizeChatSendDispatchedReplies(params: {
       ? mediaMessage?.content
       : assistantContent;
   const displayReply =
-    extractAssistantDisplayText(assistantContent) ?? buildTranscriptReplyText(finalPayloads);
+    extractAssistantDisplayText(assistantContent) ??
+    buildTranscriptReplyTextFromInputs(finalInputs);
   const transcriptDisplayReply = displayReply?.trim() ?? "";
   const transcriptReply =
     mediaMessage?.transcriptText ||
     (managedMediaPrepareFailed
       ? transcriptDisplayReply
-      : buildTranscriptReplyText(finalPayloads)) ||
+      : buildTranscriptReplyTextFromInputs(finalInputs)) ||
     transcriptDisplayReply;
   let message: Record<string, unknown> | undefined;
   const payloadOwnsAssistantTranscript = rawFinalPayloads.some(

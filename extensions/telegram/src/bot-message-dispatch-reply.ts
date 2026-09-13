@@ -2,6 +2,7 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { OutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isFastModeAutoProgressPayload,
@@ -17,6 +18,7 @@ import {
   deliverFinalAnswerText,
   handlePreviewFinalizedResult,
   normalizeDeliveryPayload,
+  normalizePreparedDeliveryPayload,
   registerTelegramQuestionDeliveryForMessage,
   sendPayload,
 } from "./bot-message-dispatch-delivery.js";
@@ -226,8 +228,25 @@ export function formatTelegramGroupThreadReply(
 
 export async function deliverReply(
   turn: Turn,
-  incomingPayload: Parameters<NonNullable<Deliver>>[0],
+  payload: Parameters<NonNullable<Deliver>>[0],
   info: Parameters<NonNullable<Deliver>>[1],
+): Promise<TelegramReplyDeliveryResult> {
+  return deliverReplyWithNormalization(turn, payload, info, normalizeDeliveryPayload);
+}
+
+export async function deliverPreparedReply(
+  turn: Turn,
+  plan: OutboundPayloadPlan,
+  info: Parameters<NonNullable<Deliver>>[1],
+): Promise<TelegramReplyDeliveryResult> {
+  return deliverReplyWithNormalization(turn, plan.payload, info, normalizePreparedDeliveryPayload);
+}
+
+async function deliverReplyWithNormalization(
+  turn: Turn,
+  incomingPayload: ReplyPayload,
+  info: Parameters<NonNullable<Deliver>>[1],
+  normalizePayload: typeof normalizeDeliveryPayload,
 ): Promise<TelegramReplyDeliveryResult> {
   if (turn.isSuperseded()) {
     return await settleTerminalNoVisibleDelivery(turn, info, { abandonBufferedFinal: true });
@@ -239,7 +258,7 @@ export async function deliverReply(
       text: formatTelegramGroupThreadReply(payload.text ?? "", info.participant),
     };
   }
-  const normalizedPayload = normalizeDeliveryPayload(turn, payload);
+  const normalizedPayload = normalizePayload(turn, payload);
   if (!normalizedPayload) {
     return await settleTerminalNoVisibleDelivery(turn, info);
   }

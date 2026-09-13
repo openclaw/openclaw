@@ -264,7 +264,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitReasoningStream,
     flushBlockReplyBuffer,
     resetAssistantMessageState,
-    resetBlockReplyDirectives,
     resetPartialReplyDirectives,
     stripBlockTags,
   } = streamRendering;
@@ -383,7 +382,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     clearDeferredBlockReplies,
     emitReasoningStream,
     consumePartialReplyDirectives,
-    resetBlockReplyDirectives,
     resetPartialReplyDirectives,
     resetAssistantMessageState,
     resetForCompactionRetry,

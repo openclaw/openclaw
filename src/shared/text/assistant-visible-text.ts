@@ -14,6 +14,7 @@ import {
   applyTextFilters,
   leadingEmptyLinesTextFilter,
   trimTextFilter,
+  trimTextPreservingCode,
   type TextFilter,
 } from "./text-projection.js";
 
@@ -700,7 +701,10 @@ function stripDowngradedToolCalls(input: string): string {
  * Strip downgraded tool call text representations that leak into user-visible
  * text content when replaying history across providers.
  */
-export function stripDowngradedToolCallText(text: string): string {
+export function stripDowngradedToolCallText(
+  text: string,
+  options?: { preserveTrailingWhitespace?: boolean },
+): string {
   if (!text || (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text))) {
     return text;
   }
@@ -716,7 +720,16 @@ export function stripDowngradedToolCallText(text: string): string {
       isInsideCode(offset, (codeRegions ??= findCodeRegions(input))) ? match : "",
     );
   }
-  return cleaned.trim();
+  return trimTextPreservingCode(cleaned, options?.preserveTrailingWhitespace ? "start" : "both");
+}
+
+export function downgradedToolCallTextFilter(options?: {
+  preserveTrailingWhitespace?: boolean;
+}): TextFilter {
+  return {
+    transform: (text) => stripDowngradedToolCallText(text, options),
+    activationTokens: ["[Tool Call", "[Tool Result", "[Historical context"],
+  };
 }
 
 function stripRelevantMemoriesTags(text: string): string {
@@ -784,21 +797,28 @@ const profileFilters = new Map<string, readonly TextFilter[]>();
 export function assistantVisibleTextFilters(
   profile: AssistantVisibleTextSanitizerProfile,
   streaming = false,
+  options?: { preserveTrailingWhitespace?: boolean },
 ): readonly TextFilter[] {
-  const key = `${profile}:${streaming}`;
+  const key = `${profile}:${streaming}:${Boolean(options?.preserveTrailingWhitespace)}`;
   const cached = profileFilters.get(key);
   if (cached) {
     return cached;
   }
   const preserve = profile === "internal-scaffolding";
-  const trim = preserve || profile === "history" ? "none" : "both";
+  const preserveCodeIndentation = profile === "delivery" || profile === "final-answer-delivery";
+  const trim =
+    preserve || profile === "history"
+      ? "none"
+      : options?.preserveTrailingWhitespace
+        ? "start"
+        : "both";
   const reasoning: TextFilter = {
     activationTokens: ["<"],
     transform: (text) =>
       stripReasoningTagsFromText(text, {
         mode: preserve ? "preserve" : "strict",
         scope: profile === "final-answer-delivery" ? "leading" : "all",
-        trim,
+        trim: preserveCodeIndentation ? "none" : trim,
         // An unfinished stream cannot use terminal malformed-output recovery.
         recoverUnclosed: !streaming,
       }),
@@ -819,14 +839,16 @@ export function assistantVisibleTextFilters(
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
     { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
     plainToolCallTextFilter,
-    ...(!preserve ? [{ transform: stripDowngradedToolCallText, activationTokens: ["["] }] : []),
+    ...(!preserve ? [downgradedToolCallTextFilter(options)] : []),
   ];
   if (preserve) {
     filters.unshift(reasoning);
   } else {
     filters.push(reasoning);
   }
-  filters.push(preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim));
+  filters.push(
+    preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
+  );
   profileFilters.set(key, filters);
   return filters;
 }

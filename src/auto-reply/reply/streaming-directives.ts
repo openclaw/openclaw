@@ -22,7 +22,10 @@ type ConsumeOptions = {
 // live drafts still carry inline markers mid-run. Delete alongside the marker
 // parser when the visibleReplies default flips to "message_tool".
 // Hold incomplete tails until the inline parser can read complete reply/audio tags.
-export const splitTrailingDirective = (text: string): { text: string; tail: string } => {
+export const splitTrailingDirective = (
+  text: string,
+  options?: { preserveTrailingWhitespace?: boolean },
+): { text: string; tail: string } => {
   let bufferStart = text.length;
   let trimTextBeforeTail = false;
 
@@ -63,7 +66,10 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
   }
 
   return {
-    text: trimTextBeforeTail ? text.slice(0, bufferStart).trimEnd() : text.slice(0, bufferStart),
+    text:
+      trimTextBeforeTail && !options?.preserveTrailingWhitespace
+        ? text.slice(0, bufferStart).trimEnd()
+        : text.slice(0, bufferStart),
     tail: text.slice(bufferStart),
   };
 };

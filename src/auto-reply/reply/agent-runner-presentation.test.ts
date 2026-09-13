@@ -1,8 +1,11 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it, vi } from "vitest";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import { appendReplyMediaFailures } from "../reply-payload.js";
 import {
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
@@ -14,7 +17,11 @@ import {
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyOperation } from "./reply-run-registry.operation.js";
+import { createTypingSignaler } from "./typing-mode.js";
+import { createTypingController } from "./typing.js";
 
 function normalizeStreamingTextReference(
   payload: ReplyPayload,
@@ -56,7 +63,12 @@ function createPresentation(
     isHeartbeat?: boolean;
     silentExpected?: boolean;
     conversationContext?: string;
+    normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
     replyOperation?: AgentTurnParams["replyOperation"];
+    delivery?: Pick<
+      AgentTurnParams,
+      "opts" | "typingSignals" | "blockStreamingEnabled" | "blockReplyPipeline" | "applyReplyToMode"
+    >;
   } = {},
 ) {
   const turn = {
@@ -65,10 +77,13 @@ function createPresentation(
     sessionCtx: { agentText: options.conversationContext },
     opts: undefined,
     replyOperation: options.replyOperation,
+    ...options.delivery,
   } as unknown as AgentTurnParams;
   return createAgentTurnPresentation({
     turn,
-    replyMediaContext: { normalizePayload: async (payload) => payload },
+    replyMediaContext: {
+      normalizePayload: options.normalizeMediaPaths ?? (async (payload) => payload),
+    },
     directlySentBlockKeys: new Set(),
     directBlockDeliveries: [],
     heartbeatState: { didLogStrip: false },
@@ -88,6 +103,155 @@ function cumulativePrefixes(text: string, seed: number): string[] {
 }
 
 describe("agent runner streaming presentation", () => {
+  it.each([
+    { name: "cleaned silent token", caption: "NO_REPLY", silent: true },
+    { name: "cleaned silent envelope", caption: '{"action":"NO_REPLY"}', silent: true },
+    { name: "ordinary code-literal caption", caption: "Use `NO_REPLY` literally.", silent: false },
+  ])("preserves $name policy across attachment normalization", async ({ caption, silent }) => {
+    const retainedMedia = "https://example.invalid/retained.png";
+    const delivered = vi.fn(async (_payload: ReplyPayload) => {});
+    const typing = createTypingController({});
+    const presentation = createPresentation({
+      normalizeMediaPaths: async (payload) => ({
+        ...payload,
+        text: appendReplyMediaFailures(payload.text, [
+          { code: "delivery-failed", kind: "image", label: "Example" },
+        ]),
+        mediaUrl: retainedMedia,
+        mediaUrls: [retainedMedia],
+      }),
+      delivery: {
+        opts: { onPreparedBlockReply: async (plan) => delivered(plan.payload) },
+        blockStreamingEnabled: true,
+        blockReplyPipeline: null,
+        applyReplyToMode: (payload) => payload,
+        typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+      },
+    });
+    const handler = presentation.blockReplyHandler;
+    if (!handler) {
+      throw new Error("expected the prepared block delivery handler");
+    }
+    try {
+      await handler({
+        text: `[tool calls omitted]\n${caption}`,
+        mediaUrls: ["https://example.invalid/failed.png", retainedMedia],
+      });
+      expect(delivered.mock.calls.map(([payload]) => payload.text)).toEqual([
+        silent
+          ? ""
+          : "Use `NO_REPLY` literally.\n⚠️ Example: Delivery failed. Try sending this file again.",
+      ]);
+      expect(
+        delivered.mock.calls.map(
+          ([payload]) => resolveSendableOutboundReplyParts(payload).mediaUrls,
+        ),
+      ).toEqual([[retainedMedia]]);
+    } finally {
+      typing.cleanup();
+    }
+  });
+
+  it.each(["NO_REPLY", '{"action":"NO_REPLY"}'])(
+    "suppresses cleaned silent blocks before coalesced prepared delivery: %s",
+    async (silentText) => {
+      const { createSubscribedSessionHarness } =
+        await import("../../agents/embedded-agent-subscribe.e2e-harness.js");
+      const delivered = vi.fn(async (_payload: ReplyPayload) => {});
+      const dispatcher = createReplyDispatcher({
+        deliver: delivered,
+        deliverPrepared: async (plan) => delivered(plan.payload),
+      });
+      const forwardPrepared: NonNullable<
+        NonNullable<AgentTurnParams["opts"]>["onPreparedBlockReply"]
+      > = async (plan) => {
+        dispatcher.sendPreparedReply("block", plan);
+        await dispatcher.waitForIdle();
+      };
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (payload) => {
+          for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+            await forwardPrepared(plan);
+          }
+        },
+        timeoutMs: 0,
+        coalescing: { minChars: 1, maxChars: 1200, idleMs: 0, joiner: "\n\n" },
+      });
+      const typing = createTypingController({});
+      const presentation = createPresentation({
+        delivery: {
+          opts: { onPreparedBlockReply: forwardPrepared },
+          blockStreamingEnabled: true,
+          blockReplyPipeline: pipeline,
+          applyReplyToMode: (payload) => payload,
+          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+        },
+      });
+      const handler = presentation.blockReplyHandler;
+      if (!handler) {
+        throw new Error("expected the prepared block delivery handler");
+      }
+      const blocks: string[] = [];
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "run-cleaned-silence",
+        onBlockReply: async (payload) => {
+          blocks.push(payload.text ?? "");
+          await handler(payload);
+        },
+        blockReplyBreak: "text_end",
+        blockReplyChunking: {
+          minChars: 1,
+          maxChars: 1200,
+          breakPreference: "paragraph",
+          flushOnParagraph: true,
+        },
+      });
+      const source = `First.\n\n[tool calls omitted]\n${silentText}\n\nLast.\n\n`;
+      const message = makeAgentAssistantMessage({
+        api: "google-generative-ai",
+        provider: "google",
+        model: "gemini-2.5-flash",
+        content: [{ type: "text", text: source }],
+      });
+      try {
+        emit({ type: "message_start", message: { ...message, content: [] } });
+        emit({
+          type: "message_update",
+          message,
+          assistantMessageEvent: {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: source,
+            partial: message,
+          },
+        });
+        emit({
+          type: "message_update",
+          message,
+          assistantMessageEvent: {
+            type: "text_end",
+            contentIndex: 0,
+            content: source,
+            partial: message,
+          },
+        });
+        emit({ type: "message_end", message });
+        await subscription.waitForPendingEvents();
+        await pipeline.flush({ force: true });
+        await dispatcher.waitForIdle();
+
+        expect(blocks).toEqual(["First.", `[tool calls omitted]\n${silentText}`, "Last."]);
+        expect(delivered.mock.calls.map(([payload]) => payload.text)).toEqual(["First.\n\nLast."]);
+      } finally {
+        subscription.unsubscribe();
+        pipeline.stop();
+        typing.cleanup();
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+    },
+  );
+
   it.each(["active", "committed", "completed"] as const)(
     "fences delayed typing when the reply operation is %s",
     async (ending) => {

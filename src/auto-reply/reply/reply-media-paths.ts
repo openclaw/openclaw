@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
@@ -337,7 +338,8 @@ export function createReplyMediaPathNormalizer(params: {
     const seen = new Set<string>();
     let hasTrustedLocalMedia = payload.trustedLocalMedia === true;
     const mediaFailures: ReplyMediaFailure[] = [];
-    for (const [mediaIndex, media] of mediaList.entries()) {
+    const mediaEntries = collectReplyMediaEntries(payload, mediaList);
+    for (const [mediaIndex, { url: media, attachment }] of mediaEntries.entries()) {
       let normalized: Awaited<ReturnType<typeof normalizeMediaSource>>;
       try {
         normalized = await normalizeMediaSource(media);
@@ -352,15 +354,23 @@ export function createReplyMediaPathNormalizer(params: {
       seen.add(normalized.mediaUrl);
       normalizedMedia.push(normalized.mediaUrl);
       hasTrustedLocalMedia ||= normalized.trustedLocalMedia;
-      const existingAttachment = payload.attachments?.[mediaIndex] ?? {};
-      normalizedAttachments.push({
+      const existingAttachment = attachment ?? {};
+      const normalizedAttachment = {
         ...existingAttachment,
         ...(normalized.fileName && !existingAttachment.name ? { name: normalized.fileName } : {}),
         ...(normalized.mimeType && !existingAttachment.mimeType
           ? { mimeType: normalized.mimeType }
           : {}),
         ...(normalized.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
-      });
+      };
+      if (normalized.mediaUrl !== media) {
+        for (const field of ["path", "url", "mediaUrl", "filePath"] as const) {
+          if (normalizedAttachment[field] !== undefined) {
+            normalizedAttachment[field] = normalized.mediaUrl;
+          }
+        }
+      }
+      normalizedAttachments.push(normalizedAttachment);
     }
 
     const text = appendReplyMediaFailures(payload.text, mediaFailures);

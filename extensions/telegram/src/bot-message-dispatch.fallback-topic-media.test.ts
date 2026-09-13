@@ -3,6 +3,7 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -365,7 +366,9 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
         telegramDeps: telegramDepsForTest,
       });
 
-      expect(finalDeliveryPayload().mediaUrls).toEqual([]);
+      const finalPayload = finalDeliveryPayload();
+      expect(resolveSendableOutboundReplyParts(finalPayload).mediaUrls).toEqual([]);
+      expect(finalPayload.text).toBe("Here is the image");
     });
 
     it("does not restore block-sent legacy media when the final includes another attachment", async () => {

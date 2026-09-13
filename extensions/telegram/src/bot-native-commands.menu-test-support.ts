@@ -47,11 +47,13 @@ export const emitTelegramMessageSentHooks: UnknownMock = deliveryMocks.emitTeleg
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+  deliverStructuredReplies: deliverReplies,
   emitTelegramMessageSentHooks,
 }));
 
 vi.mock("./bot/delivery.replies.js", () => ({
   deliverReplies,
+  deliverStructuredReplies: deliverReplies,
 }));
 
 export async function waitForRegisteredCommands(

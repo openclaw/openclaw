@@ -300,6 +300,28 @@ raw callback string. Actor and source-message checks remain channel-owned.
       Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
       when a native reply target was resolved, so payload helpers can preserve
       explicit reply tags without consuming an implicit single-use reply slot.
+
+      For payload planning, `openclaw/plugin-sdk/channel-outbound` exports
+      `createOutboundPayloadPlan(payloads, context)` for raw reply text, including
+      legacy reply/audio tags, `MEDIA:` directives, and optional Markdown-image
+      extraction. Use `createStructuredOutboundPayloadPlan(payloads)` only after
+      the producer has resolved those controls into explicit payload fields.
+      The structured planner does not reinterpret remaining text as delivery
+      directives or silence tokens. Downstream automatic-reply silence policy
+      still applies, and channels retain their opted-in presentation transforms,
+      including Markdown-image extraction. Both operations use
+      `projectOutboundPayloadPlanForDelivery(plan)` for their delivery projection.
+
+      Streaming delivery can carry one `OutboundPayloadPlan` through the optional
+      `onPreparedBlockReply(plan, context)`, dispatcher `sendPreparedReply(kind, plan)`,
+      and adapter `deliverPrepared(plan, info)` operations. Modifiers rebuild that
+      plan from the changed payload fields without reinterpreting literal text.
+      Channel turn adapters can forward the same plan through
+      `deliverPreparedWithProviderMessageSending`, and durable inbound delivery uses
+      `deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan })`.
+      Existing raw callbacks remain supported. An older adapter receives the
+      payload through its original callback; it must adopt the prepared operation
+      to avoid reparsing literal text in its own normalization code.
     </Accordion>
 
     ### Group tool-policy adapters

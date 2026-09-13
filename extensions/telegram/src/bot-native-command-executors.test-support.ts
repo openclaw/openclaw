@@ -264,9 +264,11 @@ vi.mock("./bot-native-commands.runtime.js", () => {
 });
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
+  deliverStructuredReplies: deliveryMocks.deliverReplies,
 }));
 vi.mock("./bot/delivery.replies.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
+  deliverStructuredReplies: deliveryMocks.deliverReplies,
 }));
 
 export let activePluginRegistry: ReturnType<typeof createEmptyPluginRegistry>;

@@ -40,7 +40,6 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
-  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
@@ -115,7 +114,6 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     runtimeCfg: OpenClawConfig;
     runtimeTelegramCfg: TelegramAccountConfig;
     turnSettings: ReturnType<typeof resolveTelegramMessageTurnSettings>;
-    threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     threadParams: ReturnType<typeof buildTelegramThreadParams>;
     route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
     mediaLocalRoots: readonly string[] | undefined;
@@ -445,10 +443,7 @@ export async function prepareTelegramCommandDispatch(
     dmThreadId: auth.threadSpec.scope === "dm" ? auth.threadSpec.id : undefined,
     botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(params.botUser),
   });
-  const buildDeliveryBaseOptions = (keys?: {
-    sessionKeyForInternalHooks?: string;
-    policySessionKey?: string;
-  }): DeliveryBaseOptions => ({
+  const buildDeliveryBaseOptions: TelegramCommandDispatch["buildDeliveryBaseOptions"] = (keys) => ({
     cfg: runtimeCfg,
     ownerAgentId: params.opts.ownerAgentId,
     chatId: String(auth.chatId),
@@ -477,7 +472,6 @@ export async function prepareTelegramCommandDispatch(
     runtimeTelegramCfg,
     turnSettings,
     ...auth,
-    threadSpec: auth.threadSpec,
     threadParams: buildTelegramThreadParams(auth.threadSpec),
     route,
     mediaLocalRoots,
@@ -552,10 +546,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
         }),
     ConversationLabel: conversationLabel,
     GroupSubject: dispatch.isGroup ? (dispatch.msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt:
-      dispatch.isGroup || (!dispatch.isGroup && dispatch.groupConfig)
-        ? groupSystemPrompt
-        : undefined,
+    GroupSystemPrompt: dispatch.isGroup || dispatch.groupConfig ? groupSystemPrompt : undefined,
     SenderName: buildSenderName(dispatch.msg),
     SenderId: dispatch.senderId || undefined,
     SenderUsername: dispatch.senderUsername || undefined,
@@ -588,7 +579,45 @@ export async function dispatchTelegramBuiltinTurn(params: {
     sessionKeyForInternalHooks: commandSessionKey,
     policySessionKey: commandTargetSessionKey,
   });
-  const { deliverReplies } = await dispatch.loadDeliveryRuntime();
+  const { deliverReplies, deliverStructuredReplies } = await dispatch.loadDeliveryRuntime();
+  type ProviderDeliver =
+    ChannelInboundTurnPlan<"provider_message_sending">["delivery"]["deliverWithProviderMessageSending"];
+  const deliverPayload = async (
+    payload: Parameters<ProviderDeliver>[0],
+    info: Parameters<ProviderDeliver>[1],
+    sendReplies: typeof deliverReplies,
+  ) => {
+    if (
+      shouldSuppressLocalTelegramExecApprovalPrompt({
+        cfg: dispatch.runtimeCfg,
+        accountId: dispatch.route.accountId,
+        payload,
+      })
+    ) {
+      deliveryState.delivered = true;
+      return { visibleReplySent: false, suppression: { reason: "no_visible_result" as const } };
+    }
+    const targetedPayload = payload.replyToId
+      ? payload
+      : { ...payload, replyToId: String(dispatch.msg.message_id) };
+    const result = await sendReplies({
+      replies: [
+        info.bindPendingFinalDelivery
+          ? info.bindPendingFinalDelivery(targetedPayload)
+          : targetedPayload,
+      ],
+      ...deliveryBaseOptions,
+      silent: dispatch.runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
+    });
+    if (result.delivered) {
+      deliveryState.delivered = true;
+    }
+    return result.delivered
+      ? { visibleReplySent: true }
+      : { visibleReplySent: false, suppression: { reason: "no_visible_result" as const } };
+  };
   const turnPlan: ChannelInboundTurnPlan<"provider_message_sending"> = {
     cfg: dispatch.runtimeCfg,
     channel: "telegram",
@@ -619,39 +648,10 @@ export async function dispatchTelegramBuiltinTurn(params: {
       },
     },
     delivery: {
-      deliverWithProviderMessageSending: async (payload, info) => {
-        if (
-          shouldSuppressLocalTelegramExecApprovalPrompt({
-            cfg: dispatch.runtimeCfg,
-            accountId: dispatch.route.accountId,
-            payload,
-          })
-        ) {
-          deliveryState.delivered = true;
-          return { visibleReplySent: false, suppression: { reason: "no_visible_result" } };
-        }
-        const targetedPayload = payload.replyToId
-          ? payload
-          : { ...payload, replyToId: String(dispatch.msg.message_id) };
-        const result = await deliverReplies({
-          replies: [
-            info.bindPendingFinalDelivery
-              ? info.bindPendingFinalDelivery(targetedPayload)
-              : targetedPayload,
-          ],
-          ...deliveryBaseOptions,
-          silent:
-            dispatch.runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
-          onPlatformSendDispatch: info.onPlatformSendDispatch,
-          assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
-        });
-        if (result.delivered) {
-          deliveryState.delivered = true;
-        }
-        return result.delivered
-          ? { visibleReplySent: true }
-          : { visibleReplySent: false, suppression: { reason: "no_visible_result" as const } };
-      },
+      deliverWithProviderMessageSending: (payload, info) =>
+        deliverPayload(payload, info, deliverReplies),
+      deliverPreparedWithProviderMessageSending: (plan, info) =>
+        deliverPayload(plan.payload, info, deliverStructuredReplies),
       onDelivered: (_payload, info, result) => {
         const reason = result?.suppression?.reason;
         if (info.kind === "final" && result?.visibleReplySent) {

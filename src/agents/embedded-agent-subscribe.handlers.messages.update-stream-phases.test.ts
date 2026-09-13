@@ -464,7 +464,7 @@ describe("handleMessageUpdate text signatures", () => {
       }),
     );
 
-    expect(ctx.blockChunker.bufferedText).toBe("Done.");
+    expect(ctx.blockChunker.bufferedText).toBe("Done.\n\n");
     expect(
       consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
         text: "Done.",

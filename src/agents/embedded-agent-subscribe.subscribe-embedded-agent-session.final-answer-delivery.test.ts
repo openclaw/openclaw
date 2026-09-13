@@ -25,6 +25,59 @@ import {
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 describe("text_end snapshot reconciliation", () => {
+  it("does not replay compact Responses items when message_end becomes cumulative", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const items = [
+      { id: "item-a", text: "Alpha" },
+      { id: "item-b", text: "Beta" },
+    ];
+    const base = createOpenAiResponsesPartial({
+      text: "",
+      id: "item-a",
+      signaturePhase: "final_answer",
+    });
+    try {
+      emit({ type: "message_start", message: base });
+      for (const [contentIndex, item] of items.entries()) {
+        const partial = createOpenAiResponsesPartial({
+          ...item,
+          signaturePhase: "final_answer",
+        });
+        for (const type of ["text_delta", "text_end"] as const) {
+          emit({
+            type: "message_update",
+            message: partial,
+            assistantMessageEvent: {
+              type,
+              contentIndex,
+              partial,
+              ...(type === "text_delta" ? { delta: item.text } : { content: item.text }),
+            },
+          });
+        }
+        await subscription.waitForPendingEvents();
+        expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(
+          items.slice(0, contentIndex + 1).map(({ text }) => text),
+        );
+      }
+      const message = {
+        ...base,
+        content: items.map((item) =>
+          createOpenAiResponsesTextBlock({ ...item, phase: "final_answer" }),
+        ),
+      };
+      for (let repeat = 0; repeat < 2; repeat++) {
+        emit({ type: "message_end", message });
+        await subscription.waitForPendingEvents();
+        expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Alpha", "Beta"]);
+        expect(onBlockReply).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      subscription.unsubscribe();
+    }
+  });
+
   it.each([
     { name: "hidden reasoning", prefix: "<think>private reasoning</think>", audioAsVoice: false },
     {
@@ -530,6 +583,75 @@ describe("subscribeEmbeddedAgentSession", () => {
       subscription.unsubscribe();
     }
   });
+
+  it.each([
+    { provider: "google", delivery: "terminal-only" },
+    { provider: "responses", delivery: "terminal-only" },
+    { provider: "google", delivery: "streamed" },
+    { provider: "responses", delivery: "streamed" },
+  ] as const)(
+    "preserves $delivery indented code in $provider replies",
+    async ({ provider, delivery }) => {
+      const text = "    const value = 1;\n    use(value);";
+      const onBlockReply = vi.fn();
+      const onAgentEvent = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "run-terminal-indented-code",
+        onBlockReply,
+        onAgentEvent,
+        blockReplyBreak: "message_end",
+        blockReplyChunking: { minChars: 64, maxChars: 128, breakPreference: "paragraph" },
+      });
+      const message =
+        provider === "responses"
+          ? createOpenAiResponsesPartial({
+              text,
+              id: "item-final-code",
+              signaturePhase: "final_answer",
+            })
+          : {
+              ...textAssistant(text),
+              api: "google-generative-ai",
+              provider: "google",
+              model: "gemini-2.5-flash",
+              stopReason: "stop",
+            };
+
+      try {
+        emit({ type: "message_start", message: { ...message, content: [] } });
+        if (delivery === "streamed") {
+          let accumulatedText = "";
+          for (const delta of ["    ", "const value = 1;\n", "    use(value);"]) {
+            accumulatedText += delta;
+            const partial = {
+              ...message,
+              content: message.content.map((block) => ({ ...block, text: accumulatedText })),
+            };
+            emit({
+              type: "message_update",
+              message: partial,
+              assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial },
+            });
+            await subscription.waitForPendingEvents();
+          }
+        }
+        emit({ type: "message_end", message });
+        await subscription.waitForPendingEvents();
+
+        expect.soft(extractTextPayloads(onBlockReply.mock.calls)).toEqual([text]);
+        expect
+          .soft(
+            onAgentEvent.mock.calls
+              .filter(([event]) => event.stream === "assistant")
+              .map(([event]) => event.data.text),
+          )
+          .toEqual(delivery === "streamed" ? ["    const value = 1;", text] : [text]);
+        expect.soft(subscription.assistantTexts).toEqual([text]);
+      } finally {
+        subscription.unsubscribe();
+      }
+    },
+  );
 
   it.each(["text_end", "message_end"] as const)(
     "retains silent terminal evidence with %s block replies",

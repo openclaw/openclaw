@@ -97,10 +97,34 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   };
 }
 
-export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
+/** Trim surrounding padding without removing Markdown block indentation. */
+export function trimTextPreservingCode(text: string, mode: "start" | "both" = "both"): string {
+  let trimmed = text.trimStart();
+  if (trimmed && trimmed.length !== text.length) {
+    const contentStart = text.length - trimmed.length;
+    const leadingCode = findCodeRegions(text).find(
+      (region) => region.block && region.start <= contentStart && contentStart < region.end,
+    );
+    if (leadingCode) {
+      trimmed = text.slice(leadingCode.start);
+    }
+  }
+  return mode === "both" ? trimmed.trimEnd() : trimmed;
+}
+
+export function trimTextFilter(
+  mode: "none" | "start" | "both",
+  options?: { preserveCodeIndentation?: boolean },
+): TextFilter {
   return {
     transform: (text) =>
-      mode === "both" ? text.trim() : mode === "start" ? text.trimStart() : text,
+      mode === "none"
+        ? text
+        : options?.preserveCodeIndentation
+          ? trimTextPreservingCode(text, mode)
+          : mode === "both"
+            ? text.trim()
+            : text.trimStart(),
     create: () => {
       let text = "";
       let leading = true;
@@ -112,7 +136,14 @@ export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
         }
         const appended = input.delta ?? input.text;
         let delta = leading ? appended.trimStart() : appended;
-        removedLeading ||= delta.length !== appended.length;
+        if (leading && options?.preserveCodeIndentation && delta) {
+          // The first visible content classifies any preceding whitespace-only deltas.
+          // Replacements create a fresh projector; later appends retain this decision.
+          delta = trimTextPreservingCode(input.text, "start");
+          removedLeading = delta.length !== input.text.length;
+        } else {
+          removedLeading ||= delta.length !== appended.length;
+        }
         leading &&= !delta;
         if (mode === "both") {
           const content = delta.trimEnd();

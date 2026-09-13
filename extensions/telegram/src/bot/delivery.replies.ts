@@ -4,6 +4,7 @@ import type { Message } from "grammy/types";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
   createMessageReceiptFromOutboundResults,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -715,7 +716,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
   });
 }
 
-export async function deliverReplies(params: {
+type DeliverRepliesParams = {
   replies: ReplyPayload[];
   cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   ownerAgentId?: string;
@@ -763,9 +764,30 @@ export async function deliverReplies(params: {
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Synchronously fence custody after revalidation and before Telegram I/O. */
   assertPlatformSendAuthorized?: () => void;
-}): Promise<{
-  delivered: boolean;
-}> {
+};
+
+export async function deliverReplies(
+  params: DeliverRepliesParams,
+): Promise<{ delivered: boolean }> {
+  return deliverReplyPlan(params, (replies) =>
+    createOutboundPayloadPlan(replies, {
+      cfg: params.cfg,
+      sessionKey: params.policySessionKey ?? params.sessionKeyForInternalHooks,
+      surface: "telegram",
+    }),
+  );
+}
+
+export async function deliverStructuredReplies(
+  params: DeliverRepliesParams,
+): Promise<{ delivered: boolean }> {
+  return deliverReplyPlan(params, createStructuredOutboundPayloadPlan);
+}
+
+async function deliverReplyPlan(
+  params: DeliverRepliesParams,
+  createPlan: (replies: ReplyPayload[]) => ReturnType<typeof createOutboundPayloadPlan>,
+): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
@@ -809,13 +831,7 @@ export async function deliverReplies(params: {
     }
     candidateReplies.push(reply);
   }
-  const normalizedReplies = projectOutboundPayloadPlanForDelivery(
-    createOutboundPayloadPlan(candidateReplies, {
-      cfg: params.cfg,
-      sessionKey: params.policySessionKey ?? params.sessionKeyForInternalHooks,
-      surface: "telegram",
-    }),
-  );
+  const normalizedReplies = projectOutboundPayloadPlanForDelivery(createPlan(candidateReplies));
   for (const originalReply of normalizedReplies) {
     let reply = canonicalizeTelegramPresentationPayload(originalReply, {
       allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",

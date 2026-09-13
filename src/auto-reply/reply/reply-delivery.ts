@@ -1,19 +1,21 @@
-/** Normalizes reply directives and delivers block replies through streaming or direct paths. */
+/** Delivers prepared block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyPayloadText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { resolveReplyDispatchErrorOutcome } from "./reply-dispatch-outcome.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+import { isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type ReplyDirectiveParseMode = "always" | "auto" | "never";
@@ -55,7 +57,7 @@ export function normalizeReplyPayloadDirectives(params: {
 
   let text = parsed ? parsed.text || undefined : params.payload.text || undefined;
   if (params.trimLeadingWhitespace && text) {
-    text = text.trimStart() || undefined;
+    text = trimTextPreservingCode(text, "start") || undefined;
   }
 
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
@@ -131,7 +133,15 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
     const { text, skip } = params.normalizeStreamingText(payload);
-    if (skip && !hasOutboundReplyContent({ ...payload, text: undefined })) {
+    const isSilent =
+      getReplyPayloadMetadata(payload)?.silentReply === true ||
+      isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) ||
+      (skip && isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN));
+    if (
+      skip &&
+      !hasOutboundReplyContent({ ...payload, text: undefined }) &&
+      !payload.audioAsVoice
+    ) {
       return;
     }
 
@@ -143,36 +153,25 @@ export function createBlockReplyDeliveryHandler(params: {
           : params.replyThreading?.implicitCurrentMessage !== "deny";
     // Reply-to-current is implicit for block replies unless per-turn threading disables it.
 
-    const taggedPayload = applyReplyTagsToPayload(
-      {
-        ...payload,
-        text,
-        mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
-        replyToId:
-          payload.replyToId ??
-          (implicitCurrentMessageAllowed ? params.currentMessageId : undefined),
-      },
-      params.currentMessageId,
-    );
+    const normalizedText = text ? trimTextPreservingCode(text, "start") : undefined;
+    const normalizedPayload = copyReplyPayloadMetadata(payload, {
+      ...payload,
+      text: isSilent ? undefined : normalizedText || undefined,
+      audioAsVoice: Boolean(payload.audioAsVoice),
+      mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
+      replyToId:
+        payload.replyToId ?? (implicitCurrentMessageAllowed ? params.currentMessageId : undefined),
+    });
 
     // Let through payloads with audioAsVoice flag even if empty (need to track it).
-    if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) {
+    if (!isRenderablePayload(normalizedPayload) && !payload.audioAsVoice) {
       return;
     }
 
-    const normalized = normalizeReplyPayloadDirectives({
-      payload: taggedPayload,
-      currentMessageId: params.currentMessageId,
-      silentToken: SILENT_REPLY_TOKEN,
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-      extractMediaDirectives: false,
-    });
-
     const mediaNormalizedPayload = params.normalizeMediaPaths
-      ? await params.normalizeMediaPaths(normalized.payload)
-      : normalized.payload;
-    if (normalized.isSilent) {
+      ? await params.normalizeMediaPaths(normalizedPayload)
+      : normalizedPayload;
+    if (isSilent) {
       mediaNormalizedPayload.text = undefined;
     }
     const blockPayload = copyReplyPayloadMetadata(
@@ -186,9 +185,6 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
     if (!blockPayload.text && !blockHasNonTextContent && !blockPayload.audioAsVoice) {
-      return;
-    }
-    if (normalized.isSilent && !blockHasNonTextContent) {
       return;
     }
 

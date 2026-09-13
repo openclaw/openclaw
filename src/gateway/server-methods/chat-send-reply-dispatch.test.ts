@@ -1,21 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { projectChatDisplayMessage } from "../chat-display-projection.js";
-import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
-  buildTranscriptReplyText,
+  copyReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { projectChatDisplayMessage } from "../chat-display-projection.js";
+import {
+  buildAssistantReplyContent,
+  buildAssistantReplyContentFromInputs,
+  extractAssistantDisplayText,
+} from "./chat-assistant-content.js";
+import {
+  readChatSendReplyPayload,
+  selectChatSendFinalReplyInputs,
+} from "./chat-send-command-replies.js";
+import {
+  buildTranscriptReplyTextFromInputs,
   createChatSendReplyDispatch,
 } from "./chat-send-reply-dispatch.js";
 
-describe("buildTranscriptReplyText", () => {
+function buildRawTranscriptReplyText(payloads: ReplyPayload[]): string {
+  return buildTranscriptReplyTextFromInputs(payloads.map((payload) => ({ kind: "raw", payload })));
+}
+
+describe("buildTranscriptReplyTextFromInputs", () => {
   it.each(["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "keeps %s out of combined command display text",
     async (controlText) => {
       const payloads = [{ text: "First instruction" }, { text: controlText }, { text: "Done" }];
-      expect(buildTranscriptReplyText(payloads)).toBe("First instruction\n\nDone");
+      expect(buildRawTranscriptReplyText(payloads)).toBe("First instruction\n\nDone");
       expect(
         (
           await buildAssistantReplyContent({
@@ -30,7 +49,7 @@ describe("buildTranscriptReplyText", () => {
 
   it("preserves authored indentation across split fenced-code reply payloads", () => {
     expect(
-      buildTranscriptReplyText([
+      buildRawTranscriptReplyText([
         { text: "Here is the YAML:\n\n```yaml\nroot:\n" },
         { text: "  nested:\n    value: true\n```" },
       ]),
@@ -39,7 +58,7 @@ describe("buildTranscriptReplyText", () => {
 
   it("preserves authored CRLF boundaries and skips whitespace-only reply payloads", () => {
     expect(
-      buildTranscriptReplyText([
+      buildRawTranscriptReplyText([
         { text: "```yaml\r\nroot:\r\n" },
         { text: "  \t\n" },
         { text: "  nested: true\r\n```" },
@@ -49,7 +68,7 @@ describe("buildTranscriptReplyText", () => {
 
   it("keeps reply directives and safe media while suppressing reasoning", () => {
     expect(
-      buildTranscriptReplyText([
+      buildRawTranscriptReplyText([
         { text: "hidden", isReasoning: true },
         {
           text: "Hello",
@@ -75,6 +94,48 @@ describe("buildTranscriptReplyText", () => {
       ].join("\n\n"),
     );
   });
+});
+
+describe("buildAssistantReplyContentFromInputs", () => {
+  it.each([
+    { kind: "raw", withAnswer: false },
+    { kind: "prepared", withAnswer: false },
+    { kind: "raw", withAnswer: true },
+    { kind: "prepared", withAnswer: true },
+  ] as const)(
+    "omits $kind reasoning from both projections (answer: $withAnswer)",
+    async ({ kind, withAnswer }) => {
+      const payloads: ReplyPayload[] = [
+        { text: "Checking the arithmetic.", isReasoning: true },
+        ...(withAnswer ? [{ text: "The result is 4." }] : []),
+      ];
+      const inputs =
+        kind === "raw"
+          ? payloads.map((payload): ReplyDispatchOperation => ({ kind: "raw", payload }))
+          : createStructuredOutboundPayloadPlan(payloads).map((plan): ReplyDispatchOperation => ({
+              kind: "prepared",
+              plan,
+            }));
+      const content = await buildAssistantReplyContentFromInputs({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        inputs,
+        transcriptMediaMessage: {
+          content: [],
+          transcriptText: "",
+          payloadTexts: ["Thinking text for slot zero.", "The persisted result is 4."],
+        },
+      });
+      const expected = withAnswer ? [{ type: "text", text: "The result is 4." }] : undefined;
+
+      expect(content).toEqual({
+        assistantContent: expected,
+        persistedAssistantContent: withAnswer
+          ? [{ type: "text", text: "The persisted result is 4." }]
+          : undefined,
+      });
+    },
+  );
 });
 
 describe("createChatSendReplyDispatch", () => {
@@ -168,7 +229,12 @@ describe("createChatSendReplyDispatch", () => {
     expect(onCommandBlock).toHaveBeenCalledExactlyOnceWith("blocked");
     dispatcher.markComplete();
     expect(markBlocked).toHaveBeenCalledOnce();
-    expect(dispatch.deliveredReplies).toEqual([
+    expect(
+      dispatch.deliveredReplies.map(({ kind, input }) => ({
+        kind,
+        payload: readChatSendReplyPayload(input),
+      })),
+    ).toEqual([
       { payload: blockedPayload, kind: "block" },
       {
         payload: {
@@ -180,6 +246,117 @@ describe("createChatSendReplyDispatch", () => {
       { payload: { text: "done" }, kind: "final" },
     ]);
   });
+
+  it("preserves prepared literal directives through callback modifiers and final projection", async () => {
+    const dispatch = createChatSendReplyDispatch({
+      accountId: undefined,
+      isAgentRunStarted: () => true,
+      isRunCurrent: () => true,
+      logGateway: { ...createSubsystemLogger("test/chat-send-reply-dispatch"), warn: vi.fn() },
+      session: {
+        agentId: "main",
+        backingSessionId: undefined,
+        cfg: {},
+        clientRunId: "run-prepared",
+        sessionKey: "agent:main:main",
+        sessionLoadOptions: { agentId: "main" },
+      },
+      userTurnRecorder: { markBlocked: vi.fn() },
+    });
+    const dispatcher = createReplyDispatcher({
+      ...dispatch.dispatcherOptions,
+      beforeDeliver: async (payload) =>
+        copyReplyPayloadMetadata(payload, { ...payload, text: `${payload.text} changed` }),
+    });
+    const literalChunks = ["`prefix", "[[reply_to:literal]] [[audio_as_voice]] suffix`"];
+    dispatcher.sendBlockReply({ text: "[[reply_to:command]] Command" });
+    for (const plan of createStructuredOutboundPayloadPlan(
+      literalChunks.map((text) => ({ text })),
+    )) {
+      dispatcher.sendPreparedReply("block", plan);
+    }
+    dispatcher.sendFinalReply({ text: "[[reply_to:command]] Command" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    const inputs = selectChatSendFinalReplyInputs({
+      deliveredReplies: dispatch.deliveredReplies,
+      foldCommandBlocks: true,
+      suppressReplies: false,
+    });
+    const prepared = inputs.filter((input) => input.kind === "prepared");
+    expect(prepared.map((input) => readChatSendReplyPayload(input).text)).toEqual(
+      literalChunks.map((text) => `${text} changed`),
+    );
+    for (const input of prepared) {
+      expect(readChatSendReplyPayload(input).replyToId).toBeUndefined();
+      expect(readChatSendReplyPayload(input).audioAsVoice).not.toBe(true);
+    }
+    const visible = ["Command changed", ...literalChunks.map((text) => `${text} changed`)].join(
+      "\n\n",
+    );
+    const content = await buildAssistantReplyContentFromInputs({
+      sessionKey: "agent:main:main",
+      inputs,
+    });
+    expect(content.assistantContent).toEqual([{ type: "text", text: visible }]);
+    expect(buildTranscriptReplyTextFromInputs(inputs)).toBe(`[[reply_to:command]]\n${visible}`);
+  });
+
+  it.each([
+    { operation: "raw", split: false },
+    { operation: "raw", split: true },
+    { operation: "prepared", split: false },
+    { operation: "prepared", split: true },
+  ] as const)(
+    "preserves indented code through $operation WebChat replies (split=$split)",
+    async ({ operation, split }) => {
+      const text = "    const value = 1;\n    use(value);";
+      const parts = split ? ["    const value = 1;\n", "    use(value);"] : [text];
+      const dispatch = createChatSendReplyDispatch({
+        accountId: undefined,
+        isAgentRunStarted: () => true,
+        isRunCurrent: () => true,
+        logGateway: { ...createSubsystemLogger("test/chat-send-reply-dispatch"), warn: vi.fn() },
+        session: {
+          agentId: "main",
+          backingSessionId: undefined,
+          cfg: {},
+          clientRunId: "run-indented-code",
+          sessionKey: "agent:main:main",
+          sessionLoadOptions: { agentId: "main" },
+        },
+        userTurnRecorder: { markBlocked: vi.fn() },
+      });
+      const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+      const payloads = parts.map((part) => ({ text: part }));
+      if (operation === "prepared") {
+        for (const plan of createStructuredOutboundPayloadPlan(payloads)) {
+          dispatcher.sendPreparedReply("final", plan);
+        }
+      } else {
+        for (const payload of payloads) {
+          dispatcher.sendFinalReply(payload);
+        }
+      }
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      const inputs = selectChatSendFinalReplyInputs({
+        deliveredReplies: dispatch.deliveredReplies,
+        foldCommandBlocks: false,
+        suppressReplies: false,
+      });
+      const content = await buildAssistantReplyContentFromInputs({
+        sessionKey: "agent:main:main",
+        inputs,
+      });
+
+      expect.soft(content.assistantContent).toEqual([{ type: "text", text }]);
+      expect.soft(extractAssistantDisplayText(content.assistantContent)).toBe(text);
+      expect.soft(buildTranscriptReplyTextFromInputs(inputs)).toBe(text);
+    },
+  );
 
   it("publishes ordered command text while pending and suppresses hidden or retired output", async () => {
     let current = true;
@@ -257,6 +434,11 @@ describe("createChatSendReplyDispatch", () => {
     );
     dispatcher.sendToolResult({ mediaUrl: "https://example.test/tool.png" });
     dispatcher.sendFinalReply({ mediaUrl: "https://example.test/final.png" });
+    for (const plan of createStructuredOutboundPayloadPlan([
+      setReplyPayloadMetadata({ text: "prepared blocked" }, { beforeAgentRunBlocked: true }),
+    ])) {
+      dispatcher.sendPreparedReply("block", plan);
+    }
     dispatcher.markComplete();
     const receipt = await dispatcher.waitForIdle();
 
@@ -265,7 +447,7 @@ describe("createChatSendReplyDispatch", () => {
     expect(markBlocked).not.toHaveBeenCalled();
     expect(receipt?.counts).toMatchObject({
       tool: { cancelled: 1 },
-      block: { cancelled: 1 },
+      block: { cancelled: 2 },
       final: { cancelled: 1 },
     });
   });

@@ -756,7 +756,11 @@ async function dispatchDirectTelegramTurn(params: {
     streamMode: "off",
     textLimit: 4096,
     telegramCfg: params.telegramCfg ?? {},
-    telegramDeps: { ...telegramBotDepsForTest, deliverReplies: params.deliverReplies },
+    telegramDeps: {
+      ...telegramBotDepsForTest,
+      deliverReplies: params.deliverReplies,
+      deliverStructuredReplies: params.deliverReplies,
+    },
     opts: { token: "tok" },
   });
 }

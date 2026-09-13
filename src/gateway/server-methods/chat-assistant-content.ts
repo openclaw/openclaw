@@ -5,9 +5,11 @@ import {
   stripReplyMediaFailureFallback,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
+import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
@@ -44,7 +46,7 @@ export function combineNonStreamingReplyParts(parts: readonly string[]): string 
           : "\n\n";
     combined += separator + part;
   }
-  return combined.trim();
+  return trimTextPreservingCode(combined);
 }
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
@@ -96,11 +98,27 @@ export function sanitizeAssistantDisplayText(
   const withoutEnvelope = stripEnvelopeFromMessage(value);
   const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
   const stripped = stripInlineDirectiveTagsForDelivery(normalized);
-  const visible = stripped.text.trim();
+  const visible = trimTextPreservingCode(stripped.text);
   return visible
     ? options?.preserveBoundaries && !stripped.changed
       ? normalized
       : visible
+    : undefined;
+}
+
+export function prepareAssistantDisplayText(
+  value?: string | null,
+  options?: { preserveBoundaries?: boolean },
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const withoutEnvelope = stripEnvelopeFromMessage(value);
+  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  return normalized.trim()
+    ? options?.preserveBoundaries
+      ? normalized
+      : trimTextPreservingCode(normalized)
     : undefined;
 }
 
@@ -119,7 +137,7 @@ export function extractAssistantDisplayText(
   return combineNonStreamingReplyParts(parts) || undefined;
 }
 
-export async function buildAssistantReplyContent(params: {
+type AssistantReplyContentParams = {
   sessionKey: string;
   agentId?: string;
   payloads: ReplyPayload[];
@@ -131,22 +149,47 @@ export async function buildAssistantReplyContent(params: {
   transcriptMediaMessage?: Awaited<
     ReturnType<typeof buildWebchatAssistantMessageFromReplyPayloads>
   >;
-}): Promise<{
+};
+
+export function buildAssistantReplyContent(params: AssistantReplyContentParams) {
+  return buildAssistantReplyContentFromInputs({
+    ...params,
+    inputs: params.payloads.map((payload) => ({ kind: "raw", payload })),
+  });
+}
+
+export async function buildAssistantReplyContentFromInputs(
+  params: Omit<AssistantReplyContentParams, "payloads"> & {
+    inputs: readonly ReplyDispatchOperation[];
+  },
+): Promise<{
   assistantContent: AssistantDisplayContentBlock[] | undefined;
   persistedAssistantContent: AssistantDisplayContentBlock[] | undefined;
 }> {
-  const rawTextPayloadCount = params.payloads.filter(
+  const payloads = params.inputs.map((input) =>
+    input.kind === "raw" ? input.payload : input.plan.payload,
+  );
+  const rawTextPayloadCount = payloads.filter(
     (payload) =>
       payload.isReasoning !== true &&
       typeof payload.text === "string" &&
       payload.text.trim().length > 0,
   ).length;
-  const plan = createOutboundPayloadPlan(params.payloads);
+  const plan = params.inputs.flatMap((input, sourceIndex) => {
+    if (payloads[sourceIndex]?.isReasoning === true) {
+      return [];
+    }
+    return (input.kind === "raw" ? createOutboundPayloadPlan([input.payload]) : [input.plan]).map(
+      (entry) => Object.assign({}, entry, { sourceIndex }),
+    );
+  });
   if (plan.length === 0) {
-    const failureBlocks = params.payloads.flatMap((payload) =>
-      (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
-        buildManagedMediaFailureBlock,
-      ),
+    const failureBlocks = payloads.flatMap((payload) =>
+      payload.isReasoning === true
+        ? []
+        : (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
+            buildManagedMediaFailureBlock,
+          ),
     );
     const assistantContent =
       failureBlocks.length > 0
@@ -162,18 +205,19 @@ export async function buildAssistantReplyContent(params: {
     1;
   const content: AssistantDisplayContentBlock[] = [];
   const persistedContent: AssistantDisplayContentBlock[] = [];
-  const persistSensitiveDisplay = !hasSensitiveMediaPayload(params.payloads);
+  const persistSensitiveDisplay = !hasSensitiveMediaPayload(payloads);
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
-    const metadataSource = params.payloads[entry.sourceIndex] ?? payload;
+    const metadataSource = payloads[entry.sourceIndex] ?? payload;
     const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
-    const text = sanitizeAssistantDisplayText(
-      stripReplyMediaFailureFallback(payload.text, mediaFailures),
-      {
-        preserveBoundaries: preserveTextBoundaries,
-      },
-    );
+    const displayText =
+      params.inputs[entry.sourceIndex]?.kind === "prepared"
+        ? prepareAssistantDisplayText
+        : sanitizeAssistantDisplayText;
+    const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
+      preserveBoundaries: preserveTextBoundaries,
+    });
     if (text && !isSuppressedControlReplyText(text)) {
       const previousBlock = content.at(-1);
       if (previousBlock?.type === "text" && typeof previousBlock.text === "string") {

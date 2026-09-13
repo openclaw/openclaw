@@ -465,43 +465,56 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
-  it("suppresses generated media-failure warning text for silent structured block replies", async () => {
-    const blockReplyPipeline = {
-      enqueue: vi.fn(),
-    } as unknown as BlockReplyPipelineLike;
-    const absPath = path.join("/tmp/home", "openclaw", "survived.png");
+  it.each([
+    { name: "raw silence", text: "NO_REPLY", parsedSilent: false, expectWarning: false },
+    { name: "parsed silence", text: "", parsedSilent: true, expectWarning: false },
+    { name: "ordinary reply", text: "Caption", parsedSilent: false, expectWarning: true },
+  ])(
+    "preserves $name text policy during structured block normalization",
+    async ({ text, parsedSilent, expectWarning }) => {
+      const blockReplyPipeline = {
+        enqueue: vi.fn(),
+      } as unknown as BlockReplyPipelineLike;
+      const absPath = path.join("/tmp/home", "openclaw", "survived.png");
 
-    const handler = createBlockReplyDeliveryHandler({
-      onBlockReply: vi.fn(async () => {}),
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      normalizeMediaPaths: async (payload) => ({
-        ...payload,
-        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      const handler = createBlockReplyDeliveryHandler({
+        onBlockReply: vi.fn(async () => {}),
+        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+        applyReplyToMode: (payload) => payload,
+        normalizeMediaPaths: async (payload) => ({
+          ...payload,
+          text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+          mediaUrl: absPath,
+          mediaUrls: [absPath],
+        }),
+        typingSignals: {
+          signalTextDelta: vi.fn(async () => {}),
+        } as unknown as TypingSignaler,
+        blockStreamingEnabled: true,
+        blockReplyPipeline,
+        directlySentBlockKeys: new Set(),
+        directBlockDeliveries: [],
+      });
+
+      const payload: ReplyPayload = { text, mediaUrls: ["./missing.png", "./survived.png"] };
+      if (parsedSilent) {
+        setReplyPayloadMetadata(payload, { silentReply: true });
+      }
+      await handler(payload);
+
+      expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+        text: expectWarning
+          ? "⚠️ Media failed. Try sending a smaller supported file or a different format."
+          : undefined,
         mediaUrl: absPath,
         mediaUrls: [absPath],
-      }),
-      typingSignals: {
-        signalTextDelta: vi.fn(async () => {}),
-      } as unknown as TypingSignaler,
-      blockStreamingEnabled: true,
-      blockReplyPipeline,
-      directlySentBlockKeys: new Set(),
-      directBlockDeliveries: [],
-    });
-
-    await handler({ text: "NO_REPLY", mediaUrls: ["./missing.png", "./survived.png"] });
-
-    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
-      text: undefined,
-      mediaUrl: absPath,
-      mediaUrls: [absPath],
-      replyToId: undefined,
-      replyToCurrent: undefined,
-      replyToTag: false,
-      audioAsVoice: false,
-    });
-  });
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: undefined,
+        audioAsVoice: false,
+      });
+    },
+  );
 
   it("preserves reply payload metadata across block-reply normalization", async () => {
     const enqueue = vi.fn();

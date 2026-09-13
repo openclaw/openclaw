@@ -4826,47 +4826,57 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
   });
 
-  it("folds block-only non-agent command replies into the final WebChat message", async () => {
-    await createTranscriptFixture("openclaw-chat-send-command-block-final-");
-    mockState.dispatchedReplies = [
-      {
-        kind: "block",
-        payload: {
-          text: [
-            "Trajectory exports can include prompts, model messages, tool schemas, tool results, runtime events, and local paths.",
-            "Trajectory bundle: requested `openclaw sessions export-trajectory` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.",
-          ].join("\n"),
+  it.each([
+    {
+      name: "prose",
+      text: [
+        "Trajectory exports can include prompts, model messages, tool schemas, tool results, runtime events, and local paths.",
+        "Trajectory bundle: requested `openclaw sessions export-trajectory` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.",
+      ].join("\n"),
+      directive: "",
+    },
+    {
+      name: "directive before indented code",
+      text: "    const value = 1;\n    use(value);",
+      directive: "[[reply_to_current]]\n\n",
+    },
+  ])(
+    "folds block-only non-agent command replies into the final WebChat message ($name)",
+    async ({ text, directive }) => {
+      await createTranscriptFixture("openclaw-chat-send-command-block-final-");
+      mockState.dispatchedReplies = [
+        {
+          kind: "block",
+          payload: { text: `${directive}${text}` },
         },
-      },
-    ];
-    const { context, send } = createChatRequestFixture();
+      ];
+      const { context, send } = createChatRequestFixture();
 
-    const payload = await send({
-      idempotencyKey: "idem-command-block",
-      message: "/export-trajectory bundle",
-    });
+      const payload = await send({
+        idempotencyKey: "idem-command-block",
+        message: "/export-trajectory bundle",
+      });
 
-    const text = getMessageContent(payload)
-      .map((block) => (typeof block.text === "string" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n");
-    expect(text).toContain("Trajectory exports can include");
-    expect(text).toContain("through exec approval");
-    expect(text).toContain("Approve once");
-    const broadcast = lastBroadcastPayload(context);
-    expect(broadcast?.runId).toBe("idem-command-block");
-    expect(broadcast?.state).toBe("final");
-    const broadcastText = getMessageContent(broadcast)
-      .map((block) => (typeof block.text === "string" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n");
-    expect(broadcastText).toContain("Trajectory exports can include");
-    expect(broadcastText).toContain("through exec approval");
-    expect(broadcastText).toContain("Approve once");
-    await waitForAssertion(() =>
-      expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
-    );
-  });
+      expect.soft(extractFirstTextBlock(payload)).toBe(text);
+      const broadcast = lastBroadcastPayload(context);
+      expect(broadcast?.runId).toBe("idem-command-block");
+      expect(broadcast?.state).toBe("final");
+      expect.soft(extractFirstTextBlock(broadcast)).toBe(text);
+      const delta = context.broadcast.mock.calls
+        .map(([event, value]) => (event === "chat" ? asOptionalRecord(value) : undefined))
+        .findLast((value) => value?.state === "delta");
+      expect.soft(delta?.deltaText).toBe(text);
+      const assistantMessages = await readRawActiveAssistantTranscriptMessages();
+      expect(assistantMessages).toHaveLength(1);
+      expect.soft(assistantMessages[0]?.content).toEqual([{ type: "text", text }]);
+      if (directive) {
+        expect.soft(assistantMessages[0]?.openclawDelivery).toEqual({ replyToCurrent: true });
+      }
+      await waitForAssertion(() =>
+        expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
+      );
+    },
+  );
 
   it("keeps slash-command block text when the final payload only adds media", async () => {
     const transcriptDir = await createTranscriptFixture(
@@ -5294,34 +5304,65 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     verify(getMessageContent(payload), fixturePaths);
   });
 
-  it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {
-    await createTranscriptFixture("openclaw-chat-send-agent-image-");
-    mockState.finalPayload = {
-      text: "Scan this QR code with the OpenClaw iOS app:",
-      mediaUrl: `data:image/png;base64,${TINY_PNG_BASE64}`,
-    };
-    const payload = await createChatRequestFixture().send({
-      idempotencyKey: "idem-agent-image",
-    });
+  it.each(["inline", "mixed"] as const)(
+    "renders image reply payloads as assistant image content instead of MEDIA text (%s)",
+    async (media) => {
+      const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-image-");
+      const localPath = path.join(transcriptDir, "local.png");
+      if (media === "mixed") {
+        fs.writeFileSync(localPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        writeSavedPng(transcriptDir, "staged.png");
+      }
+      mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
+      const inlineUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+      mockState.finalPayload = {
+        text: "Scan this QR code with the OpenClaw iOS app:",
+        ...(media === "mixed"
+          ? {
+              mediaUrls: [inlineUrl, localPath],
+              attachments: [{ path: localPath, name: "Board chart.png", mimeType: "image/png" }],
+            }
+          : { mediaUrl: inlineUrl }),
+      };
+      const payload = await createChatRequestFixture().send({
+        idempotencyKey: "idem-agent-image",
+      });
 
-    const content = getMessageContent(payload);
-    const image = content.find((block) => block.type === "image");
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({
-      type: "text",
-      text: "Scan this QR code with the OpenClaw iOS app:",
-    });
-    expect(image).toMatchObject({
-      type: "image",
-      artifactId: expect.stringMatching(/^artifact_managed_image_/u),
-      mimeType: "image/png",
-      url: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
-      openUrl: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
-    });
-    expect(JSON.stringify(payload?.message)).not.toContain(
-      `MEDIA:data:image/png;base64,${TINY_PNG_BASE64}`,
-    );
-  });
+      const content = getMessageContent(payload);
+      expect(getMessage(payload)?.role).toBe("assistant");
+      expect(content[0]).toEqual({
+        type: "text",
+        text: "Scan this QR code with the OpenClaw iOS app:",
+      });
+      const expectedImages = [
+        expect.objectContaining({
+          type: "image",
+          alt: "Generated image 1",
+          artifactId: expect.stringMatching(/^artifact_managed_image_/u),
+          mimeType: "image/png",
+          url: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
+          openUrl: expect.stringMatching(/\/api\/chat\/media\/outgoing\//u),
+        }),
+        ...(media === "mixed"
+          ? [
+              expect.objectContaining({
+                type: "image",
+                alt: "Board chart.png",
+                mimeType: "image/png",
+              }),
+            ]
+          : []),
+      ];
+      expect.soft(content.filter((block) => block.type === "image")).toEqual(expectedImages);
+      const transcriptMessages = await readActiveAssistantTranscriptMessages();
+      expect(transcriptMessages).toHaveLength(1);
+      const persistedContent = getMessageContent({ message: transcriptMessages[0] });
+      expect
+        .soft(persistedContent.filter((block) => block.type === "image"))
+        .toEqual(expectedImages);
+      expect(JSON.stringify(payload?.message)).not.toContain(`MEDIA:${inlineUrl}`);
+    },
+  );
 
   it("suppresses reasoning payloads from webchat transcript replies", async () => {
     await createTranscriptFixture("openclaw-chat-send-reasoning-hidden-");

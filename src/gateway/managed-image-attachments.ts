@@ -29,6 +29,7 @@ import {
 } from "../config/sessions/targets-read-availability.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
@@ -909,38 +910,6 @@ function toRecordFilename(
       ? path.extname(safeName)
       : path.extname(filePath);
   return `${path.parse(safeName).name}${extension}`;
-}
-
-function collectReplyMediaEntries(payload: ReplyPayload) {
-  const attachmentByReference = new Map<string, ReplyMediaAttachment>();
-  for (const attachment of payload.attachments ?? []) {
-    const reference = (
-      attachment.path ??
-      attachment.url ??
-      attachment.mediaUrl ??
-      attachment.filePath
-    )?.trim();
-    if (reference && !attachmentByReference.has(reference)) {
-      attachmentByReference.set(reference, attachment);
-    }
-  }
-  const mediaUrlCount = payload.mediaUrls?.length ?? 0;
-  return [
-    ...(payload.mediaUrls ?? []).map((url, index) => ({
-      url,
-      attachment: attachmentByReference.get(url.trim()) ?? payload.attachments?.[index],
-    })),
-    ...(typeof payload.mediaUrl === "string"
-      ? [
-          {
-            url: payload.mediaUrl,
-            attachment:
-              attachmentByReference.get(payload.mediaUrl.trim()) ??
-              payload.attachments?.[mediaUrlCount],
-          },
-        ]
-      : []),
-  ];
 }
 
 export function prepareOutgoingMediaFromReplyPayload(

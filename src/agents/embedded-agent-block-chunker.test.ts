@@ -103,20 +103,62 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker, true)).toEqual(["Tail"]);
   });
 
-  it("reports original source across synthetic wrappers and a consumed closing fence", () => {
-    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 20 });
-    const delivered: Array<{ text: string; sourceText?: string }> = [];
-    chunker.append("```txt\nabcdefghijklmnopqr\n```\n\nTail");
-    chunker.drain({
-      force: true,
-      emit: (text, options) => delivered.push({ text, sourceText: options?.sourceText }),
-    });
+  it.each([false, true])(
+    "reports original source across synthetic wrappers with a preserved break: %s",
+    (preserveBreak) => {
+      const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 20 });
+      const delivered: Array<{ text: string; sourceText?: string }> = [];
+      const fenced = "```txt\nabcdefghijklmnopqr\n```\n\n";
+      if (preserveBreak) {
+        chunker.reset([fenced.length]);
+      }
+      chunker.append(`${fenced}Tail`);
+      chunker.drain({
+        force: true,
+        emit: (text, options) => delivered.push({ text, sourceText: options?.sourceText }),
+      });
 
-    expect(delivered).toEqual([
-      { text: "```txt\nabcdefghi\n```", sourceText: "```txt\nabcdefghi" },
-      { text: "```txt\njklmnopqr\n```", sourceText: "jklmnopqr\n```\n\n" },
-      { text: "Tail", sourceText: "Tail" },
-    ]);
+      expect(delivered).toEqual([
+        { text: "```txt\nabcdefghi\n```", sourceText: "```txt\nabcdefghi" },
+        { text: "```txt\njklmnopqr\n```", sourceText: "jklmnopqr\n```\n\n" },
+        { text: "Tail", sourceText: "Tail" },
+      ]);
+    },
+  );
+
+  it.each([
+    { name: "below the cap", suffix: "Unchanged paragraph follows.\n", ready: false },
+    { name: "at the cap", suffix: "Unchanged prose remains for this case. ", ready: true },
+  ])(
+    "drains a preserved short prefix $name and on force without merging its suffix",
+    ({ suffix, ready }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 12,
+        maxChars: 50,
+        breakPreference: "newline",
+      });
+      const prefix = "Corrected. ";
+      chunker.reset([prefix.length]);
+      chunker.append(prefix + suffix);
+
+      expect(drainChunks(chunker)).toEqual(ready ? [prefix] : []);
+      expect(chunker.bufferedText).toBe(ready ? suffix : prefix + suffix);
+      expect(drainChunks(chunker, true)).toEqual(ready ? [suffix] : [prefix, suffix]);
+      expect(chunker.bufferedText).toBe("");
+    },
+  );
+
+  it("replaces a pending preserved boundary before introducing a code fence", () => {
+    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 50 });
+    const prefix = "Corrected. ";
+    chunker.reset([prefix.length]);
+    chunker.append(`${prefix}Unchanged prose follows.`);
+    const replacement = "```txt\nA revised fenced answer.\n```";
+
+    chunker.replace(replacement);
+
+    expect(drainChunks(chunker, true)).toEqual([replacement]);
+    expect(chunker.bufferedText).toBe("");
   });
 
   it.each([

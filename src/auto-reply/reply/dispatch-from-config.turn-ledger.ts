@@ -4,6 +4,7 @@
 // routed transport result is recorded, so no delivery lane can bypass the
 // no-visible-reply fallback gate with a fresh inference flag.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
@@ -15,7 +16,11 @@ import {
   type ReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type {
+  ReplyDispatchKind,
+  ReplyDispatchOperation,
+  ReplyDispatcher,
+} from "./reply-dispatcher.types.js";
 
 // Failsafe for transports that never settle: the completion barrier bounds
 // delivery waits at the operation layer, and finalization must not out-wait it.
@@ -32,6 +37,7 @@ type LedgerSettleResult = "settled" | "aborted" | "timed-out";
 type ReplyTurnLedger = {
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
   sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
+  sendPreparedQueued: (kind: ReplyDispatchKind, plan: OutboundPayloadPlan) => LedgerQueuedSend;
   /** Record a routed transport result; routed sends settle at their call site. */
   recordRoutedDelivery: (
     payload: ReplyPayload,
@@ -86,34 +92,43 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     }
     return dispatcher.sendFinalReply(payload);
   };
+  const sendOperation = (
+    kind: ReplyDispatchKind,
+    operation: ReplyDispatchOperation,
+  ): LedgerQueuedSend => {
+    const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
+    const capture =
+      dispatcher.supportsSettledReceipt === true
+        ? captureReplyDispatchDeliveryOutcome(payload)
+        : undefined;
+    const queued =
+      operation.kind === "prepared" && dispatcher.sendPreparedReply
+        ? dispatcher.sendPreparedReply(kind, operation.plan)
+        : enqueue(kind, payload);
+    if (!queued) {
+      return { queued: false };
+    }
+    if (!capture) {
+      // Legacy dispatchers expose admission only. Treat an accepted send as
+      // potentially visible so the fallback cannot duplicate its delivery.
+      outcomes.add("failed-deliver");
+      return { queued: true };
+    }
+    if (!capture.isTracked()) {
+      return { queued: true };
+    }
+    const outcome = capture.promise.then((settled) => {
+      pendingDelivery ||= capture.hasPendingDelivery();
+      if (hasOutboundReplyContent(payload, { trimText: true })) {
+        outcomes.add(settled);
+      }
+      return settled;
+    });
+    return { queued: true, outcome, hasPendingDelivery: capture.hasPendingDelivery };
+  };
   return {
-    sendQueued(kind, payload) {
-      const capture =
-        dispatcher.supportsSettledReceipt === true
-          ? captureReplyDispatchDeliveryOutcome(payload)
-          : undefined;
-      const queued = enqueue(kind, payload);
-      if (!queued) {
-        return { queued: false };
-      }
-      if (!capture) {
-        // Legacy dispatchers expose admission only. Treat an accepted send as
-        // potentially visible so the fallback cannot duplicate its delivery.
-        outcomes.add("failed-deliver");
-        return { queued: true };
-      }
-      if (!capture.isTracked()) {
-        return { queued: true };
-      }
-      const outcome = capture.promise.then((settled) => {
-        pendingDelivery ||= capture.hasPendingDelivery();
-        if (hasOutboundReplyContent(payload, { trimText: true })) {
-          outcomes.add(settled);
-        }
-        return settled;
-      });
-      return { queued: true, outcome, hasPendingDelivery: capture.hasPendingDelivery };
-    },
+    sendQueued: (kind, payload) => sendOperation(kind, { kind: "raw", payload }),
+    sendPreparedQueued: (kind, plan) => sendOperation(kind, { kind: "prepared", plan }),
     recordRoutedDelivery(payload, result) {
       const outcome = resolveRoutedReplyDeliveryOutcome(result);
       pendingDelivery ||=
