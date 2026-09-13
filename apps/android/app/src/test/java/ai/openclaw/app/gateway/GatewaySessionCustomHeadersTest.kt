@@ -896,6 +896,122 @@ class GatewaySessionCustomHeadersTest {
     }
 
   @Test
+  fun rejectedUpgradeClosesPeerBeforeFailureTeardown() =
+    runBlocking {
+      val valid = AtomicBoolean(true)
+      val peerOpened = CompletableDeferred<Unit>()
+      val peerClosed = CompletableDeferred<Unit>()
+      val responseHeld = CompletableDeferred<Unit>()
+      val rawFailure = CompletableDeferred<Throwable>()
+      val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val releaseResponse = CountDownLatch(1)
+      val releaseFailure = CountDownLatch(1)
+      val opened = AtomicInteger()
+      val connected = AtomicInteger()
+      val server = MockWebServer()
+      server.enqueue(
+        MockResponse().withWebSocketUpgrade(
+          object : WebSocketListener() {
+            override fun onOpen(
+              webSocket: WebSocket,
+              response: Response,
+            ) {
+              peerOpened.complete(Unit)
+            }
+
+            override fun onFailure(
+              webSocket: WebSocket,
+              t: Throwable,
+              response: Response?,
+            ) {
+              peerClosed.complete(Unit)
+            }
+          },
+        ),
+      )
+      server.start()
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request) = request.newBuilder().header("CF-Access-Token", "test-grant").build()
+
+          override fun requireCurrent(request: Request) {
+            if (!valid.get()) throw GatewayExternalAuthorizationException()
+          }
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+        }
+      val session =
+        ingressSession(
+          scope,
+          authorization,
+          onFailure = { error, pause -> failure.complete(error to pause) },
+          onConnected = { connected.incrementAndGet() },
+          socketFactory = { client, request, listener ->
+            client
+              .newBuilder()
+              .addInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                check(response.code == 101 && response.socket != null)
+                responseHeld.complete(Unit)
+                check(releaseResponse.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                response
+              }.build()
+              .newWebSocket(
+                request.newBuilder().url(server.url("/upgrade")).build(),
+                object : WebSocketListener() {
+                  override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response,
+                  ) {
+                    opened.incrementAndGet()
+                    listener.onOpen(webSocket, response)
+                  }
+
+                  override fun onFailure(
+                    webSocket: WebSocket,
+                    t: Throwable,
+                    response: Response?,
+                  ) {
+                    rawFailure.complete(t)
+                    // Hold application teardown so it cannot mask leaked upgrade streams.
+                    check(releaseFailure.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                    listener.onFailure(webSocket, t, response)
+                  }
+                },
+              )
+          },
+        )
+      try {
+        connectIngressSession(session)
+        withTimeout(TEST_TIMEOUT_MS) {
+          peerOpened.await()
+          responseHeld.await()
+        }
+        valid.set(false)
+        releaseResponse.countDown()
+        assertTrue(withTimeout(TEST_TIMEOUT_MS) { rawFailure.await() } is GatewayExternalAuthorizationException)
+        withTimeout(TEST_TIMEOUT_MS) { peerClosed.await() }
+        assertEquals(0, opened.get())
+        assertEquals(0, connected.get())
+        releaseFailure.countDown()
+        val denied = withTimeout(TEST_TIMEOUT_MS) { failure.await() }
+        assertEquals("EXTERNAL_AUTH_REQUIRED", denied.first.code)
+        assertTrue(denied.second)
+        assertEquals(1, server.requestCount)
+        val request = requireNotNull(server.takeRequest(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+        assertEquals("test-grant", request.getHeader("CF-Access-Token"))
+        assertNull(server.takeRequest(250, TimeUnit.MILLISECONDS))
+      } finally {
+        releaseResponse.countDown()
+        releaseFailure.countDown()
+        session.disconnectAndJoin()
+        scope.cancel()
+        server.shutdown()
+      }
+    }
+
+  @Test
   fun onlyAnExplicitUpgradeChallengePausesForExternalAuthorization() =
     runBlocking {
       for (protected in listOf(false, true)) {
@@ -1079,12 +1195,13 @@ class GatewaySessionCustomHeadersTest {
     scope: CoroutineScope,
     authorization: GatewayIngressAuthorization,
     onFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onConnected: (GatewayHelloSummary) -> Unit = {},
     socketFactory: (OkHttpClient, Request, WebSocketListener) -> WebSocket,
   ) = GatewaySession(
     scope = scope,
     identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
     deviceAuthStore = NoopDeviceAuthStore(),
-    onConnected = {},
+    onConnected = onConnected,
     onDisconnected = {},
     onEvent = { _, _ -> },
     onConnectFailure = onFailure,

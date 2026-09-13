@@ -1552,7 +1552,11 @@ class GatewaySession(
             authorization.requireCurrent(request)
             authorization.rejection(response)?.let { throw it }
           } catch (error: Throwable) {
-            response.close()
+            // A 101 response owns the socket until RealWebSocket adopts it.
+            // Rejecting here must close both streams even if another close fails.
+            runCatching { response.close() }
+            runCatching { response.socket?.sink?.close() }
+            runCatching { response.socket?.source?.close() }
             throw error
           }
           response
