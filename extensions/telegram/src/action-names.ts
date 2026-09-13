@@ -2,6 +2,7 @@ import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contr
 
 export const TELEGRAM_MESSAGE_ACTION_MAP = {
   delete: "deleteMessage",
+  dice: "sendDice",
   edit: "editMessage",
   "emoji-list": "emoji-list",
   poll: "poll",
