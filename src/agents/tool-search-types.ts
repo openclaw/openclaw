@@ -120,9 +120,24 @@ export type ToolSearchCatalogSession = {
   searchCount: number;
   describeCount: number;
   callCount: number;
+  /** Trusted core coding tools still model-visible after compaction. */
+  directCoreToolNames?: string[];
+  /**
+   * Native core tools kept callable by name/id through tool_call without
+   * listing them in `entries` next to the Tool Search controls.
+   */
+  directCoreEntries?: ToolSearchCatalogEntry[];
+  /**
+   * Native core tools removed by the current toolsAllow / execution gate.
+   * Lookups treat these as known-but-unavailable instead of unknown ids.
+   */
+  gatedDirectCoreEntries?: ToolSearchCatalogEntry[];
 };
 
-export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries"> & {
+export type ToolSearchCatalogTelemetry = Omit<
+  ToolSearchCatalogSession,
+  "entries" | "directCoreEntries" | "gatedDirectCoreEntries"
+> & {
   catalogSize: number;
   sources: Record<CatalogSource, number>;
 };

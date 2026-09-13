@@ -104,7 +104,9 @@ export async function runScheduledToolSearchCall<T>(params: {
     // Queued cancellation must settle even if a predecessor ignores abort.
     await racePromiseWithAbortSignal(admission.ready.promise, signal);
     signal.throwIfAborted();
-    const current = owner.current?.entries.find((entry) => entry.id === params.entry.id);
+    const current =
+      owner.current?.entries.find((entry) => entry.id === params.entry.id) ??
+      owner.current?.directCoreEntries?.find((entry) => entry.id === params.entry.id);
     if (!current || current.tool !== params.entry.tool || current.tool.executionMode !== mode) {
       throw new ToolInputError("Queued tool changed or is no longer available in this run.");
     }

@@ -13,6 +13,7 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
+import { TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -24,6 +25,7 @@ import {
   prepareToolSearchCatalogExecutionTool,
   readToolSearchCatalogTelemetry,
   resolveCatalog,
+  resolveNativeCoreCatalogEntry,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import {
@@ -101,10 +103,26 @@ function findEntry(
     throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
   }
   const namedEntry = namedEntries[0];
-  if (!namedEntry) {
-    throw new ToolInputError(formatUnknownToolIdError(needle, entries, options));
+  if (namedEntry) {
+    return namedEntry;
   }
-  return namedEntry;
+  // Native core tools stay callable by name after structured compaction removes
+  // them from catalog listings. Unknown-id suggestions include those native
+  // entries so a mistype like file_write can recover to write.
+  const nativeEntry = resolveNativeCoreCatalogEntry(catalog, needle);
+  if (nativeEntry) {
+    return nativeEntry;
+  }
+  const gatedNative = resolveNativeCoreCatalogEntry(
+    { ...catalog, directCoreEntries: catalog.gatedDirectCoreEntries ?? [] },
+    needle,
+  );
+  if (gatedNative) {
+    throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+  }
+  throw new ToolInputError(
+    formatUnknownToolIdError(needle, [...entries, ...(catalog.directCoreEntries ?? [])], options),
+  );
 }
 
 function findEntryByExactId(
@@ -113,13 +131,26 @@ function findEntryByExactId(
   errorOptions: ToolLookupErrorOptions = {},
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
-  const entry = catalog.entries.find((candidate) => candidate.id === needle);
-  if (!entry) {
-    throw new ToolInputError(
-      formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
-    );
+  const entry =
+    catalog.entries.find((candidate) => candidate.id === needle) ??
+    resolveNativeCoreCatalogEntry(catalog, needle, { exactIdOnly: true });
+  if (entry) {
+    return entry;
   }
-  return entry;
+  const gatedNative = resolveNativeCoreCatalogEntry(
+    { ...catalog, directCoreEntries: catalog.gatedDirectCoreEntries ?? [] },
+    needle,
+    { exactIdOnly: true },
+  );
+  if (gatedNative) {
+    throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+  }
+  throw new ToolInputError(
+    formatUnknownToolIdError(needle, [...catalog.entries, ...(catalog.directCoreEntries ?? [])], {
+      ...errorOptions,
+      exactIdOnly: true,
+    }),
+  );
 }
 
 const TOOL_SEARCH_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
@@ -166,7 +197,7 @@ export function readToolSearchCallArgs(
         if (typeof value !== "string") {
           return [];
         }
-        const matches = catalog.entries.filter(
+        const matches = [...catalog.entries, ...(catalog.directCoreEntries ?? [])].filter(
           (entry) => entry.id === value || entry.name === value,
         );
         return matches.length > 0 ? [{ key, matches }] : [];
