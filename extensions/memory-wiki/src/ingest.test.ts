@@ -177,7 +177,7 @@ hello from source
     expect(externalAfter).toBe("keep external content\n");
     expect(pageAfter).toContain("updated source");
     process.stdout.write(
-      "REAL_OPENCLAW_MEMORY_WIKI_CLI_PROOF command=wiki-ingest-json created=false pageUpdated=true externalUnchanged=true\n",
+      "REAL_OPENCLAW_MEMORY_WIKI_CLI_PROOF command=wiki-ingest-json status=0 created=false pageUpdated=true externalUnchanged=true\n",
     );
   });
 
