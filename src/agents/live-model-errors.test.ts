@@ -1,6 +1,9 @@
 // Covers provider error text classifiers used by live model validation.
 import { describe, expect, it } from "vitest";
-import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+import {
+  isModelNotFoundErrorMessage,
+  isProviderWideModelNotFoundErrorMessage,
+} from "./live-model-errors.js";
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
@@ -83,5 +86,29 @@ describe("live model error helpers", () => {
       false,
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
+  });
+
+  it("treats only unambiguous missing-model text as provider-wide", () => {
+    expect(isProviderWideModelNotFoundErrorMessage("404 model not found")).toBe(true);
+    expect(isProviderWideModelNotFoundErrorMessage("The model gpt-foo does not exist.")).toBe(true);
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
+        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      ),
+    ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage("The model does not exist or you do not have access"),
+    ).toBe(true);
+    expect(
+      isProviderWideModelNotFoundErrorMessage("The model does not exist or you do not have access"),
+    ).toBe(false);
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
+        "The 'gpt-5.5-pro' model is not supported when using Codex with a ChatGPT account.",
+      ),
+    ).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("current candidate model unavailable")).toBe(
+      false,
+    );
   });
 });

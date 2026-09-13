@@ -4,6 +4,18 @@
  * Probe and fallback code uses these string checks to distinguish missing or
  * deprecated model ids from generic provider/runtime failures.
  */
+/**
+ * Access or permission wording means another authorized profile may still
+ * serve the model. "continued paid access" on a retirement notice does not.
+ */
+const ACCOUNT_SCOPED_MODEL_NOT_FOUND_RE = new RegExp(
+  String.raw`\b(?:do not have access|does not have access|don't have access|dont have access|` +
+    String.raw`not have access|no access to|access denied|insufficient permissions?|` +
+    String.raw`permission denied|not authorized|unauthorized|forbidden)\b|` +
+    String.raw`\bwith a chatgpt account\b`,
+  "i",
+);
+
 /** Returns whether a provider error message indicates a missing or retired model id. */
 export function isModelNotFoundErrorMessage(raw: string): boolean {
   const msg = raw.trim();
@@ -29,4 +41,14 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     /is not a valid model id/i.test(msg) ||
     (/invalid model/i.test(msg) && !/invalid model reference/i.test(msg))
   );
+}
+
+/**
+ * True only when {@link isModelNotFoundErrorMessage} matches and the text does
+ * not also describe an account or permission denial. Ambiguous and
+ * account-scoped failures stay on profile rotation.
+ */
+export function isProviderWideModelNotFoundErrorMessage(raw: string): boolean {
+  const msg = raw.trim();
+  return isModelNotFoundErrorMessage(msg) && !ACCOUNT_SCOPED_MODEL_NOT_FOUND_RE.test(msg);
 }

@@ -252,6 +252,61 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("sends provider-wide assistant model_not_found failures directly to model fallback", () => {
+    // A model the provider no longer serves is not credential-specific.
+    expect(
+      resolveAssistantDecision({
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        errorMessage: "404 model not found",
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
+  it("surfaces provider-wide assistant model_not_found when no fallback is configured", () => {
+    expect(
+      resolveAssistantDecision({
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        errorMessage: "404 model not found",
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "model_not_found",
+    });
+  });
+
+  it("rotates profiles for account-scoped model access denials", () => {
+    // The classifier still reports model_not_found, but another profile may
+    // be allowed to use the selected model.
+    expect(
+      resolveAssistantDecision({
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        errorMessage: "The model does not exist or you do not have access",
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "model_not_found",
+    });
+  });
+
+  it("keeps profile rotation when model_not_found is not proven provider-wide", () => {
+    expect(
+      resolveAssistantDecision({
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "model_not_found",
+    });
+  });
+
   it("does not fall back on stale classified assistant text after rotation is exhausted", () => {
     expect(
       resolveAssistantDecision({

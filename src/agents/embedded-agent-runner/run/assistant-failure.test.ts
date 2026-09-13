@@ -617,6 +617,75 @@ describe("handleEmbeddedAssistantFailure", () => {
     expect(fixture.traceAttempts).toEqual([]);
   });
 
+  it.each([
+    {
+      label: "does not rotate a provider-wide missing model onto another profile",
+      errorMessage: "404 model not found",
+      rotates: false,
+    },
+    {
+      label: "rotates an account-scoped model access denial to the next profile",
+      errorMessage: "The model does not exist or you do not have access",
+      rotates: true,
+    },
+  ])("$label", async ({ errorMessage, rotates }) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "anthropic",
+      model: "mock-1",
+      stopReason: "error",
+      errorMessage,
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    fixture.input.normalizedAttempt.attempt = attempt;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
+    fixture.input.emptyErrorRetries = 0;
+    fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
+
+    if (rotates) {
+      const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+      expect(outcome).toMatchObject({
+        action: "retry",
+        lastRetryFailoverReason: "model_not_found",
+      });
+      expect(fixture.advanceAuthProfile).toHaveBeenCalledOnce();
+      expect(fixture.traceAttempts).toEqual([
+        {
+          provider: "anthropic",
+          model: "mock-1",
+          result: "rotate_profile",
+          reason: "model_not_found",
+          stage: "assistant",
+        },
+      ]);
+      return;
+    }
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "model_not_found",
+    });
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([
+      {
+        provider: "anthropic",
+        model: "mock-1",
+        result: "fallback_model",
+        reason: "model_not_found",
+        stage: "assistant",
+        status: 404,
+      },
+    ]);
+  });
+
   it("closes every failover retry after an idle timeout commits a write", async () => {
     const fixture = makeIdleTimeoutFailureInput();
 

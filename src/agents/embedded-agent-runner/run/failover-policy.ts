@@ -1,6 +1,7 @@
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCliTerminalStopCode } from "../../failover-error.js";
 import type { FailoverReason } from "../../failover/signal.js";
+import { isProviderWideModelNotFoundErrorMessage } from "../../live-model-errors.js";
 
 type ProfileDecision = {
   action: "rotate_profile" | "surface_error";
@@ -40,6 +41,8 @@ type AssistantDecisionParams = {
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
+  /** Assistant error text used to prove a provider-wide missing model. */
+  errorMessage?: string;
   harnessOwnsTransport?: boolean;
   profileRotated: boolean;
 };
@@ -73,7 +76,21 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
   );
 }
 
+function isProviderWideMissingModel(params: AssistantDecisionParams): boolean {
+  // The reason alone also covers "does not exist or you do not have access".
+  // Skip rotation only when the same classifier proves the id is missing
+  // provider-wide, so another authorized profile cannot serve it.
+  return (
+    params.failoverFailure &&
+    params.failoverReason === "model_not_found" &&
+    isProviderWideModelNotFoundErrorMessage(params.errorMessage ?? "")
+  );
+}
+
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
+  if (isProviderWideMissingModel(params)) {
+    return false;
+  }
   if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
     return false;
   }
@@ -174,6 +191,14 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     if (params.failoverFailure && params.failoverReason === "tls_certificate") {
       return params.fallbackConfigured
         ? { action: "fallback_model", reason: "tls_certificate" }
+        : surfaceError;
+    }
+    // A proven provider-wide miss cannot be fixed by another credential.
+    // Returning here avoids the continue_normal path that non-rotating
+    // assistant failures otherwise take.
+    if (isProviderWideMissingModel(params)) {
+      return params.fallbackConfigured
+        ? { action: "fallback_model", reason: "model_not_found" }
         : surfaceError;
     }
     shouldRotate = shouldRotateAssistant(params);
