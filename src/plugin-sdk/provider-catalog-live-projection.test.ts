@@ -8,8 +8,10 @@ import {
   projectProviderCatalogSnapshotRows,
   projectUpstreamProviderCatalogSnapshot,
   type ProviderCatalogSnapshot,
-  type ProjectedUpstreamProviderCatalogModel,
 } from "./provider-catalog-snapshot.internal.js";
+import type {
+  ProjectedUpstreamProviderCatalogModel,
+} from "./provider-catalog-live-normalize.internal.js";
 
 function buildModel(id: string): ProjectedUpstreamProviderCatalogModel {
   return {
