@@ -47,6 +47,15 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
   });
 
+  it("keeps host-required tools in a narrowed runtime allowlist", () => {
+    const context = buildEmbeddedAttemptToolRunContext({
+      toolsAllow: ["read"],
+      forceToolNames: ["heartbeat_respond"],
+    });
+
+    expect(context.runtimeToolAllowlist).toEqual(["read", "heartbeat_respond"]);
+  });
+
   it("forwards memory trigger metadata into tool creation so append-only guards activate", () => {
     const memoryFlushWritePath = "memory/2026-03-24.md";
     const context = buildEmbeddedAttemptToolRunContext({ trigger: "memory", memoryFlushWritePath });

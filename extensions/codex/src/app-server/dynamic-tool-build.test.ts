@@ -2591,6 +2591,7 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.enableHeartbeatTool = true;
     params.forceHeartbeatTool = true;
+    params.toolsAllow = ["read"];
     const heartbeatTool = {
       ...createRuntimeDynamicTool("heartbeat_respond"),
       catalogMode: "direct-only" as const,

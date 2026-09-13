@@ -222,12 +222,18 @@ export async function buildDynamicTools(
   input: DynamicToolBuildParams,
 ): Promise<OpenClawDynamicTool[]> {
   const { params } = input;
+  const heartbeatToolEnabled =
+    params.trigger === "heartbeat" ||
+    params.enableHeartbeatTool === true ||
+    params.forceHeartbeatTool === true ||
+    input.forceHeartbeatTool === true;
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...params,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
+    forceToolNames: heartbeatToolEnabled ? ["heartbeat_respond"] : undefined,
   });
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
@@ -258,11 +264,6 @@ export async function buildDynamicTools(
     input.sandbox,
     input.nativeToolSurfaceEnabled,
   );
-  const heartbeatToolEnabled =
-    params.trigger === "heartbeat" ||
-    params.enableHeartbeatTool === true ||
-    params.forceHeartbeatTool === true ||
-    input.forceHeartbeatTool === true;
   const options: OpenClawCodingToolsOptions = {
     agentId: input.sessionAgentId,
     policyAgentId: input.policyAgentId,
