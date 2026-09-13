@@ -158,6 +158,7 @@ hello from source
           OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
           OPENCLAW_DEV_SOURCE_ROOT: repoRoot,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
           OPENCLAW_DISABLE_UPDATE_CHECK: "1",
           OPENCLAW_NO_RESPAWN: "1",
         },
