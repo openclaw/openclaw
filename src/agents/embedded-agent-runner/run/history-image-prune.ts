@@ -41,33 +41,45 @@ type PrunableContextAgent = {
  * ones, so text-only turns consume the window.
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
+
+/**
+ * Scan state for one turn: a turn opens at a user message (or an orphan
+ * toolResult) and closes at the next user message. `roundStarts` records the
+ * first index of each maximal contiguous toolResult block, so parallel tool
+ * calls appending several results count as one round.
+ */
+type TurnScanState = {
+  start: number;
+  hasAssistantReply: boolean;
+  roundStarts: number[];
+};
+
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   const completedTurnStarts: number[] = [];
-  let currentTurnStart = -1;
-  let currentTurnHasAssistantReply = false;
+  let currentTurn: TurnScanState | undefined;
 
   for (let i = 0; i < messages.length; i++) {
     const role = messages[i]?.role;
     if (role === "user") {
-      if (currentTurnStart >= 0 && currentTurnHasAssistantReply) {
+      if (currentTurn && currentTurn.hasAssistantReply) {
         // The retained window and one older turn are enough to decide pruning.
         if (completedTurnStarts.length > PRESERVE_RECENT_COMPLETED_TURNS) {
           completedTurnStarts.shift();
         }
-        completedTurnStarts.push(currentTurnStart);
+        completedTurnStarts.push(currentTurn.start);
       }
-      currentTurnStart = i;
-      currentTurnHasAssistantReply = false;
+      currentTurn = { start: i, hasAssistantReply: false, roundStarts: [] };
       continue;
     }
     if (role === "toolResult") {
-      if (currentTurnStart < 0) {
-        currentTurnStart = i;
+      currentTurn ??= { start: i, hasAssistantReply: false, roundStarts: [] };
+      if (messages[i - 1]?.role !== "toolResult") {
+        currentTurn.roundStarts.push(i);
       }
       continue;
     }
-    if (role === "assistant" && currentTurnStart >= 0) {
-      currentTurnHasAssistantReply = true;
+    if (role === "assistant" && currentTurn) {
+      currentTurn.hasAssistantReply = true;
     }
   }
 
