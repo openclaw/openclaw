@@ -6,8 +6,8 @@ import {
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../../../infra/embedded-plugin-approval-broker.js";
-import { runBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
+import { runBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import {
   cleanupTempPaths,
@@ -115,10 +115,7 @@ describe("runEmbeddedAttempt abort races", () => {
       expect(publishedDeadlines[2]?.deadlineAtMs).toBeGreaterThan(
         (publishedDeadlines[0]?.deadlineAtMs ?? 0) + 59_000,
       );
-      expect(approvalEvents).toEqual([
-        "plugin.approval.requested",
-        "plugin.approval.resolved",
-      ]);
+      expect(approvalEvents).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
       process.stdout.write(
         `REAL_BEHAVIOR_PROOF terminal=ok deadlineKinds=${publishedDeadlines.map(({ kind }) => kind).join(",")} ` +
           `resumedDeadlineDeltaMs=${(publishedDeadlines[2]?.deadlineAtMs ?? 0) - (publishedDeadlines[0]?.deadlineAtMs ?? 0)} ` +
