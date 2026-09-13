@@ -2355,7 +2355,7 @@ describe("runCodexAppServerAttempt", () => {
     const toolBridge = createCodexDynamicToolBridge({
       tools,
       signal: new AbortController().signal,
-      directToolNames: ["message"],
+      directToolNames: ["message", "heartbeat_respond"],
     });
     const specs = flattenSpecsWithNamespace(toolBridge.specs);
     const message = specs.find((tool) => tool.name === "message");
@@ -2368,8 +2368,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(message).not.toHaveProperty("deferLoading");
     expect(webSearch?.namespace).toBe("openclaw");
     expect(webSearch?.deferLoading).toBe(true);
-    expect(heartbeat?.namespace).toBe("openclaw");
-    expect(heartbeat?.deferLoading).toBe(true);
+    expect(heartbeat).not.toHaveProperty("namespace");
+    expect(heartbeat).not.toHaveProperty("deferLoading");
     expect(agentsList).not.toHaveProperty("namespace");
     expect(agentsList).not.toHaveProperty("deferLoading");
     expect(sessionsSpawn).not.toHaveProperty("namespace");
@@ -2378,7 +2378,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
-  it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
+  it("keeps the heartbeat schema direct and stable across normal and heartbeat turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
       ...(options?.enableHeartbeatTool === true
@@ -2429,15 +2429,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(normalInstructions).not.toContain(
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
-    expect(heartbeatInstructions).toContain(
+    expect(heartbeatInstructions).not.toContain(
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
         (tool) => tool.name === "heartbeat_respond",
       );
-      expect(heartbeat?.namespace).toBe("openclaw");
-      expect(heartbeat?.deferLoading).toBe(true);
+      expect(heartbeat).not.toHaveProperty("namespace");
+      expect(heartbeat).not.toHaveProperty("deferLoading");
     }
     expect(codexDynamicToolsFingerprint(heartbeatBridge.specs)).toBe(
       codexDynamicToolsFingerprint(normalBridge.specs),
