@@ -379,20 +379,44 @@ describe("Doctor legacy config composition", () => {
       });
     });
   });
-  it.each(["${DOCTOR_MEMORY_KEY}", "$${DOCTOR_MEMORY_KEY}"])(
-    "preserves migrated default memory references %s and explicit canonical values",
-    async (apiKey) => {
+  it.each([
+    { apiKey: "${DOCTOR_MEMORY_KEY}", provider: "auto", canonicalApiKey: undefined },
+    { apiKey: "$${DOCTOR_MEMORY_KEY}", provider: "auto", canonicalApiKey: undefined },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "${DOCTOR_MEMORY_PROVIDER}",
+      canonicalApiKey: undefined,
+    },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "auto",
+      canonicalApiKey: "${DOCTOR_CANONICAL_MEMORY_KEY}",
+    },
+  ])(
+    "preserves migrated $apiKey and canonical $canonicalApiKey references while canonicalizing $provider",
+    async ({ apiKey, provider, canonicalApiKey }) => {
       await withDoctorConfigPreflightHome(async (home) => {
         await withEnvAsync(
-          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", DOCTOR_MEMORY_KEY: "memory-secret-canary" },
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            DOCTOR_MEMORY_KEY: "memory-secret-canary",
+            DOCTOR_MEMORY_PROVIDER: "auto",
+            DOCTOR_CANONICAL_MEMORY_KEY: "canonical-secret-canary",
+          },
           async () => {
             const configPath = await writeOpenClawConfig(home, {
-              memory: { search: { enabled: false, query: { maxResults: 9 } } },
+              memory: {
+                search: {
+                  enabled: false,
+                  query: { maxResults: 9 },
+                  ...(canonicalApiKey ? { remote: { apiKey: canonicalApiKey } } : {}),
+                },
+              },
               agents: {
                 defaults: {
                   memorySearch: {
                     enabled: true,
-                    provider: "auto",
+                    provider,
                     query: { maxResults: 7 },
                     remote: { apiKey },
                   },
@@ -407,16 +431,40 @@ describe("Doctor legacy config composition", () => {
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
-            const repaired = await repairConfig(configPath);
+            const ctx = await prepareDoctorContext(configPath);
+            await withEnvAsync(
+              {
+                DOCTOR_MEMORY_KEY: "rotated-memory-secret-canary",
+                DOCTOR_CANONICAL_MEMORY_KEY: "rotated-canonical-secret-canary",
+              },
+              async () => {
+                await runInitialConfigWriteHealth(ctx);
+                const snapshot = await readConfigFileSnapshot();
+                expect(snapshot.valid).toBe(true);
+                expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(
+                  canonicalApiKey
+                    ? "rotated-canonical-secret-canary"
+                    : apiKey.startsWith("$$")
+                      ? "${DOCTOR_MEMORY_KEY}"
+                      : "rotated-memory-secret-canary",
+                );
+              },
+            );
+            const repaired = ctx.configResult;
+            expect(ctx.configWriteRefusal).toBeUndefined();
             expect(repaired.cfg.memory?.search?.remote?.apiKey).toBe(
-              apiKey.startsWith("$$") ? "${DOCTOR_MEMORY_KEY}" : "memory-secret-canary",
+              canonicalApiKey
+                ? "canonical-secret-canary"
+                : apiKey.startsWith("$$")
+                  ? "${DOCTOR_MEMORY_KEY}"
+                  : "memory-secret-canary",
             );
             const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(saved.memory.search).toEqual({
               enabled: false,
               provider: "openai",
               query: { maxResults: 9 },
-              remote: { apiKey },
+              remote: { apiKey: canonicalApiKey ?? apiKey },
             });
             expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
             expect(saved.agents.entries.ops.memory.search).toEqual({

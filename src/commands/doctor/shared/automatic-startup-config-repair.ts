@@ -23,7 +23,10 @@ import {
   withoutPluginInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import { restoreDoctorConfigEnvRefs } from "./config-flow-steps.js";
+import {
+  prepareDoctorConfigReferenceSource,
+  restoreDoctorConfigEnvRefs,
+} from "./config-flow-steps.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 import {
@@ -37,6 +40,7 @@ type AutomaticConfigRepairPlan = {
   config: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   changes: string[];
+  writeConfig: OpenClawConfig;
 };
 
 function admitAutomaticConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boolean {
@@ -115,10 +119,16 @@ function planConfigRepair(
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     return null;
   }
+  // Validate, verify, and commit one authored candidate; resolving a moved escaped
+  // reference again would make successful repairs look like unexpected config drift.
+  // Core-only selection must not resolve plugin migration contracts before state admission.
+  const writeConfig = pluginContracts
+    ? restoreDoctorConfigEnvRefs(config, prepareDoctorConfigReferenceSource(snapshot))
+    : config;
   const valid = withMetadata(config, (metadata) => {
     const validated = pluginContracts
       ? validateConfigObjectWithPlugins(
-          prepareAutomaticConfigRepairWrite(snapshot, config),
+          prepareAutomaticConfigRepairWrite(snapshot, writeConfig),
           metadata ? { pluginMetadataSnapshot: metadata } : undefined,
         ).ok
       : validateConfigObjectRaw(config).ok;
@@ -133,6 +143,7 @@ function planConfigRepair(
   }
   return {
     config,
+    writeConfig,
     changes: [
       ...migration.changes,
       ...(sourceRecords.status === "valid"
@@ -188,7 +199,7 @@ export function isStartupConfigRepairResult(
   after: ConfigFileSnapshot,
 ): boolean {
   const plan = planAutomaticConfigRepair(before);
-  const expected = plan ? prepareAutomaticConfigRepairWrite(before, plan.config) : null;
+  const expected = plan ? prepareAutomaticConfigRepairWrite(before, plan.writeConfig) : null;
   return Boolean(
     expected &&
     after.valid &&
@@ -210,13 +221,13 @@ async function writeAutomaticConfigRepair(
     baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     // Preflight can commit before the later Doctor health write. Preserve moved
     // references here, under the same snapshot/hash and read-time environment.
-    transform: (_current, { snapshot: currentSnapshot }, { envSnapshotForRestore }) => {
+    transform: (_current, { snapshot: currentSnapshot }) => {
       assertShippedPluginInstallConfigImportCurrent(
         currentSnapshot,
         options.pluginInstallConfigImport,
       );
       return {
-        nextConfig: restoreDoctorConfigEnvRefs(plan.config, currentSnapshot, envSnapshotForRestore),
+        nextConfig: plan.writeConfig,
       };
     },
     afterWrite: { mode: "none", reason: "automatic migration" },

@@ -1,12 +1,10 @@
 // Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { isDeepStrictEqual } from "node:util";
-import { configIncludeOwnsAgentRoster } from "../../../config/agent-roster-provenance.js";
-import { restoreEnvVarRefs } from "../../../config/env-preserve.js";
-import { resolveConfigIncludes } from "../../../config/includes.js";
+import { restoreEnvVarRefsFromResolved } from "../../../config/env-preserve.js";
 import { projectAuthoredAgentRosterForWrite } from "../../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../../config/issue-format.js";
 import { createMergePatch } from "../../../config/merge-patch.js";
-import { resolveIncludeRoots } from "../../../config/paths.js";
+import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
@@ -141,33 +139,58 @@ export function applyUnknownConfigKeyStep(params: {
   };
 }
 
-/** Restore references moved by Doctor while keeping resolved values for its state repairs. */
+export type DoctorConfigReferenceSource = {
+  authored: OpenClawConfig;
+  resolved: OpenClawConfig;
+  parsed: unknown;
+};
+
+/** Keep the matched planning read independent of later write receipts and environment changes. */
+export function prepareDoctorConfigReferenceSource(
+  snapshot: ConfigFileSnapshot,
+): DoctorConfigReferenceSource | undefined {
+  if (!snapshot.authoredConfig || !snapshot.sourceConfigBeforeMigrations) {
+    return undefined;
+  }
+  return {
+    authored: structuredClone(snapshot.authoredConfig),
+    resolved: cloneConfigWithResolutionFacts(snapshot.sourceConfigBeforeMigrations),
+    parsed: structuredClone(snapshot.parsed),
+  };
+}
+
+/** Restore unchanged and moved references without substituting a later environment. */
 export function restoreDoctorConfigEnvRefs(
   candidate: OpenClawConfig,
-  snapshot: ConfigFileSnapshot,
-  env?: NodeJS.ProcessEnv,
+  source: DoctorConfigReferenceSource | undefined,
 ): OpenClawConfig {
-  const authored = resolveConfigIncludes(snapshot.parsed, snapshot.path, undefined, {
-    allowedRoots: resolveIncludeRoots(env),
-  });
-  // The roster key must use the resolved identity from this same snapshot, while
-  // migrated leaves retain authored references for the canonical writer to match.
+  if (!source) {
+    return candidate;
+  }
+  // Both views use the original resolved roster identity, including escaped-id facts.
   const canonicalAuthored = projectAuthoredAgentRosterForWrite({
-    rootAuthoredConfig: authored,
-    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+    rootAuthoredConfig: source.authored,
+    sourceConfigBeforeMigrations: source.resolved,
   });
-  const migrated = applyLegacyDoctorMigrations(canonicalAuthored, {
-    authoredRaw: snapshot.parsed,
-    resolvedRaw: snapshot.sourceConfig,
+  const canonicalResolved = projectAuthoredAgentRosterForWrite({
+    rootAuthoredConfig: source.resolved,
+    sourceConfigBeforeMigrations: source.resolved,
   });
-  // The root writer preserves unchanged roster refs after checking include ownership.
-  // Single-file and include-file writers still need references moved with their roster.
-  const referenceBase =
-    containsAuthoredInclude(snapshot.parsed) && !configIncludeOwnsAgentRoster(snapshot)
-      ? canonicalAuthored
-      : authored;
-  const referenceTemplate = createMergePatch(referenceBase, migrated.next ?? canonicalAuthored);
-  const restored = restoreEnvVarRefs(candidate, referenceTemplate, env);
+  const unchanged = restoreEnvVarRefsFromResolved(candidate, canonicalAuthored, canonicalResolved);
+  const context = { authoredRaw: source.parsed, resolvedRaw: source.resolved };
+  const migratedAuthored = applyLegacyDoctorMigrations(canonicalAuthored, context);
+  const migratedResolved = applyLegacyDoctorMigrations(canonicalResolved, context);
+  // Only migration-owned destinations participate in the second pass. Unchanged policy
+  // templates must not restore retired IDs after their resolved values were canonicalized.
+  const referenceTemplate = createMergePatch(
+    canonicalAuthored,
+    migratedAuthored.next ?? canonicalAuthored,
+  );
+  const resolvedTemplate = createMergePatch(
+    canonicalResolved,
+    migratedResolved.next ?? canonicalResolved,
+  );
+  const restored = restoreEnvVarRefsFromResolved(unchanged, referenceTemplate, resolvedTemplate);
   // SAFETY: Restoring string leaves preserves the candidate's config structure.
   return restored as OpenClawConfig;
 }
