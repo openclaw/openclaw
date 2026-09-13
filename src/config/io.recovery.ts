@@ -1,6 +1,9 @@
 import path from "node:path";
 import { replaceFileAtomic } from "../infra/replace-file.js";
-import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
+import {
+  formatClobberSnapshotSkipWarning,
+  persistBoundedClobberedConfigSnapshot,
+} from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
   parseConfigJson5,
@@ -37,7 +40,7 @@ async function persistPrefixedConfigRecovery(params: {
   context: ConfigIoContext;
   originalRaw: string;
   recoveredRaw: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const { context } = params;
   const observedAt = new Date().toISOString();
   const clobberedPath = await persistBoundedClobberedConfigSnapshot({
@@ -46,6 +49,12 @@ async function persistPrefixedConfigRecovery(params: {
     raw: params.originalRaw,
     observedAt,
   });
+  if (!clobberedPath) {
+    context.deps.logger.warn(
+      formatClobberSnapshotSkipWarning("prefix recovery", context.configPath, ["non-JSON prefix"]),
+    );
+    return false;
+  }
   // Recovery must publish by rename; a copy fallback can truncate the live config.
   await replaceFileAtomic({
     filePath: context.configPath,
@@ -56,9 +65,9 @@ async function persistPrefixedConfigRecovery(params: {
     fileSystem: context.deps.fs,
   });
   context.deps.logger.warn(
-    `Config auto-stripped non-JSON prefix: ${context.configPath}` +
-      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
+    `Config auto-stripped non-JSON prefix: ${context.configPath} (original saved as ${clobberedPath})`,
   );
+  return true;
 }
 
 export async function recoverConfigFromJsonRootSuffixWithContext(
@@ -97,10 +106,9 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   if (!validated.ok) {
     return false;
   }
-  await persistPrefixedConfigRecovery({
+  return await persistPrefixedConfigRecovery({
     context,
     originalRaw: snapshot.raw,
     recoveredRaw: suffixRecovery.raw,
   });
-  return true;
 }

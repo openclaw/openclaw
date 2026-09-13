@@ -72,10 +72,12 @@ export function createConfigFileSnapshot(params: {
 export async function finalizeReadConfigSnapshotInternalResult(
   deps: NormalizedConfigIoDeps,
   result: ReadConfigFileSnapshotInternalResult,
-  options?: { observe?: boolean },
+  options?: { observe?: boolean; recordSuspiciousSignature?: boolean },
 ): Promise<ReadConfigFileSnapshotInternalResult> {
   if (deps.observe && options?.observe !== false) {
-    await observeConfigSnapshot(deps, result.snapshot);
+    await observeConfigSnapshot(deps, result.snapshot, {
+      recordSuspiciousSignature: options?.recordSuspiciousSignature,
+    });
   }
   return result;
 }
