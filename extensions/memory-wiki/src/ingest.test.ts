@@ -116,6 +116,7 @@ hello from source
       JSON.stringify({
         plugins: {
           enabled: true,
+          load: { paths: [path.join(repoRoot, "extensions", "memory-wiki")] },
           entries: {
             "memory-wiki": {
               enabled: true,
@@ -145,14 +146,15 @@ hello from source
           ...process.env,
           CI: "1",
           NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_ENV: undefined,
+          VITEST: undefined,
           HOME: tempHome,
           USERPROFILE: tempHome,
           OPENCLAW_HOME: tempHome,
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
           OPENCLAW_DEV_SOURCE_ROOT: repoRoot,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
-          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_DISABLE_UPDATE_CHECK: "1",
           OPENCLAW_NO_RESPAWN: "1",
         },
