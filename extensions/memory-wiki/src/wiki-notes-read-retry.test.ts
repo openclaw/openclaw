@@ -32,8 +32,8 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
           if (prop !== "readText") {
             return Reflect.get(target, prop, receiver);
           }
-          return async (...args: Parameters<typeof vault.readText>) => {
-            const [relativePath] = args;
+          return async (...readArgs: Parameters<typeof vault.readText>) => {
+            const [relativePath] = readArgs;
             if (securityRuntimeMock.failReadTextAlwaysFor === relativePath) {
               securityRuntimeMock.readTextFailureInjected = true;
               throw securityRuntimeMock.readTextError;
@@ -53,7 +53,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
               securityRuntimeMock.readTextFailureInjected = true;
               throw securityRuntimeMock.readTextOnceError;
             }
-            return target.readText(...args);
+            return target.readText(...readArgs);
           };
         },
       });
