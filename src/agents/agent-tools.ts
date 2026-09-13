@@ -105,6 +105,7 @@ import {
 } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
+import { resolveSubagentSessionAttachmentRootDir } from "./subagents/subagent-attachment-paths.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -491,6 +492,13 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? resolveSessionAgentId({ config: options.config, sessionKey: options.runSessionKey })
       : agentId);
   const executionSessionKey = options?.runSessionKey ?? options?.sessionKey;
+  const attachmentReadRoot =
+    executionAgentId && executionSessionKey
+      ? resolveSubagentSessionAttachmentRootDir({
+          agentId: executionAgentId,
+          childSessionKey: executionSessionKey,
+        })
+      : undefined;
 
   const enableHeartbeatTool =
     options?.enableHeartbeatTool === true ||
@@ -626,6 +634,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const fsPolicy = {
     workspaceOnly,
     ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
+    ...(!sandbox && attachmentReadRoot ? { readOnlyRoots: [attachmentReadRoot] } : {}),
   };
   const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
   const applyPatchConfig = execConfig.applyPatch;
@@ -656,6 +665,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     {};
   const coreTools = createCoreCodingTools({
     abortSignal: options?.abortSignal,
+    attachmentReadRoot,
+    agentId,
     codingRoot,
     containmentRoot,
     includeBaseCodingTools,

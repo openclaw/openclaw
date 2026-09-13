@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -64,6 +65,8 @@ function guardHostWorkspaceTool(
 
 type CoreCodingToolsOptions = {
   abortSignal?: AbortSignal;
+  attachmentReadRoot?: string;
+  agentId?: string;
   codingRoot: string;
   containmentRoot: string;
   includeBaseCodingTools: boolean;
@@ -100,6 +103,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   }
 
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options.skillsSnapshot);
+  const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
+  const hostReadRoots = [
+    ...(skillReadRoots ?? []),
+    ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
+  ];
   const needsReadOnlyWorkspaceSkillMounts =
     options.includeShellTools || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
@@ -175,7 +183,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                 bridge: sandboxFsBridge,
               }
             : {
-                additionalRoots: skillReadRoots,
+                additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
               },

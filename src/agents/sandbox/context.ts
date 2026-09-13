@@ -3,6 +3,7 @@
  *
  * Prepares workspace layout, backend handle, filesystem bridge, browser bridge, and registry state for one run.
  */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -18,6 +19,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
+import {
+  resolveSubagentSessionAttachmentRootDir,
+  SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
+} from "../subagents/subagent-attachment-paths.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -176,6 +181,20 @@ function resolveSandboxSession(params: {
   }
 
   const configured = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  const sessionAttachmentRoot = resolveSubagentSessionAttachmentRootDir({
+    agentId: runtime.agentId,
+    childSessionKey: rawSessionKey,
+  });
+  // An attachment grant is session-owned. Give the child a dedicated runtime
+  // even when ordinary agent-scoped turns share one, so no sibling guest can
+  // inherit this session's protected projection.
+  try {
+    if (fsSync.statSync(sessionAttachmentRoot).isDirectory()) {
+      runtime.isolationSubject = { kind: "session", sessionKey: rawSessionKey };
+    }
+  } catch {
+    // No attachment grant for this session.
+  }
   const librarySelections = params.skillsSnapshot?.librarySelections;
   // Shared/agent sandboxes cannot expose one person's private bundles to another session,
   // or replace bytes under an active revision. Selection changes get a separate runtime.
@@ -286,6 +305,28 @@ async function resolveProvisionedSandboxContext(
     workspaceDir,
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
+  const readOnlyResourceMounts =
+    resolvedCfg.scope === "shared"
+      ? undefined
+      : await (async () => {
+          const hostPath = resolveSubagentSessionAttachmentRootDir({
+            agentId: runtime.agentId,
+            childSessionKey: rawSessionKey,
+          });
+          try {
+            if (!(await fs.stat(hostPath)).isDirectory()) {
+              return undefined;
+            }
+            return [
+              {
+                hostPath: await fs.realpath(hostPath),
+                containerPath: SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
+              },
+            ];
+          } catch {
+            return undefined;
+          }
+        })();
 
   const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
     backendId: resolvedCfg.backend,
@@ -298,6 +339,7 @@ async function resolveProvisionedSandboxContext(
     workspaceDir,
     agentWorkspaceDir,
     skillsWorkspaceDir,
+    readOnlyResourceMounts,
     cfg: resolvedCfg,
     ...(params.requireCurrentConfig !== undefined
       ? { requireCurrentConfig: params.requireCurrentConfig }
@@ -354,6 +396,7 @@ async function resolveProvisionedSandboxContext(
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
+    ...(readOnlyResourceMounts ? { readOnlyResourceMounts } : {}),
     workspaceAccess: resolvedCfg.workspaceAccess,
     runtimeId: backend.runtimeId,
     runtimeLabel: backend.runtimeLabel,

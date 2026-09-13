@@ -89,17 +89,21 @@ describe("docker sandbox backend manager", () => {
   it("forwards the canonical scope key to container provisioning", async () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+    const readOnlyResourceMounts = [
+      { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
+    ];
 
     await createDockerSandboxBackend({
       sessionKey: "agent:poly:msteams:channel-1",
       scopeKey,
       workspaceDir: "/tmp/customer/workspace",
       agentWorkspaceDir: "/tmp/customer/workspace",
+      readOnlyResourceMounts,
       cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
     });
 
     expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeKey }),
+      expect.objectContaining({ scopeKey, readOnlyResourceMounts }),
     );
   });
 

@@ -72,8 +72,7 @@ export function createSubagentRegistrationRecord(
     cleanupHandled: false,
     wakeOnDescendantSettle: undefined,
     requesterSettleWake: undefined,
-    attachmentsDir: registerParams.attachmentsDir,
-    attachmentsRootDir: registerParams.attachmentsRootDir,
+    attachmentId: registerParams.attachmentId,
     retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
   });
 }

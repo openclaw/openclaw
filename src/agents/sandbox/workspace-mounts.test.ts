@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
   filterBindsConflictingWithProtectedMounts,
   resolveProtectedSkillMountContainerPaths,
@@ -273,6 +274,19 @@ describe("resolveProtectedSkillMountContainerPaths", () => {
     ];
     const paths = resolveProtectedSkillMountContainerPaths(mounts);
     expect(paths).toEqual(new Set(["/workspace/skills", "/workspace/.agents/skills"]));
+  });
+});
+
+describe("appendReadOnlyWorkspaceSkillMountArgs", () => {
+  it("projects a host-owned resource with read-only managed mount flags", () => {
+    const args: string[] = [];
+    appendReadOnlyWorkspaceSkillMountArgs({
+      args,
+      readOnlyWorkspaceSkillMounts: [
+        { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
+      ],
+    });
+    expect(args).toEqual(["-v", "/host/attachments:/openclaw/attachments:ro,z"]);
   });
 });
 

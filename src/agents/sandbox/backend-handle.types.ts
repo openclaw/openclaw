@@ -83,6 +83,7 @@ export type SandboxBackendHandle = {
   workdirRoots?: readonly string[];
   capabilities?: {
     browser?: boolean;
+    readOnlyResourceMounts?: boolean;
   };
   buildExecSpec(params: {
     command: string;

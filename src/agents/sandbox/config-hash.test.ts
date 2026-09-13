@@ -152,6 +152,23 @@ describe("computeSandboxConfigHash", () => {
 
     expect(withoutSkills).not.toBe(withSkills);
   });
+
+  it("changes when read-only resource mount state changes", () => {
+    const shared = {
+      docker: createDockerConfig(),
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+    };
+    const withoutResources = computeSandboxConfigHash(shared);
+    const withResources = computeSandboxConfigHash({
+      ...shared,
+      readOnlyResourceMounts: ["/host/attachments:/openclaw/attachments:ro"],
+    });
+    expect(withoutResources).not.toBe(withResources);
+  });
 });
 
 describe("computeSandboxBrowserConfigHash", () => {

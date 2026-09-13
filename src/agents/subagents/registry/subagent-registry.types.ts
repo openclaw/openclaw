@@ -285,6 +285,9 @@ export type SubagentRunRecord = {
   delivery?: SubagentCompletionDeliveryState;
   /** Durable top-level requester wake obligation, replayed after restart. */
   requesterSettleWake?: RequesterSettleWakeState;
+  /** Generated identity under the host-owned per-agent attachment root. */
+  attachmentId?: string;
+  /** Legacy persisted absolute paths are never used for cleanup. */
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
@@ -363,6 +366,7 @@ export type RegisterSubagentRunParams = {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  attachmentId?: string;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

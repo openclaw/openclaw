@@ -909,7 +909,7 @@ describe("subagent registry persistence", () => {
     });
   });
 
-  it("removes attachments after canonical orphan completion", async () => {
+  it("prunes orphaned runs without traversing legacy attachment paths", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const attachmentsRootDir = path.join(tempStateDir, "attachments");
@@ -931,16 +931,11 @@ describe("subagent registry persistence", () => {
     saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
 
     restartRegistry();
-    await waitForRegistryWork(async () => {
-      try {
-        await fs.access(attachmentsDir);
-        return false;
-      } catch (err) {
-        return (err as NodeJS.ErrnoException).code === "ENOENT";
-      }
-    });
+    await waitForRegistryWork(() =>
+      Promise.resolve(readPersistedRegistry().runs?.["run-orphan-attachments"] === undefined),
+    );
 
-    await expect(fs.access(attachmentsDir)).rejects.toHaveProperty("code", "ENOENT");
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
     const after = readPersistedRegistry();
     expect(after.runs?.["run-orphan-attachments"]).toBeUndefined();
   });

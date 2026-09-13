@@ -43,6 +43,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   installSpawnAuthorityFixture,
@@ -266,7 +267,14 @@ describe("pending spawn preparation authority", () => {
           const details = (outcome as { details: { attachments: { relDir: string } } }).details;
           expect(
             await fs.readFile(
-              path.join(fixture.stateDir, details.attachments.relDir, "synthetic.txt"),
+              path.join(
+                resolveSubagentAttachmentDir({
+                  agentId: "main",
+                  childSessionKey,
+                  attachmentId: path.basename(details.attachments.relDir),
+                }),
+                "synthetic.txt",
+              ),
               "utf8",
             ),
           ).toBe("synthetic attachment");
@@ -602,7 +610,7 @@ describe("pending spawn preparation authority", () => {
         .toEqual([]);
       expect(bindingFixture?.bindings ?? []).toEqual([]);
       for (const directory of attachmentFixture?.attachmentDirs ?? []) {
-        await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(directory), directory).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(deleted).toEqual([childSessionKey]);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();

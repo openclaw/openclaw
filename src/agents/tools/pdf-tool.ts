@@ -545,6 +545,7 @@ export function createPdfTool(options?: {
         sandbox: sandboxConfig,
         rootOptions: {
           workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+          additionalRoots: options?.fsPolicy?.readOnlyRoots,
         },
       });
       if (resolvedPath === null) {
