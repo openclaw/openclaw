@@ -52,7 +52,11 @@ export function buildEmbeddedAttemptToolRunContext(
     memoryFlushWritePath?: string;
     toolsAllow?: string[];
     forceMessageTool?: boolean;
-    /** Host-required result tools that must remain available despite a narrowed turn allowlist. */
+    /**
+     * Host-required result tools that must remain available despite a narrowed turn allowlist.
+     * Omitting this preserves existing behavior; listed names still pass through ordinary tool
+     * construction and downstream authorization policy.
+     */
     forceToolNames?: readonly string[];
     swarmCollector?: boolean;
     swarmOutputSchema?: Record<string, unknown>;
