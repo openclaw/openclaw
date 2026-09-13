@@ -16,7 +16,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController } from "./composer.ts";
+import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { renderNewSessionBody, renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";

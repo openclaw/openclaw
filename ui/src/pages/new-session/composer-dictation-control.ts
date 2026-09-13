@@ -10,7 +10,7 @@ import {
 } from "../chat/components/chat-composer-controls.ts";
 import { ComposerDictationController } from "../chat/composer-dictation.ts";
 import { ComposerMicrophonePicker } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextareaController } from "./composer.ts";
+import type { NewSessionComposerTextareaController } from "./composer-controller.ts";
 
 type NewSessionDictationOptions = {
   textarea: NewSessionComposerTextareaController;

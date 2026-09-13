@@ -56,6 +56,21 @@ In **Connectors**, administrators can select **Add MCP server…** and choose a 
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
+## Emoji shortcodes
+
+In Chat and New Session, type a colon followed by an emoji name, such as
+`:smi`, to see a compact list above the shortcode. The list sizes to its matches
+and stays inside the viewport. Use the up and down arrows
+to choose a match, then press Enter or Tab to insert it. You can also click a
+match. Escape dismisses the suggestions without changing your draft. Selecting
+an emoji does not send the message.
+
+Typing a recognized complete shortcode, such as `:smile:`, inserts its Unicode
+emoji directly into your draft. Code spans and code blocks, URLs, escaped
+shortcodes, and unknown names stay literal. Existing messages are not rewritten.
+You can still paste emoji or use your operating system’s emoji keyboard; there
+is no separate emoji picker in the composer.
+
 ## Chat behavior
 
 New Session shows the agent's known default model while the model catalog loads.

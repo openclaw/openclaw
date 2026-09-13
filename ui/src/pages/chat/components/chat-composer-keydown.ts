@@ -53,6 +53,10 @@ export function createComposerKeyDownHandler({
       return;
     }
 
+    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
+      return;
+    }
+
     if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
       return;
     }

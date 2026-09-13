@@ -29,6 +29,7 @@ import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
+import type { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
 import type {
   ChatComposerCapabilityMenuProps,
@@ -191,6 +192,7 @@ export type ChatComposerState = SkillMenuState &
     composerComposing: boolean;
     editRevision: number;
     mentionMenu: HumanMentionMenu;
+    emojiMenu: ComposerEmojiMenu;
     mentionInput?: HumanMentionInput;
     composingDraft: ComposingDraft | null;
     composerInputIntentKey: string | null;

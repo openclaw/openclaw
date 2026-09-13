@@ -2721,6 +2721,9 @@ importers:
       markdown-it-cjk-friendly:
         specifier: 3.0.0
         version: 3.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.1)
+      markdown-it-emoji:
+        specifier: 3.0.0
+        version: 3.0.0
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
@@ -8032,6 +8035,9 @@ packages:
     peerDependenciesMeta:
       '@types/markdown-it':
         optional: true
+
+  markdown-it-emoji@3.0.0:
+    resolution: {integrity: sha512-+rUD93bXHubA4arpEZO3q80so0qgoFJEKRkRbjKX8RTdca89v2kfyF+xR3i2sQTwql9tpPZPOQN5B+PunspXRg==}
 
   markdown-it-task-lists@2.1.1:
     resolution: {integrity: sha512-TxFAc76Jnhb2OUu+n3yz9RMu4CwGfaT788br6HhEDlvWfdeJcLUsxk1Hgw2yJio0OXsxv7pyIPmvECY7bMbluA==}
@@ -15600,6 +15606,8 @@ snapshots:
       markdown-it: 15.0.1
     optionalDependencies:
       '@types/markdown-it': 14.2.0
+
+  markdown-it-emoji@3.0.0: {}
 
   markdown-it-task-lists@2.1.1: {}
 

@@ -1,14 +1,12 @@
-/* @vitest-environment jsdom */
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
-import {
-  NewSessionComposerTextareaController,
-  renderNewSessionComposer,
-} from "../new-session/composer.ts";
+/* @vitest-environment jsdom */
+import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
+import { renderNewSessionComposer } from "../new-session/composer.ts";
 import {
   createComposerProps,
   findPrimaryButton,
