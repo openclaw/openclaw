@@ -2179,7 +2179,7 @@ struct GatewayNodeSessionTests {
         let session = FakeGatewayWebSocketSession()
         let gate = AsyncGate()
         let finished = StringCapture()
-        let channel = GatewayChannelActor(
+        let channel = try GatewayChannelActor(
             url: testURL("wss://gateway.example.invalid"), token: nil,
             session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
             extraHeadersProvider: {
