@@ -299,6 +299,75 @@ describe("tsdown config", () => {
     },
   );
 
+  it("parses HTML-only IMAP mail from the bundled runtime", async () => {
+    const entryName = "extensions/imap/index";
+    const selected = configs.find((config) =>
+      hasWorkerEntry(config, entryName, "extensions/imap/index.ts"),
+    );
+    expect(selected).toBeDefined();
+
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-imap-"));
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    // Mirror the packaged layout: the bundled plugin runs beside root production dependencies.
+    fs.symlinkSync(fs.realpathSync("node_modules"), path.join(root, "node_modules"), "dir");
+
+    const bundles = await build({
+      ...selected,
+      config: false,
+      entry: { [entryName]: "extensions/imap/index.ts" },
+      outDir: path.join(root, "dist"),
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const artifact = path.join(root, "dist", `${entryName}.js`);
+      const proofArtifact = path.join(root, "dist", `${entryName}-proof.js`);
+      const artifactSource = fs.readFileSync(artifact, "utf8");
+      const defaultExport = "export { imap_default as default };";
+      expect(artifactSource).toContain(defaultExport);
+      // Expose the parser binding from the actual plugin artifact; its bundled code is unchanged.
+      fs.writeFileSync(
+        proofArtifact,
+        artifactSource.replace(
+          defaultExport,
+          "export { imap_default as default, import_mailparser as __mailparser };",
+        ),
+      );
+      const script = `
+        import assert from "node:assert/strict";
+        import { pathToFileURL } from "node:url";
+        const [entry] = process.argv.slice(1);
+        const { __mailparser } = await import(pathToFileURL(entry).href);
+        const mail = await __mailparser.simpleParser(Buffer.from(
+          "From: sender@example.com\\r\\n" +
+          "To: recipient@example.com\\r\\n" +
+          "Subject: Bundled HTML\\r\\n" +
+          "Content-Type: text/html\\r\\n" +
+          "\\r\\n" +
+          "<p>Sheena&apos;s expert advice.</p>\\r\\n"
+        ), { skipImageLinks: true, skipTextToHtml: true });
+        assert.equal(mail.text?.trim(), "Sheena's expert advice.");
+        console.log("bundled IMAP parser decoded HTML entities");
+      `;
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            process.execPath,
+            ["--input-type=module", "-e", script, proofArtifact],
+            { cwd: root, timeout: 30_000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe("bundled IMAP parser decoded HTML entities");
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it("builds retained config repairs without plugin runtime or state migration closures", async () => {
     const selected = configs.find((config) => config.outDir === "dist/config-doctor");
     expect(selected?.name).toBe(TSDOWN_UNIFIED_CONFIG_GROUP);
