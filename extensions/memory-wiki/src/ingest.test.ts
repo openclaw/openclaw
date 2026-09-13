@@ -115,6 +115,7 @@ hello from source
       configPath,
       JSON.stringify({
         plugins: {
+          enabled: true,
           load: { paths: [path.join(repoRoot, "extensions", "memory-wiki")] },
           entries: {
             "memory-wiki": {
