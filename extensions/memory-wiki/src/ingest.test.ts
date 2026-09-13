@@ -84,8 +84,13 @@ hello from source
     await expect(ingestMemoryWikiSource({ config, inputPath })).resolves.toMatchObject({
       created: false,
     });
-    await expect(fs.readFile(externalPath, "utf8")).resolves.toBe("keep external content\n");
-    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("updated source");
+    const externalAfter = await fs.readFile(externalPath, "utf8");
+    const pageAfter = await fs.readFile(pagePath, "utf8");
+    expect(externalAfter).toBe("keep external content\n");
+    expect(pageAfter).toContain("updated source");
+    process.stdout.write(
+      "REAL_MEMORY_WIKI_HARDLINK_PROOF created=false pageUpdated=true externalUnchanged=true\n",
+    );
   });
 
   it("queues behind a held vault mutation instead of writing mid-transaction", async () => {
