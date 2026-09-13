@@ -67,18 +67,22 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
   async removeRuntime({ entry, config, agentId }) {
     const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
     const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
-    if (cfg.backend !== "ssh" || !cfg.ssh.target) {
-      return;
+    const target = entry.cleanupMetadata?.target?.trim();
+    const workspaceRoot = entry.cleanupMetadata?.workspaceRoot?.trim();
+    if (entry.cleanupMetadata?.locatorVersion !== "1" || !target || !workspaceRoot) {
+      throw new Error(
+        `SSH sandbox runtime ${entry.containerName} has no authoritative cleanup locator; remove the recorded runtime manually after verifying its original target.`,
+      );
     }
     assertSshSandboxSecretOwnerAvailable({
       config,
       scope: cfg.scope,
       agentId: effectiveAgentId,
     });
-    const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
+    const runtimePaths = resolveSshRuntimePaths(workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
-      target: cfg.ssh.target,
+      target,
     });
     try {
       const result = await runSshSandboxCommand({
@@ -110,7 +114,7 @@ async function createSshSandboxBackendInternal(
   if (!target) {
     throw new Error('Sandbox backend "ssh" requires agents.defaults.sandbox.ssh.target.');
   }
-  return createRemoteShellSandboxBackend(params, {
+  const backend = await createRemoteShellSandboxBackend(params, {
     backendId: "ssh",
     configLabel: target,
     configLabelKind: "Target",
@@ -129,6 +133,14 @@ async function createSshSandboxBackendInternal(
       };
     },
   });
+  return {
+    ...backend,
+    cleanupMetadata: {
+      locatorVersion: "1",
+      target,
+      workspaceRoot: params.cfg.ssh.workspaceRoot,
+    },
+  };
 }
 
 /** Create a static SSH sandbox using the shared remote workspace lifecycle. */

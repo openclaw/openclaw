@@ -6,6 +6,7 @@ import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { buildBrowserTestConfig as buildConfig } from "./browser.create.test-helpers.js";
 import {
   computeSandboxBrowserConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -35,6 +36,7 @@ const dockerMocks = vi.hoisted(() => ({
 
 const registryMocks = vi.hoisted(() => ({
   readBrowserRegistry: vi.fn(),
+  removeBrowserRegistryEntry: vi.fn(),
   updateBrowserRegistry: vi.fn(),
 }));
 
@@ -63,6 +65,12 @@ vi.mock("./docker.js", async () => {
 
 vi.mock("./registry.js", () => ({
   readBrowserRegistry: registryMocks.readBrowserRegistry,
+  readBrowserRegistryEntry: async (containerName: string) =>
+    ((await registryMocks.readBrowserRegistry()).entries as Array<{ containerName: string }>).find(
+      (entry) => entry.containerName === containerName,
+    ) ?? null,
+  removeBrowserRegistryEntry: registryMocks.removeBrowserRegistryEntry,
+  resolveSandboxBrowserRegistryLifecycleId: (entry: unknown) => JSON.stringify(entry),
   updateBrowserRegistry: registryMocks.updateBrowserRegistry,
 }));
 
@@ -109,55 +117,6 @@ async function loadFreshBrowserModulesForTest() {
   vi.resetModules();
   ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
   ({ ensureSandboxBrowser } = await import("./browser.js"));
-}
-
-function buildConfig(noVncEnabled: boolean): SandboxConfig {
-  return {
-    mode: "all",
-    backend: "docker",
-    scope: "session",
-    workspaceAccess: "none",
-    workspaceRoot: "/tmp/openclaw-sandboxes",
-    dockerTmpfsSource: "default",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: ["/tmp", "/var/tmp", "/run"],
-      network: "none",
-      capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
-    },
-    ssh: {
-      command: "ssh",
-      workspaceRoot: "/tmp/openclaw-sandboxes",
-      strictHostKeyChecking: true,
-      updateHostKeys: true,
-    },
-    browser: {
-      enabled: true,
-      image: "openclaw-sandbox-browser:bookworm-slim",
-      containerPrefix: "openclaw-sbx-browser-",
-      network: "openclaw-sandbox-browser",
-      cdpPort: 9222,
-      vncPort: 5900,
-      noVncPort: 6080,
-      headless: false,
-      noVncEnabled,
-      allowHostControl: false,
-      autoStart: true,
-      autoStartTimeoutMs: 12_000,
-    },
-    tools: {
-      allow: ["browser"],
-      deny: [],
-    },
-    prune: {
-      idleHours: 24,
-      maxAgeDays: 7,
-    },
-  };
 }
 
 function computeTestBrowserHash(params: {
@@ -232,6 +191,18 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
   return value;
 }
 
+function browserRegistryEntry(image: string, overrides: Record<string, unknown> = {}) {
+  return {
+    containerName: "openclaw-sbx-browser-session-test-0661d10a",
+    sessionKey: "session:test",
+    createdAtMs: 1,
+    lastUsedAtMs: 2,
+    image,
+    cdpPort: 49100,
+    ...overrides,
+  };
+}
+
 function latestBridgeResolved(): Record<string, unknown> {
   const params = bridgeMocks.startBrowserBridgeServer.mock.calls.at(-1)?.[0];
   if (!params || typeof params !== "object") {
@@ -259,6 +230,7 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.readDockerContainerLabel.mockClear();
     dockerMocks.readDockerPort.mockClear();
     registryMocks.readBrowserRegistry.mockClear();
+    registryMocks.removeBrowserRegistryEntry.mockClear();
     registryMocks.updateBrowserRegistry.mockClear();
     bridgeMocks.startBrowserBridgeServer.mockClear();
     bridgeMocks.stopBrowserBridgeServer.mockClear();
@@ -287,7 +259,7 @@ describe("ensureSandboxBrowser create args", () => {
       return null;
     });
     registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
-    registryMocks.updateBrowserRegistry.mockResolvedValue(undefined);
+    registryMocks.updateBrowserRegistry.mockImplementation(async (entry) => entry);
     bridgeMocks.startBrowserBridgeServer.mockResolvedValue({
       server: { listening: true } as never,
       port: 19000,
@@ -445,6 +417,27 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
+  it("retires a surviving registry identity before recreating a missing browser", async () => {
+    const cfg = buildConfig(false);
+    registryMocks.readBrowserRegistry.mockResolvedValue({
+      entries: [browserRegistryEntry(cfg.browser.image)],
+    });
+
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith(
+      "openclaw-sbx-browser-session-test-0661d10a",
+    );
+    expect(registryMocks.removeBrowserRegistryEntry.mock.invocationCallOrder[0]).toBeLessThan(
+      registryMocks.updateBrowserRegistry.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
   it("recreates a cold browser container when the shared args epoch changes", async () => {
     const cfg = buildConfig(false);
     const oldHash = computeTestBrowserHash({
@@ -455,17 +448,7 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
     dockerMocks.readDockerContainerLabel.mockResolvedValue(oldHash);
     registryMocks.readBrowserRegistry.mockResolvedValue({
-      entries: [
-        {
-          containerName: "openclaw-sbx-browser-session-test-0661d10a",
-          sessionKey: "session:test",
-          createdAtMs: 1,
-          lastUsedAtMs: 0,
-          image: cfg.browser.image,
-          configHash: oldHash,
-          cdpPort: 49100,
-        },
-      ],
+      entries: [browserRegistryEntry(cfg.browser.image, { lastUsedAtMs: 0, configHash: oldHash })],
     });
     BROWSER_BRIDGES.set("session:test", {
       containerName: "openclaw-sbx-browser-session-test-0661d10a",
@@ -501,15 +484,7 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.readDockerContainerLabel.mockResolvedValue(oldHash);
     registryMocks.readBrowserRegistry.mockResolvedValue({
       entries: [
-        {
-          containerName: "openclaw-sbx-browser-session-test-0661d10a",
-          sessionKey: "session:test",
-          createdAtMs: 1,
-          lastUsedAtMs: Date.now(),
-          image: cfg.browser.image,
-          configHash: oldHash,
-          cdpPort: 49100,
-        },
+        browserRegistryEntry(cfg.browser.image, { lastUsedAtMs: Date.now(), configHash: oldHash }),
       ],
     });
 

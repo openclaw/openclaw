@@ -10,8 +10,18 @@ import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import type { SandboxRegistryEntry } from "./sandbox/registry.js";
 
-const updateRegistryMock = vi.hoisted(() => vi.fn());
+const registryEntries = vi.hoisted(() => new Map<string, SandboxRegistryEntry>());
+const updateRegistryMock = vi.hoisted(() =>
+  vi.fn(async (entry: SandboxRegistryEntry) => {
+    registryEntries.set(entry.containerName, entry);
+    return entry;
+  }),
+);
+const readRegistryEntryMock = vi.hoisted(() =>
+  vi.fn(async (name: string) => registryEntries.get(name) ?? null),
+);
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
@@ -34,7 +44,9 @@ const containerEngineMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./sandbox/registry.js", () => ({
+  readRegistryEntry: readRegistryEntryMock,
   readRegisteredSandboxRuntimeIds: readRegisteredSandboxRuntimeIdsMock,
+  resolveSandboxRegistryLifecycleId: (entry: unknown) => JSON.stringify(entry),
   updateRegistry: updateRegistryMock,
 }));
 
@@ -65,6 +77,10 @@ vi.mock("../skills/runtime/remote.js", () => ({
 vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: syncSkillsToWorkspaceMock,
 }));
+
+async function emptyShellCommand() {
+  return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+}
 
 let sandboxFixtureRoot = "";
 let sandboxFixtureCount = 0;
@@ -128,11 +144,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     const restore = registerSandboxBackend("test-off-backend", backendFactory);
     try {
@@ -190,11 +202,7 @@ describe("resolveSandboxContext", () => {
         env: {},
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     const restore = registerSandboxBackend("required-backend", backendFactory);
     const warnLogs = createWarnLogCapture("openclaw-required-sandbox-workspace");
@@ -293,11 +301,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     const restore = registerSandboxBackend("test-backend", {
       factory: backendFactory,
@@ -377,11 +381,7 @@ describe("resolveSandboxContext", () => {
           env: process.env,
           stdinMode: "pipe-closed",
         }),
-        runShellCommand: async () => ({
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        }),
+        runShellCommand: emptyShellCommand,
       };
     });
     try {
@@ -526,11 +526,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     try {
       const cfg: OpenClawConfig = {
@@ -578,11 +574,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     try {
       const cfg: OpenClawConfig = {
@@ -629,11 +621,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
       createFsBridge: () => {
         throw bridgeFailure;
       },
@@ -682,11 +670,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     const restore = registerSandboxBackend("docker", backendFactory);
     try {
@@ -738,11 +722,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed" as const,
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     const restore = registerSandboxBackend("podman", backendFactory);
     try {
@@ -800,11 +780,7 @@ describe("resolveSandboxContext", () => {
         env: process.env,
         stdinMode: "pipe-closed",
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
+      runShellCommand: emptyShellCommand,
     }));
     try {
       const cfg: OpenClawConfig = {

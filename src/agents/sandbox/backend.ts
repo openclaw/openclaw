@@ -24,11 +24,15 @@ import { SandboxRuntimeRetiredError } from "./provisioning-error.js";
 import {
   assertSandboxRegistryEntryCurrent,
   completeSandboxRegistryReservation,
+  readRegistryEntry,
   reserveSandboxRegistryEntry,
+  resolveSandboxRegistryLifecycleId,
   updateRegistry,
   withSandboxRegistryEntryLock,
   type SandboxRegistryEntry,
 } from "./registry.js";
+import { coordinateSandboxBackendHandle } from "./runtime-activity.js";
+import { withSandboxScopeLock } from "./scope-lock.js";
 import {
   createSshSandboxBackend,
   resolveSshRuntimePaths,
@@ -176,6 +180,28 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 export async function createSandboxBackend(
   params: CreateSandboxBackendParams,
 ): Promise<SandboxBackendHandle> {
+  return withSandboxScopeLock(params.scopeKey, async () => {
+    const backend = await createSandboxBackendLifecycle(params);
+    const backendWithFsBridge = backend.createFsBridge
+      ? backend
+      : { ...backend, createFsBridge: (await import("./fs-bridge.js")).createSandboxFsBridge };
+    const registered = await readRegistryEntry(backend.runtimeId);
+    if (!registered) {
+      throw new Error("Sandbox runtime was removed before provisioning completed.");
+    }
+    const lifecycleId = resolveSandboxRegistryLifecycleId(registered);
+    return coordinateSandboxBackendHandle(backendWithFsBridge, async () => {
+      const current = await readRegistryEntry(backend.runtimeId);
+      if (!current || resolveSandboxRegistryLifecycleId(current) !== lifecycleId) {
+        throw new Error("Sandbox runtime was recycled before the operation started.");
+      }
+    });
+  });
+}
+
+async function createSandboxBackendLifecycle(
+  params: CreateSandboxBackendParams,
+): Promise<SandboxBackendHandle> {
   const factory = requireSandboxBackendFactory(params.cfg.backend);
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
   const toEntry = (backend: SandboxBackendHandle): SandboxRegistryEntry => ({
@@ -187,6 +213,7 @@ export async function createSandboxBackend(
     lastUsedAtMs: Date.now(),
     image: backend.configLabel ?? params.cfg.docker.image,
     configLabelKind: backend.configLabelKind ?? "Image",
+    cleanupMetadata: backend.cleanupMetadata,
   });
   if (!reserveRuntimeId) {
     const backend = await factory(params);

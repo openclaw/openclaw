@@ -876,6 +876,7 @@ export async function runExecProcess({
         workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
         env: shellRuntimeEnv,
         usePty: opts.usePty,
+        signal: initialStartupSignal,
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
       assertSandboxCurrent = backendExecSpec.assertCurrent;
