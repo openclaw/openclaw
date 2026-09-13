@@ -29,6 +29,17 @@ describe("Codex direct tool loading", () => {
     ).toEqual([expect.objectContaining({ type: "function", name: "openclaw" })]);
   });
 
+  it("keeps the registered heartbeat result tool directly callable", () => {
+    const heartbeatTools = projectTool("heartbeat_respond");
+    expect(
+      createCodexDynamicToolSpecs({
+        entries: heartbeatTools,
+        loading: "searchable",
+        directToolNames: resolveCodexDynamicToolDirectNames(createAttemptParams(), heartbeatTools),
+      }),
+    ).toEqual([expect.objectContaining({ type: "function", name: "heartbeat_respond" })]);
+  });
+
   it.each([false, true])(
     "keeps registered catalog bytes stable and enforces message availability when disabled=%s",
     async (disableMessageTool) => {

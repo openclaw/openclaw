@@ -91,5 +91,12 @@ export function resolveCodexDynamicToolDirectNames(
   if (registeredTools.some((tool) => tool.name === "message")) {
     names.push("message");
   }
+  // Heartbeats must report their structured outcome without relying on tool
+  // search. Keep the registered result tool at the dynamic root for every
+  // turn so the persistent thread schema remains stable; turn availability is
+  // still enforced by the executable tool map.
+  if (registeredTools.some((tool) => tool.name === "heartbeat_respond")) {
+    names.push("heartbeat_respond");
+  }
   return names;
 }
