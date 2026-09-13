@@ -556,6 +556,41 @@ describe("pruneProcessedHistoryImages", () => {
     expect(JSON.stringify(messages.slice(0, retainedLength))).toBe(retainedBytes);
   });
 
+  const toolRound = (id: number): AgentMessage[] => [
+    castAgentMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: `call_${id}`, name: "read", arguments: {} }],
+    } as AgentMessage),
+    castAgentMessage(textToolResult(`call_${id}`, "read", "bytes")),
+  ];
+  const toolRounds = (count: number, firstId = 0): AgentMessage[] =>
+    Array.from({ length: count }, (_, index) => toolRound(firstId + index)).flat();
+
+  it("keeps images while the active tool loop is below the eviction threshold", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "look" }, { ...image }] }),
+      ...toolRounds(5),
+    ];
+
+    expectImageMessagePreserved(messages, "expected user array content");
+  });
+
+  it("evicts the turn-opening image once the active tool loop crosses the threshold", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "look" }, { ...image }] }),
+      ...toolRounds(6),
+    ];
+
+    const pruned = expectPrunedMessages(messages);
+    expectContentBlock(expectArrayMessageContent(pruned[0], "expected pruned content")[1], {
+      type: "text",
+      text: PRUNED_HISTORY_IMAGE_MARKER,
+    });
+    // Only the opening image is rewritten; every later message stays
+    // byte-identical so the warm prefix after the cutoff survives.
+    expect(JSON.stringify(pruned.slice(1))).toBe(JSON.stringify(messages.slice(1)));
+  });
+
   it("prunes image blocks from toolResult messages older than 3 completed turns", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({

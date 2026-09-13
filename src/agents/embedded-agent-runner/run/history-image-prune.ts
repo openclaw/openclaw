@@ -42,6 +42,38 @@ type PrunableContextAgent = {
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 
+// A single long agentic turn can accumulate dozens of tool rounds without a
+// new user message ever closing it, so the completed-turn window above never
+// evicts that turn's images and they replay on every model call (#140651
+// froze the cutoff during tool loops to keep the warm prompt-cache prefix
+// byte-stable). These thresholds add bounded intra-turn eviction while
+// preserving that stability: the cutoff is a pure function of an append-only
+// prefix and advances only at coarse round boundaries, so each advance
+// rewrites the cached prefix once and the pruned view then stays byte-stable
+// for the next INTRA_TURN_PRUNE_ROUND_STEP rounds. Tunable, but advances
+// must stay rare relative to round frequency.
+const INTRA_TURN_PRUNE_MIN_ROUNDS = 6;
+const INTRA_TURN_KEEP_RECENT_ROUNDS = 4;
+const INTRA_TURN_PRUNE_ROUND_STEP = 20;
+
+/**
+ * Cutoff index covering a turn's oldest completed tool rounds, or -1 while
+ * the turn is below the eviction threshold. Monotone in `roundStarts` length:
+ * recorded rounds never move, so a later scan of a longer prefix can only
+ * keep or advance the cutoff, never retreat it.
+ */
+function resolveIntraTurnPruneCutoff(roundStarts: number[]): number {
+  if (roundStarts.length < INTRA_TURN_PRUNE_MIN_ROUNDS) {
+    return -1;
+  }
+  const evictedRounds =
+    INTRA_TURN_PRUNE_MIN_ROUNDS -
+    INTRA_TURN_KEEP_RECENT_ROUNDS +
+    INTRA_TURN_PRUNE_ROUND_STEP *
+      Math.floor((roundStarts.length - INTRA_TURN_PRUNE_MIN_ROUNDS) / INTRA_TURN_PRUNE_ROUND_STEP);
+  return roundStarts[evictedRounds] ?? -1;
+}
+
 /**
  * Scan state for one turn: a turn opens at a user message (or an orphan
  * toolResult) and closes at the next user message. `roundStarts` records the
@@ -57,6 +89,7 @@ type TurnScanState = {
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   const completedTurnStarts: number[] = [];
   let currentTurn: TurnScanState | undefined;
+  let intraTurnCutoff = -1;
 
   for (let i = 0; i < messages.length; i++) {
     const role = messages[i]?.role;
@@ -67,6 +100,15 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
           completedTurnStarts.shift();
         }
         completedTurnStarts.push(currentTurn.start);
+      }
+      // Closed turns never change, so folding their cutoff into a running max
+      // keeps eviction monotone: a follow-up or steering user message cannot
+      // resurrect images a long turn already evicted.
+      if (currentTurn) {
+        intraTurnCutoff = Math.max(
+          intraTurnCutoff,
+          resolveIntraTurnPruneCutoff(currentTurn.roundStarts),
+        );
       }
       currentTurn = { start: i, hasAssistantReply: false, roundStarts: [] };
       continue;
@@ -82,13 +124,24 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
       currentTurn.hasAssistantReply = true;
     }
   }
+  if (currentTurn) {
+    intraTurnCutoff = Math.max(
+      intraTurnCutoff,
+      resolveIntraTurnPruneCutoff(currentTurn.roundStarts),
+    );
+  }
 
   // Only a later user message closes a turn; tool-loop replies must not move
-  // the cutoff and rewrite the warm prefix during the active turn.
-  if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
-    return -1;
-  }
-  return completedTurnStarts.at(-PRESERVE_RECENT_COMPLETED_TURNS) ?? -1;
+  // the completed-turn cutoff and rewrite the warm prefix during the active
+  // turn. The sole exception is the coarse intra-turn eviction above, whose
+  // cutoff advances rarely and monotonically once a turn crosses
+  // INTRA_TURN_PRUNE_MIN_ROUNDS. Past that point it can supersede the
+  // PRESERVE_RECENT_COMPLETED_TURNS guarantee for older messages.
+  const completedTurnCutoff =
+    completedTurnStarts.length > PRESERVE_RECENT_COMPLETED_TURNS
+      ? (completedTurnStarts.at(-PRESERVE_RECENT_COMPLETED_TURNS) ?? -1)
+      : -1;
+  return Math.max(completedTurnCutoff, intraTurnCutoff);
 }
 
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
