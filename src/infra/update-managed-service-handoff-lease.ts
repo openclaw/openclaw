@@ -87,15 +87,12 @@ export function createManagedHandoffLeaseStore(
   const isPidAlive = (pid: number) => !isPidDefinitelyDead(pid);
 
   function readProcessStartIdentity(pid: number): string | null {
-    const start = getFileLockProcessStartTime(
-      pid,
-      { ...serviceManagerEnv, LC_ALL: "C", TZ: "UTC" },
-      1000,
-    );
+    const processEnv = { ...serviceManagerEnv, LC_ALL: "C", TZ: "UTC" };
+    const start = getFileLockProcessStartTime(pid, processEnv, 1000);
     return start === null ? null : String(start);
   }
 
-  function processState(value: HandoffProcessIdentity) {
+  function processState(value: HandoffProcessIdentity): "live" | "dead" | "unknown" {
     if (!isPidAlive(value.pid)) {
       return "dead";
     }
@@ -710,6 +707,9 @@ export function createManagedHandoffLeaseStore(
     owns,
     current,
     readGeneration,
+    observeProcessState: processState,
+    observeBootIdentity: bootIdentity,
+    observeNativeScope: nativeScope,
     settle,
     release,
     assertSourceUnborrowed,

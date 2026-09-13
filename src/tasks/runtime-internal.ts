@@ -41,6 +41,7 @@ export {
   maybeDeliverTaskTerminalUpdate,
   publishTaskRecordAfterAtomicStore,
   recordTaskProgressByRunId,
+  reloadTaskRegistryFromStore,
   resolveTaskForLookupToken,
   isParentFlowLinkError,
   setTaskCleanupAfterById,

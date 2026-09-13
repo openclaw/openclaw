@@ -19,6 +19,7 @@ import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.j
 const UPDATE_FAILURE_MAX_BYTES = 8 * 1024;
 const UPDATE_FAILURE_PROMPT_MAX_BYTES = 4 * 1024;
 const updateIdentitySchema = z.object({
+  buildId: z.string().nullish(),
   sha: z.string().nullish(),
   version: z.string().nullish(),
 });
@@ -26,6 +27,7 @@ export const updateFailureSchema = z
   .union([
     z.object({
       result: z.object({
+        runId: z.string().optional(),
         status: z.enum(["ok", "error", "skipped"]),
         mode: z.enum(["git", "pnpm", "bun", "npm", "unknown"]),
         root: z.string().optional(),
@@ -179,8 +181,22 @@ export function sanitizeTriageUpdateFailure(
     return { error, ...(failure.omittedDetails ? { omittedDetails: failure.omittedDetails } : {}) };
   }
   const result = failure.result;
-  const identity = (value: typeof result.before) =>
-    value ? { sha: text(value.sha, 48), version: text(value.version, 48) } : undefined;
+  // Correlation is diagnostic DATA, not admission. Never turn a truncated or
+  // redacted identifier into an apparent exact build/run match.
+  const exactBuildId = (value: string | null | undefined) =>
+    value && text(value, 512) === value ? value : undefined;
+  const parsedRunId = z.uuid().safeParse(result.runId);
+  const identity = (value: typeof result.before) => {
+    if (!value) {
+      return undefined;
+    }
+    const buildId = exactBuildId(value.buildId);
+    return {
+      sha: text(value.sha, 48),
+      version: text(value.version, 48),
+      ...(buildId ? { buildId } : {}),
+    };
+  };
   let omittedDetails = failure.omittedDetails ?? 0;
   let remainingPluginErrors = 3;
   const removePluginDetails: Array<() => void> = [];
@@ -272,6 +288,7 @@ export function sanitizeTriageUpdateFailure(
   const sanitized = {
     ...(error ? { error } : {}),
     result: {
+      ...(parsedRunId.success ? { runId: parsedRunId.data } : {}),
       status: result.status,
       mode: result.mode,
       reason: text(result.reason, 128),
@@ -319,6 +336,11 @@ export function sanitizeTriageUpdateFailure(
       removePluginDetails.pop()?.();
     } else if ((sanitized.result.steps[0]?.failureFacts?.length ?? 0) > 1) {
       sanitized.result.steps[0]?.failureFacts?.pop();
+    } else if (sanitized.result.before?.buildId) {
+      // Optional correlation must not prevent the original failure from reaching repair.
+      delete sanitized.result.before.buildId;
+    } else if (sanitized.result.after?.buildId) {
+      delete sanitized.result.after.buildId;
     } else {
       throw new Error("Update failure diagnostics exceed the 4 KiB prompt limit.");
     }

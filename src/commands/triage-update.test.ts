@@ -84,6 +84,54 @@ describe("update failure triage diagnostics", () => {
     },
   );
 
+  it("bounds structured failure facts together with exact build correlation", async () => {
+    const stateDir = tempDirs.make("openclaw-triage-composed-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const failure = {
+      error: "original failure ".repeat(55),
+      result: {
+        runId: "a184ee5c-ec3b-460d-ad02-f6ca62ce1e53",
+        status: "error" as const,
+        mode: "npm" as const,
+        before: { buildId: "before-" + "x".repeat(490) },
+        after: { buildId: "after-" + "y".repeat(490) },
+        reason: "startup-failed",
+        steps: [
+          {
+            name: "original startup",
+            exitCode: 1,
+            stderrTail: "original symptom " + "detail ".repeat(90),
+            failureFacts: Array.from({ length: 5 }, (_, index) => ({
+              check: `core/doctor/check-${index}`,
+              code: "startup-failed",
+              affectedKey: "config." + "k".repeat(120),
+              message: "cause " + "m".repeat(194),
+              pluginId: "p".repeat(80),
+            })),
+          },
+        ],
+      },
+    };
+    const original = structuredClone(failure);
+    const output = await writeTriageUpdateFailure(failure, { env });
+    const first = await readTriageUpdateFailure(output, { env, stateDir });
+    const second = await readTriageUpdateFailure(await writeTriageUpdateFailure(first, { env }), {
+      env,
+      stateDir,
+    });
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(4096);
+    expect(second).toEqual(first);
+    expect(first).toMatchObject({
+      result: { runId: failure.result.runId, reason: "startup-failed" },
+    });
+    expect("result" in first && first.result.steps[0]?.failureFacts?.[0]?.check).toBe(
+      "core/doctor/check-0",
+    );
+    expect(JSON.stringify(first)).toContain("original symptom");
+    expect(first.omittedDetails).toBeGreaterThan(0);
+    expect(failure).toEqual(original);
+  });
+
   it("preserves a post-install activation error even when the core update succeeded", async () => {
     const stateDir = tempDirs.make("openclaw-update-triage-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

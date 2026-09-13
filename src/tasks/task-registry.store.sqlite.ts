@@ -18,6 +18,7 @@ import {
   deleteTaskRowsWithDeliveryState,
   listTaskRecordsByOwnerKeyInDatabase,
   listTaskRecordsByRuntimeSourceIdInDatabase,
+  matchesTaskIdentityInDatabase,
   readTaskRegistrySnapshot,
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshotIfReady,
@@ -114,6 +115,17 @@ export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
       listTaskRecordsByRuntimeSourceIdInDatabase(db, params.runtime, sourceId),
     ) ?? []
   );
+}
+
+/** Compares raw persisted identity without creating or migrating shared state. */
+export function matchesTaskIdentityFromSqlite(task: TaskRecord): boolean | undefined {
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+      matchesTaskIdentityInDatabase(db, task),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 /** Binds only the exact task row selected before admission; runId is never a join key. */

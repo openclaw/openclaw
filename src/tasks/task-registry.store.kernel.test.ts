@@ -174,3 +174,88 @@ it("isolates supplied connections and rolls back compound task, flow, delivery, 
     second.close();
   }
 });
+
+it("compares raw triage identity on the supplied connection without normalizing or writing", async () => {
+  const tasks = await import("./task-registry.store.kernel.js");
+  const { OPENCLAW_STATE_SCHEMA_SQL } = await import("../state/openclaw-state-schema.js");
+  const { OPENCLAW_STATE_SCHEMA_VERSION } = await import("../state/openclaw-state-db-contract.js");
+  const db = new DatabaseSync(":memory:");
+  const task: TaskRecord = {
+    taskId: "triage-identity",
+    runtime: "cli",
+    taskKind: "triage_repair",
+    sourceId: "generation-a",
+    runId: "run-a",
+    requesterSessionKey: "",
+    ownerKey: "system:triage",
+    scopeKind: "system",
+    task: "Repair",
+    status: "running",
+    deliveryStatus: "not_applicable",
+    notifyPolicy: "silent",
+    createdAt: 100,
+    startedAt: 100,
+  };
+  try {
+    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    tasks.upsertTaskWithDeliveryStateInDatabase({ db }, { task });
+    db.exec("PRAGMA query_only = ON");
+    const before = db.prepare("SELECT total_changes() AS n").get();
+    expect(tasks.matchesTaskIdentityInDatabase(db, task)).toBe(true);
+    for (const replacement of [
+      { runId: "other" },
+      { sourceId: "other" },
+      { ownerKey: "other" },
+      { requesterSessionKey: "other" },
+      { startedAt: 101 },
+      { childSessionKey: "other" },
+    ]) {
+      expect(tasks.matchesTaskIdentityInDatabase(db, { ...task, ...replacement })).toBe(false);
+    }
+    expect(tasks.matchesTaskIdentityInDatabase(db, { ...task, taskId: "missing" })).toBeUndefined();
+    expect(db.prepare("SELECT total_changes() AS n").get()).toEqual(before);
+  } finally {
+    db.close();
+  }
+});
+
+it.each(["older", "newer", "missing-columns"])(
+  "does not repair %s schema to compare triage identity",
+  async (shape) => {
+    const tasks = await import("./task-registry.store.kernel.js");
+    const { OPENCLAW_STATE_SCHEMA_SQL } = await import("../state/openclaw-state-schema.js");
+    const { OPENCLAW_STATE_SCHEMA_VERSION } =
+      await import("../state/openclaw-state-db-contract.js");
+    const db = new DatabaseSync(":memory:");
+    const task: TaskRecord = {
+      taskId: "triage-identity",
+      runtime: "cli",
+      requesterSessionKey: "",
+      ownerKey: "system:triage",
+      scopeKind: "system",
+      task: "Repair",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 100,
+    };
+    try {
+      if (shape === "missing-columns") {
+        db.exec("CREATE TABLE task_runs (task_id TEXT PRIMARY KEY)");
+      } else {
+        db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      }
+      const version =
+        OPENCLAW_STATE_SCHEMA_VERSION + (shape === "older" ? -1 : shape === "newer" ? 1 : 0);
+      db.exec(`PRAGMA user_version = ${version}`);
+      db.exec("PRAGMA query_only = ON");
+      const before = db.prepare("SELECT name, sql FROM sqlite_master ORDER BY name").all();
+      expect(tasks.matchesTaskIdentityInDatabase(db, task)).toBeUndefined();
+      expect(db.prepare("SELECT name, sql FROM sqlite_master ORDER BY name").all()).toEqual(before);
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
+    } finally {
+      db.close();
+    }
+  },
+);

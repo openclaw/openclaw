@@ -3,6 +3,7 @@ import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 // Stores task registry records in memory and bridges persistence runtime hooks.
 import {
   closeTaskRegistryDatabase,
+  matchesTaskIdentityFromSqlite,
   deleteTaskAndDeliveryStateFromSqlite,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryMutationStateFromSqlite,
@@ -20,6 +21,7 @@ import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = {
+  matchesTaskIdentity?: (task: TaskRecord) => boolean | undefined;
   loadSnapshot: () => TaskRegistryStoreSnapshot;
   loadMutationSnapshot?: (scope: TaskRegistryMutationScope) => TaskRegistryStoreSnapshot;
   withMutation?: <T>(operation: () => T) => T;
@@ -56,6 +58,7 @@ type TaskRegistryObservers = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
+  matchesTaskIdentity: matchesTaskIdentityFromSqlite,
   loadSnapshot: loadTaskRegistryStateFromSqlite,
   loadMutationSnapshot: loadTaskRegistryMutationStateFromSqlite,
   withMutation: withTaskRegistrySqliteMutation,
