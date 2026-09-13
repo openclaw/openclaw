@@ -7,7 +7,9 @@ import {
   normalizeLegacyInteractiveReply,
   renderMessagePresentationFallbackText,
   resolveLegacyInteractiveTextFallback,
+  resolveMessagePresentationButtonAction,
   type MessagePresentation,
+  type MessagePresentationButton,
   type MessagePresentationInteractiveBlock,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -17,6 +19,8 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import {
   buildTelegramPresentationButtons,
+  escapeTelegramCopyTextFallback,
+  isValidTelegramCopyText,
   resolveTelegramInlineButtons,
   type TelegramButtonBuildOptions,
 } from "./button-types.js";
@@ -27,6 +31,7 @@ const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
 const TELEGRAM_PRESENTATION_CAPABILITIES = {
   supported: true,
   buttons: true,
+  copyTextButtons: true,
   selects: true,
   context: true,
   divider: false,
@@ -37,7 +42,7 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
     actions: {
       maxActions: 100,
       maxActionsPerRow: 3,
-      supportsStyles: false,
+      supportsStyles: true,
       supportsDisabled: false,
     },
     selects: {
@@ -94,12 +99,26 @@ function renderTelegramTableIsland(block: MessagePresentationTableBlock): string
 
 // Context blocks are low-emphasis by contract; italics is Telegram's closest
 // native register. Lines already containing markdown emphasis markers stay
-// plain so wrapping cannot mis-parse them.
+// plain so wrapping cannot mis-parse them. Fenced literals retain every byte:
+// shared action-budget fallback uses fences for multiline copy-text values.
 function renderTelegramContextText(text: string): string {
+  let fenceMarker: string | undefined;
   return text
     .split("\n")
     .map((line) => {
       const trimmed = line.trim();
+      const marker = /^(`{3,}|~{3,})$/u.exec(trimmed)?.[1];
+      if (marker) {
+        if (!fenceMarker) {
+          fenceMarker = marker;
+        } else if (marker[0] === fenceMarker[0] && marker.length >= fenceMarker.length) {
+          fenceMarker = undefined;
+        }
+        return line;
+      }
+      if (fenceMarker) {
+        return line;
+      }
       return trimmed && !/[_*]/.test(trimmed) ? `_${trimmed}_` : line;
     })
     .join("\n");
@@ -131,6 +150,127 @@ function canEncodeTelegramPresentationControl(
   return Boolean(buildTelegramPresentationButtons({ blocks: [block] }, options)?.length);
 }
 
+function prepareTelegramCopyTextFallbackButton(
+  button: MessagePresentationButton,
+): MessagePresentationButton {
+  const action = resolveMessagePresentationButtonAction(button);
+  if (action?.type !== "copy-text" || isValidTelegramCopyText(action.text)) {
+    return button;
+  }
+  return {
+    ...button,
+    action: { type: "copy-text", text: escapeTelegramCopyTextFallback(action.text) },
+  };
+}
+
+function renderTelegramControlFallbackText(block: MessagePresentationInteractiveBlock): string {
+  const fallbackBlock =
+    block.type === "buttons"
+      ? { ...block, buttons: block.buttons.map(prepareTelegramCopyTextFallbackButton) }
+      : block;
+  return renderMessagePresentationFallbackText({ presentation: { blocks: [fallbackBlock] } });
+}
+
+function prepareTelegramControlFallbackBlock(block: MessagePresentationInteractiveBlock) {
+  const text = renderTelegramControlFallbackText(block);
+  const containsCopyText =
+    block.type === "buttons" &&
+    block.buttons.some(
+      (button) => resolveMessagePresentationButtonAction(button)?.type === "copy-text",
+    );
+  return containsCopyText ? { type: "text" as const, text } : { type: "context" as const, text };
+}
+
+/** Remove Telegram-invalid copy actions before core spends the shared action budget. */
+export function prepareTelegramPresentationPayloadForCoreAdaptation(
+  payload: ReplyPayload,
+): ReplyPayload {
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  if (!presentation) {
+    return payload;
+  }
+  let changed = false;
+  const blocks = presentation.blocks.flatMap((block): MessagePresentation["blocks"] => {
+    if (block.type !== "buttons") {
+      return [block];
+    }
+    const nativeButtons: typeof block.buttons = [];
+    const fallbackButtons: typeof block.buttons = [];
+    for (const button of block.buttons) {
+      const action = resolveMessagePresentationButtonAction(button);
+      const target =
+        action?.type === "copy-text" && !isValidTelegramCopyText(action.text)
+          ? fallbackButtons
+          : nativeButtons;
+      target.push(button);
+    }
+    if (fallbackButtons.length === 0) {
+      return [block];
+    }
+    changed = true;
+    return [
+      ...(nativeButtons.length > 0 ? [{ ...block, buttons: nativeButtons }] : []),
+      prepareTelegramControlFallbackBlock({ type: "buttons", buttons: fallbackButtons }),
+    ];
+  });
+  return changed ? { ...payload, presentation: { ...presentation, blocks } } : payload;
+}
+
+function prepareTelegramPresentationForAdaptation(params: {
+  presentation: MessagePresentation;
+  presentationControlsSelected: boolean;
+  buttonOptions: TelegramButtonBuildOptions;
+}): MessagePresentation {
+  if (!params.presentationControlsSelected) {
+    return params.presentation;
+  }
+  const blocks = params.presentation.blocks.flatMap((block): MessagePresentation["blocks"] => {
+    if (!isMessagePresentationInteractiveBlock(block)) {
+      return [block];
+    }
+    if (block.type === "buttons") {
+      const nativeButtons = block.buttons.filter((button) =>
+        canEncodeTelegramPresentationControl(
+          { type: "buttons", buttons: [button] },
+          params.buttonOptions,
+        ),
+      );
+      const native = new Set(nativeButtons);
+      const fallbackButtons = block.buttons.filter((button) => !native.has(button));
+      return [
+        ...(nativeButtons.length > 0 ? [{ type: "buttons" as const, buttons: nativeButtons }] : []),
+        ...(fallbackButtons.length > 0
+          ? [prepareTelegramControlFallbackBlock({ type: "buttons", buttons: fallbackButtons })]
+          : []),
+      ];
+    }
+
+    const nativeOptions = block.options.filter((option) =>
+      canEncodeTelegramPresentationControl(
+        { type: "select", options: [option] },
+        params.buttonOptions,
+      ),
+    );
+    const native = new Set(nativeOptions);
+    const fallbackOptions = block.options.filter((option) => !native.has(option));
+    return [
+      ...(nativeOptions.length > 0
+        ? [
+            {
+              ...block,
+              options: nativeOptions,
+              ...(fallbackOptions.length > 0 ? { placeholder: undefined } : {}),
+            },
+          ]
+        : []),
+      ...(fallbackOptions.length > 0
+        ? [prepareTelegramControlFallbackBlock({ ...block, options: fallbackOptions })]
+        : []),
+    ];
+  });
+  return { ...params.presentation, blocks };
+}
+
 function partitionTelegramPresentationBlocks(params: {
   presentation: MessagePresentation;
   presentationControlsSelected: boolean;
@@ -147,7 +287,10 @@ function partitionTelegramPresentationBlocks(params: {
       continue;
     }
     if (!params.presentationControlsSelected) {
-      fallbackBlocks.push(block);
+      // An existing provider/legacy keyboard owns the native action budget. Render
+      // portable controls through Telegram's fallback sanitizer so invalid copy
+      // values stay inspectable instead of being rewritten by TDLib semantics.
+      fallbackBlocks.push(prepareTelegramControlFallbackBlock(block));
       continue;
     }
     if (block.type === "buttons") {
@@ -166,7 +309,9 @@ function partitionTelegramPresentationBlocks(params: {
         nativeControlBlocks.push({ type: "buttons", buttons: nativeButtons });
       }
       if (fallbackButtons.length > 0) {
-        fallbackBlocks.push({ type: "buttons", buttons: fallbackButtons });
+        fallbackBlocks.push(
+          prepareTelegramControlFallbackBlock({ type: "buttons", buttons: fallbackButtons }),
+        );
       }
       continue;
     }
@@ -186,7 +331,9 @@ function partitionTelegramPresentationBlocks(params: {
       nativeControlBlocks.push({ ...block, options: nativeOptions });
     }
     if (fallbackOptions.length > 0) {
-      fallbackBlocks.push({ ...block, options: fallbackOptions });
+      fallbackBlocks.push(
+        prepareTelegramControlFallbackBlock({ ...block, options: fallbackOptions }),
+      );
     } else if (block.placeholder) {
       // Telegram maps selects to buttons, so retain the select prompt in message text.
       fallbackBlocks.push({ type: "text", text: block.placeholder });
@@ -198,7 +345,12 @@ function partitionTelegramPresentationBlocks(params: {
 /** Convert portable presentation into the one Telegram payload shape used by every send funnel. */
 export function canonicalizeTelegramPresentationPayload(
   payload: ReplyPayload,
-  options?: { allowWebAppButtons?: boolean; richTables?: boolean },
+  options?: {
+    allowWebAppButtons?: boolean;
+    onDroppedControl?: TelegramButtonBuildOptions["onDroppedControl"];
+    preserveEmptyTextForControls?: boolean;
+    richTables?: boolean;
+  },
 ): ReplyPayload {
   const normalizedPresentation = normalizeMessagePresentation(payload.presentation);
   const telegramData = payload.channelData?.telegram as
@@ -214,15 +366,10 @@ export function canonicalizeTelegramPresentationPayload(
     // Native-only controls need the same visible message anchor as portable controls.
     return { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK };
   }
-  const richTables = options?.richTables === true;
-  const presentation = adaptMessagePresentationForChannel({
-    presentation: normalizedPresentation,
-    capabilities: resolveTelegramPresentationCapabilities({ richMessages: richTables }),
-  });
-
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
+    onDroppedControl: options?.onDroppedControl,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
   };
   const existingButtons = resolveTelegramInlineButtons(
@@ -233,6 +380,15 @@ export function canonicalizeTelegramPresentationPayload(
     buttonOptions,
   );
   const presentationControlsSelected = existingButtons === undefined;
+  const richTables = options?.richTables === true;
+  const presentation = adaptMessagePresentationForChannel({
+    presentation: prepareTelegramPresentationForAdaptation({
+      presentation: normalizedPresentation,
+      presentationControlsSelected,
+      buttonOptions,
+    }),
+    capabilities: resolveTelegramPresentationCapabilities({ richMessages: richTables }),
+  });
   const { fallbackBlocks, nativeControlBlocks } = partitionTelegramPresentationBlocks({
     presentation,
     presentationControlsSelected,
@@ -243,6 +399,7 @@ export function canonicalizeTelegramPresentationPayload(
     adaptMessagePresentationForChannel({
       presentation: { blocks: nativeControlBlocks },
       capabilities: {
+        copyTextButtons: true,
         limits: {
           actions: { maxLabelLength: 64 },
           selects: { maxLabelLength: 64 },
@@ -282,7 +439,11 @@ export function canonicalizeTelegramPresentationPayload(
   } = payload;
   const canonical: ReplyPayload = {
     ...withoutPresentation,
-    text: text || (buttons ? TELEGRAM_CONTROL_ONLY_FALLBACK : ""),
+    text:
+      text ||
+      (buttons && !(options?.preserveEmptyTextForControls === true && payload.text === "")
+        ? TELEGRAM_CONTROL_ONLY_FALLBACK
+        : ""),
   };
   if (buttons) {
     canonical.channelData = {

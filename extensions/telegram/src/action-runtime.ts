@@ -20,8 +20,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  isMessagePresentationInteractiveBlock,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationButtonAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -44,7 +47,10 @@ import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
-import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import {
+  canonicalizeTelegramPresentationPayload,
+  resolveTelegramInteractiveTextFallback,
+} from "./interactive-fallback.js";
 import {
   resolveTelegramConversationReadChatId,
   resolveTelegramMessageMutationChatId,
@@ -250,6 +256,134 @@ function resolveTelegramButtonsFromParams(
   );
 }
 
+function selectTelegramInteractivePresentation(
+  presentation: MessagePresentation | undefined,
+): MessagePresentation | undefined {
+  const blocks = presentation?.blocks.filter(isMessagePresentationInteractiveBlock) ?? [];
+  return blocks.length > 0 ? { blocks } : undefined;
+}
+
+function selectTelegramNonInteractivePresentation(
+  presentation: MessagePresentation | undefined,
+): MessagePresentation | undefined {
+  if (!presentation) {
+    return undefined;
+  }
+  const blocks = presentation.blocks.filter(
+    (block) => !isMessagePresentationInteractiveBlock(block),
+  );
+  return blocks.length > 0 || presentation.title ? { ...presentation, blocks } : undefined;
+}
+
+function readTelegramPayloadButtons(
+  payload: ReplyPayload,
+): ReturnType<typeof resolveTelegramButtonsFromParams> {
+  const telegram = payload.channelData?.telegram;
+  if (!telegram || typeof telegram !== "object" || Array.isArray(telegram)) {
+    return undefined;
+  }
+  // SAFETY: The canonicalizer owns this shape and emits only TelegramInlineButtons.
+  return (telegram as { buttons?: ReturnType<typeof resolveTelegramButtonsFromParams> }).buttons;
+}
+
+function countTelegramPresentationControls(presentation: MessagePresentation | undefined): number {
+  return (
+    presentation?.blocks.reduce(
+      (count, block) =>
+        count +
+        (block.type === "buttons"
+          ? block.buttons.length
+          : block.type === "select"
+            ? block.options.length
+            : 0),
+      0,
+    ) ?? 0
+  );
+}
+
+function countTelegramInlineButtons(
+  buttons: ReturnType<typeof resolveTelegramButtonsFromParams>,
+): number {
+  return buttons?.reduce((count, row) => count + row.length, 0) ?? 0;
+}
+
+function countTelegramPresentationCopyTextControls(
+  presentation: MessagePresentation | undefined,
+): number {
+  return (
+    presentation?.blocks.reduce(
+      (count, block) =>
+        count +
+        (block.type === "buttons"
+          ? block.buttons.filter(
+              (button) => resolveMessagePresentationButtonAction(button)?.type === "copy-text",
+            ).length
+          : 0),
+      0,
+    ) ?? 0
+  );
+}
+
+function countTelegramInlineCopyTextButtons(
+  buttons: ReturnType<typeof resolveTelegramButtonsFromParams>,
+): number {
+  return (
+    buttons?.reduce(
+      (count, row) => count + row.filter((button) => button.copy_text !== undefined).length,
+      0,
+    ) ?? 0
+  );
+}
+
+function resolveTelegramMarkupOnlyPresentationFallback(params: {
+  interactivePresentation: MessagePresentation | undefined;
+  interactive?: unknown;
+  buttons: ReturnType<typeof resolveTelegramButtonsFromParams>;
+  buttonOptions: TelegramButtonBuildOptions;
+  droppedControlCount: number;
+}):
+  | {
+      count: number;
+      reason?: "presentation_action_budget_exceeded" | "presentation_keyboard_precedence";
+      requiresExplicitContent: boolean;
+    }
+  | undefined {
+  const requestedCount = countTelegramPresentationControls(params.interactivePresentation);
+  if (requestedCount === 0) {
+    return undefined;
+  }
+  const legacyButtons = resolveTelegramInlineButtons(
+    {
+      interactive: normalizeLegacyInteractiveReply(params.interactive),
+    },
+    {
+      ...params.buttonOptions,
+      onDroppedControl: undefined,
+    },
+  );
+  if (countTelegramInlineButtons(legacyButtons) > 0) {
+    return {
+      count: requestedCount,
+      reason: "presentation_keyboard_precedence",
+      requiresExplicitContent:
+        countTelegramPresentationCopyTextControls(params.interactivePresentation) > 0,
+    };
+  }
+  const missingCount = Math.max(0, requestedCount - countTelegramInlineButtons(params.buttons));
+  if (missingCount === 0) {
+    return undefined;
+  }
+  return {
+    count: missingCount,
+    requiresExplicitContent:
+      countTelegramPresentationCopyTextControls(params.interactivePresentation) >
+      countTelegramInlineCopyTextButtons(params.buttons),
+    ...(missingCount > params.droppedControlCount
+      ? { reason: "presentation_action_budget_exceeded" as const }
+      : {}),
+  };
+}
+
 function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
@@ -301,24 +435,37 @@ function readTelegramSendContent(params: {
 function buildTelegramControlDegradation(
   controls: readonly TelegramDroppedControl[],
   fallbackDelivered: boolean,
+  options?: {
+    fallbackControlCount?: number;
+    fallbackReason?: "presentation_action_budget_exceeded" | "presentation_keyboard_precedence";
+    requiresExplicitContent?: boolean;
+  },
 ) {
-  if (controls.length === 0) {
+  const controlCount = Math.max(controls.length, options?.fallbackControlCount ?? 0);
+  if (controlCount === 0) {
     return undefined;
   }
-  const reasons = [...new Set(controls.map((control) => control.reason))];
+  const reasons = [
+    ...new Set([
+      ...controls.map((control) => control.reason),
+      ...(options?.fallbackReason ? [options.fallbackReason] : []),
+    ]),
+  ];
   const hasOverflow = reasons.includes("callback_data_too_long");
   return {
     warning: fallbackDelivered
-      ? `Telegram delivered ${controls.length} unencodable control${controls.length === 1 ? "" : "s"} as readable text.`
-      : `Telegram could not deliver ${controls.length} control${controls.length === 1 ? "" : "s"}.`,
+      ? `Telegram delivered ${controlCount} unencodable control${controlCount === 1 ? "" : "s"} as readable text.`
+      : `Telegram could not deliver ${controlCount} control${controlCount === 1 ? "" : "s"}.`,
     degradedDelivery: {
-      droppedControls: controls.length,
+      droppedControls: controlCount,
       fallback: fallbackDelivered ? "text" : "not_delivered",
       reasons,
       ...(hasOverflow ? { callbackDataLimitBytes: TELEGRAM_CALLBACK_DATA_MAX_BYTES } : {}),
-      guidance: hasOverflow
-        ? `Shorten callback data to at most ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} UTF-8 bytes and retry if clickable controls are required.`
-        : "Retry with a supported control action if clickable controls are required.",
+      guidance: options?.requiresExplicitContent
+        ? "Retry with explicit content or caption so Telegram can deliver the readable fallback without replacing the existing message body."
+        : hasOverflow
+          ? `Shorten callback data to at most ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} UTF-8 bytes and retry if clickable controls are required.`
+          : "Retry with a supported control action if clickable controls are required.",
     },
   };
 }
@@ -629,27 +776,59 @@ export async function handleTelegramAction(
     const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
     const droppedControls: TelegramDroppedControl[] = [];
-    const buttons = resolveTelegramButtonsFromParams(params, presentation, {
+    const buttonOptions: TelegramButtonBuildOptions = {
       allowWebAppButtons: resolveTelegramTargetChatType(to) === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
-    });
+    };
+    let buttons = presentation
+      ? undefined
+      : resolveTelegramButtonsFromParams(params, undefined, buttonOptions);
+    const interactivePresentation = selectTelegramInteractivePresentation(presentation);
+    const nonInteractivePresentation = selectTelegramNonInteractivePresentation(presentation);
     const resolvedContent = readTelegramSendContent({
       args: params,
       mediaUrl: firstMediaUrl,
-      hasButtons: Array.isArray(buttons) && buttons.length > 0,
+      hasButtons:
+        (Array.isArray(buttons) && buttons.length > 0) || interactivePresentation !== undefined,
       hasLocation: Boolean(location),
       interactive: params.interactive,
-      presentation,
+      presentation: nonInteractivePresentation,
     });
-    const content =
-      droppedControls.length > 0 && resolvedContent.hasExplicitContent
-        ? appendTelegramDroppedControlFallback(resolvedContent.content, droppedControls)
-        : resolvedContent.content;
+    let content = resolvedContent.content;
+    // Keep authored/chart fallback policy here, but route portable controls
+    // through Telegram's canonical capability and shared-budget adapter.
+    const presentationControlsCanonicalized = interactivePresentation !== undefined;
+    if (interactivePresentation) {
+      const canonical = canonicalizeTelegramPresentationPayload(
+        {
+          text: content,
+          interactive: normalizeLegacyInteractiveReply(params.interactive),
+          presentation: interactivePresentation,
+        },
+        {
+          allowWebAppButtons: buttonOptions.allowWebAppButtons,
+          onDroppedControl: buttonOptions.onDroppedControl,
+        },
+      );
+      buttons = readTelegramPayloadButtons(canonical);
+      content = canonical.text ?? content;
+    } else if (presentation) {
+      buttons = resolveTelegramButtonsFromParams(params, presentation, buttonOptions);
+    }
+    if (
+      !presentationControlsCanonicalized &&
+      droppedControls.length > 0 &&
+      resolvedContent.hasExplicitContent
+    ) {
+      content = appendTelegramDroppedControlFallback(content, droppedControls);
+    }
     const droppedControlFallback = appendTelegramDroppedControlFallback("", droppedControls);
     const hasOnlyDroppedControlFallback =
       !resolvedContent.hasExplicitContent &&
       droppedControlFallback.length > 0 &&
-      content.trim() === droppedControlFallback.trim();
+      (presentation
+        ? presentation.blocks.every(isMessagePresentationInteractiveBlock)
+        : content.trim() === droppedControlFallback.trim());
     const asVideoNote = readBooleanParam(params, "asVideoNote") ?? false;
     if (
       location &&
@@ -924,20 +1103,81 @@ export async function handleTelegramAction(
       readStringParam(params, "message", { allowEmpty: false });
     // Telegram treats an explicit empty caption as a request to remove it.
     let caption = readStringParam(params, "caption", { allowEmpty: true });
+    const presentation = normalizeMessagePresentation(params.presentation);
     const droppedControls: TelegramDroppedControl[] = [];
-    const buttons = resolveTelegramButtonsFromParams(params, undefined, {
+    const buttonOptions: TelegramButtonBuildOptions = {
       allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
-    });
-    if (droppedControls.length > 0) {
+    };
+    let buttons = presentation
+      ? undefined
+      : resolveTelegramButtonsFromParams(params, undefined, buttonOptions);
+    const interactivePresentation = selectTelegramInteractivePresentation(presentation);
+    const nonInteractivePresentation = selectTelegramNonInteractivePresentation(presentation);
+    if (nonInteractivePresentation) {
+      const resolvedContent = readTelegramSendContent({
+        args: params,
+        hasButtons: interactivePresentation !== undefined,
+        interactive: params.interactive,
+        presentation: nonInteractivePresentation,
+      }).content;
+      if (caption != null) {
+        caption = resolvedContent;
+      } else {
+        content = resolvedContent;
+      }
+    }
+    const presentationControlsCanonicalized = interactivePresentation !== undefined;
+    if (interactivePresentation) {
+      const canonical = canonicalizeTelegramPresentationPayload(
+        {
+          text: caption ?? content,
+          interactive: normalizeLegacyInteractiveReply(params.interactive),
+          presentation: interactivePresentation,
+        },
+        {
+          allowWebAppButtons: buttonOptions.allowWebAppButtons,
+          onDroppedControl: buttonOptions.onDroppedControl,
+          preserveEmptyTextForControls: caption === "",
+        },
+      );
+      buttons = readTelegramPayloadButtons(canonical);
+      if (caption != null) {
+        caption = canonical.text ?? caption;
+      } else if (content != null) {
+        content = canonical.text ?? content;
+      }
+    } else if (presentation) {
+      buttons = resolveTelegramButtonsFromParams(params, presentation, buttonOptions);
+    }
+    if (!presentationControlsCanonicalized && droppedControls.length > 0) {
       if (caption != null) {
         caption = appendTelegramDroppedControlFallback(caption, droppedControls);
       } else if (content != null) {
         content = appendTelegramDroppedControlFallback(content, droppedControls);
       }
     }
-    if (content == null && caption == null && buttons === undefined) {
-      const degradation = buildTelegramControlDegradation(droppedControls, false);
+    const markupOnlyPresentationFallback =
+      content == null && caption == null && presentationControlsCanonicalized
+        ? resolveTelegramMarkupOnlyPresentationFallback({
+            interactivePresentation,
+            interactive: params.interactive,
+            buttons,
+            buttonOptions,
+            droppedControlCount: droppedControls.length,
+          })
+        : undefined;
+    if (
+      content == null &&
+      caption == null &&
+      (buttons === undefined || markupOnlyPresentationFallback?.requiresExplicitContent === true)
+    ) {
+      const degradation = buildTelegramControlDegradation(droppedControls, false, {
+        fallbackControlCount: markupOnlyPresentationFallback?.count,
+        fallbackReason: markupOnlyPresentationFallback?.reason,
+        requiresExplicitContent:
+          buttons === undefined || markupOnlyPresentationFallback?.requiresExplicitContent === true,
+      });
       if (degradation) {
         return jsonResult({ ok: false, ...degradation });
       }
@@ -976,7 +1216,10 @@ export async function handleTelegramAction(
         ok: true,
         messageId: result.messageId,
         chatId: result.chatId,
-        ...buildTelegramControlDegradation(droppedControls, false),
+        ...buildTelegramControlDegradation(droppedControls, false, {
+          fallbackControlCount: markupOnlyPresentationFallback?.count,
+          fallbackReason: markupOnlyPresentationFallback?.reason,
+        }),
       });
     }
     const result = await telegramActionRuntime.editMessageTelegram(
