@@ -8,10 +8,10 @@ import {
   projectProviderCatalogSnapshotRows,
   projectUpstreamProviderCatalogSnapshot,
   type ProviderCatalogSnapshot,
+  type ProjectedUpstreamProviderCatalogModel,
 } from "./provider-catalog-snapshot.internal.js";
-import type { ModelDefinitionConfig } from "./provider-model-shared.js";
 
-function buildModel(id: string): ModelDefinitionConfig {
+function buildModel(id: string): ProjectedUpstreamProviderCatalogModel {
   return {
     id,
     name: id,
