@@ -56,6 +56,23 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.runtimeToolAllowlist).toEqual(["read", "heartbeat_respond"]);
   });
 
+  it("composes host-required tools with existing message and collector exceptions", () => {
+    const context = buildEmbeddedAttemptToolRunContext({
+      toolsAllow: ["read"],
+      forceMessageTool: true,
+      forceToolNames: ["heartbeat_respond"],
+      swarmCollector: true,
+      swarmOutputSchema: { type: "object" },
+    });
+
+    expect(context.runtimeToolAllowlist).toEqual([
+      "read",
+      "message",
+      "heartbeat_respond",
+      "structured_output",
+    ]);
+  });
+
   it("forwards memory trigger metadata into tool creation so append-only guards activate", () => {
     const memoryFlushWritePath = "memory/2026-03-24.md";
     const context = buildEmbeddedAttemptToolRunContext({ trigger: "memory", memoryFlushWritePath });
