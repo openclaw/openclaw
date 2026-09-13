@@ -85,7 +85,9 @@ describe("runEmbeddedAttempt abort races", () => {
             },
           });
           while (broker.listPending().length === 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 1));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 1);
+            });
           }
           const approval = broker.listPending()[0];
           if (!approval) {
