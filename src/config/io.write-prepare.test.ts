@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
-import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
+import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
@@ -1627,78 +1627,6 @@ describe("config io write prepare", () => {
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
   });
 
-  it("preserves env refs on unchanged paths while keeping changed paths resolved", () => {
-    const unchanged = {
-      plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
-    };
-    const before = { ...unchanged, gateway: { port: 18789 } };
-    const after = { ...unchanged, gateway: { port: 18789, auth: { mode: "token" } } };
-    const changedPaths = new Set<string>();
-    collectChangedPaths(before, after, "", changedPaths);
-    expect(
-      restoreEnvRefsFromMap(
-        after,
-        "",
-        new Map([["plugins.entries.acme.config.env.API_KEY", "${ACME_API_KEY}"]]),
-        changedPaths,
-      ),
-    ).toEqual({
-      plugins: { entries: { acme: { config: { env: { API_KEY: "${ACME_API_KEY}" } } } } },
-      gateway: { port: 18789, auth: { mode: "token" } },
-    });
-  });
-
-  it("preserves env refs in arrays while keeping appended entries resolved", () => {
-    const config = (args: string[]) => ({ plugins: { entries: { acme: { config: { args } } } } });
-    const changedPaths = new Set<string>();
-    collectChangedPaths(
-      config(["${USER_ID}", "123"]),
-      config(["${USER_ID}", "123", "456"]),
-      "",
-      changedPaths,
-    );
-    expect(
-      restoreEnvRefsFromMap(
-        config(["999", "123", "456"]),
-        "",
-        new Map([["plugins.entries.acme.config.args[0]", "${USER_ID}"]]),
-        changedPaths,
-      ),
-    ).toEqual(config(["${USER_ID}", "123", "456"]));
-  });
-
-  it.each([
-    {
-      name: "does not overwrite identity-restored env refs with positional map entries",
-      agents: [
-        { id: "b", token: "${TOKEN_B}" },
-        { id: "a", token: "${TOKEN_A}" },
-      ],
-      refs: [
-        ["agents[0].token", "${TOKEN_A}"],
-        ["agents[1].token", "${TOKEN_B}"],
-      ] as const,
-    },
-    {
-      name: "does not overwrite identity-restored escaped refs with positional map entries",
-      agents: [
-        { id: "real", token: "${TOKEN}" },
-        { id: "literal", token: "$${TOKEN}" },
-      ],
-      refs: [["agents[1].token", "${TOKEN}"]] as const,
-    },
-  ])("$name", ({ agents, refs }) => {
-    expect(
-      restoreEnvRefsFromMap(
-        { agents },
-        "",
-        new Map<string, string>(refs),
-        new Set(["agents[0].id", "agents[1].id"]),
-        new Set(["agents[0].token", "agents[1].token"]),
-      ),
-    ).toEqual({ agents });
-  });
-
   it("ignores prototype-chain keys when collecting changed paths", () => {
     const base = { safe: { mode: "local" }, collision: { mode: "owned-base" } };
     const target = Object.create({ collision: { mode: "inherited-target" } }) as Record<
@@ -1709,38 +1637,6 @@ describe("config io write prepare", () => {
     const changedPaths = new Set<string>();
     collectChangedPaths(base, target, "", changedPaths);
     expect([...changedPaths].toSorted()).toEqual(["collision", "safe.mode"]);
-  });
-
-  it("restores unchanged paths even when their values equal another authored template", () => {
-    expect(
-      restoreEnvRefsFromMap(
-        {
-          included: {
-            first: "${SECOND}",
-            second: "second-secret",
-            third: "$${SECOND}",
-            escaped: "$${SECOND}",
-          },
-          gateway: { port: 18790 },
-        },
-        "",
-        new Map([
-          ["included.first", "${FIRST}"],
-          ["included.second", "${SECOND}"],
-          ["included.third", "${THIRD}"],
-          ["included.escaped", "$${SECOND}"],
-        ]),
-        new Set(["gateway.port"]),
-      ),
-    ).toEqual({
-      included: {
-        first: "${FIRST}",
-        second: "${SECOND}",
-        third: "${THIRD}",
-        escaped: "$${SECOND}",
-      },
-      gateway: { port: 18790 },
-    });
   });
 
   it.each([

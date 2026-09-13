@@ -21,9 +21,9 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
-import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
+import { getConfigValueAtPath } from "./config-paths.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
-import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
+import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
@@ -57,7 +57,11 @@ import {
 } from "./io.read-helpers.js";
 import { configWriteCommittedSnapshot } from "./io.types.js";
 import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
-import { injectExplicitlySetPaths, projectConfigWriteSource } from "./io.write-prepare.js";
+import {
+  injectExplicitlySetPaths,
+  prepareConfigWriteValues,
+  projectConfigWriteSource,
+} from "./io.write-prepare.js";
 import {
   captureConfigFileWritePathProof,
   createGuardedConfigFileSystem,
@@ -431,9 +435,15 @@ function resolveIncludeOwnedWriteCandidate(params: {
     }) as OpenClawConfig, // SAFETY: Projection and path edits preserve the config object.
     projection.unsetPaths,
   );
+  const values = prepareConfigWriteValues({
+    snapshot: params.snapshot,
+    nextConfig: requestedConfig,
+    env: params.io?.env ?? process.env,
+    explicitSetPaths: params.writeOptions?.explicitSetPaths,
+  });
   const markerPath = ["meta", "migrations", "modelPolicyAllowlist"];
   const nextConfig = projectIncludeModelPolicyWrite({
-    config: requestedConfig,
+    config: values.authoredConfig,
     previousConfig: params.snapshot.sourceConfig,
     preserveMarker:
       params.writeOptions?.explicitSetPaths?.some(
@@ -442,11 +452,11 @@ function resolveIncludeOwnedWriteCandidate(params: {
           segments.every((part, i) => part === markerPath[i]),
       ) === true,
   });
-  let changed = collectChangedConfigPaths(params.snapshot.sourceConfig, nextConfig);
-  if (changed.paths.length === 0 && !changed.rootChanged && nextConfig !== requestedConfig) {
+  let changed = collectChangedConfigPaths(values.authoredSourceConfig, nextConfig);
+  if (changed.paths.length === 0 && !changed.rootChanged && nextConfig !== values.authoredConfig) {
     // A policy deletion can normalize to an already-empty policy. Its original
     // destination still owns the successful semantic no-op.
-    changed = collectChangedConfigPaths(params.snapshot.sourceConfig, requestedConfig);
+    changed = collectChangedConfigPaths(values.authoredSourceConfig, values.authoredConfig);
   }
   if (changed.rootChanged || changed.paths.length === 0) {
     return null;
@@ -840,7 +850,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       ) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
-      let includedValueToWrite = getConfigValueAtPath(nextConfig, [...boundaryPath]);
+      const includedValueToWrite = getConfigValueAtPath(nextConfig, [...boundaryPath]);
       if (previousIncludeRaw !== null) {
         let authoredIncludeValue: unknown;
         let parsedInclude = false;
@@ -870,11 +880,6 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
             throw new ConfigMutationConflictError("included config changed since last load");
           }
-          includedValueToWrite = restoreEnvVarRefs(
-            includedValueToWrite,
-            authoredIncludeValue,
-            envForRestore,
-          );
         }
       }
       const deferRuntimeActivation = hasManagedRuntimeConfigWriteOwner(params.snapshot.path);
@@ -886,15 +891,8 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
           })
         : cloneEnvWithPlatformSemantics(writeEnv);
-      const authoredRuntimeCandidate = restoreEnvVarRefs(
-        nextConfig,
-        params.snapshot.parsed,
-        envForRestore,
-      ) as OpenClawConfig;
-      applyConfigEnvVars(authoredRuntimeCandidate, runtimeCandidateEnv);
-      const runtimeCandidate = structuredClone(authoredRuntimeCandidate);
-      setConfigValueAtPath(runtimeCandidate, [...boundaryPath], includedValueToWrite);
-      const runtimeConfigToWrite = resolveConfigEnvVars(runtimeCandidate, runtimeCandidateEnv, {
+      applyConfigEnvVars(nextConfig, runtimeCandidateEnv);
+      const runtimeConfigToWrite = resolveConfigEnvVars(nextConfig, runtimeCandidateEnv, {
         onMissing: () => {},
       }) as OpenClawConfig;
       const validated = validateConfigObjectWithPlugins(

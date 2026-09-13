@@ -2,7 +2,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPlainObject } from "../infra/plain-object.js";
-import { isRecord } from "../utils.js";
 import { containsEnvVarReference, resolveConfigEnvVars } from "./env-substitution.js";
 
 /**
@@ -24,7 +23,7 @@ import { containsEnvVarReference, resolveConfigEnvVars } from "./env-substitutio
 const ENV_VAR_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
-export class EnvRefArrayMutationError extends Error {
+class EnvRefArrayMutationError extends Error {
   constructor() {
     super("Config write would reorder or modify an array containing environment references.");
     this.name = "EnvRefArrayMutationError";
@@ -697,10 +696,11 @@ export function restoreEnvVarRefs(
 }
 
 /** Restore only references owned by the matching authored/resolved planning read. */
-function restoreEnvVarRefsFromResolved(
+export function restoreEnvVarRefsFromResolved(
   incoming: unknown,
   parsed: unknown,
   resolved: unknown,
+  explicitSetPaths?: readonly (readonly string[])[],
 ): unknown {
   // If parsed has no env var refs at this level, return incoming as-is
   if (parsed === null || parsed === undefined) {
@@ -709,6 +709,11 @@ function restoreEnvVarRefsFromResolved(
 
   // String leaf: check if parsed was a ${VAR} template that resolves to incoming
   if (typeof incoming === "string" && typeof parsed === "string") {
+    // An explicitly authored template is intent, even when an old escaped
+    // template resolved to the same string. Literal descendants still restore.
+    if (hasEnvVarRef(incoming) && explicitSetPaths?.some((path) => path.length === 0)) {
+      return incoming;
+    }
     if (hasEnvVarRef(parsed)) {
       if (resolved === incoming) {
         // The incoming value matches what the env var resolves to — restore the reference
@@ -717,6 +722,11 @@ function restoreEnvVarRefsFromResolved(
     }
     return incoming;
   }
+
+  const childExplicitPaths = (key: string) =>
+    explicitSetPaths?.flatMap((path) =>
+      path.length === 0 ? [path] : path[0] === key ? [path.slice(1)] : [],
+    );
 
   // Array template entries must retain a unique identity before authored refs
   // can be restored; ambiguous moves would attach secrets or activate escaped
@@ -728,7 +738,12 @@ function restoreEnvVarRefsFromResolved(
     ) {
       return incoming.map((item, index) =>
         index < parsed.length
-          ? restoreEnvVarRefsFromResolved(item, parsed[index], resolved[index])
+          ? restoreEnvVarRefsFromResolved(
+              item,
+              parsed[index],
+              resolved[index],
+              childExplicitPaths(String(index)),
+            )
           : item,
       );
     }
@@ -749,6 +764,7 @@ function restoreEnvVarRefsFromResolved(
         incoming[incomingIndex],
         parsed[parsedIndex],
         resolved[parsedIndex],
+        childExplicitPaths(String(incomingIndex)),
       );
     }
     for (let index = 0; index < incoming.length && index < parsed.length; index += 1) {
@@ -761,6 +777,7 @@ function restoreEnvVarRefsFromResolved(
           incoming[index],
           parsed[index],
           resolved[index],
+          childExplicitPaths(String(index)),
         );
       }
     }
@@ -800,7 +817,12 @@ function restoreEnvVarRefsFromResolved(
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(incoming)) {
       if (Object.hasOwn(parsed, key)) {
-        result[key] = restoreEnvVarRefsFromResolved(value, parsed[key], resolved[key]);
+        result[key] = restoreEnvVarRefsFromResolved(
+          value,
+          parsed[key],
+          resolved[key],
+          childExplicitPaths(key),
+        );
       } else {
         // New key added by caller — keep as-is
         result[key] = value;
@@ -811,90 +833,6 @@ function restoreEnvVarRefsFromResolved(
 
   // Mismatched types or primitives — keep incoming
   return incoming;
-}
-
-function parentPath(value: string): string {
-  if (!value) {
-    return "";
-  }
-  if (value.endsWith("]")) {
-    const index = value.lastIndexOf("[");
-    return index > 0 ? value.slice(0, index) : "";
-  }
-  const index = value.lastIndexOf(".");
-  return index >= 0 ? value.slice(0, index) : "";
-}
-
-function isPathChanged(path: string, changedPaths: Set<string>): boolean {
-  if (changedPaths.has(path)) {
-    return true;
-  }
-  let current = parentPath(path);
-  while (current) {
-    if (changedPaths.has(current)) {
-      return true;
-    }
-    current = parentPath(current);
-  }
-  return changedPaths.has("");
-}
-
-export function restoreEnvRefsFromMap(
-  value: unknown,
-  path: string,
-  envRefMap: Map<string, string>,
-  changedPaths: Set<string>,
-  identityRestoredPaths: ReadonlySet<string> = new Set(),
-): unknown {
-  if (typeof value === "string") {
-    if (identityRestoredPaths.has(path)) {
-      return value;
-    }
-    if (!isPathChanged(path, changedPaths)) {
-      const original = envRefMap.get(path);
-      if (original !== undefined) {
-        return original;
-      }
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((item, index) => {
-      const updated = restoreEnvRefsFromMap(
-        item,
-        `${path}[${index}]`,
-        envRefMap,
-        changedPaths,
-        identityRestoredPaths,
-      );
-      if (updated !== item) {
-        changed = true;
-      }
-      return updated;
-    });
-    return changed ? next : value;
-  }
-  if (isRecord(value)) {
-    let changed = false;
-    const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-      const childPath = path ? `${path}.${key}` : key;
-      const updated = restoreEnvRefsFromMap(
-        child,
-        childPath,
-        envRefMap,
-        changedPaths,
-        identityRestoredPaths,
-      );
-      if (updated !== child) {
-        changed = true;
-      }
-      next[key] = updated;
-    }
-    return changed ? next : value;
-  }
-  return value;
 }
 
 export function resolveWriteEnvSnapshotForPath(params: {

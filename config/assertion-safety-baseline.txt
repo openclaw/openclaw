@@ -2485,7 +2485,7 @@ src/config/io.snapshot.ts	1
 src/config/io.warnings.ts	2
 src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	3
-src/config/io.write.ts	6
+src/config/io.write.ts	2
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
 src/config/legacy.roster.ts	13
@@ -2497,7 +2497,7 @@ src/config/mcp-config.ts	1
 src/config/merge-patch.ts	1
 src/config/model-input-normalization.ts	2
 src/config/model-input.ts	1
-src/config/mutate.ts	4
+src/config/mutate.ts	3
 src/config/normalize-exec-safe-bin.ts	2
 src/config/official-external-channel-secret-schema.ts	4
 src/config/plugin-auto-enable.apply.ts	1

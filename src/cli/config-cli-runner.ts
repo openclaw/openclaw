@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
+import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -314,6 +315,7 @@ export async function runConfigOperations(params: {
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
+  const suppliedValuePaths: PathSegment[][] = [];
   const appliedOperations: ConfigSetOperation[] = [];
   const recordOperation = (operation: ConfigSetOperation): PathSegment[] => {
     const writePath = roster.writePath(operation.setPath);
@@ -385,8 +387,9 @@ export async function runConfigOperations(params: {
       quotedNumericSegments: operation.quotedNumericSegments,
       schema: mutationSchema,
     };
+    let suppliedPaths: PathSegment[][];
     if (merge) {
-      mergeAtPath(next, operation.setPath, operation.value, pathOptions);
+      suppliedPaths = mergeAtPath(next, operation.setPath, operation.value, pathOptions);
     } else {
       assertNonDestructiveReplacement({
         root: next,
@@ -395,7 +398,9 @@ export async function runConfigOperations(params: {
         allowReplace: options.replace || operation.mutation === "replace",
       });
       setAtPath(next, operation.setPath, operation.value, pathOptions);
+      suppliedPaths = [operation.setPath];
     }
+    suppliedValuePaths.push(...suppliedPaths.map((path) => roster.writePath(path)));
     explicitSetPaths.push(recordOperation(operation));
   }
   roster.finish();
@@ -405,11 +410,18 @@ export async function runConfigOperations(params: {
   const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({ root: next, operations });
   let nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
+  // Parent merge paths own policy, but inherited children are not caller-authored values.
+  const authoredNextConfig = prepareConfigWriteValues({
+    snapshot,
+    nextConfig,
+    explicitSetPaths: suppliedValuePaths.map(normalizeConfigMutationExplicitSetPath),
+    env: process.env,
+  }).authoredConfig;
   if (options.dryRun) {
     nextConfig = prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
-      nextConfig,
+      nextConfig: authoredNextConfig,
       options: { explicitSetPaths: normalizedExplicitSetPaths },
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
       env: process.env,
@@ -435,7 +447,7 @@ export async function runConfigOperations(params: {
   }
 
   await replaceConfigFile({
-    sourceConfig: nextConfig,
+    sourceConfig: authoredNextConfig,
     snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {

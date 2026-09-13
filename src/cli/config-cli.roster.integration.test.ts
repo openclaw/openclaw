@@ -223,6 +223,369 @@ describe("config cli roster integration", () => {
     },
   );
 
+  it.each(["agentDir", "session.store"])(
+    "preserves the physical owner when config set assigns an equivalent reference to %s",
+    async (ownerPath) => {
+      await withConfigFileHarness(
+        "openclaw-config-cli-owner-reference-",
+        "{}",
+        async ({ configPath, tempDir }) => {
+          const physicalPath = path.join(
+            fs.realpathSync(tempDir),
+            ownerPath === "agentDir" ? "custom-agent" : "sessions.sqlite",
+          );
+          const original = {
+            agents: {
+              ...(ownerPath === "session.store"
+                ? { defaults: { sessionStore: { agentId: "main" } } }
+                : {}),
+              entries: {
+                main: ownerPath === "agentDir" ? { agentDir: physicalPath } : {},
+              },
+            },
+            ...(ownerPath === "session.store" ? { session: { store: physicalPath } } : {}),
+          };
+          const raw = `${JSON.stringify(original)}\n`;
+          fs.writeFileSync(configPath, raw);
+          const envSnapshot = captureEnv(["CONFIG_OWNER_PATH"]);
+          try {
+            setTestEnvValue("CONFIG_OWNER_PATH", physicalPath);
+            expect((await readConfigFileSnapshot()).valid).toBe(true);
+            try {
+              await runRegisteredConfigCommand([
+                "config",
+                "set",
+                ownerPath === "agentDir" ? "agents.entries.main.agentDir" : "session.store",
+                "${CONFIG_OWNER_PATH}",
+              ]);
+            } finally {
+              expect(registeredRuntimeErrors).toEqual([]);
+            }
+            const saved = JSON5.parse(fs.readFileSync(configPath, "utf8"));
+            const reloaded = await readConfigFileSnapshot();
+            expect(reloaded.valid).toBe(true);
+            if (ownerPath === "agentDir") {
+              expect(saved.agents.entries.main.agentDir).toBe("${CONFIG_OWNER_PATH}");
+              expect(reloaded.sourceConfig.agents?.entries?.main?.agentDir).toBe(physicalPath);
+              expect(resolveLegacyInheritedAuthAgentId(reloaded.config)).toBe("main");
+            } else {
+              expect(saved.session.store).toBe("${CONFIG_OWNER_PATH}");
+              expect(reloaded.sourceConfig.session?.store).toBe(physicalPath);
+              expect(saved.agents.defaults.sessionStore.agentId).toBe("main");
+              expect(resolveSessionStoreCompatibilityAgentId(reloaded.config)).toBe("main");
+            }
+            expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(raw);
+            expect(registeredRuntimeErrors).toEqual([]);
+          } finally {
+            envSnapshot.restore();
+          }
+        },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "preserves changed reference identity and escaped literals (included: %s)",
+    async (included) => {
+      await withConfigFileHarness(
+        "openclaw-config-cli-reference-identity-",
+        "{}",
+        async ({ configPath, tempDir }) => {
+          const browser = { enabled: true, executablePath: "${CONFIG_REFERENCE_A}" };
+          const browserPath = path.join(tempDir, "browser.json");
+          const original = {
+            agents: { entries: { main: {} } },
+            browser: included ? { $include: "./browser.json" } : browser,
+          };
+          const rootRaw = `${JSON.stringify(original)}\n`;
+          const ownedPath = included ? browserPath : configPath;
+          const ownedRaw = included ? `${JSON.stringify(browser)}\n` : rootRaw;
+          fs.writeFileSync(configPath, rootRaw);
+          if (included) {
+            fs.writeFileSync(browserPath, ownedRaw);
+          }
+          const readBrowser = () => {
+            const saved = JSON5.parse(fs.readFileSync(ownedPath, "utf8"));
+            return included ? saved : saved.browser;
+          };
+          const envSnapshot = captureEnv(["CONFIG_REFERENCE_A", "CONFIG_REFERENCE_B"]);
+          try {
+            setTestEnvValue("CONFIG_REFERENCE_A", "/opt/example/browser");
+            setTestEnvValue("CONFIG_REFERENCE_B", "/opt/example/browser");
+            await runRegisteredConfigCommand([
+              "config",
+              "set",
+              "browser.executablePath",
+              "${CONFIG_REFERENCE_B}",
+            ]);
+            expect(readBrowser().executablePath).toBe("${CONFIG_REFERENCE_B}");
+            expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
+              "/opt/example/browser",
+            );
+            expect(fs.readFileSync(`${ownedPath}.bak`, "utf8")).toBe(ownedRaw);
+
+            await runRegisteredConfigCommand([
+              "config",
+              "set",
+              "browser.executablePath",
+              "$${CONFIG_REFERENCE_A}",
+            ]);
+            const escapedRaw = fs.readFileSync(ownedPath, "utf8");
+            expect(readBrowser().executablePath).toBe("$${CONFIG_REFERENCE_A}");
+            await runRegisteredConfigCommand(["config", "set", "browser.enabled", "false"]);
+            expect(readBrowser()).toMatchObject({
+              enabled: false,
+              executablePath: "$${CONFIG_REFERENCE_A}",
+            });
+            const reloaded = await readConfigFileSnapshot();
+            expect(reloaded.valid).toBe(true);
+            expect(reloaded.sourceConfig.browser?.executablePath).toBe("${CONFIG_REFERENCE_A}");
+            expect(fs.readFileSync(`${ownedPath}.bak`, "utf8")).toBe(escapedRaw);
+            const beforeMerge = fs.readFileSync(ownedPath, "utf8");
+            await runRegisteredConfigCommand([
+              "config",
+              "set",
+              "browser",
+              '{"enabled":true}',
+              "--strict-json",
+              "--merge",
+            ]);
+            expect(readBrowser()).toMatchObject({
+              enabled: true,
+              executablePath: "$${CONFIG_REFERENCE_A}",
+            });
+            expect(fs.readFileSync(`${ownedPath}.bak`, "utf8")).toBe(beforeMerge);
+            const beforeActivation = fs.readFileSync(ownedPath, "utf8");
+            await runRegisteredConfigCommand([
+              "config",
+              "set",
+              "--batch-json",
+              JSON.stringify([
+                { path: "browser.executablePath", value: "${CONFIG_REFERENCE_A}" },
+                { path: "browser.enabled", value: false },
+              ]),
+            ]);
+            expect(readBrowser().executablePath).toBe("${CONFIG_REFERENCE_A}");
+            expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
+              "/opt/example/browser",
+            );
+            expect(fs.readFileSync(`${ownedPath}.bak`, "utf8")).toBe(beforeActivation);
+            if (included) {
+              expect(fs.readFileSync(configPath, "utf8")).toBe(rootRaw);
+            }
+            expect(registeredRuntimeErrors).toEqual([]);
+          } finally {
+            envSnapshot.restore();
+          }
+        },
+      );
+    },
+  );
+
+  it("preserves merged array ownership when an unchanged reference accompanies a sibling edit", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-merged-reference-",
+      "{}",
+      async ({ configPath, tempDir }) => {
+        const includePath = path.join(tempDir, "gateway.json");
+        const includedRaw = `${JSON.stringify({
+          mode: "local",
+          controlUi: { allowedOrigins: ["https://included.example"] },
+        })}\n`;
+        const original = {
+          agents: { entries: { main: {} } },
+          gateway: {
+            $include: "./gateway.json",
+            controlUi: { allowedOrigins: ["${CONFIG_ROOT_ORIGIN}"] },
+          },
+        };
+        fs.writeFileSync(includePath, includedRaw);
+        fs.writeFileSync(configPath, `${JSON.stringify(original)}\n`);
+        const envSnapshot = captureEnv(["CONFIG_ROOT_ORIGIN", "CONFIG_ALT_ORIGIN"]);
+        try {
+          setTestEnvValue("CONFIG_ROOT_ORIGIN", "https://root.example");
+          setTestEnvValue("CONFIG_ALT_ORIGIN", "https://root.example");
+          await runRegisteredConfigCommand(["config", "set", "gateway.controlUi.enabled", "false"]);
+          const committedRaw = fs.readFileSync(configPath, "utf8");
+          expect(JSON5.parse(committedRaw).gateway.controlUi.allowedOrigins).toEqual([
+            "${CONFIG_ROOT_ORIGIN}",
+          ]);
+          const committedBackup = fs.readFileSync(`${configPath}.bak`, "utf8");
+          const inventory = fs.readdirSync(tempDir).toSorted();
+          await expect(
+            runRegisteredConfigCommand([
+              "config",
+              "set",
+              "gateway.controlUi.allowedOrigins[1]",
+              "${CONFIG_ALT_ORIGIN}",
+            ]),
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+          expect(registeredRuntimeErrors).toEqual([expect.stringContaining("$include-owned")]);
+          expect(fs.readFileSync(configPath, "utf8")).toBe(committedRaw);
+          expect(fs.readFileSync(includePath, "utf8")).toBe(includedRaw);
+          expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(committedBackup);
+          expect(fs.readdirSync(tempDir).toSorted()).toEqual(inventory);
+        } finally {
+          envSnapshot.restore();
+        }
+      },
+    );
+  });
+
+  it("preserves untouched escaped references when model arrays merge by id", async () => {
+    const raw = JSON.stringify({
+      models: {
+        providers: {
+          example: {
+            baseUrl: "https://provider.example/v1",
+            api: "openai-completions",
+            models: [
+              { id: "first", name: "$${CONFIG_MODEL_NAME}" },
+              { id: "second", name: "Second" },
+            ],
+          },
+        },
+      },
+    });
+    await withConfigFileHarness(
+      "openclaw-config-cli-model-merge-reference-",
+      raw,
+      async ({ configPath }) => {
+        const envSnapshot = captureEnv(["CONFIG_MODEL_NAME"]);
+        try {
+          setTestEnvValue("CONFIG_MODEL_NAME", "Activated model name");
+          await runRegisteredConfigCommand([
+            "config",
+            "set",
+            "models.providers.example.models",
+            '[{"id":"second","contextWindow":8192}]',
+            "--strict-json",
+            "--merge",
+          ]);
+          const saved = JSON5.parse(fs.readFileSync(configPath, "utf8"));
+          expect(saved.models.providers.example.models).toEqual([
+            { id: "first", name: "$${CONFIG_MODEL_NAME}" },
+            { id: "second", name: "Second", contextWindow: 8192 },
+          ]);
+          expect(
+            (await readConfigFileSnapshot()).sourceConfig.models?.providers?.example?.models[0]
+              ?.name,
+          ).toBe("${CONFIG_MODEL_NAME}");
+          expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(raw);
+          expect(registeredRuntimeErrors).toEqual([]);
+        } finally {
+          envSnapshot.restore();
+        }
+      },
+    );
+  });
+
+  it.each([false, true])(
+    "requires explicit ownership before activating an escaped custom agentDir (legacy: %s)",
+    async (legacy) => {
+      await withConfigFileHarness(
+        "openclaw-config-cli-escaped-owner-",
+        "{}",
+        async ({ configPath, tempDir }) => {
+          const root = fs.realpathSync(tempDir);
+          const agentDir = path.join(root, "$${CONFIG_OWNER}");
+          const activeDir = path.join(root, "${CONFIG_OWNER}");
+          const raw = `${JSON.stringify({
+            agents: legacy
+              ? { list: [{ id: "main", agentDir }] }
+              : { entries: { main: { agentDir } } },
+            browser: { enabled: true },
+          })}\n`;
+          fs.writeFileSync(configPath, raw);
+          const inventory = fs.readdirSync(tempDir).toSorted();
+          const envSnapshot = captureEnv(["CONFIG_OWNER"]);
+          try {
+            setTestEnvValue("CONFIG_OWNER", "other-agent");
+            expect((await readConfigFileSnapshot()).valid).toBe(true);
+            const operations = [
+              { path: "agents.entries.main.agentDir", value: activeDir },
+              { path: "browser.enabled", value: false },
+            ];
+            await expect(
+              runRegisteredConfigCommand([
+                "config",
+                "set",
+                "--batch-json",
+                JSON.stringify(operations),
+              ]),
+            ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+            expect(registeredRuntimeErrors).toEqual([expect.stringContaining("inherited auth")]);
+            expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+            expect(fs.readdirSync(tempDir).toSorted()).toEqual(inventory);
+            registeredRuntimeErrors.length = 0;
+
+            await runRegisteredConfigCommand([
+              "config",
+              "set",
+              "--batch-json",
+              JSON.stringify([
+                ...operations,
+                { path: "agents.defaults.authInheritance.agentId", value: "main" },
+              ]),
+            ]);
+            const saved = JSON5.parse(fs.readFileSync(configPath, "utf8"));
+            expect(saved.agents.entries.main.agentDir).toBe(activeDir);
+            expect(saved.agents.defaults.authInheritance.agentId).toBe("main");
+            expect(
+              (await readConfigFileSnapshot()).sourceConfig.agents?.entries?.main?.agentDir,
+            ).toBe(path.join(root, "other-agent"));
+            expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(raw);
+            expect(registeredRuntimeErrors).toEqual([]);
+          } finally {
+            envSnapshot.restore();
+          }
+        },
+      );
+    },
+  );
+
+  it("uses config env over lower-precedence values before checking a physical owner", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-owner-env-precedence-",
+      "{}",
+      async ({ configPath, tempDir }) => {
+        const { createConfigIO } = await import("../config/io.factory.js");
+        const physicalPath = path.join(fs.realpathSync(tempDir), "custom-agent");
+        const raw = `${JSON.stringify({
+          agents: { entries: { main: { agentDir: physicalPath } } },
+        })}\n`;
+        fs.writeFileSync(configPath, raw);
+        const lowerPrecedenceEnv = { CONFIG_OWNER_PATH: path.join(tempDir, "fallback-agent") };
+        const io = createConfigIO({
+          configPath,
+          env: { ...process.env, ...lowerPrecedenceEnv },
+          lowerPrecedenceEnv,
+        });
+        const snapshot = await io.readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        await io.writeConfigFile(
+          {
+            ...snapshot.sourceConfig,
+            env: { vars: { CONFIG_OWNER_PATH: physicalPath } },
+            agents: { entries: { main: { agentDir: "${CONFIG_OWNER_PATH}" } } },
+          },
+          {
+            inputBase: "source",
+            baseSnapshot: snapshot,
+            explicitSetPaths: [["agents", "entries", "main", "agentDir"]],
+          },
+        );
+        expect(JSON5.parse(fs.readFileSync(configPath, "utf8")).agents.entries.main.agentDir).toBe(
+          "${CONFIG_OWNER_PATH}",
+        );
+        const reloaded = await io.readConfigFileSnapshot();
+        expect(reloaded.valid).toBe(true);
+        expect(reloaded.sourceConfig.agents?.entries?.main?.agentDir).toBe(physicalPath);
+        expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(raw);
+      },
+    );
+  });
+
   it.each([
     { name: "leaf recreated", removed: { main: { name: null } }, main: { name: "changed-main" } },
     { name: "entry recreated", removed: { main: null }, main: { name: "changed-main" } },

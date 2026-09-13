@@ -4,6 +4,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import { pinSurvivorWorkspaceForRosterCollapse } from "./agent-workspace-roster-transition.js";
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
+import { restoreEnvVarRefsFromResolved } from "./env-preserve.js";
 import { prepareAuthInheritanceOwnerForWrite } from "./io.auth-inheritance-owner.js";
 import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
 import { coerceConfig } from "./io.read-helpers.js";
@@ -12,6 +13,7 @@ import type {
   ConfigWriteOptions,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
+import { prepareConfigWriteValues } from "./io.write-prepare.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import type { OpenClawConfig } from "./types.js";
 import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "./validation.js";
@@ -52,11 +54,20 @@ export function prepareConfigWriteTopology(
     >;
     unsetPaths: readonly (readonly string[])[];
     env: NodeJS.ProcessEnv;
+    lowerPrecedenceEnv?: Readonly<Record<string, string>>;
     homedir?: () => string;
   },
 ) {
   const { snapshot, options, unsetPaths, env, homedir, pluginMetadataSnapshot } = params;
-  let nextConfig = params.nextConfig;
+  const values = prepareConfigWriteValues({
+    snapshot,
+    nextConfig: params.nextConfig,
+    env,
+    lowerPrecedenceEnv: params.lowerPrecedenceEnv,
+    explicitSetPaths: options.explicitSetPaths,
+    explicitSetValueSource: options.explicitSetValueSource,
+  });
+  let nextConfig = values.resolvedConfig;
   const sourceRosterMigration = migratePersistedImplicitMainRoster(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
     { env, homedir },
@@ -195,7 +206,7 @@ export function prepareConfigWriteTopology(
     ownershipPaths: topologyPaths,
   });
   const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyPaths];
-  const explicitSource = options.explicitSetValueSource ?? nextConfig;
+  const explicitSource = values.explicitSetValueSource;
   const explicitSetValueSource = { ...explicitSource };
   for (const ownershipPath of topologyPaths) {
     cloneConfigPathParents(explicitSource, explicitSetValueSource, ownershipPath);
@@ -207,6 +218,12 @@ export function prepareConfigWriteTopology(
   }
   return {
     nextConfig,
+    // Apply topology changes to the paired authored view without materializing untouched refs.
+    authoredConfig: coerceConfig(
+      restoreEnvVarRefsFromResolved(nextConfig, values.authoredConfig, values.resolvedConfig),
+    ),
+    authoredSourceConfig: values.authoredSourceConfig,
+    authoredRuntimeConfig: values.authoredRuntimeConfig,
     explicitSetPaths,
     explicitSetValueSource,
     persistCanonicalAgentRoster:
