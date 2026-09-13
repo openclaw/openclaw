@@ -15,6 +15,9 @@ function buildModel(id: string): ModelDefinitionConfig {
   return {
     id,
     name: id,
+    provider: "opencode-go",
+    api: "openai-completions",
+    baseUrl: "https://opencode.ai/zen/go/v1",
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -38,7 +41,7 @@ describe("live provider catalog projection", () => {
         models: {
           [model.id]: {
             id: model.id,
-            limit: { context: model.contextWindow, output: model.maxTokens },
+            limit: { context: 128_000, output: model.maxTokens },
           },
         },
       },
@@ -62,7 +65,7 @@ describe("live provider catalog projection", () => {
           [model.id]: {
             id: model.id,
             status: "preview",
-            limit: { context: model.contextWindow, output: model.maxTokens },
+            limit: { context: 128_000, output: model.maxTokens },
           },
         },
       },
