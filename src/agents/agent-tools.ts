@@ -426,7 +426,9 @@ type OpenClawCodingToolsOptions = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
-function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+export function createOpenClawCodingToolsInternal(
+  options?: OpenClawCodingToolsOptions,
+): AnyAgentTool[] {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
@@ -1167,8 +1169,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   }).map((tool) => wrapToolWithGatewayCallerIdentity(tool, toolCallerIdentity));
 }
 
-/** Build the runtime tool list exposed through the public agent harness SDK. */
-export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+/** Build the SDK tool list without exposing core-only auxiliary read scope. */
+export function createOpenClawCodingTools(
+  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey">,
+): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
