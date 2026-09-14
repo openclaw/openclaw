@@ -19,7 +19,11 @@ type StoredRepository = Extract<
   { kind: "stored" }
 >;
 
-async function readArtifacts(access: StoredRepository, previewPath?: string) {
+async function readArtifacts(
+  access: StoredRepository,
+  previewPath?: string,
+  maxPreviewBytes?: number,
+) {
   access.assertCurrent();
   if (!access.repository.checkpointRef) {
     return undefined;
@@ -29,6 +33,7 @@ async function readArtifacts(access: StoredRepository, previewPath?: string) {
     workspaceId: access.repository.workspaceId,
     checkpointRef: access.repository.checkpointRef,
     previewPath,
+    ...(maxPreviewBytes === undefined ? {} : { maxPreviewBytes }),
     assertCurrent: access.assertCurrent,
   });
   access.assertCurrent();
@@ -125,7 +130,7 @@ export async function getRepositoryArtifact(
   maxPreviewBytes: number = WORKSPACE_PREVIEW_MAX_BYTES,
 ): Promise<{ file?: SessionFileEntry }> {
   const selected = artifactPath(requestedPath);
-  const snapshot = await readArtifacts(access, selected);
+  const snapshot = await readArtifacts(access, selected, maxPreviewBytes);
   const entry = snapshot?.changedEntries.find((candidate) => candidate.path === selected);
   if (!snapshot || entry?.type !== "file") {
     throw new Error(
