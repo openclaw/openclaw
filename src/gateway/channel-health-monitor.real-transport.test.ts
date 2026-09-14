@@ -232,7 +232,7 @@ class RealTransportChannelManager implements ChannelManager {
   async startChannel(): Promise<ReadonlyMap<string, never>> {
     this.monitorRestarts.push("start");
     await this.doStart();
-    return new Map();
+    return new Map<string, never>();
   }
   releaseChannelRouteHandoffs() {}
   setAutostartSuppression() {}
