@@ -102,7 +102,8 @@ type CompactionLoss =
   | "suffix-head"
   | "split-turn-head"
   | "split-turn-tail"
-  | "preserved-turn-head";
+  | "preserved-turn-head"
+  | "quality-retention";
 
 function prependPreviousSummaryForRedistill(params: {
   messages: AgentMessage[];
@@ -1021,6 +1022,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       },
       producerLosses: ReadonlySet<CompactionLoss> = new Set(),
       qualityRetention?: SummaryQualityRetention,
+      // The degrade path exists BECAUSE required facts would not fit. Retaining them
+      // there must not throw, or the branch re-strands the session it exists to rescue.
+      retentionOptional = false,
     ) => {
       workspaceContextPromise ??= readWorkspaceContextForSummary(
         runtime?.postCompactionSections,
@@ -1034,14 +1038,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
-      const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
+      let fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
         budgetCompactionSummary(body, suffix, maxChars, qualityRetention),
       );
+      const losses = new Set(producerLosses);
+      if (!fitted.ok && qualityRetention && retentionOptional) {
+        losses.add("quality-retention");
+        fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
+          budgetCompactionSummary(body, suffix, maxChars),
+        );
+      }
       if (!fitted.ok) {
         throw fitted.error;
       }
       const finalized = fitted.value;
-      const losses = new Set(producerLosses);
       for (const section of Object.values(sections)) {
         if (typeof section !== "string" && section?.truncatedLoss) {
           losses.add(section.truncatedLoss);
@@ -1385,18 +1395,33 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             `Compaction safeguard: ${diagnostic}; using degraded fallback summary; ` +
               "reasonCode=quality_guard_degraded_fallback",
           );
+          const degradedBody = buildStructuredFallbackSummary(effectivePreviousSummary);
+          const degradedSections = {
+            // The generated split-turn prefix is separately summarized context.
+            // Omitting it here silently drops the active request on this path,
+            // which normal finalization above preserves.
+            generatedSplitTurnSection: splitTurnSectionLocal
+              ? `\n\n${splitTurnSectionLocal}`
+              : undefined,
+            preservedTurnsSection: preservedTurnsSectionLocal,
+          };
+          // Carry the same required facts the audited path budgets for. auditSummary is
+          // deliberately omitted: the fallback body contains none of the generated text, so
+          // claiming it does would let the planner drop facts it thinks are already there.
+          const degradedRetention: SummaryQualityRetention = {
+            identifiers,
+            latestAsk: latestUserAsk,
+            latestAskInRetainedTurn: splitUserAsk !== null,
+            latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
+            requiredAskContext,
+            identifierPolicy,
+          };
           const degraded = await finalizeSummaryText(
-            buildStructuredFallbackSummary(effectivePreviousSummary),
-            {
-              // The generated split-turn prefix is separately summarized context.
-              // Omitting it here silently drops the active request on this path,
-              // which normal finalization above preserves.
-              generatedSplitTurnSection: splitTurnSectionLocal
-                ? `\n\n${splitTurnSectionLocal}`
-                : undefined,
-              preservedTurnsSection: preservedTurnsSectionLocal,
-            },
+            degradedBody,
+            degradedSections,
             producerLosses,
+            degradedRetention,
+            true,
           );
           // Record the degradation on the boundary it produced. The fallback template is
           // the only other evidence, and reading intent back out of summary prose is the

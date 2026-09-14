@@ -32,8 +32,10 @@ generated body, while pending asks and exact identifiers must remain in the
 exact text that would be stored. Invalid output gets only the configured number
 of corrective attempts. If no finalized summary passes, OpenClaw stores a bounded
 degraded summary - the structured previous summary plus the preserved recent turns
-and the generated split-turn prefix - and records
-`reasonCode=quality_guard_degraded_fallback` on the boundary it writes. This is
+and the generated split-turn prefix. The boundary it writes records
+`details.qualityDegraded`, which is the durable fact; the run also logs
+`reasonCode=quality_guard_degraded_fallback`, which is diagnostic only and does not
+survive the session. This is
 lossy on purpose: cancelling instead left the transcript at full size, so every
 later turn failed the same preflight and the session could not be compacted at
 all. A configured compaction provider that throws or returns an empty result
