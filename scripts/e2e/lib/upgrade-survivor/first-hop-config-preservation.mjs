@@ -10,7 +10,7 @@ const LEAF = "first-hop-messages-leaf.json";
 const MANUAL = `${ROOT}.bak.first-hop-manual`;
 const BEFORE = "positive-config-before.json";
 const AFTER_HOP = "positive-config-after-hop.json";
-const CONVERGED = "positive-config-converged.json";
+const AFTER_REPAIR = "positive-config-after-repair.json";
 const ring = Array.from({ length: 5 }, (_, index) => `${ROOT}.bak${index ? `.${index}` : ""}`);
 const references = {
   responsePrefix: "${UPGRADE_SURVIVOR_PREFIX}",
@@ -222,12 +222,97 @@ function assertHop(files, before) {
   return config;
 }
 
+function assertDoctor(artifacts, phase, observation) {
+  requireProof(
+    Number.isInteger(observation.doctorExit) &&
+      observation.doctorExit >= 0 &&
+      observation.doctorExit <= 255,
+    `${phase} Doctor exit status missing or invalid`,
+  );
+  requireProof(
+    observation.doctorExit === 0,
+    `${phase} Doctor exited with status ${observation.doctorExit}`,
+  );
+  const output = ["stdout", "stderr"]
+    .map((suffix) => readFile(artifacts, `positive-${phase}-doctor.${suffix}`).raw)
+    .join("\n");
+  requireProof(output.includes("Doctor complete."), `${phase} Doctor did not complete`);
+  requireProof(
+    !/Skipping doctor config write|config fixes were not applied|No config changes were written|Invalid config:|Run[^\n]*doctor --fix/i.test(
+      output,
+    ),
+    `${phase} Doctor skipped or refused config convergence`,
+  );
+}
+
+function assertRepair(artifacts, before, observation) {
+  requireProof(observation.kind === "after-repair-observation", "missing after-repair observation");
+  assertDoctor(artifacts, "repair", observation);
+  const afterHop = readJson(artifacts, AFTER_HOP);
+  requireProof(afterHop.kind === "after-hop-observation", "missing after-hop observation");
+  // Observations can contain rejected state; revalidate before using a backup baseline.
+  const afterHopConfig = assertHop(afterHop.files, before);
+  const config = assertRoot(observation.files[ROOT].raw, before, before.targetVersion);
+  assertBackups(observation.files, afterHop.files, before);
+  requireProof(
+    !before.activateOpenai || config.plugins?.entries?.openai?.enabled === true,
+    "required fixture OpenAI activation missing",
+  );
+  const rosterRequired = needsCanonicalRoster(JSON.parse(before.files[ROOT].raw));
+  requireProof(
+    !rosterRequired || isDeepStrictEqual(config.agents?.entries, { main: {} }),
+    "required canonical agent roster missing",
+  );
+  return {
+    activationPhase: before.activateOpenai
+      ? afterHopConfig.plugins?.entries?.openai?.enabled === true
+        ? "first-hop"
+        : "first-repair"
+      : "not-required",
+    rosterPhase: rosterRequired
+      ? isDeepStrictEqual(afterHopConfig.agents?.entries, { main: {} })
+        ? "first-hop"
+        : "first-repair"
+      : "not-required",
+  };
+}
+
+function observePhase(root, artifacts, phase, doctorExit, validate) {
+  const observation = {
+    kind: `after-${phase}-observation`,
+    files: capture(root),
+    ...(phase === "hop" ? {} : { doctorExit }),
+  };
+  // Save rejected bytes before validation; capture failure must not hide the primary assertion.
+  let observationError;
+  try {
+    writeJson(artifacts, `positive-config-after-${phase}.json`, observation);
+  } catch (error) {
+    observationError = new Error("first-hop config preservation: input read/write failed", {
+      cause: error,
+    });
+  }
+  let result;
+  try {
+    result = validate(observation);
+  } catch (error) {
+    if (observationError) {
+      console.error(`after-${phase} observation could not be saved`);
+    }
+    throw error;
+  }
+  if (observationError) {
+    throw observationError;
+  }
+  return result;
+}
+
 try {
   requireProof(
     ["seed", "assert-hop", "assert-repair", "assert-doctor"].includes(command) &&
       configArgument &&
       artifactArgument,
-    "expected seed|assert-hop|assert-repair|assert-doctor CONFIG ARTIFACT_DIR [TARGET_VERSION]",
+    "expected seed|assert-hop|assert-repair|assert-doctor CONFIG ARTIFACT_DIR [TARGET_VERSION|DOCTOR_EXIT]",
   );
   const root = fs.realpathSync(path.dirname(configArgument));
   const artifacts = fs.realpathSync(artifactArgument);
@@ -280,77 +365,31 @@ try {
       files: capture(root),
     });
   } else {
-    const before = readJson(artifacts, BEFORE);
-    const files = capture(root);
-    if (command === "assert-hop") {
-      // Retain rejected bytes too. An observation is not a passed preservation check.
-      let observationError;
-      try {
-        writeJson(artifacts, AFTER_HOP, { kind: "after-hop-observation", files });
-      } catch (error) {
-        observationError = new Error("first-hop config preservation: input read/write failed", {
-          cause: error,
-        });
+    const phase = command.slice("assert-".length);
+    const doctorExit = extra && /^(0|[1-9][0-9]*)$/.test(extra) ? Number(extra) : null;
+    const transitions = observePhase(root, artifacts, phase, doctorExit, (observation) => {
+      const before = readJson(artifacts, BEFORE);
+      if (phase === "hop") {
+        assertHop(observation.files, before);
+        return null;
       }
-      try {
-        assertHop(files, before);
-      } catch (error) {
-        if (observationError) {
-          console.error("after-hop observation could not be saved");
-        }
-        throw error;
+      if (phase === "repair") {
+        return assertRepair(artifacts, before, observation);
       }
-      if (observationError) {
-        throw observationError;
-      }
-    } else {
-      const phase = command === "assert-repair" ? "repair" : "fresh";
-      const output = ["stdout", "stderr"]
-        .map((suffix) => readFile(artifacts, `positive-${phase}-doctor.${suffix}`).raw)
-        .join("\n");
-      requireProof(output.includes("Doctor complete."), `${phase} Doctor did not complete`);
+      assertDoctor(artifacts, "fresh", observation);
+      const repaired = readJson(artifacts, AFTER_REPAIR);
+      const validated = assertRepair(artifacts, before, repaired);
       requireProof(
-        !/Skipping doctor config write|config fixes were not applied|No config changes were written|Invalid config:|Run[^\n]*doctor --fix/i.test(
-          output,
-        ),
-        `${phase} Doctor skipped or refused config convergence`,
+        isDeepStrictEqual(observation.files, repaired.files),
+        "fresh Doctor changed converged config or backup bytes/identity",
       );
-      if (command === "assert-repair") {
-        const afterHop = readJson(artifacts, AFTER_HOP);
-        requireProof(afterHop.kind === "after-hop-observation", "missing after-hop observation");
-        // Revalidate against the original before trusting this as the next backup baseline.
-        const afterHopConfig = assertHop(afterHop.files, before);
-        const config = assertRoot(files[ROOT].raw, before, before.targetVersion);
-        assertBackups(files, afterHop.files, before);
-        requireProof(
-          !before.activateOpenai || config.plugins?.entries?.openai?.enabled === true,
-          "required fixture OpenAI activation missing",
-        );
-        const rosterRequired = needsCanonicalRoster(JSON.parse(before.files[ROOT].raw));
-        requireProof(
-          !rosterRequired || isDeepStrictEqual(config.agents?.entries, { main: {} }),
-          "required canonical agent roster missing",
-        );
-        // These phases identify observed transitions; Doctor/update logs own write attribution.
-        writeJson(artifacts, CONVERGED, {
-          files,
-          activationPhase: before.activateOpenai
-            ? afterHopConfig.plugins?.entries?.openai?.enabled === true
-              ? "first-hop"
-              : "first-repair"
-            : "not-required",
-          rosterPhase: rosterRequired
-            ? isDeepStrictEqual(afterHopConfig.agents?.entries, { main: {} })
-              ? "first-hop"
-              : "first-repair"
-            : "not-required",
-        });
-      } else {
-        requireProof(
-          isDeepStrictEqual(files, readJson(artifacts, CONVERGED).files),
-          "fresh Doctor changed converged config or backup bytes/identity",
-        );
-      }
+      return validated;
+    });
+    if (transitions) {
+      // Only validated transitions get attribution; observations never claim convergence.
+      console.log(
+        `activationPhase=${transitions.activationPhase} rosterPhase=${transitions.rosterPhase}`,
+      );
     }
   }
   console.log(`first-hop config preservation: ${command} passed`);

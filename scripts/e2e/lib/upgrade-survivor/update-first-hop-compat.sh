@@ -224,12 +224,21 @@ run_positive_hops() {
   # Check before mock configuration can overwrite evidence from the old updater.
   node "$preservation" assert-hop "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
   openclaw config validate --json >"$ARTIFACT_DIR/$lane-first-config-validation.json"
-  openclaw doctor --fix --non-interactive \
-    >"$ARTIFACT_DIR/$lane-repair-doctor.stdout" 2>"$ARTIFACT_DIR/$lane-repair-doctor.stderr"
-  node "$preservation" assert-repair "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
-  openclaw doctor --fix --non-interactive \
-    >"$ARTIFACT_DIR/$lane-fresh-doctor.stdout" 2>"$ARTIFACT_DIR/$lane-fresh-doctor.stderr"
-  node "$preservation" assert-doctor "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
+  local command phase doctor_status preservation_status
+  for command in assert-repair assert-doctor; do
+    phase=repair
+    if [ "$command" = assert-doctor ]; then phase=fresh; fi
+    doctor_status=0
+    openclaw doctor --fix --non-interactive \
+      >"$ARTIFACT_DIR/$lane-$phase-doctor.stdout" 2>"$ARTIFACT_DIR/$lane-$phase-doctor.stderr" \
+      || doctor_status="$?"
+    preservation_status=0
+    # Capture even failed Doctor writes, but never replace their original exit status.
+    node "$preservation" "$command" "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR" "$doctor_status" \
+      || preservation_status="$?"
+    if [ "$doctor_status" -ne 0 ]; then return "$doctor_status"; fi
+    if [ "$preservation_status" -ne 0 ]; then return "$preservation_status"; fi
+  done
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
 
   run_update "$lane-second" "$FUTURE_PACKAGE"

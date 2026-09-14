@@ -57,9 +57,11 @@ function makeFixture(seed = true) {
 type Fixture = ReturnType<typeof makeFixture>;
 
 function run(fixture: { artifacts: string; config: string }, command: string, extra?: string) {
+  const argument =
+    extra ?? (command === "assert-repair" || command === "assert-doctor" ? "0" : undefined);
   return spawnSync(
     process.execPath,
-    [helper, command, fixture.config, fixture.artifacts, ...(extra ? [extra] : [])],
+    [helper, command, fixture.config, fixture.artifacts, ...(argument ? [argument] : [])],
     {
       encoding: "utf8",
       timeout: 10_000,
@@ -125,7 +127,9 @@ function rewriteRoot(
 function completeRepair(fixture: Fixture) {
   rewriteRoot(fixture, targetVersion, true, true);
   doctorOutput(fixture, "Doctor complete.\n", "repair");
-  expectSuccess(run(fixture, "assert-repair"));
+  const result = run(fixture, "assert-repair");
+  expectSuccess(result);
+  return result;
 }
 
 describe("packaged first-hop config preservation assertions", () => {
@@ -161,15 +165,15 @@ describe("packaged first-hop config preservation assertions", () => {
       JSON.parse(readFileSync(join(fixture.artifacts, "positive-config-after-hop.json"), "utf8"))
         .kind,
     ).toBe("after-hop-observation");
-    completeRepair(fixture);
-    expect(
-      JSON.parse(readFileSync(join(fixture.artifacts, "positive-config-converged.json"), "utf8"))
-        .activationPhase,
-    ).toBe("first-repair");
-    expect(
-      JSON.parse(readFileSync(join(fixture.artifacts, "positive-config-converged.json"), "utf8"))
-        .rosterPhase,
-    ).toBe("first-repair");
+    const repair = completeRepair(fixture);
+    expect(repair.stdout).toContain("activationPhase=first-repair rosterPhase=first-repair");
+    const observation = JSON.parse(
+      readFileSync(join(fixture.artifacts, "positive-config-after-repair.json"), "utf8"),
+    );
+    expect(observation.kind).toBe("after-repair-observation");
+    expect(observation.doctorExit).toBe(0);
+    expect(observation).not.toHaveProperty("activationPhase");
+    expect(existsSync(join(fixture.artifacts, "positive-config-converged.json"))).toBe(false);
     doctorOutput(fixture);
     expectSuccess(run(fixture, "assert-doctor"));
   });
@@ -194,11 +198,9 @@ describe("packaged first-hop config preservation assertions", () => {
     expectSuccess(run(fixture, "assert-hop"));
     rewriteRoot(fixture, targetVersion, false, true);
     doctorOutput(fixture, "Doctor complete.\n", "repair");
-    expectSuccess(run(fixture, "assert-repair"));
-    expect(
-      JSON.parse(readFileSync(join(fixture.artifacts, "positive-config-converged.json"), "utf8"))
-        .activationPhase,
-    ).toBe("first-hop");
+    const result = run(fixture, "assert-repair");
+    expectSuccess(result);
+    expect(result.stdout).toContain("activationPhase=first-hop");
   });
 
   it("preserves existing OpenAI entry fields and unrelated plugin policy during activation", () => {
@@ -266,11 +268,9 @@ describe("packaged first-hop config preservation assertions", () => {
     expectSuccess(run(fixture, "assert-hop"));
     rewriteRoot(fixture, targetVersion, false, true);
     doctorOutput(fixture, "Doctor complete.\n", "repair");
-    expectSuccess(run(fixture, "assert-repair"));
-    expect(
-      JSON.parse(readFileSync(join(fixture.artifacts, "positive-config-converged.json"), "utf8"))
-        .activationPhase,
-    ).toBe("not-required");
+    const result = run(fixture, "assert-repair");
+    expectSuccess(result);
+    expect(result.stdout).toContain("activationPhase=not-required");
     doctorOutput(fixture);
     expectSuccess(run(fixture, "assert-doctor"));
   });
@@ -282,6 +282,8 @@ describe("packaged first-hop config preservation assertions", () => {
     doctorOutput(fixture, "Doctor complete.\n", "repair");
     expectFailure(run(fixture, "assert-repair"), "required fixture OpenAI activation missing");
     expect(existsSync(join(fixture.artifacts, "positive-config-converged.json"))).toBe(false);
+    doctorOutput(fixture);
+    expectFailure(run(fixture, "assert-doctor"), "required fixture OpenAI activation missing");
   });
 
   it.each(["absent", "defaults-only"])("accepts only the canonical %s roster repair", (kind) => {
@@ -297,22 +299,24 @@ describe("packaged first-hop config preservation assertions", () => {
     repaired.agents = { ...repaired.agents, entries: { main: {} } };
     writeFileSync(fixture.config, JSON.stringify(repaired));
     expectSuccess(run(fixture, "assert-hop"));
+    let result;
     if (kind === "absent") {
       doctorOutput(fixture, "Doctor complete.\n", "repair");
-      expectSuccess(run(fixture, "assert-repair"));
+      result = run(fixture, "assert-repair");
+      expectSuccess(result);
     } else {
-      completeRepair(fixture);
+      result = completeRepair(fixture);
     }
-    const converged = JSON.parse(
-      readFileSync(join(fixture.artifacts, "positive-config-converged.json"), "utf8"),
+    const observation = JSON.parse(
+      readFileSync(join(fixture.artifacts, "positive-config-after-repair.json"), "utf8"),
     );
-    expect(converged.rosterPhase).toBe("first-hop");
-    expect(JSON.parse(converged.files["openclaw.json"].raw).agents).toStrictEqual({
+    expect(result.stdout).toContain("rosterPhase=first-hop");
+    expect(JSON.parse(observation.files["openclaw.json"].raw).agents).toStrictEqual({
       ...original.agents,
       entries: { main: {} },
     });
     if (kind === "absent") {
-      expect(converged.activationPhase).toBe("not-required");
+      expect(result.stdout).toContain("activationPhase=not-required");
     }
   });
 
@@ -384,25 +388,46 @@ describe("packaged first-hop config preservation assertions", () => {
     },
   );
 
-  it.each(["root", "include"])("retains a private observation when %s validation fails", (kind) => {
+  it.each(
+    ["hop", "repair", "doctor"].flatMap((phase) =>
+      ["root", "include", "backup"].map((kind) => ({ phase, kind })),
+    ),
+  )("retains a private $phase observation when $kind validation fails", ({ phase, kind }) => {
     const fixture = makeFixture();
     prepareHop(fixture);
-    const name = kind === "root" ? "openclaw.json" : "first-hop-messages-leaf.json";
+    if (phase !== "hop") {
+      expectSuccess(run(fixture, "assert-hop"));
+      if (phase === "doctor") {
+        completeRepair(fixture);
+        doctorOutput(fixture);
+      } else {
+        rewriteRoot(fixture, targetVersion, true, true);
+        doctorOutput(fixture, "Doctor complete.\n", "repair");
+      }
+    }
+    const name =
+      kind === "root"
+        ? "openclaw.json"
+        : kind === "include"
+          ? "first-hop-messages-leaf.json"
+          : "openclaw.json.bak.first-hop-manual";
     const file = join(fixture.root, name);
     const config = JSON.parse(readFileSync(file, "utf8"));
     config.unexpected = "synthetic-private-value";
     const raw = JSON.stringify(config);
     writeFileSync(file, raw);
-    const result = run(fixture, "assert-hop");
+    const result = run(fixture, `assert-${phase}`);
     expectFailure(
       result,
-      kind === "root"
-        ? "root config changed outside permitted metadata"
-        : "file changed: first-hop-messages-leaf.json",
+      phase === "doctor"
+        ? "fresh Doctor changed converged config or backup bytes/identity"
+        : kind === "root"
+          ? "root config changed outside permitted metadata"
+          : `file changed: ${name}`,
     );
-    const observationPath = join(fixture.artifacts, "positive-config-after-hop.json");
+    const observationPath = join(fixture.artifacts, `positive-config-after-${phase}.json`);
     const observation = JSON.parse(readFileSync(observationPath, "utf8"));
-    expect(observation.kind).toBe("after-hop-observation");
+    expect(observation.kind).toBe(`after-${phase}-observation`);
     expect(observation.files[name].raw).toBe(raw);
     if (process.platform !== "win32") {
       expect(statSync(observationPath).mode & 0o777).toBe(0o600);
@@ -411,6 +436,45 @@ describe("packaged first-hop config preservation assertions", () => {
     expect(existsSync(join(fixture.artifacts, "positive-config-converged.json"))).toBe(false);
     expect(result.stderr).not.toContain(config.unexpected);
     expect(result.stderr).not.toContain(fixture.root);
+  });
+
+  it.each(
+    ["hop", "repair", "doctor"].flatMap((phase) =>
+      ["missing", "malformed"].map((baseline) => ({ phase, baseline })),
+    ),
+  )("retains the $phase observation with a $baseline baseline", ({ phase, baseline }) => {
+    const fixture = makeFixture();
+    prepareHop(fixture);
+    if (phase !== "hop") {
+      expectSuccess(run(fixture, "assert-hop"));
+      if (phase === "doctor") {
+        completeRepair(fixture);
+        doctorOutput(fixture);
+      } else {
+        rewriteRoot(fixture, targetVersion, true, true);
+        doctorOutput(fixture, "Doctor complete.\n", "repair");
+      }
+    }
+    const raw = readFileSync(fixture.config, "utf8");
+    const beforePath = join(fixture.artifacts, "positive-config-before.json");
+    if (baseline === "missing") {
+      unlinkSync(beforePath);
+    } else {
+      writeFileSync(beforePath, "{");
+    }
+    const result = run(fixture, `assert-${phase}`);
+    expectFailure(
+      result,
+      baseline === "missing"
+        ? "input read/write failed"
+        : "invalid JSON: positive-config-before.json",
+    );
+    const observation = JSON.parse(
+      readFileSync(join(fixture.artifacts, `positive-config-after-${phase}.json`), "utf8"),
+    );
+    expect(observation.kind).toBe(`after-${phase}-observation`);
+    expect(observation.files["openclaw.json"].raw).toBe(raw);
+    expect(result.stdout).not.toContain("activationPhase=");
   });
 
   it.each(["root", "include", "backup"])(
@@ -454,27 +518,47 @@ describe("packaged first-hop config preservation assertions", () => {
     },
   );
 
-  it.each([false, true])(
-    "never overwrites an observation or hides a primary failure (invalid=%s)",
-    (invalid) => {
+  it.each(
+    ["hop", "repair", "doctor"].flatMap((phase) =>
+      [false, true].map((invalid) => ({ phase, invalid })),
+    ),
+  )(
+    "never overwrites a $phase observation or hides a primary failure (invalid=$invalid)",
+    ({ phase, invalid }) => {
       const fixture = makeFixture();
       prepareHop(fixture);
-      const observationPath = join(fixture.artifacts, "positive-config-after-hop.json");
+      if (phase !== "hop") {
+        expectSuccess(run(fixture, "assert-hop"));
+        if (phase === "doctor") {
+          completeRepair(fixture);
+          doctorOutput(fixture);
+        } else {
+          rewriteRoot(fixture, targetVersion, true, true);
+          doctorOutput(fixture, "Doctor complete.\n", "repair");
+        }
+      }
+      const observationPath = join(fixture.artifacts, `positive-config-after-${phase}.json`);
       writeFileSync(observationPath, "retained evidence");
       if (invalid) {
         const config = JSON.parse(readFileSync(fixture.config, "utf8"));
         config.unexpected = true;
         writeFileSync(fixture.config, JSON.stringify(config));
       }
-      const result = run(fixture, "assert-hop");
+      const result = run(fixture, `assert-${phase}`);
       expectFailure(
         result,
-        invalid ? "root config changed outside permitted metadata" : "input read/write failed",
+        invalid
+          ? phase === "doctor"
+            ? "fresh Doctor changed converged config or backup bytes/identity"
+            : "root config changed outside permitted metadata"
+          : "input read/write failed",
       );
       if (invalid) {
-        expect(result.stderr).toContain("after-hop observation could not be saved");
+        expect(result.stderr).toContain(`after-${phase} observation could not be saved`);
       }
       expect(readFileSync(observationPath, "utf8")).toBe("retained evidence");
+      expect(result.stdout).not.toContain("activationPhase=");
+      expect(existsSync(join(fixture.artifacts, "positive-config-converged.json"))).toBe(false);
     },
   );
 
@@ -486,7 +570,62 @@ describe("packaged first-hop config preservation assertions", () => {
     doctorOutput(fixture, "Doctor complete.\n", "repair");
     expectFailure(run(fixture, "assert-repair"), "required canonical agent roster missing");
     expect(existsSync(join(fixture.artifacts, "positive-config-converged.json"))).toBe(false);
+    doctorOutput(fixture);
+    expectFailure(run(fixture, "assert-doctor"), "required canonical agent roster missing");
   });
+
+  it.each(["root", "include", "backup", "exit", "outcome"])(
+    "revalidates the saved repair %s before accepting a fresh Doctor",
+    (kind) => {
+      const fixture = makeFixture();
+      prepareHop(fixture);
+      expectSuccess(run(fixture, "assert-hop"));
+      completeRepair(fixture);
+      const observationPath = join(fixture.artifacts, "positive-config-after-repair.json");
+      const observation = JSON.parse(readFileSync(observationPath, "utf8"));
+      let error;
+      if (kind === "exit") {
+        observation.doctorExit = 23;
+        error = "repair Doctor exited with status 23";
+      } else if (kind === "outcome") {
+        doctorOutput(fixture, "No config changes were written.\nDoctor complete.", "repair");
+        error = "repair Doctor skipped or refused config convergence";
+      } else {
+        const name =
+          kind === "root"
+            ? "openclaw.json"
+            : kind === "include"
+              ? "first-hop-messages-leaf.json"
+              : "openclaw.json.bak.first-hop-manual";
+        const config = JSON.parse(observation.files[name].raw);
+        config.unexpected = true;
+        observation.files[name].raw = JSON.stringify(config);
+        writeFileSync(join(fixture.root, name), observation.files[name].raw);
+        error =
+          kind === "root"
+            ? "root config changed outside permitted metadata"
+            : `file changed: ${name}`;
+      }
+      writeFileSync(observationPath, JSON.stringify(observation));
+      doctorOutput(fixture);
+      expectFailure(run(fixture, "assert-doctor"), error);
+      expect(existsSync(join(fixture.artifacts, "positive-config-after-doctor.json"))).toBe(true);
+    },
+  );
+
+  it.each(["", "not-a-status", "-1", "256"])(
+    "rejects missing or invalid Doctor exit evidence %j",
+    (status) => {
+      const fixture = makeFixture();
+      prepareHop(fixture);
+      expectSuccess(run(fixture, "assert-hop"));
+      rewriteRoot(fixture, targetVersion, true, true);
+      doctorOutput(fixture, "Doctor complete.\n", "repair");
+      const result = run(fixture, "assert-repair", status);
+      expectFailure(result, "repair Doctor exit status missing or invalid");
+      expect(existsSync(join(fixture.artifacts, "positive-config-after-repair.json"))).toBe(true);
+    },
+  );
 
   it("rejects newline corruption in the newly inserted original-root backup", () => {
     const fixture = makeFixture();
@@ -675,13 +814,14 @@ describe("packaged first-hop config preservation assertions", () => {
     expectFailure(run(fixture, "assert-doctor"), error);
   });
 
-  it("fails closed on missing proof and rejects seed collisions without replacing existing config", () => {
+  it("rejects seed collisions and incomplete fixture files without replacing existing config", () => {
     const fixture = makeFixture(false);
     const raw = readFileSync(fixture.config, "utf8");
     writeFileSync(join(fixture.root, "first-hop-messages.json"), "{}");
     expectFailure(run(fixture, "seed", targetVersion), "fixture collision");
     expect(readFileSync(fixture.config, "utf8")).toBe(raw);
-    expectFailure(run(fixture, "assert-hop"), "input read/write failed");
+    expectFailure(run(fixture, "assert-hop"), "missing fixture file: first-hop-messages-leaf.json");
+    expect(existsSync(join(fixture.artifacts, "positive-config-after-hop.json"))).toBe(false);
   });
 });
 
@@ -692,8 +832,10 @@ describe.skipIf(process.platform === "win32")("first-hop preservation shell orde
     "repair-missing",
     "repair-refused",
     "repair-exit",
+    "repair-exit-capture",
     "doctor",
     "doctor-exit",
+    "doctor-exit-capture",
   ])("stops before masking evidence when %s fails", (failure) => {
     const fixture = makeFixture(false);
     const positive = readFileSync(laneScript, "utf8").match(
@@ -725,7 +867,13 @@ openclaw() {
   if [ "$1" = doctor ]; then
     doctor_calls=$((doctor_calls + 1))
     if [ "$doctor_calls" = 1 ]; then
-      if [ "$FAILURE" = repair-exit ]; then return 23; fi
+      if [[ "$FAILURE" = repair-exit* ]]; then
+        printf '\\n' >> "$OPENCLAW_CONFIG_PATH"
+        if [ "$FAILURE" = repair-exit-capture ]; then
+          printf 'retained evidence' > "$ARTIFACT_DIR/positive-config-after-repair.json"
+        fi
+        return 23
+      fi
       if [ "$FAILURE" = repair-refused ]; then
         echo 'Config fixes were not applied.'
       elif [ "$FAILURE" != repair-missing ]; then
@@ -738,7 +886,13 @@ openclaw() {
         '
       fi
     else
-      if [ "$FAILURE" = doctor-exit ]; then return 24; fi
+      if [[ "$FAILURE" = doctor-exit* ]]; then
+        printf '\\n' >> "$OPENCLAW_CONFIG_PATH"
+        if [ "$FAILURE" = doctor-exit-capture ]; then
+          printf 'retained evidence' > "$ARTIFACT_DIR/positive-config-after-doctor.json"
+        fi
+        return 24
+      fi
       if [ "$FAILURE" = doctor ]; then printf '\\n' >> "$OPENCLAW_CONFIG_PATH"; fi
     fi
     echo 'Doctor complete.'
@@ -792,7 +946,13 @@ run_positive_hops
     expect(result.error).toBeUndefined();
     expect(result.signal).toBeNull();
     expect(result.status, result.stderr).toBe(
-      failure === "none" ? 0 : failure === "repair-exit" ? 23 : failure === "doctor-exit" ? 24 : 1,
+      failure === "none"
+        ? 0
+        : failure.startsWith("repair-exit")
+          ? 23
+          : failure.startsWith("doctor-exit")
+            ? 24
+            : 1,
     );
     const calls = readFileSync(log, "utf8").trim().split("\n");
     const expected = [
@@ -804,19 +964,36 @@ run_positive_hops
     ];
     if (failure !== "hop") {
       expected.push("config validate --json", "doctor --fix --non-interactive");
-      if (failure !== "repair-exit") {
-        expected.push("preserve assert-repair");
-        if (!failure.startsWith("repair-")) {
-          expected.push("doctor --fix --non-interactive");
-          if (failure !== "doctor-exit") {
-            expected.push("preserve assert-doctor");
-            if (failure === "none") {
-              expected.push("configure", "positive-second", "stop");
-            }
-          }
+      expected.push("preserve assert-repair");
+      if (!failure.startsWith("repair-")) {
+        expected.push("doctor --fix --non-interactive", "preserve assert-doctor");
+        if (failure === "none") {
+          expected.push("configure", "positive-second", "stop");
         }
       }
     }
     expect(calls).toStrictEqual(expected);
+    if (failure.endsWith("-capture")) {
+      const phase = failure.startsWith("repair-") ? "repair" : "doctor";
+      expect(
+        readFileSync(join(fixture.artifacts, `positive-config-after-${phase}.json`), "utf8"),
+      ).toBe("retained evidence");
+      expect(result.stderr).toContain(`after-${phase} observation could not be saved`);
+    } else if (failure !== "hop") {
+      const repair = JSON.parse(
+        readFileSync(join(fixture.artifacts, "positive-config-after-repair.json"), "utf8"),
+      );
+      expect(repair.doctorExit).toBe(failure === "repair-exit" ? 23 : 0);
+      if (failure.startsWith("repair-")) {
+        expect(repair.files["openclaw.json"].raw).toBe(readFileSync(fixture.config, "utf8"));
+      }
+      if (!failure.startsWith("repair-")) {
+        const fresh = JSON.parse(
+          readFileSync(join(fixture.artifacts, "positive-config-after-doctor.json"), "utf8"),
+        );
+        expect(fresh.doctorExit).toBe(failure === "doctor-exit" ? 24 : 0);
+        expect(fresh.files["openclaw.json"].raw).toBe(readFileSync(fixture.config, "utf8"));
+      }
+    }
   });
 });
