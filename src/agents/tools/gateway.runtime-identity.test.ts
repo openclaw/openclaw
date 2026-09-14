@@ -187,7 +187,10 @@ describe("gateway tool runtime identity", () => {
     mocks.callGateway.mockResolvedValueOnce({ sessionId: "delegate-1", reply: "Applied" });
     const operationalRunInstance = createOperationalRunInstanceRef("run-openclaw-wire");
     const toolLifetime = new AbortController();
-    const context = {} as GatewayRequestContext;
+    const context = {
+      localEmbedded: true,
+      trackExecution: (run: () => Promise<void>) => run(),
+    } as GatewayRequestContext;
 
     await withActiveGatewayToolCallerIdentity(
       {
