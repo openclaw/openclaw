@@ -211,7 +211,14 @@ export abstract class MatrixClientBase {
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
       fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
-        await this.persistCryptoBeforeKeyUpload(resource, init);
+        const runtime = await loadMatrixCryptoRuntime();
+        await runtime.persistCryptoBeforeKeyUpload({
+          resource,
+          init,
+          encryptionEnabled: this.encryptionEnabled,
+          snapshotPath: this.idbSnapshotPath,
+          databasePrefix: this.cryptoDatabasePrefix,
+        });
         const pendingGuard = this.messageWireDispatchGuards.beforeRequest(resource, init);
         if (pendingGuard) {
           await pendingGuard;
@@ -234,34 +241,6 @@ export abstract class MatrixClientBase {
       this.captureRequestAuthority()?.();
       return this.withClientCryptoWork(() => decryptEventIfNeeded(event, options));
     };
-  }
-
-  private async persistCryptoBeforeKeyUpload(resource: RequestInfo | URL, init?: RequestInit) {
-    const method = init?.method ?? (resource instanceof Request ? resource.method : "GET");
-    const url = resource instanceof Request ? resource.url : String(resource);
-    if (
-      !this.encryptionEnabled ||
-      method.toUpperCase() !== "POST" ||
-      !/\/_matrix\/client\/(?:v3|r0|unstable)\/keys\/upload$/.test(new URL(url).pathname)
-    ) {
-      return;
-    }
-    if (!this.cryptoDatabasePrefix) {
-      throw new Error("Matrix key upload requires an account-scoped crypto database");
-    }
-    const signal = init?.signal ?? (resource instanceof Request ? resource.signal : undefined);
-    signal?.throwIfAborted();
-    const runtime = await loadMatrixCryptoRuntime();
-    // The server must never publish keys whose private account state can be
-    // lost before the periodic snapshot. A failed durable write denies I/O.
-    await runtime.persistIdbToDisk({
-      snapshotPath: this.idbSnapshotPath,
-      databasePrefix: this.cryptoDatabasePrefix,
-      strict: true,
-      requireCryptoAccount: true,
-      abortSignal: signal ?? undefined,
-    });
-    signal?.throwIfAborted();
   }
 
   on<TEvent extends keyof MatrixClientEventMap>(

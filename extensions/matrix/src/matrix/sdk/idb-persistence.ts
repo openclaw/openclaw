@@ -382,6 +382,40 @@ export async function persistIdbToDisk(params?: {
   }
 }
 
+export async function persistCryptoBeforeKeyUpload(params: {
+  resource: RequestInfo | URL;
+  init?: RequestInit;
+  encryptionEnabled: boolean;
+  snapshotPath?: string;
+  databasePrefix?: string;
+}): Promise<void> {
+  const { resource, init } = params;
+  const method = init?.method ?? (resource instanceof Request ? resource.method : "GET");
+  const url = resource instanceof Request ? resource.url : String(resource);
+  if (
+    !params.encryptionEnabled ||
+    method.toUpperCase() !== "POST" ||
+    !/\/_matrix\/client\/(?:v3|r0|unstable)\/keys\/upload$/.test(new URL(url).pathname)
+  ) {
+    return;
+  }
+  if (!params.databasePrefix) {
+    throw new Error("Matrix key upload requires an account-scoped crypto database");
+  }
+  const signal = init?.signal ?? (resource instanceof Request ? resource.signal : undefined);
+  signal?.throwIfAborted();
+  // The server must never publish keys whose private account state can be
+  // lost before the periodic snapshot. A failed durable write denies I/O.
+  await persistIdbToDisk({
+    snapshotPath: params.snapshotPath,
+    databasePrefix: params.databasePrefix,
+    strict: true,
+    requireCryptoAccount: true,
+    abortSignal: signal ?? undefined,
+  });
+  signal?.throwIfAborted();
+}
+
 export function readLegacyMatrixIdbSnapshotStateUnlocked(
   storageRootDir: string,
 ): IdbDatabaseSnapshot[] | null {
