@@ -125,12 +125,24 @@ export function renderAssistantTranscriptPlainTextFallback(
   text: string,
   enabled: boolean,
   assistantLabel: () => string,
-  escapeHtml: (value: string) => string,
-): string {
-  const escaped = escapeHtml(text);
+): HTMLDivElement {
+  // This path is already plain text: keep it in a text node rather than
+  // escaping and reparsing a large entity-heavy HTML string. The caller still
+  // sanitizes the resulting tree with the same DOMPurify policy and hooks.
+  const container = document.createElement("div");
+  container.className = "markdown-plain-text-fallback";
+  // HTML parsing drops NULs in text; preserve that normalization without a parser.
+  const sourceText = text.replaceAll("\0", "");
   if (!enabled) {
-    return `<div class="markdown-plain-text-fallback">${escaped}</div>`;
+    container.textContent = sourceText;
+    return container;
   }
-  const marker = renderAssistantTranscriptRoleMarker(`${assistantLabel()}:`, escapeHtml);
-  return `<div class="markdown-plain-text-fallback">${marker}\n<span class="markdown-plain-text-source">${escaped}</span></div>`;
+  const marker = document.createElement("code");
+  marker.className = "assistant-transcript-role";
+  marker.textContent = `${assistantLabel()}:`.replaceAll("\0", "");
+  const source = document.createElement("span");
+  source.className = "markdown-plain-text-source";
+  source.textContent = sourceText;
+  container.append(marker, "\n", source);
+  return container;
 }

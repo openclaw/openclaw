@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGateway,
   createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
+  setEffectiveSessionOwner,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
@@ -61,19 +61,6 @@ function visibleSessionKeys(sidebar: SidebarLifecycleState): string[] {
     .map((row) => row.dataset.sessionKey ?? "");
 }
 
-function setEffectiveOwner(
-  row: GatewaySessionRow,
-  actor: NonNullable<GatewaySessionRow["createdActor"]> & { id: string },
-) {
-  const owner: typeof actor = {
-    ...actor,
-    identity:
-      actor.type === "agent" ? { type: "agent", id: actor.id } : { type: "profile", id: actor.id },
-  };
-  row.createdActor = owner;
-  row.owner = { actor: owner };
-}
-
 describe("AppSidebar session ownership", () => {
   it("renders durable actor avatars identically regardless of live presence", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -100,19 +87,19 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob || !carol) {
       throw new Error("expected owner rows");
     }
-    setEffectiveOwner(ada, {
+    setEffectiveSessionOwner(ada, {
       type: "human",
       id: "profile-ada",
       label: "Ada",
       avatarUrl: "/api/users/profile-ada/avatar?v=1",
     });
-    setEffectiveOwner(bob, {
+    setEffectiveSessionOwner(bob, {
       type: "human",
       id: "profile-bob",
       label: "Bob",
       avatarUrl: "/api/users/profile-bob/avatar?v=2",
     });
-    setEffectiveOwner(carol, { type: "human", id: "profile-carol", label: "Carol" });
+    setEffectiveSessionOwner(carol, { type: "human", id: "profile-carol", label: "Carol" });
     result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
@@ -199,7 +186,7 @@ describe("AppSidebar session ownership", () => {
       if (!lobster) {
         throw new Error("expected owner row");
       }
-      setEffectiveOwner(lobster, { type, id: "profile-lobster", label });
+      setEffectiveSessionOwner(lobster, { type, id: "profile-lobster", label });
       result.owners = [
         { type, id: "profile-lobster", label },
         { type: "human", id: "profile-ada", label: "Ada" },
@@ -233,7 +220,7 @@ describe("AppSidebar session ownership", () => {
     if (!ada) {
       throw new Error("expected owner row");
     }
-    setEffectiveOwner(ada, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveSessionOwner(ada, { type: "human", id: "profile-ada", label: "Ada" });
     result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
@@ -345,13 +332,13 @@ describe("AppSidebar session ownership", () => {
       if (!result || !solo || !shared || !collab) {
         throw new Error("expected participant rows");
       }
-      setEffectiveOwner(solo, { type: "human", id: "profile-ada", label: "Ada" });
+      setEffectiveSessionOwner(solo, { type: "human", id: "profile-ada", label: "Ada" });
       solo.hasActiveRun = true;
       solo.status = "running";
-      setEffectiveOwner(shared, { type: "human", id: "profile-ada", label: "Ada" });
+      setEffectiveSessionOwner(shared, { type: "human", id: "profile-ada", label: "Ada" });
       shared.participants = [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }];
       shared.participantCount = 1;
-      setEffectiveOwner(collab, { type: "human", id: "profile-bob", label: "Bob" });
+      setEffectiveSessionOwner(collab, { type: "human", id: "profile-bob", label: "Bob" });
       collab.participants = [{ identity: { type: "profile", id: "profile-ada" }, label: "Ada" }];
       collab.participantCount = 1;
       result.owners = [
@@ -403,8 +390,8 @@ describe("AppSidebar session ownership", () => {
     const result = harness.sessions.state.result!;
     const solo = result.sessions.find((row) => row.key.endsWith(":solo"))!;
     const collab = result.sessions.find((row) => row.key.endsWith(":collab"))!;
-    setEffectiveOwner(solo, { type: "human", id: "profile-ada", label: "Ada" });
-    setEffectiveOwner(collab, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveSessionOwner(solo, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveSessionOwner(collab, { type: "human", id: "profile-ada", label: "Ada" });
     collab.participants = [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }];
     collab.participantCount = 1;
     for (const row of [solo, collab]) {
@@ -443,7 +430,7 @@ describe("AppSidebar session ownership", () => {
       const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:collab"]);
       const result = harness.sessions.state.result!;
       const collab = result.sessions[1]!;
-      setEffectiveOwner(collab, { type: "human", id: "profile-ada", label: "Ada" });
+      setEffectiveSessionOwner(collab, { type: "human", id: "profile-ada", label: "Ada" });
       collab.participants = [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }];
       if (participantCount === 2) {
         collab.participants.push({
@@ -506,7 +493,7 @@ describe("AppSidebar session ownership", () => {
       throw new Error("expected session list");
     }
     for (const row of result.sessions) {
-      setEffectiveOwner(row, { type: "human", id: "profile-ada", label: "Ada" });
+      setEffectiveSessionOwner(row, { type: "human", id: "profile-ada", label: "Ada" });
       row.participants = [{ identity: { type: "profile", id: "profile-ada" }, label: "Ada" }];
       row.participantCount = 1;
     }
@@ -621,8 +608,8 @@ describe("AppSidebar session ownership", () => {
     if (!result || !ada || !zoe) {
       throw new Error("expected owner rows");
     }
-    setEffectiveOwner(ada, { type: "human", id: "profile-ada", label: "Ada" });
-    setEffectiveOwner(zoe, {
+    setEffectiveSessionOwner(ada, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveSessionOwner(zoe, {
       type: "human",
       id: "profile-zoe",
       label: "Zoe",
@@ -728,8 +715,8 @@ describe("AppSidebar session ownership", () => {
       identity: { type: "profile", id: "profile-bob" },
       label: "Bob",
     };
-    setEffectiveOwner(archived, { type: "human", id: "profile-ada", label: "Ada" });
-    setEffectiveOwner(collaborator, { type: "human", id: "profile-bob", label: "Bob" });
+    setEffectiveSessionOwner(archived, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveSessionOwner(collaborator, { type: "human", id: "profile-bob", label: "Bob" });
     result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
@@ -751,7 +738,7 @@ describe("AppSidebar session ownership", () => {
     ) as HTMLElementTagNameMap["openclaw-viewer-facepile"] | null;
     expect(archivedFacepile?.excludeIdentities).toEqual([archived.archivedBy.identity]);
 
-    setEffectiveOwner(collaborator, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveSessionOwner(collaborator, { type: "human", id: "profile-ada", label: "Ada" });
     result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;

@@ -232,6 +232,19 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
   };
 }
 
+export function setEffectiveSessionOwner(
+  row: GatewaySessionRow,
+  actor: NonNullable<GatewaySessionRow["createdActor"]> & { id: string },
+) {
+  const owner: typeof actor = {
+    ...actor,
+    identity:
+      actor.type === "agent" ? { type: "agent", id: actor.id } : { type: "profile", id: actor.id },
+  };
+  row.createdActor = owner;
+  row.owner = { actor: owner };
+}
+
 export function successfulSessionPatch(key: string) {
   return {
     ok: true as const,
