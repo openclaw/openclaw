@@ -28,7 +28,12 @@ import {
   readMatrixRecoveryKeyStateForPath,
 } from "./crypto-state-store.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
-import { clearAllIndexedDbState, seedDatabase } from "./sdk/idb-persistence.test-helpers.js";
+import { restoreIdbFromDisk } from "./sdk/idb-persistence.js";
+import {
+  clearAllIndexedDbState,
+  readDatabaseRecords,
+  seedDatabase,
+} from "./sdk/idb-persistence.test-helpers.js";
 import { LogService } from "./sdk/logger.js";
 
 const createSharedMatrixClientMock = vi.hoisted(() => vi.fn());
@@ -1055,7 +1060,8 @@ describe("MatrixClient request hardening", () => {
   });
 
   it.each([
-    "durable",
+    "fresh-device-restart",
+    "existing-device-restart",
     "durable-prefixed",
     "storage-failure",
     "missing-database",
@@ -1069,11 +1075,17 @@ describe("MatrixClient request hardening", () => {
       fs.writeFileSync(storageRoot, "not a directory");
     }
     const record = { key: "account", value: { pendingKey: "fixture-private-material" } };
+    const records = [
+      record,
+      ...(mode === "existing-device-restart"
+        ? [{ key: "session::existing-room", value: { session: "retained-session" } }]
+        : []),
+    ];
     if (mode !== "missing-database") {
       await seedDatabase({
         name: `${prefix}::matrix-sdk-crypto`,
         storeName: "core",
-        records: mode === "missing-account" ? [] : [record],
+        records: mode === "missing-account" ? [] : records,
       });
     }
     try {
@@ -1083,7 +1095,7 @@ describe("MatrixClient request hardening", () => {
         expect(JSON.parse(snapshot!)).toEqual([
           expect.objectContaining({
             name: `${prefix}::matrix-sdk-crypto`,
-            stores: [expect.objectContaining({ name: "core", records: [record] })],
+            stores: [expect.objectContaining({ name: "core", records })],
           }),
         ]);
         return new Response('{"one_time_key_counts":{"signed_curve25519":1}}');
@@ -1101,9 +1113,40 @@ describe("MatrixClient request hardening", () => {
         method: "POST",
         body: '{"one_time_keys":{"signed_curve25519:fixture":{"key":"public"}}}',
       });
-      if (mode.startsWith("durable")) {
+      if (
+        mode === "fresh-device-restart" ||
+        mode === "existing-device-restart" ||
+        mode === "durable-prefixed"
+      ) {
         await expect(upload).resolves.toBeInstanceOf(Response);
-        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        if (mode.endsWith("-restart")) {
+          await clearAllIndexedDbState({ databasePrefix: prefix });
+          await expect(
+            restoreIdbFromDisk(path.join(storageRoot, "crypto-idb-snapshot.json")),
+          ).resolves.toBe(true);
+          await expect(
+            readDatabaseRecords({
+              name: `${prefix}::matrix-sdk-crypto`,
+              storeName: "core",
+            }),
+          ).resolves.toEqual(records);
+          const restartedClient = new MatrixClient(baseUrl, "token", {
+            encryption: true,
+            idbSnapshotPath: path.join(storageRoot, "crypto-idb-snapshot.json"),
+            cryptoDatabasePrefix: prefix,
+            ssrfPolicy: { allowPrivateNetwork: true },
+          });
+          expect(restartedClient).toBeInstanceOf(MatrixClient);
+          const restartedFetch = lastCreateClientOpts?.fetchFn as typeof fetch;
+          await expect(
+            restartedFetch(`${baseUrl}/_matrix/client/v3/keys/upload`, {
+              method: "POST",
+              body: '{"one_time_keys":{"signed_curve25519:fixture":{"key":"public"}}}',
+            }),
+          ).resolves.toBeInstanceOf(Response);
+          expect(fetchMock).toHaveBeenCalledTimes(2);
+        }
       } else {
         await expect(upload).rejects.toThrow();
         expect(fetchMock).not.toHaveBeenCalled();

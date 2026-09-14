@@ -211,16 +211,10 @@ export abstract class MatrixClientBase {
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
       fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
-<<<<<<< HEAD
+        await this.persistCryptoBeforeKeyUpload(resource, init);
         const pendingGuard = this.messageWireDispatchGuards.beforeRequest(resource, init);
         if (pendingGuard) {
           await pendingGuard;
-=======
-        await this.persistCryptoBeforeKeyUpload(resource, init);
-        const dispatch = resolveMessageWireDispatch(resource, init);
-        if (dispatch) {
-          await this.messageWireDispatchGuards.get(dispatch.transactionId)?.(dispatch);
->>>>>>> e6dbd475b98 (fix(matrix): persist private crypto state before key uploads)
         }
         return await guardedFetch(resource, init);
       }) as typeof fetch,
@@ -233,7 +227,6 @@ export abstract class MatrixClientBase {
         VerificationMethod.Reciprocate,
       ],
     });
-<<<<<<< HEAD
     // SDK mappers and relations also call this method. Crypto retries belong to
     // the client generation, while their callers retain their own read authority.
     const decryptEventIfNeeded = this.client.decryptEventIfNeeded.bind(this.client);
@@ -241,7 +234,6 @@ export abstract class MatrixClientBase {
       this.captureRequestAuthority()?.();
       return this.withClientCryptoWork(() => decryptEventIfNeeded(event, options));
     };
-=======
   }
 
   private async persistCryptoBeforeKeyUpload(resource: RequestInfo | URL, init?: RequestInit) {
@@ -270,26 +262,6 @@ export abstract class MatrixClientBase {
       abortSignal: signal ?? undefined,
     });
     signal?.throwIfAborted();
-  }
-
-  protected async withMessageWireDispatchGuard<T>(params: {
-    transactionId?: string;
-    guard?: MatrixMessageWireDispatchGuard;
-    run: () => Promise<T>;
-  }): Promise<T> {
-    if (!params.transactionId || !params.guard) {
-      return await params.run();
-    }
-    if (this.messageWireDispatchGuards.has(params.transactionId)) {
-      throw new Error(`Matrix transaction ${params.transactionId} already has a dispatch guard`);
-    }
-    this.messageWireDispatchGuards.set(params.transactionId, params.guard);
-    try {
-      return await params.run();
-    } finally {
-      this.messageWireDispatchGuards.delete(params.transactionId);
-    }
->>>>>>> e6dbd475b98 (fix(matrix): persist private crypto state before key uploads)
   }
 
   on<TEvent extends keyof MatrixClientEventMap>(
