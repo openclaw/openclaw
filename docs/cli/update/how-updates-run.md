@@ -664,6 +664,11 @@ also rejected before activation. Staged source-checkout exposure currently
 requires an npm-owned package symlink; package-to-package updates remain
 supported through the owning manager.
 
+When an npm package link points to a built Git checkout, rollback verifies that
+same checkout and build before restoring the link and launchers. Local source
+edits are preserved. Replacing the checkout or rebuilding it during the update
+prevents automatic rollback; restoring a link alone does not prove runtime safety.
+
 ### Local packaged overrides
 
 Package updates preserve local `dist` edits in a recovery bundle before replacing

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -243,6 +244,83 @@ describe("retained npm package integrity", () => {
         );
         expect(await fs.readFile(path.join(fixture.checkout, "package.json"), "utf8")).toContain(
           '"version":"1.0.0"',
+        );
+      });
+    },
+  );
+
+  it.each(["unchanged", "rebuilt", "replaced"] as const)(
+    "checks the original linked Git runtime before rollback (%s)",
+    async (change) => {
+      await withTestDir({ prefix: "openclaw-linked-git-recovery-" }, async (base) => {
+        const fixture = await createLinkedPackageSwapFixture(base);
+        const git = (...args: string[]) =>
+          execFileSync(
+            "git",
+            [
+              "-C",
+              fixture.checkout,
+              "-c",
+              `core.hooksPath=${path.join(base, "no-hooks")}`,
+              ...args,
+            ],
+            { encoding: "utf8" },
+          ).trim();
+        git("init", "--quiet", "--template=");
+        git(
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "commit.gpgSign=false",
+          "commit",
+          "--quiet",
+          "--allow-empty",
+          "-m",
+          "fixture",
+        );
+        const sha = git("rev-parse", "HEAD");
+        const dist = path.join(fixture.checkout, "dist");
+        await fs.mkdir(path.join(dist, "control-ui"));
+        for (const [name, contents] of [
+          ["entry.js", "export {};\n"],
+          ["control-ui/index.html", "ready"],
+          ["build-info.json", JSON.stringify({ commit: sha, buildId: "original-build" })],
+          [".buildstamp", JSON.stringify({ head: sha })],
+          [".runtime-postbuildstamp", JSON.stringify({ head: sha })],
+        ] as const) {
+          await fs.writeFile(path.join(dist, name), contents);
+        }
+        const transaction = await retain(fixture.params);
+        await fs.writeFile(path.join(fixture.checkout, "operator.txt"), "local edit\n");
+        if (change === "rebuilt") {
+          await fs.writeFile(
+            path.join(dist, "build-info.json"),
+            JSON.stringify({ commit: sha, buildId: "replacement-build" }),
+          );
+        } else if (change === "replaced") {
+          const moved = path.join(base, "moved-checkout");
+          await fs.rename(fixture.checkout, moved);
+          await fs.cp(moved, fixture.checkout, { recursive: true });
+        }
+        if (change !== "unchanged") {
+          expect(transaction.assertRollbackSafe).toBeTypeOf("function");
+          await expect(transaction.assertRollbackSafe?.()).rejects.toThrow("Git runtime changed");
+        }
+        const rollback = await transaction.rollback(() => {});
+        expect(rollback.exitCode).toBe(change === "unchanged" ? 0 : 1);
+        if (change === "unchanged") {
+          expect(await fs.realpath(fixture.packageRoot)).toBe(fixture.checkout);
+          expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+          expect(
+            await transaction.complete({ activationVerified: false }, () => {}),
+          ).toBeUndefined();
+        } else {
+          await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+        }
+        expect(await fs.readFile(path.join(fixture.checkout, "operator.txt"), "utf8")).toBe(
+          "local edit\n",
         );
       });
     },

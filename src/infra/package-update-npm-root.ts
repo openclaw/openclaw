@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -6,13 +7,51 @@ import {
   type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
 } from "./package-update-integrity.js";
+import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 
-export function createNpmPackageRootLinkLifecycle(params: {
+/** The retained package link owns this baseline; its checkout remains operator-owned. */
+async function captureNpmLinkedGitRecovery(
+  packageRoot: string,
+  link: Extract<PackageRootIntegrityFingerprint, { kind: "link" }>,
+  timeoutMs?: number,
+): Promise<(() => Promise<void>) | undefined> {
+  const target = path.resolve(path.dirname(packageRoot), link.target);
+  const recovery = await readCurrentGitUpdateRecovery(target, timeoutMs);
+  if (!recovery.serviceRestartSafe || !recovery.buildId) {
+    return undefined;
+  }
+  const root = await fs.realpath(target);
+  const identity = await fs.stat(root, { bigint: true });
+  if (identity.ino === 0n || (process.platform === "win32" && identity.dev === 0n)) {
+    return undefined;
+  }
+  return async () => {
+    const currentIdentity = await fs.stat(root, { bigint: true });
+    const current = await readCurrentGitUpdateRecovery(root, timeoutMs);
+    if (
+      (await fs.realpath(target)) !== root ||
+      currentIdentity.dev !== identity.dev ||
+      currentIdentity.ino !== identity.ino ||
+      !current.serviceRestartSafe ||
+      current.buildId !== recovery.buildId ||
+      current.version !== recovery.version
+    ) {
+      throw new Error("Previous Git runtime changed; automatic rollback was refused.");
+    }
+  };
+}
+
+export async function createNpmPackageRootLinkLifecycle(params: {
   liveRoot: string;
   backupRoot: string;
   fingerprint: Extract<PackageRootIntegrityFingerprint, { kind: "link" }>;
   timeoutMs?: number;
 }) {
+  const verifyRuntime = await captureNpmLinkedGitRecovery(
+    params.liveRoot,
+    params.fingerprint,
+    params.timeoutMs,
+  );
   const assertUnchanged = async (root: string) => {
     const actual = await createPackageIntegrityReader(params.timeoutMs).rootEntry(
       root,
@@ -24,7 +63,11 @@ export function createNpmPackageRootLinkLifecycle(params: {
     }
   };
   return {
-    assertLiveUnchanged: () => assertUnchanged(params.liveRoot),
+    verifyRuntime,
+    async assertLiveUnchanged() {
+      await assertUnchanged(params.liveRoot);
+      await verifyRuntime?.();
+    },
     async acquire(): Promise<{ acquired: true } | { acquired: false; error: string }> {
       await fs.rename(params.liveRoot, params.backupRoot);
       try {
@@ -69,10 +112,11 @@ export async function verifyNpmRootRecovery(
     shims: readonly { destination: string; backup: string | null; fingerprint?: string }[];
   },
   timeoutMs?: number,
-): Promise<void> {
+  verifyGitRuntime?: () => Promise<void>,
+): Promise<boolean> {
   const { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims } = params;
   const reader = createPackageIntegrityReader(timeoutMs);
-  await reader.observe(fromBackup ? "retained" : "restored", async () => {
+  return await reader.observe(fromBackup ? "retained" : "restored", async () => {
     if (
       hadPackage
         ? previousRoot
@@ -100,5 +144,13 @@ export async function verifyNpmRootRecovery(
         );
       }
     }
+    await verifyGitRuntime?.();
+    // Restoring absence or an unverified external link does not establish a runnable runtime.
+    return (
+      hadPackage &&
+      (previousRoot?.kind === "directory" ||
+        verifyGitRuntime !== undefined ||
+        (!previousRoot && params.previousIdentity !== undefined))
+    );
   });
 }
