@@ -34,6 +34,7 @@ export type PluginDiagnosticCode =
   | "backup-resource-declaration-invalid"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
+  | "hook-registration-blocked"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";

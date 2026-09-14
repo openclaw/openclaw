@@ -1,3 +1,4 @@
+import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
@@ -313,6 +314,9 @@ export function loadOpenClawPluginsCore(
           (entry) => entry.pluginId && retained.has(entry.pluginId),
         ),
       );
+      registry.blockedHooks.push(
+        ...options.previousRegistry.blockedHooks.filter((entry) => retained.has(entry.pluginId)),
+      );
     }
     const selectedMiddlewareOwnerManifests = new Map<
       string,
@@ -442,6 +446,16 @@ export function loadOpenClawPluginsCore(
           `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
             failedPlugins,
           )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics and 'openclaw plugins list' for registry state. After fixing plugin code or load paths, run 'openclaw plugins reload <id>' to retry.`,
+        );
+      }
+      const blockedHookPluginIds = uniqueValues(
+        registry.blockedHooks
+          .filter((entry) => entry.severity === "error")
+          .map((entry) => entry.pluginId),
+      );
+      if (blockedHookPluginIds.length > 0) {
+        logger.error(
+          `[plugins] hook registrations blocked for ${blockedHookPluginIds.length} plugin(s) (${blockedHookPluginIds.join(", ")}); those handlers will never run. Run '/status plugins' or 'openclaw plugins inspect <id> --runtime --json' for the blocked hook names and the config key that unblocks each one.`,
         );
       }
     }

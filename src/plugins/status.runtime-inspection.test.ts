@@ -43,7 +43,11 @@ import { disposePluginRegistryInstances, getActivePluginRegistry } from "./runti
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import * as statusSnapshot from "./status-snapshot.js";
-import { withPluginDiagnosticsReportForInspection, withPluginDiagnosticsReport } from "./status.js";
+import {
+  buildPluginInspectReport,
+  withPluginDiagnosticsReportForInspection,
+  withPluginDiagnosticsReport,
+} from "./status.js";
 import type { OpenClawPluginService } from "./types.js";
 
 describe("plugin runtime inspection", () => {
@@ -794,6 +798,42 @@ module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.s
         );
       });
       expect(fs.readFileSync(registrationModePath, "utf8")).toBe("tool-discovery");
+    });
+  });
+
+  it("scopes refused hook registrations to the inspected plugin", async () => {
+    // Two non-bundled plugins each register a conversation hook and neither has
+    // allowConversationAccess set, so the registry refuses both. `plugins inspect`
+    // must report only the inspected plugin's dead handler.
+    const hookBody = (id: string) => `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+    api.on("before_prompt_build", () => undefined);
+  } };\n`;
+    useNoBundledPlugins();
+    const first = writePlugin({ id: "blocked-inspect-a", body: hookBody("blocked-inspect-a") });
+    const second = writePlugin({ id: "blocked-inspect-b", body: hookBody("blocked-inspect-b") });
+    const stateDir = makePluginLoaderTempDir();
+    const config = {
+      plugins: {
+        load: { paths: [first.file, second.file] },
+        allow: [first.id, second.id],
+      },
+    };
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const params = { config, workspaceDir: first.dir, env: process.env };
+      await withPluginDiagnosticsReport(params, (report) => {
+        const inspect = buildPluginInspectReport({ ...params, id: first.id, report });
+
+        // Both refusals really happened, and inspect shows exactly one of them.
+        expect(report.typedHooks).toStrictEqual([]);
+        expect(report.blockedHooks.map((entry) => entry.pluginId).toSorted()).toStrictEqual(
+          [first.id, second.id].toSorted(),
+        );
+        expect(inspect?.blockedHooks.map((entry) => entry.pluginId)).toStrictEqual([first.id]);
+        expect(inspect?.blockedHooks[0]?.hookName).toBe("before_prompt_build");
+        expect(inspect?.blockedHooks[0]?.reason).toBe("conversation-access-missing");
+        expect(inspect?.blockedHooks[0]?.severity).toBe("error");
+      });
     });
   });
 });
