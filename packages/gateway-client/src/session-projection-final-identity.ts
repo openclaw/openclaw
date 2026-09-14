@@ -26,14 +26,20 @@ type TerminalProjectionRun = {
 /** Tool-bearing assistant rows are continuations even without a tool stop reason. */
 export function isSessionProjectionToolContinuation(message: unknown): boolean {
   const record = readRecord(message);
-  return (
-    record?.stopReason === "toolUse" ||
-    (Array.isArray(record?.content) &&
-      record.content.some((block) => {
-        const type = readRecord(block)?.type;
-        return type === "toolCall" || type === "toolUse" || type === "functionCall";
-      }))
-  );
+  if (
+    Array.isArray(record?.content) &&
+    record.content.some((block) => {
+      const type = readRecord(block)?.type;
+      return type === "toolCall" || type === "toolUse" || type === "functionCall";
+    })
+  ) {
+    return true;
+  }
+  // A tool stop reason alone marks a continuation only when the row carries no
+  // displayable text: a run's selected final answer is persisted with the
+  // run's terminal stop reason even when the row itself is pure text, and such
+  // a final must still reconcile with its unkeyed live projection (#148297).
+  return record?.stopReason === "toolUse" && !hasDisplayableSessionMessage(message);
 }
 
 function readPersistedFinalIdentity(message: unknown): string | null {
@@ -213,7 +219,13 @@ export function findUniqueSnapshotTerminalMatch(
     return (
       (metadata?.runTerminal === true ||
         (entry.identity?.runId === current.identity?.runId &&
-          hasTerminalStopReason(entry.message)) ||
+          (hasTerminalStopReason(entry.message) ||
+            // A row persisted with the run's terminal tool stop reason and no
+            // tool-call content is the run's selected final; it must reconcile
+            // with its unkeyed live projection (#148297). Unmarked rows stay
+            // separate — partial history must not adopt the terminal.
+            (readRecord(entry.message)?.["stopReason"] === "toolUse" &&
+              !isSessionProjectionToolContinuation(entry.message)))) ||
         hasCompletedRunSnapshotContext(entry)) &&
       readFinalContentIdentity(entry.message) === terminalContent
     );
