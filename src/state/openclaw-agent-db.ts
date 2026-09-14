@@ -55,6 +55,7 @@ import {
   assertOpenClawAgentDatabaseLease,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
+  type prepareOpenClawAgentDatabaseWorkerLease,
 } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
@@ -183,8 +184,11 @@ export function clearOpenClawAgentDatabaseOpenFailure(
 /** Open or return a cached per-agent database after schema and owner validation. */
 export function openOpenClawAgentDatabase(
   options: OpenClawAgentDatabaseOptions,
+  preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
 ): OpenClawAgentDatabase {
-  return runSqliteIntegrityOperationSync(openOpenClawAgentDatabaseSteps(options));
+  return runSqliteIntegrityOperationSync(
+    openOpenClawAgentDatabaseSteps(options, undefined, preparedLease),
+  );
 }
 
 export type { OpenClawAgentDatabaseWriteAdmission } from "./openclaw-agent-db-admission.js";
@@ -194,6 +198,7 @@ export const { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseAdmissio
 function* openOpenClawAgentDatabaseSteps(
   options: OpenClawAgentDatabaseOptions,
   pending?: PendingAgentDatabaseOpen,
+  preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const agentId = normalizeAgentId(options.agentId);
   assertAgentDatabaseAdmitted(agentId, { env: options.env });
@@ -204,6 +209,9 @@ function* openOpenClawAgentDatabaseSteps(
   // A live successful cache entry is authoritative; failed entries remain only for disposal.
   const opened = getOpenClawAgentDatabaseIfOpen(databaseOptions);
   if (opened) {
+    if (preparedLease) {
+      throw new Error("A prepared Worker lease cannot adopt an existing agent database handle");
+    }
     cache.databases.delete(pathname);
     cache.databases.set(pathname, opened);
     return opened;
@@ -284,11 +292,15 @@ function* openOpenClawAgentDatabaseSteps(
       ? { OPENCLAW_SUPERVISOR_MODE: "external" }
       : {}),
   };
-  const leaseId = claimOpenClawAgentDatabaseLease({
-    agentId,
-    path: pathname,
-    env: leaseEnvironment,
-  });
+  if (
+    preparedLease &&
+    (preparedLease.receipt.agentId !== agentId || preparedLease.receipt.path !== pathname)
+  ) {
+    throw new Error("Prepared agent database lease belongs to another store");
+  }
+  const leaseId = preparedLease
+    ? preparedLease.claim()
+    : claimOpenClawAgentDatabaseLease({ agentId, path: pathname, env: leaseEnvironment });
   if (pending) {
     pending.assertHeld = () =>
       assertOpenClawAgentDatabaseLease(leaseId, {
@@ -490,7 +502,7 @@ export function runOpenClawAgentWriteTransaction<T>(
   options: OpenClawAgentDatabaseOptions,
   transactionOptions: Pick<
     SqliteTransactionOptions,
-    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs" | "onCommitted"
   > = {},
 ): T {
   const database = openOpenClawAgentDatabase(options);

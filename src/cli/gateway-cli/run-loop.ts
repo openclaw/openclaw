@@ -1276,6 +1276,8 @@ export async function runGatewayLoop(params: {
       const {
         abortActiveCronTaskRuns,
         advanceCronActiveJobGeneration,
+        getAgentRunLifecycleGeneration,
+        drainRetiredAgentRunWorkerTransactions,
         reloadTaskRuntimeStateFromStore,
         retireActiveCronTaskRunTracking,
         resetCronActiveJobs,
@@ -1287,9 +1289,27 @@ export async function runGatewayLoop(params: {
         waitForActiveCronTaskRuns,
       } = await loadGatewayLifecycleRuntimeModule();
       // Rotation aborts rootless stale owners before reset pumps preserved queues.
-      rotateAgentEventLifecycleGeneration();
-      advanceCronActiveJobGeneration();
-      abortActiveCronTaskRuns("Gateway restarting.");
+      const retiringGeneration = getAgentRunLifecycleGeneration();
+      const retirementErrors: unknown[] = [];
+      for (const retire of [
+        rotateAgentEventLifecycleGeneration,
+        advanceCronActiveJobGeneration,
+        () => abortActiveCronTaskRuns("Gateway restarting."),
+      ]) {
+        try {
+          retire();
+        } catch (error) {
+          retirementErrors.push(error);
+        }
+      }
+      try {
+        await drainRetiredAgentRunWorkerTransactions(retiringGeneration);
+      } catch (error) {
+        retirementErrors.push(error);
+      }
+      if (retirementErrors.length > 0) {
+        throw new AggregateError(retirementErrors, "Gateway run retirement failed");
+      }
       const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
       const cronDrain = await waitForActiveCronJobs(1_000);
       if (!cronTaskDrain.drained || !cronDrain.drained) {

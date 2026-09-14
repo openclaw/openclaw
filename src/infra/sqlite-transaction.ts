@@ -76,17 +76,35 @@ export async function withSqliteWriteAdmissionService<T>(
   if (location === null) {
     throw new Error("SQLite write admission service requires a file-backed database");
   }
-  const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
-  services.add(service);
-  writeAdmissionServices.set(location, services);
+  const release = retainSqliteWriteAdmissionService([location], service);
   try {
     return await operation();
   } finally {
-    services.delete(service);
-    if (services.size === 0) {
-      writeAdmissionServices.delete(location);
-    }
+    release();
   }
+}
+
+/** Locations come from the retained native owner; registration grants no write authority. */
+export function retainSqliteWriteAdmissionService(
+  nativeLocations: readonly string[],
+  service: () => void,
+): () => void {
+  const registrations = [...new Set(nativeLocations)].map((location) => {
+    const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
+    // Separate reservations remain valid when the same owner retains two operations.
+    const retained = () => service();
+    services.add(retained);
+    writeAdmissionServices.set(location, services);
+    return { location, services, retained };
+  });
+  return () => {
+    for (const { location, services, retained } of registrations) {
+      services.delete(retained);
+      if (services.size === 0 && writeAdmissionServices.get(location) === services) {
+        writeAdmissionServices.delete(location);
+      }
+    }
+  };
 }
 
 type SqliteBeginAdmissionDiagnostics = {
@@ -155,6 +173,8 @@ export type SqliteTransactionOptions = {
   slowTransactionHoldMs?: number;
   /** Enclose the physical commit in an owner's synchronous authority guard. */
   withCommit?: (commit: () => void) => void;
+  /** Nonthrowing native witness, recorded before diagnostics or observer publication. */
+  onCommitted?: () => void;
 };
 
 type SqliteTransactionStep = "begin" | "commit";
@@ -258,6 +278,9 @@ function execTimedTransactionStep(params: {
       beginImmediateTransaction(params.db, beginAdmission);
     } else {
       params.db.exec(params.sql);
+      if (params.step === "commit") {
+        params.options?.onCommitted?.();
+      }
     }
     const elapsedMs = Date.now() - startedAt;
     logSlowTransactionStep({

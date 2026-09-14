@@ -4,6 +4,21 @@ import type {
   AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
+import type { RetainedWorkerTransactionAdmission } from "./sqlite-worker-operation-settlement.js";
+
+export type AgentRunWorkerTransactionSource = {
+  assertCurrent(): void;
+  admitTransaction(operation: RetainedWorkerTransactionAdmission, grant: () => boolean): void;
+};
+
+export type AgentRunWorkerCustody = {
+  context: AgentRunContext;
+  admittedContext: object;
+  authority: AgentRunDelegatedAuthority;
+  admissionClosed: boolean;
+  operations: Map<RetainedWorkerTransactionAdmission, Promise<void>>;
+  errors: unknown[];
+};
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
@@ -42,6 +57,7 @@ export type AgentRunContext = {
   delegatedAuthority?: AgentRunDelegatedAuthority;
   /** Exact in-process source owner, intentionally absent from serialized authority. */
   assertSourceCurrent?: () => void;
+  workerCustody?: AgentRunWorkerCustody;
   approvalLeases?: AgentRunApprovalLeases;
 };
 
@@ -60,6 +76,8 @@ export type AgentRunRegistryState = {
   contexts: Map<string, AgentRunContext>;
   owners: Map<string, AgentRunContextOwnership>;
   queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
+  /** Exact original records retained for settlement after their public claim is retired. */
+  workerCustody?: Set<AgentRunWorkerCustody>;
   lifecycleGeneration: string;
   sequenceResetHandler?: (runId: string) => void;
   delegatedAuthorityClosedHandlers?: Set<

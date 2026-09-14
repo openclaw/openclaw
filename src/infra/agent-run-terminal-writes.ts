@@ -1,5 +1,9 @@
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-import { getAgentRunContext, validateAgentRunDelegatedAuthority } from "./agent-run-registry.js";
+import {
+  drainAgentRunWorkerTransactions,
+  getAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 type OperationalRunInstance = AgentRunDelegatedAuthority["operationalRunInstance"];
@@ -80,11 +84,15 @@ export function captureAgentRunTerminalWriteContext(
 
 /** Normal completion joins accepted terminal writes; explicit authority close stays immediate. */
 export async function drainAgentRunTerminalWrites(instance: OperationalRunInstance): Promise<void> {
-  const owner = getAgentRunContext(instance.runId);
-  const current = owner ? terminalWrites.get(owner) : undefined;
-  if (current?.authority.operationalRunInstance === instance) {
-    while (current.pending.size > 0) {
-      await Promise.allSettled(current.pending);
+  try {
+    const owner = getAgentRunContext(instance.runId);
+    const current = owner ? terminalWrites.get(owner) : undefined;
+    if (current?.authority.operationalRunInstance === instance) {
+      while (current.pending.size > 0) {
+        await Promise.allSettled(current.pending);
+      }
     }
+  } finally {
+    await drainAgentRunWorkerTransactions(instance);
   }
 }

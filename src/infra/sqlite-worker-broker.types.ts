@@ -1,5 +1,10 @@
 import type { Worker } from "node:worker_threads";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
+import type {
+  SqliteWorkerAdmissionFactory,
+  SqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type {
   createSqliteWorkerTransferOwner,
@@ -19,6 +24,10 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
   : never;
 type DispatchState = { dispatched: boolean };
 export type Job = {
+  createAdmission?: SqliteWorkerAdmissionFactory;
+  operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
+  settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
+  nativeDispatched?: boolean;
   stateLifecycle?: { actor: Actor; delegate: StateLifecycleDelegate };
   assertCurrent?: () => void;
   inputTransfer?: {
@@ -49,6 +58,9 @@ export type Slot = {
   pendingOpens: number;
 };
 export type Actor = {
+  nativeStopped: Promise<void>;
+  markNativeStopped(): void;
+  stateDatabasePath?: string;
   id: number;
   key: string;
   databasePath: string;
@@ -68,12 +80,14 @@ export type Actor = {
   pendingStateLifecycles: Set<StateLifecycleDelegate>;
 };
 export type OperationScope = {
+  createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: (commandType: PropertyKey) => void;
   active: boolean;
   pending: Set<Promise<unknown>>;
   stateContext?: SqliteWorkerStateContext;
 };
 export type EnqueueOptions = {
+  createAdmission?: SqliteWorkerAdmissionFactory;
   signal?: AbortSignal;
   dispatchState?: DispatchState;
   scope?: OperationScope;
@@ -98,6 +112,9 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  onNativeStopped?: (stopped: Promise<void>) => void;
+  stateDatabasePath?: string;
+  createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: () => void;
   moduleUrl: URL;
   databasePath: string;
@@ -105,3 +122,8 @@ export type PreparedSqliteWorkerOpen = {
   existingOnly: boolean;
   stateContext?: SqliteWorkerStateContext;
 };
+
+export type SqliteWorkerOpenCustody = Pick<
+  PreparedSqliteWorkerOpen,
+  "createAdmission" | "stateDatabasePath" | "onNativeStopped"
+>;

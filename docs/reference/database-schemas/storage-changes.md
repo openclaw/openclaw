@@ -143,6 +143,22 @@ existing overload error without queuing the value or executing any part of it.
 Only complete validated input reaches the backend. The transport queue remains
 bounded; an active complete input or result still requires its materialized memory.
 
+Disk-backed silent heartbeat outcomes run their persistence and next-user claims
+in the per-agent worker. The host captures the original store before dispatch
+awaits, and admitted user runs retain their live run owner through native
+transaction settlement. Revocation refuses new grants; shutdown joins operations
+that already entered. Incognito stores, maintenance and deletion cleanup scopes, and narrower callers
+without retained run admission still use their existing native path during this
+cutover. Their migration remains unfinished.
+
+The agent worker borrows the canonical shared-state connection for its durable
+lease. Node workers can share that connection across agent lifetimes; closing
+one agent releases its borrow, and the last borrow closes the shared handle.
+Bun keeps one primary agent lifetime per worker and retires its VM before
+releasing native ownership. Existing worker, store, request, and byte budgets
+remain unchanged. Cleanup after native retirement retains the exact prepared
+lease and original shared identity; it cannot adopt replacement storage.
+
 Acquire a connection once for an operation and pass that exact connection
 through its transactional helpers. SQLite write callbacks remain synchronous:
 finish asynchronous planning first, then reread authoritative rows after write

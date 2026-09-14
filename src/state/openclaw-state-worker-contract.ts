@@ -21,6 +21,7 @@ import type {
   TaskRegistryStoreSnapshot,
 } from "../tasks/task-registry.store.types.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
 type TaskLookupRecords = {
@@ -109,4 +110,12 @@ export type OpenClawStateWorkerOperations = UserPreferenceWorkerOperations &
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {
   "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
+};
+
+/** Only the retiring native owner's host can dispatch its exact cleanup receipt. */
+export type OpenClawStateWorkerCleanupOperations = {
+  "agentDatabases.releaseExitedLease": {
+    input: OpenClawAgentDatabaseWorkerLeaseReceipt;
+    output: void;
+  };
 };

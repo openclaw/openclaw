@@ -11,7 +11,10 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  resolveAdmittedRunWorkerAdmission,
+} from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import {
@@ -351,14 +354,22 @@ export async function runAgentHarnessAttempt(
                   },
               (prepared) =>
                 pluginAttempt.runWithHostScope(async () => {
-                  if (prepared.trigger !== "user" || !prepared.sessionKey) {
+                  if (
+                    prepared.trigger !== "user" ||
+                    !prepared.sessionKey ||
+                    prepared.sessionPersistence === "detached"
+                  ) {
                     return runAgentHarnessLifecycleAttempt(harness, prepared);
                   }
                   const note = await claimHeartbeatContextForUserRun({
                     ...prepared,
                     agentId: resolveSessionAgentIds(prepared).sessionAgentId,
                     storePath: prepared.sessionTarget?.storePath,
-                    detached: prepared.sessionPersistence === "detached",
+                    detached: false,
+                    workerSource: resolveAdmittedRunWorkerAdmission(
+                      internalParams.admittedRunContext,
+                      prepared.abortSignal,
+                    ),
                     assertCurrent: resolveAdmittedRunActiveAssertion(
                       internalParams.admittedRunContext,
                       prepared.abortSignal,

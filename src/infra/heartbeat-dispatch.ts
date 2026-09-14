@@ -40,7 +40,11 @@ import { formatErrorMessage } from "./errors.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
 import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
-import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
+import {
+  captureHeartbeatOutcomeStorage,
+  persistHeartbeatOutcome,
+  type HeartbeatOutcomeStorage,
+} from "./heartbeat-outcome-store.js";
 import { heartbeatLog as log, resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
 import type {
   HeartbeatRunOptions,
@@ -66,6 +70,7 @@ import { withSystemEventOwner } from "./system-event-ownership.js";
 import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
 
 type HeartbeatDispatch = {
+  outcomeStorage: HeartbeatOutcomeStorage;
   opts: HeartbeatRunOptions;
   wake: ReadyHeartbeatWake;
   prepared: PreparedHeartbeatRun;
@@ -83,6 +88,11 @@ export function createHeartbeatDispatch(
   prepared: PreparedHeartbeatRun,
 ): HeartbeatDispatch {
   const policy: HeartbeatDispatch = {
+    outcomeStorage: captureHeartbeatOutcomeStorage({
+      agentId: wake.agentId,
+      sessionKey: prepared.outboundPolicySessionKey ?? prepared.sessionKey,
+      storePath: prepared.storePath,
+    }),
     opts,
     wake,
     prepared,
@@ -285,6 +295,7 @@ async function prepareHeartbeatDispatchReply(
   const stateKey = prepared.outboundPolicySessionKey ?? sessionKey;
   const record = (value: HeartbeatToolResponse) =>
     persistHeartbeatOutcome({
+      storage: policy.outcomeStorage,
       agentId,
       sessionKey: stateKey,
       storePath,

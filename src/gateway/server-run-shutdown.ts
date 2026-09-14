@@ -1,6 +1,11 @@
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  retireAndDrainAgentRunWorkerTransactions,
+  type AgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -117,6 +122,38 @@ export type GatewayRunShutdownParams = {
   }) => Promise<void> | void;
   resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
 };
+
+/** Keep exact instance references before abort or terminal cleanup removes their registrations. */
+export type GatewayRunWorkerDrain = {
+  capture(): void;
+  drain(): Promise<void>;
+};
+
+export function captureGatewayRunWorkerDrain(
+  params: Pick<GatewayRunShutdownParams, "chatAbortControllers" | "resolveGatewayContext">,
+): GatewayRunWorkerDrain {
+  const instances = new Set<AgentRunDelegatedAuthority["operationalRunInstance"]>();
+  const capture = () => {
+    for (const entry of params.chatAbortControllers.values()) {
+      const instance =
+        entry.agentRunDelegatedAuthority?.operationalRunInstance ?? entry.operationalRunInstance;
+      if (instance) {
+        instances.add(instance);
+      }
+    }
+  };
+  capture();
+  return {
+    capture,
+    drain() {
+      capture();
+      return retireAndDrainAgentRunWorkerTransactions(
+        (context, instance) =>
+          instances.has(instance) || hasGatewayContextOwner(context, params.resolveGatewayContext),
+      );
+    },
+  };
+}
 
 async function waitForRestartReplyDrain(params: {
   getPendingReplyCount: () => number;
@@ -358,11 +395,38 @@ export async function prepareGatewayRunShutdown(
     getPendingReplyCount: () => number;
     timeoutMs: number;
     warnings: string[];
+    runWorkerDrain?: GatewayRunWorkerDrain;
   } & GatewayRunShutdownParams,
+): Promise<void> {
+  const runWorkerDrain = params.runWorkerDrain ?? captureGatewayRunWorkerDrain(params);
+  const errors: unknown[] = [];
+  try {
+    await prepareGatewayRunShutdownBeforeWorkerDrain({ ...params, runWorkerDrain });
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await runWorkerDrain.drain();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Gateway run cancellation and worker settlement failed");
+  }
+}
+
+async function prepareGatewayRunShutdownBeforeWorkerDrain(
+  params: Parameters<typeof prepareGatewayRunShutdown>[0] & {
+    runWorkerDrain: GatewayRunWorkerDrain;
+  },
 ): Promise<void> {
   // Ordinary CLI stop already spent its grace period. Cancel only this Gateway's
   // remaining owners before joining them, without scheduling restart recovery.
   if (!params.restart) {
+    params.runWorkerDrain.capture();
     abortQueuedTurns(params, false);
     abortActiveRuns(params, false);
     return;
@@ -394,6 +458,7 @@ export async function prepareGatewayRunShutdown(
     }
   }
 
+  params.runWorkerDrain.capture();
   const abortedQueuedTurns = abortQueuedTurns(params, true);
   if (drainResult?.drained === false && abortedQueuedTurns > 0) {
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
@@ -402,6 +467,7 @@ export async function prepareGatewayRunShutdown(
     ...params,
     reason: "gateway restart shutdown",
   });
+  params.runWorkerDrain.capture();
   const abortedRuns = abortActiveRuns(params, true) + abortedReplies;
   if (drainResult?.drained) {
     shutdownLog.info(`restart reply drain completed after ${drainResult.elapsedMs}ms`);

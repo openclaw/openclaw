@@ -28,6 +28,8 @@ export type SqliteWorkerRequest = {
   stateContext?: SqliteWorkerStateContext;
   gatewaySchemaFence?: MessagePort;
   stateLifecycle?: MessagePort;
+  operationAdmission?: MessagePort;
+  stateDatabasePath?: string;
 } & (
   | {
       type: "open";

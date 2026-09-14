@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +10,7 @@ import type {
   SqliteWorkerStoreOptions,
   Actor,
   Job,
+  SqliteWorkerOpenCustody,
 } from "./sqlite-worker-broker.types.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentity, type DatabasePathIdentity } from "./sqlite-worker-identity.js";
@@ -37,8 +39,14 @@ export function captureSqliteWorkerOpen(
   options: SqliteWorkerStoreOptions,
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: () => void,
+  custody: SqliteWorkerOpenCustody = {},
 ): PreparedSqliteWorkerOpen {
+  const { createAdmission, ...native } = custody;
+  const inCaller = createAdmission ? AsyncLocalStorage.snapshot() : undefined;
   return {
+    ...native,
+    createAdmission:
+      createAdmission && inCaller ? (operation) => inCaller(createAdmission, operation) : undefined,
     assertCurrent,
     moduleUrl: new URL(options.moduleUrl),
     databasePath: path.resolve(options.databasePath),
@@ -105,6 +113,22 @@ export function findUnclaimedSharedStateActors(
   );
 }
 
+export async function closeUnclaimedSharedStateActors(
+  actors: Iterable<Actor>,
+  databasePath: string,
+  close: (actor: Actor) => Promise<void>,
+): Promise<void> {
+  const results = await Promise.allSettled(
+    findUnclaimedSharedStateActors(actors, databasePath).map(close),
+  );
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) {
+    throw new AggregateError(errors, "SQLite worker unclaimed cleanup failed", {
+      cause: errors[0],
+    });
+  }
+}
+
 export async function resolveSqliteWorkerModuleUrl(sourceUrl: URL) {
   const modulePath = await realpath(fileURLToPath(sourceUrl));
   const moduleUrl = pathToFileURL(modulePath).href;
@@ -120,6 +144,7 @@ export function prepareSqliteWorkerActorContext(
 ): void {
   const stateContext = request.stateContext ?? actor?.stateContext;
   if (actor && stateContext) {
+    request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;
     if (
       actor.stateContext?.coordinatorRuntime.directory !== stateContext.coordinatorRuntime.directory
     ) {
@@ -128,7 +153,7 @@ export function prepareSqliteWorkerActorContext(
     request.stateContext = stateContext;
     if (!actor.cleanupState && !actor.gatewaySchemaFence) {
       const delegate = tryCreateGatewaySchemaFenceDelegate({
-        databasePath: actor.databasePath,
+        databasePath: request.stateDatabasePath,
         runtimeDirectory: stateContext.coordinatorRuntime.directory,
         actorId: String(actor.id),
       });
@@ -157,7 +182,7 @@ export function prepareSqliteWorkerLifecycle(job: Job, actor: Actor | undefined)
       : context.coordinatorRuntime;
   const delegate = withStateDatabaseCoordinatorRuntimeDirectory(runtime, () =>
     tryCreateStateLifecycleDelegate({
-      databasePath: actor.databasePath,
+      databasePath: job.request.stateDatabasePath ?? actor.databasePath,
       actorId: `${actor.id}:${job.request.id}`,
     }),
   );

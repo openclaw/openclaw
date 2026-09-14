@@ -9,13 +9,18 @@ import {
 import { runEmbeddedAgent as runEmbeddedAgentCore } from "../../agents/embedded-agent.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
 
 export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (
   params,
 ) => {
-  const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
+  const gatewayScope = getPluginRuntimeGatewayRequestScope();
+  const pluginId = gatewayScope?.pluginId;
+  const gatewayContextResolver = gatewayScope?.resolveGatewayContext;
   if (!pluginId) {
     throw new Error("Plugin embedded-agent execution requires an active plugin runtime scope.");
   }
@@ -49,6 +54,7 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
       },
     },
     onAdmitted: (context) => {
+      bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext = context;
       const token = context.executionIdentityToken;
       recordRuntimeActionDecision({

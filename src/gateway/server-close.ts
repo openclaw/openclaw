@@ -35,7 +35,12 @@ import {
 } from "./server-media-cleanup-lifecycle.js";
 import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
 import type { GatewayCloseOptions } from "./server-public.js";
-import { prepareGatewayRunShutdown, type GatewayRunShutdownParams } from "./server-run-shutdown.js";
+import {
+  captureGatewayRunWorkerDrain,
+  prepareGatewayRunShutdown,
+  type GatewayRunShutdownParams,
+  type GatewayRunWorkerDrain,
+} from "./server-run-shutdown.js";
 import type { GatewayMaintenanceHandles } from "./server-runtime-services.js";
 import {
   createGatewayShutdownTimeout as createTimeoutRace,
@@ -289,6 +294,7 @@ export type GatewayClosePreparation = {
   notice: ReturnType<typeof resolveGatewayShutdownNotice>;
   warnings: string[];
   cleanupWork: AsyncWorkScope;
+  runWorkerDrain: GatewayRunWorkerDrain;
 };
 
 export async function prepareGatewayClose(
@@ -302,6 +308,7 @@ export async function prepareGatewayClose(
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   const measureCloseStep = createCloseStepTimer(reason);
   const cleanupWork = new AsyncWorkScope();
+  const runWorkerDrain = captureGatewayRunWorkerDrain(params);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
   // Debug-level: the signal handler already announced the stop/restart at
@@ -351,9 +358,10 @@ export async function prepareGatewayClose(
         restart: restartExpectedMs !== null,
         timeoutMs: drainTimeoutMs,
         warnings,
+        runWorkerDrain,
       }),
     );
-    return { start, notice, warnings, cleanupWork };
+    return { start, notice, warnings, cleanupWork, runWorkerDrain };
   } catch (error) {
     await cleanupWork.drain();
     throw error;
@@ -364,6 +372,7 @@ export async function completeGatewayClose(
   params: GatewayCloseParams,
   preparation: GatewayClosePreparation,
 ): Promise<ShutdownResult> {
+  await preparation.runWorkerDrain.drain();
   params.pluginMetadata.beginClose();
   const { start, notice, warnings, cleanupWork } = preparation;
   const { reason } = notice;

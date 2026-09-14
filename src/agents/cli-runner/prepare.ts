@@ -60,6 +60,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveAdmittedRunActiveAssertion,
+  resolveAdmittedRunWorkerAdmission,
   resolvePreparedRunAdmission,
 } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
@@ -2391,13 +2392,25 @@ async function prepareCliRunContextWithinReadFence(
       fallbackReason: params.modelRoutingProvenance?.fallbackReason,
     });
 
-    const note = await claimHeartbeatContextForUserRun({
-      ...preparedParams,
-      agentId: sessionAgentId,
-      storePath: params.sessionTarget?.storePath ?? params.storePath,
-      detached: Boolean(params.sessionManager || params.isolatedCompletion),
-      assertCurrent: createCliRunCurrentAssertion(preparedParams),
-    });
+    const note =
+      preparedParams.trigger === "user" &&
+      preparedParams.sessionKey &&
+      !params.sessionManager &&
+      !params.isolatedCompletion
+        ? await claimHeartbeatContextForUserRun({
+            ...preparedParams,
+            agentId: sessionAgentId,
+            storePath: params.sessionTarget?.storePath ?? params.storePath,
+            detached: false,
+            workerSource: preparedParams.assertCurrent
+              ? undefined
+              : resolveAdmittedRunWorkerAdmission(
+                  preparedParams.admittedRunContext,
+                  preparedParams.abortSignal,
+                ),
+            assertCurrent: createCliRunCurrentAssertion(preparedParams),
+          })
+        : undefined;
     if (note) {
       preparedParams = {
         ...preparedParams,

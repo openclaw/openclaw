@@ -40,9 +40,11 @@ import {
   summarizeTaskRecordsForFlowInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
 import { readTaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
+import { releaseExitedOpenClawAgentDatabaseLeaseInDatabase } from "./openclaw-agent-db-lease.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
+  requireStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import {
@@ -58,6 +60,7 @@ import {
 import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
+  OpenClawStateWorkerCleanupOperations,
 } from "./openclaw-state-worker-contract.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 
@@ -69,7 +72,11 @@ type ManagedFlowWriteResult =
 export function createSqliteWorkerBackend(
   _input: undefined,
   context: { databasePath: string },
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
+): SqliteWorkerBackend<
+  OpenClawStateWorkerOperations &
+    OpenClawStateWorkerInspectionOperations &
+    OpenClawStateWorkerCleanupOperations
+> {
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
@@ -80,14 +87,22 @@ export function createSqliteWorkerBackend(
 export function openExistingSqliteWorkerBackend(
   _input: undefined,
   context: { databasePath: string },
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
+): SqliteWorkerBackend<
+  OpenClawStateWorkerOperations &
+    OpenClawStateWorkerInspectionOperations &
+    OpenClawStateWorkerCleanupOperations
+> {
   return createSharedStateWorkerBackend(context);
 }
 
 function createSharedStateWorkerBackend(
   context: { databasePath: string },
   initialDatabase?: OpenClawStateDatabase,
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
+): SqliteWorkerBackend<
+  OpenClawStateWorkerOperations &
+    OpenClawStateWorkerInspectionOperations &
+    OpenClawStateWorkerCleanupOperations
+> {
   let nativeDatabase = initialDatabase;
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;
@@ -144,6 +159,21 @@ function createSharedStateWorkerBackend(
         return sameSqliteFileGeneration(
           command.input.generation,
           readStableSqliteFileGeneration(context.databasePath),
+        );
+      }
+      if (command.type === "agentDatabases.releaseExitedLease") {
+        const database = open();
+        return runOpenClawStateWriteTransaction(
+          (current) => {
+            if (
+              current.path !== command.input.sharedStatePath ||
+              requireStateDatabaseIdentity(current).key !== command.input.sharedStateIdentity
+            ) {
+              throw new Error("Retired agent cleanup cannot adopt a replacement shared database");
+            }
+            releaseExitedOpenClawAgentDatabaseLeaseInDatabase(current.db, command.input);
+          },
+          { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
         );
       }
       if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {

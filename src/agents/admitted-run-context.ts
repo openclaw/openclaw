@@ -10,11 +10,15 @@ import {
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  bindAgentRunWorkerAdmissionOwner,
+  captureAgentRunWorkerAdmission,
+  supportsAgentRunWorkerAdmission,
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
+  type AgentRunWorkerTransactionSource,
 } from "../infra/agent-run-registry.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -59,6 +63,7 @@ function bindAdmittedRunDelegatedAuthority(
     context.operationalRunInstance,
     assertSourceCurrent,
   );
+  bindAgentRunWorkerAdmissionOwner(authority, context);
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   const lease = { authority, foregroundClosed: false, assertSourceCurrent };
   delegatedAuthorityLeases.set(context, lease);
@@ -92,6 +97,48 @@ export function resolveAdmittedRunActiveAssertion(
     ) {
       throw new Error("admitted run authority is no longer active");
     }
+  };
+}
+
+/** Select the retained execution contract before dispatch; revoked authority still refuses. */
+export function resolveAdmittedRunWorkerAdmission(
+  context: AdmittedRunContext,
+  signal?: AbortSignal,
+): AgentRunWorkerTransactionSource | undefined {
+  signal?.throwIfAborted();
+  const authority = getAdmittedRunDelegatedAuthority(context);
+  if (!authority) {
+    throw new Error("Admitted run worker authority is no longer active");
+  }
+  // Unmigrated narrower sources keep their existing native path before any worker dispatch.
+  return supportsAgentRunWorkerAdmission(authority)
+    ? captureAdmittedRunWorkerAdmission(context, signal)
+    : undefined;
+}
+
+/** Bind worker admission to the exact admitted run and its narrower source owner. */
+function captureAdmittedRunWorkerAdmission(
+  context: AdmittedRunContext,
+  signal?: AbortSignal,
+): AgentRunWorkerTransactionSource {
+  signal?.throwIfAborted();
+  const authority = getAdmittedRunDelegatedAuthority(context);
+  if (!authority) {
+    throw new Error("Admitted run worker authority is no longer active");
+  }
+  const source = captureAgentRunWorkerAdmission(authority);
+  return {
+    assertCurrent() {
+      signal?.throwIfAborted();
+      source.assertCurrent();
+    },
+    admitTransaction(operation, grant) {
+      signal?.throwIfAborted();
+      source.admitTransaction(operation, () => {
+        signal?.throwIfAborted();
+        return grant();
+      });
+    },
   };
 }
 

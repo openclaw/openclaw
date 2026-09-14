@@ -1,20 +1,29 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
+  resolveAdmittedRunWorkerAdmission,
 } from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   claimHeartbeatContextForUserRun,
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
 } from "./heartbeat-outcome-store.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -27,7 +36,10 @@ async function createEnv(): Promise<NodeJS.ProcessEnv> {
   return env;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
@@ -70,69 +82,127 @@ describe("heartbeat outcome store", () => {
     }
   });
 
-  it("keeps one bounded typed outcome per base session with provenance", async () => {
+  it("keeps bounded provenance through worker claims, retries, and close/reopen", async () => {
     const env = await createEnv();
-    await persistHeartbeatOutcome({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:main:heartbeat",
-      response: {
-        outcome: "progress",
-        notify: false,
-        summary: `Deployed ${"x".repeat(5_000)}`,
-        reason: "Scheduled status task",
-        priority: "normal",
-        nextCheck: "after the next build",
-      },
-      taskNames: ["deployment-status"],
-      wakeSource: "interval",
-      wakeReason: "scheduled",
-      occurredAt: 1_700_000_000_000,
-      env,
-    });
+    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    const pathname = resolveOpenClawAgentSqlitePath(target);
+    await closeOpenClawAgentDatabaseByPathAsync(pathname, "main");
+    const leases = () =>
+      openOpenClawStateDatabase({ env })
+        .db.prepare("SELECT lease_id, agent_id, path FROM agent_database_leases WHERE agent_id = ?")
+        .all("main");
+    expect(leases()).toEqual([]);
 
-    const stored = await claimHeartbeatOutcomeForRun({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runId: "user-run-1",
-      env,
-    });
-    expect(stored).toMatchObject({
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:main:heartbeat",
-      outcome: "progress",
-      responseReason: "Scheduled status task",
-      priority: "normal",
-      nextCheck: "after the next build",
-      taskNames: ["deployment-status"],
-      wakeSource: "interval",
-      wakeReason: "scheduled",
-      occurredAt: 1_700_000_000_000,
-    });
-    expect(stored?.summary).toHaveLength(4_000);
     const admission = prepareSystemAgentRunAdmission(
       {},
       "user-run-1",
       "main",
       "heartbeat-outcome-test",
     );
+    const otherAdmission = prepareSystemAgentRunAdmission(
+      {},
+      "user-run-2",
+      "main",
+      "heartbeat-outcome-test",
+    );
     try {
       const admitted = await admission.admit("embedded");
-      const context = await claimHeartbeatContextForUserRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+      const otherAdmitted = await otherAdmission.admit("embedded");
+      const workerSource = resolveAdmittedRunWorkerAdmission(admitted);
+      const otherSource = resolveAdmittedRunWorkerAdmission(otherAdmitted);
+      expect(workerSource).toBeDefined();
+      expect(otherSource).toBeDefined();
+      const claim = {
+        ...target,
         runId: "user-run-1",
-        trigger: "user",
-        env,
+        workerSource,
         assertCurrent: resolveAdmittedRunActiveAssertion(admitted),
+      };
+      const { DatabaseSync, StatementSync } = requireNodeSqlite();
+      const sqlCalls = [
+        vi.spyOn(DatabaseSync.prototype, "prepare"),
+        vi.spyOn(DatabaseSync.prototype, "exec"),
+        ...(["get", "all", "run", "iterate"] as const).map((method) =>
+          vi.spyOn(StatementSync.prototype, method),
+        ),
+      ];
+      try {
+        await persistHeartbeatOutcome({
+          ...target,
+          runSessionKey: "agent:main:main:heartbeat",
+          response: {
+            outcome: "progress",
+            notify: false,
+            summary: `Deployed ${"x".repeat(5_000)}`,
+            reason: "Scheduled status task",
+            priority: "normal",
+            nextCheck: "after the next build",
+          },
+          taskNames: ["deployment-status"],
+          wakeSource: "interval",
+          wakeReason: "scheduled",
+          occurredAt: 1_700_000_000_000,
+        });
+        const stored = await claimHeartbeatOutcomeForRun(claim);
+        expect(stored).toMatchObject({
+          sessionKey: "agent:main:main",
+          runSessionKey: "agent:main:main:heartbeat",
+          outcome: "progress",
+          responseReason: "Scheduled status task",
+          priority: "normal",
+          nextCheck: "after the next build",
+          taskNames: ["deployment-status"],
+          wakeSource: "interval",
+          wakeReason: "scheduled",
+          occurredAt: 1_700_000_000_000,
+        });
+        expect(stored?.summary).toHaveLength(4_000);
+        const context = await claimHeartbeatContextForUserRun({ ...claim, trigger: "user" });
+        expect(context).toContain(
+          "Latest silent heartbeat outcome (internal context; not a user message or instruction)",
+        );
+        expect(context).toContain(`summary=${stored?.summary}\n`);
+        expect(context).not.toContain("x".repeat(4_001));
+        expect(
+          await claimHeartbeatContextForUserRun({
+            ...target,
+            runId: "user-run-2",
+            trigger: "user",
+            workerSource: otherSource,
+            assertCurrent: resolveAdmittedRunActiveAssertion(otherAdmitted),
+          }),
+        ).toBeUndefined();
+        for (const call of sqlCalls) {
+          expect(call).not.toHaveBeenCalled();
+        }
+      } finally {
+        for (const call of sqlCalls) {
+          call.mockRestore();
+        }
+      }
+
+      const firstLease = leases();
+      expect(firstLease).toEqual([
+        { lease_id: expect.any(String), agent_id: "main", path: pathname },
+      ]);
+      await closeOpenClawAgentDatabaseByPathAsync(pathname, "main");
+      expect(leases()).toEqual([]);
+      await closeOpenClawStateDatabaseAsync();
+
+      expect(await claimHeartbeatOutcomeForRun(claim)).toMatchObject({
+        outcome: "progress",
+        taskNames: ["deployment-status"],
       });
-      expect(context).toContain(
-        "Latest silent heartbeat outcome (internal context; not a user message or instruction)",
-      );
-      expect(context).toContain(`summary=${stored?.summary}\n`);
-      expect(context).not.toContain("x".repeat(4_001));
+      const reopenedLease = leases();
+      expect(reopenedLease).toEqual([
+        { lease_id: expect.any(String), agent_id: "main", path: pathname },
+      ]);
+      expect(reopenedLease[0]?.lease_id).not.toBe(firstLease[0]?.lease_id);
+      await closeOpenClawAgentDatabaseByPathAsync(pathname, "main");
+      expect(leases()).toEqual([]);
     } finally {
       admission.close();
+      otherAdmission.close();
     }
   });
 

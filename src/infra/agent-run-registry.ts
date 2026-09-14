@@ -18,9 +18,14 @@ import type {
   ProjectedAgentRunState,
 } from "./agent-run-registry.types.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
+import {
+  createAgentRunWorkerCustodyOperations,
+  retireAgentRunWorkerCustody,
+} from "./agent-run-worker-custody.js";
 
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
+export type { AgentRunWorkerTransactionSource } from "./agent-run-registry.types.js";
 
 const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state");
 
@@ -32,6 +37,19 @@ function getAgentRunRegistryState(): AgentRunRegistryState {
     version: 0,
   }));
 }
+
+export const {
+  bind: bindAgentRunWorkerAdmissionOwner,
+  supports: supportsAgentRunWorkerAdmission,
+  capture: captureAgentRunWorkerAdmission,
+  drainInstance: drainAgentRunWorkerTransactions,
+  drainRetired: drainRetiredAgentRunWorkerTransactions,
+  retireAndDrain: retireAndDrainAgentRunWorkerTransactions,
+} = createAgentRunWorkerCustodyOperations({
+  getState: getAgentRunRegistryState,
+  validateAuthority: validateAgentRunDelegatedAuthority,
+  getOwnerStatus: getAgentRunContextOwnerStatus,
+});
 
 function bumpAgentRunIndexVersion(): void {
   getAgentRunRegistryState().version += 1;
@@ -51,6 +69,7 @@ export function rotateAgentRunRegistryLifecycleGeneration(): string {
   for (const context of state.contexts.values()) {
     const authority = context.delegatedAuthority;
     if (authority) {
+      retireAgentRunWorkerCustody(context);
       delete context.delegatedAuthority;
       delete context.assertSourceCurrent;
       notifyDelegatedAuthorityClosed(state, authority);
@@ -97,6 +116,9 @@ export function registerAgentRunSequenceResetHandler(handler: (runId: string) =>
 }
 
 function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
+  if (predecessor) {
+    retireAgentRunWorkerCustody(predecessor);
+  }
   // Callers supply a fresh record; scheduler leases never transfer with its metadata.
   context.capacityWaits = undefined;
   context.registeredAt ??= Date.now();
@@ -645,6 +667,9 @@ export function clearAgentRunContext(
     }
     return;
   }
+  if (existing) {
+    retireAgentRunWorkerCustody(existing);
+  }
   const removed = state.contexts.delete(runId);
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
@@ -666,6 +691,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
   const context = state.contexts.get(runId);
   const authority = context?.delegatedAuthority;
   if (context && authority?.claimId === claimId) {
+    retireAgentRunWorkerCustody(context);
     delete context.delegatedAuthority;
     delete context.assertSourceCurrent;
     notifyDelegatedAuthorityClosed(state, authority);
@@ -714,6 +740,7 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     const lastSeen = context.lastActiveAt ?? context.registeredAt;
     const age = lastSeen ? now - lastSeen : Infinity;
     if (age > maxAgeMs) {
+      retireAgentRunWorkerCustody(context);
       state.contexts.delete(runId);
       state.sequenceResetHandler?.(runId);
       clearAgentRunUsage(runId, context.lifecycleGeneration);
@@ -731,6 +758,7 @@ export function resetAgentRunRegistryForTest(): void {
   const state = getAgentRunRegistryState();
   const hadRunContexts = state.contexts.size > 0;
   for (const context of state.contexts.values()) {
+    retireAgentRunWorkerCustody(context);
     context.approvalLeases?.close();
   }
   resetAgentRunUsageForTest();

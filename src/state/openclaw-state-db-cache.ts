@@ -144,11 +144,11 @@ function notifyOpenClawStateDatabaseClosed(database: StateDatabaseHandle): void 
   notifyOpenClawStateDatabaseLifecycle({
     kind: "closed",
     path: database.path,
-    identity: requireOpenClawStateDatabaseIdentity(database),
+    identity: requireStateDatabaseIdentity(database),
   });
 }
 
-function requireOpenClawStateDatabaseIdentity(database: StateDatabaseHandle): DatabasePathIdentity {
+export function requireStateDatabaseIdentity(database: StateDatabaseHandle): DatabasePathIdentity {
   const identity = databaseIdentities.get(database.db);
   if (!identity) {
     throw new Error("Published shared-state owner has no recorded database identity");
@@ -177,7 +177,7 @@ export function registerOpenClawStateDatabaseLifecycleListener(
       listener({
         kind: "opened",
         database,
-        identity: requireOpenClawStateDatabaseIdentity(database),
+        identity: requireStateDatabaseIdentity(database),
       });
     }
   }
