@@ -696,7 +696,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
           settlementError = error;
         }
         // oxfmt-ignore
-        const error = resolvePartialChannelDeliveryResult(settlementError) ? settlementError : dispatchError ?? settlementError;
+        const error = resolvePartialChannelDeliveryResult(settlementError) ? settlementError : dispatchError !== undefined ? dispatchError : settlementError;
         if (error === undefined) {
           return dispatchResult!;
         }
