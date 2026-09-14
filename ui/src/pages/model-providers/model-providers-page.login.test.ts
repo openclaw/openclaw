@@ -30,6 +30,7 @@ afterEach(() => {
 function loginHarness(
   options: {
     capabilities?: ModelAuthStatusResult["providerCapabilities"];
+    expiredXai?: boolean;
     providers?: ModelAuthStatusResult["providers"];
     saved?: boolean;
   } = {},
@@ -37,7 +38,12 @@ function loginHarness(
   const harness = createHarness("writer");
   const { context, request } = harness;
   const originalRequest = request.getMockImplementation()!;
+  const provider = options.expiredXai ? "xai" : "example";
+  const displayName = options.expiredXai ? "xAI" : "Example provider";
+  const secretChoice = options.expiredXai ? "xai/xai-api-key" : "example-secret";
+  const browserChoice = options.expiredXai ? "xai/xai-oauth" : "example-browser";
   let saved = options.saved ?? false;
+  let failNextLogin = false;
   let stepShown = false;
   const answer = deferred<WizardNextResult>();
   const cancel = deferred<{ status: "running" | "cancelled" }>();
@@ -49,32 +55,54 @@ function loginHarness(
       (saved
         ? [
             {
-              provider: "example",
-              displayName: "Example provider",
+              provider,
+              displayName,
               status: "ok",
-              profiles: [{ profileId: "example:new", type: "api_key", status: "ok" }],
+              profiles: [
+                {
+                  profileId: options.expiredXai ? "xai:restored" : "example:new",
+                  type: options.expiredXai ? "oauth" : "api_key",
+                  status: "ok",
+                },
+              ],
             },
           ]
-        : []),
+        : options.expiredXai
+          ? [
+              {
+                provider,
+                displayName,
+                status: "expired",
+                profiles: [
+                  {
+                    profileId: "xai:expired",
+                    email: "expired@example.invalid",
+                    type: "oauth",
+                    status: "expired",
+                  },
+                ],
+              },
+            ]
+          : []),
     providerCapabilities: options.capabilities ?? [
       {
-        provider: "example",
+        provider,
         apiKeySupported: true,
         quickApiKeySetup: true,
         loginOptions: [
           {
-            id: "example-browser",
-            brandId: "example",
-            label: "Example browser sign-in",
-            kind: "oauth",
+            id: browserChoice,
+            brandId: provider,
+            label: options.expiredXai ? "xAI OAuth" : "Example browser sign-in",
+            kind: options.expiredXai ? "device-code" : "oauth",
             featured: true,
           },
           {
-            id: "example-secret",
-            brandId: "example",
-            label: "Example API key",
-            groupLabel: "Example provider",
-            hint: "Use your Example account key",
+            id: secretChoice,
+            brandId: provider,
+            label: options.expiredXai ? "xAI API key" : "Example API key",
+            groupLabel: displayName,
+            hint: options.expiredXai ? "Use your xAI account key" : "Use your Example account key",
             kind: "secret",
             featured: false,
           },
@@ -87,6 +115,10 @@ function loginHarness(
       case "models.authStatus":
         return authStatus();
       case "models.authLogin":
+        if (failNextLogin) {
+          failNextLogin = false;
+          throw new Error("Fresh sign-in failed");
+        }
         return { done: false, status: "running" };
       case "wizard.next":
         if (!stepShown) {
@@ -116,7 +148,18 @@ function loginHarness(
     const value = await task(context.gateway.snapshot.client!);
     return { ok: true, value, refresh: { ok: true } };
   };
-  return { ...harness, answer, cancel, status };
+  return {
+    ...harness,
+    answer,
+    cancel,
+    status,
+    expireProfile: () => {
+      saved = false;
+    },
+    rejectNextLogin: () => {
+      failNextLogin = true;
+    },
+  };
 }
 
 async function openPicker(page: ModelProvidersPageTestElement) {
@@ -159,6 +202,37 @@ function providerChoices(page: Element) {
 }
 
 describe("Models provider login", () => {
+  it("clears a previous success before a failed OAuth reconnect", async () => {
+    const { context, answer, expireProfile, rejectNextLogin } = loginHarness({ expiredXai: true });
+    const page = appendPage(context);
+    await waitForFast(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>(".model-providers__profile-reconnect"),
+      ).not.toBeNull(),
+    );
+
+    page.querySelector<HTMLButtonElement>(".model-providers__profile-reconnect")!.click();
+    await waitForFast(() =>
+      expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')).not.toBeNull(),
+    );
+    await submitCredential(page);
+    answer.resolve({ done: true, status: "done" });
+    await waitForFast(() => expect(page.textContent).toContain("Provider credentials saved."));
+
+    expireProfile();
+    rejectNextLogin();
+    await page.refresh("forced");
+    await waitForFast(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>(".model-providers__profile-reconnect"),
+      ).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>(".model-providers__profile-reconnect")!.click();
+
+    await waitForFast(() => expect(page.textContent).toContain("Fresh sign-in failed"));
+    expect(page.textContent).not.toContain("Provider credentials saved.");
+  });
+
   it.each([
     { kind: "oauth", cancel: false, submit: false, callbackOnly: false },
     { kind: "oauth", cancel: false, submit: false, callbackOnly: true },

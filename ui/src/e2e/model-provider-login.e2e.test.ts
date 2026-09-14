@@ -386,6 +386,133 @@ suite.define(() => {
       },
     );
   });
+
+  it("reconnects an expired xAI OAuth profile without opening the login picker", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const now = Date.now();
+        const config = { agents: { defaults: { model: "xai/grok-4" } } };
+        const providerCapabilities = [
+          {
+            provider: "xai",
+            apiKeySupported: true,
+            quickApiKeySetup: true,
+            loginOptions: [
+              {
+                id: "xai/xai-api-key",
+                brandId: "xai",
+                label: "xAI API key",
+                kind: "secret",
+                featured: false,
+              },
+              {
+                id: "xai/xai-oauth",
+                brandId: "xai",
+                label: "xAI OAuth",
+                kind: "device-code",
+                featured: true,
+              },
+            ],
+          },
+        ];
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
+          models: [{ id: "grok-4", name: "Grok 4", provider: "xai", available: true }],
+          methodResponses: {
+            "config.get": {
+              config,
+              sourceConfig: config,
+              hash: "xai-reconnect",
+              issues: [],
+              raw: JSON.stringify(config),
+              valid: true,
+            },
+            "models.authStatus": {
+              ts: now,
+              providerCapabilities,
+              providers: [
+                {
+                  provider: "xai",
+                  displayName: "xAI",
+                  status: "expired",
+                  profiles: [
+                    {
+                      profileId: "xai:expired",
+                      email: "expired@example.invalid",
+                      type: "oauth",
+                      status: "expired",
+                    },
+                  ],
+                },
+              ],
+            },
+            "models.authLogin": { done: false, status: "running" },
+            "wizard.next": {
+              done: false,
+              status: "running",
+              step: {
+                id: "device",
+                type: "action",
+                title: "xAI OAuth",
+                message: "Authorize this synthetic account in your browser.",
+                externalUrl: "https://example.invalid/xai",
+                deviceCode: { code: "XAI-TEST" },
+              },
+            },
+            "usage.status": { updatedAt: now, providers: [] },
+            "sessions.usage": { aggregates: { byProvider: [] } },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        const provider = page.locator('[data-provider-id="xai"]');
+        await provider.getByText("expired@example.invalid", { exact: true }).waitFor();
+        await captureProviderProof("xai-reconnect-expired.png", provider);
+
+        await provider.getByRole("button", { name: "Reconnect", exact: true }).click();
+        const login = await gateway.waitForRequest("models.authLogin");
+        expect(login.params).toEqual({
+          sessionId: expect.any(String),
+          authChoice: "xai/xai-oauth",
+          agentId: "main",
+        });
+        expect(await page.locator("[data-models-login-choice]").count()).toBe(0);
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByText("XAI-TEST", { exact: true }).waitFor();
+        await captureProviderProof("xai-reconnect-device-code.png", dialog);
+
+        await gateway.setMethodResponse("models.authStatus", {
+          ts: now,
+          providerCapabilities,
+          providers: [
+            {
+              provider: "xai",
+              displayName: "xAI",
+              status: "ok",
+              profiles: [
+                {
+                  profileId: "xai:restored",
+                  email: "restored@example.invalid",
+                  type: "oauth",
+                  status: "ok",
+                },
+              ],
+            },
+          ],
+        });
+        await gateway.setMethodResponse("wizard.next", { done: true, status: "done" });
+        await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+        await page.getByText("restored@example.invalid", { exact: true }).waitFor();
+        await captureProviderProof("xai-reconnect-restored.png", provider);
+      },
+    );
+  });
+
   it.each([
     { value: "all", label: "Show all Example models" },
     { value: "keep", label: "Keep current restrictions" },

@@ -86,7 +86,10 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onCatalogRetry: () => undefined,
     onConnectProvider: () => undefined,
     onConnect: () => undefined,
+    onReconnect: () => undefined,
     canConnect: () => false,
+    canReconnect: () => false,
+    reconnectDisabled: false,
     loginBusy: false,
     ...overrides,
   };

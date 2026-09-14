@@ -33,6 +33,9 @@ function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProf
     profileOrders: {},
     onAddAccount: () => undefined,
     addAccountDisabled: false,
+    onReconnect: () => undefined,
+    canReconnect: () => true,
+    reconnectDisabled: false,
     onProfileOrderChange: () => undefined,
     onRequestLogout: () => undefined,
     ...overrides,
@@ -111,6 +114,37 @@ describe("renderProviderProfiles", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     Reflect.deleteProperty(document, "elementFromPoint");
+  });
+
+  it("offers reconnect only for an expired OpenClaw-managed OAuth profile", () => {
+    const onReconnect = vi.fn();
+    const container = mount(
+      renderProviderProfiles(
+        card({
+          id: "xai",
+          profiles: [
+            { profileId: "xai:expired", type: "oauth", status: "expired" },
+            { profileId: "xai:healthy", type: "oauth", status: "ok" },
+            {
+              profileId: "xai:external",
+              type: "oauth",
+              status: "expired",
+              externallyManaged: true,
+            },
+          ],
+        }),
+        props({ onReconnect }),
+      ),
+    );
+
+    const reconnect = container.querySelector<HTMLButtonElement>(
+      ".model-providers__profile-reconnect",
+    );
+    expect(reconnect?.textContent?.trim()).toBe("Reconnect");
+    expect(container.querySelectorAll(".model-providers__profile-reconnect")).toHaveLength(1);
+    reconnect!.click();
+    expect(onReconnect).toHaveBeenCalledOnce();
+    expect(onReconnect).toHaveBeenCalledWith("xai");
   });
 
   it("shows account provenance and removes drag handles for config-locked priority", () => {

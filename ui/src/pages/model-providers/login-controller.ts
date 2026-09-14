@@ -25,6 +25,15 @@ import { renderProviderAccountSummary } from "./profiles-view.ts";
 import "../../styles/model-providers.css";
 registerSettingsEnglish();
 
+type LoginChoice = ReturnType<typeof buildLoginProviders>[number]["choices"][number];
+type AuthLoginChoice = Omit<LoginChoice, "kind"> & {
+  kind: Exclude<LoginChoice["kind"], "setup-secret">;
+};
+
+function isAuthLoginChoice(choice: LoginChoice): choice is AuthLoginChoice {
+  return choice.kind !== "setup-secret";
+}
+
 type LoginControllerOptions = {
   getScope: () => {
     context: ApplicationContext;
@@ -97,8 +106,11 @@ export class ModelProviderLoginController implements ReactiveController {
       canMutate: this.options.canStart(),
       loginBusy: this.busy,
       onConnect: (card: ModelProviderCard) => this.open([card.id, ...card.credentialProviderIds]),
+      onReconnect: (provider: string) => this.reconnect(provider),
       canConnect: (card: ModelProviderCard) =>
         this.loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
+      canReconnect: (provider: string) => this.reconnectOptions(provider).length === 1,
+      reconnectDisabled: !this.options.canStart() || this.busy,
     };
   }
 
@@ -203,6 +215,46 @@ export class ModelProviderLoginController implements ReactiveController {
         ? this.options.getManualProviders?.()
         : undefined,
     });
+  }
+
+  private reconnectOptions(provider: string): AuthLoginChoice[] {
+    return this.loginProviders([provider]).flatMap((group) =>
+      group.choices.filter(
+        (option): option is AuthLoginChoice =>
+          option.kind === "oauth" || option.kind === "device-code",
+      ),
+    );
+  }
+
+  private reconnect(provider: string): void {
+    const options = this.reconnectOptions(provider);
+    const option = options.length === 1 ? options[0] : undefined;
+    if (!option) {
+      return;
+    }
+    this.start(option);
+  }
+
+  private start(option: AuthLoginChoice, isCurrent?: () => boolean): void {
+    if (
+      !this.options.canStart() ||
+      this.mutationActive ||
+      this.wizard.cancelling ||
+      this.runner.state.phase !== "idle" ||
+      isCurrent?.() === false
+    ) {
+      return;
+    }
+    this.inventoryRequest?.abort();
+    this.inventoryRequest = undefined;
+    this.picker = null;
+    this.focusPicker = null;
+    this.mode = "auth";
+    this.refreshWarning = null;
+    this.message = undefined;
+    this.runner.prepareSignIn(option.kind, option.label);
+    this.host.requestUpdate();
+    void this.run(() => this.runner.start(option.id, "models.authLogin"));
   }
 
   async open(providers?: string[], authChoice?: string): Promise<void> {
@@ -410,18 +462,12 @@ export class ModelProviderLoginController implements ReactiveController {
                                       if (!canSelect()) {
                                         return;
                                       }
-                                      if (selected.kind === "setup-secret") {
+                                      if (!isAuthLoginChoice(selected)) {
                                         this.reset();
                                         this.options.onManualProvider?.(selected.id);
                                         return;
                                       }
-                                      this.picker = null;
-                                      this.mode = "auth";
-                                      this.refreshWarning = null;
-                                      this.runner.prepareSignIn(selected.kind, selected.label);
-                                      void this.run(() =>
-                                        this.runner.start(selected.id, "models.authLogin"),
-                                      );
+                                      this.start(selected, picker.isCurrent);
                                     }}
                                   >
                                     <span class="model-provider-login__copy">
