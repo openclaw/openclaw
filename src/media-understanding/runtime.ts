@@ -39,6 +39,7 @@ import type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
+import { extractStructuredWithModelFallback } from "./structured-runtime.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -354,10 +355,7 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
     params.provider,
     buildMediaUnderstandingRegistry(undefined, params.cfg),
   );
-  if (!provider?.extractStructured) {
-    throw new Error(`Provider does not support structured extraction: ${params.provider}`);
-  }
-  return await provider.extractStructured({
+  const request = {
     input: params.input,
     instructions: params.instructions,
     schemaName: params.schemaName,
@@ -370,7 +368,18 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
     authStore: params.authStore,
     timeoutMs,
     cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
+  };
+  if (provider?.extractStructured) {
+    return await provider.extractStructured({ ...request, agentDir: params.agentDir ?? "" });
+  }
+  // Providers without a native hook use the generic model-backed fallback,
+  // mirroring the describeImage fallback above. The fallback resolves a real
+  // default agent dir because auth-profile resolution in the shared image
+  // runtime needs one; provider hooks keep the historical empty-string
+  // default so their contract stays unchanged.
+  return await extractStructuredWithModelFallback({
+    ...request,
+    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.cfg),
   });
 }
 

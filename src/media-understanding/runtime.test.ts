@@ -34,6 +34,13 @@ const mocks = vi.hoisted(() => {
     buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
+    extractStructuredWithModelFallback: vi.fn(async () => ({
+      text: '{"ok":true}',
+      parsed: { ok: true },
+      model: "fallback-model",
+      provider: "fallback",
+      contentType: "json" as const,
+    })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     optimizeImageDescriptionInput: vi.fn(
       async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
@@ -68,6 +75,10 @@ vi.mock("./provider-registry.js", () => ({
 
 vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
+}));
+
+vi.mock("./structured-runtime.js", () => ({
+  extractStructuredWithModelFallback: mocks.extractStructuredWithModelFallback,
 }));
 
 vi.mock("../media/media-services.js", () => ({
@@ -811,6 +822,7 @@ describe("media-understanding runtime", () => {
       }),
     );
     expect(extractStructured.mock.calls[0]?.[0].authStore).toBe(authStore);
+    expect(mocks.extractStructuredWithModelFallback).not.toHaveBeenCalled();
   });
 
   it("caps explicit structured extraction timeouts before provider execution", async () => {
@@ -861,8 +873,10 @@ describe("media-understanding runtime", () => {
     expect(mocks.getMediaUnderstandingProvider).not.toHaveBeenCalled();
   });
 
-  it("fails clearly when a provider lacks structured extraction", async () => {
+  it("falls back to model-backed structured extraction when the provider lacks the hook", async () => {
+    mocks.extractStructuredWithModelFallback.mockClear();
     const providerRegistry = new Map();
+    const authStore = {} as AuthProfileStore;
     mocks.buildMediaUnderstandingRegistry.mockReturnValue(providerRegistry);
     mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin" });
 
@@ -879,9 +893,85 @@ describe("media-understanding runtime", () => {
         instructions: "Return JSON.",
         provider: "vision-plugin",
         model: "vision-json",
+        profile: "work",
+        preferredProfile: "preferred-work",
+        authStore,
+        timeoutMs: 45_000,
         cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
       }),
-    ).rejects.toThrow("Provider does not support structured extraction: vision-plugin");
+    ).resolves.toEqual({
+      text: '{"ok":true}',
+      parsed: { ok: true },
+      model: "fallback-model",
+      provider: "fallback",
+      contentType: "json",
+    });
+
+    expect(mocks.extractStructuredWithModelFallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: "Return JSON.",
+        provider: "vision-plugin",
+        model: "vision-json",
+        profile: "work",
+        preferredProfile: "preferred-work",
+        authStore,
+        timeoutMs: 45_000,
+        agentDir: "/tmp/agent",
+      }),
+    );
+  });
+
+  it("falls back when no media-understanding provider is registered at all", async () => {
+    mocks.extractStructuredWithModelFallback.mockClear();
+    mocks.buildMediaUnderstandingRegistry.mockReturnValue(new Map());
+    mocks.getMediaUnderstandingProvider.mockReturnValue(undefined);
+
+    const result = await extractStructuredWithModel({
+      input: [
+        {
+          type: "image",
+          buffer: Buffer.from("image-bytes"),
+          fileName: "fact.png",
+          mime: "image/png",
+        },
+      ],
+      instructions: "Return JSON.",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(result.contentType).toBe("json");
+    expect(mocks.extractStructuredWithModelFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "anthropic", model: "claude-sonnet-5" }),
+    );
+  });
+
+  it("resolves a default agent dir for the fallback when none is supplied", async () => {
+    mocks.extractStructuredWithModelFallback.mockClear();
+    mocks.getMediaUnderstandingProvider.mockReturnValue(undefined);
+
+    await extractStructuredWithModel({
+      input: [
+        {
+          type: "image",
+          buffer: Buffer.from("image-bytes"),
+          fileName: "fact.png",
+          mime: "image/png",
+        },
+      ],
+      instructions: "Return JSON.",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      cfg: {} as OpenClawConfig,
+    });
+
+    const call = mocks.extractStructuredWithModelFallback.mock.calls[0]?.[0] as
+      | { agentDir?: string }
+      | undefined;
+    expect(call?.agentDir).toBeTruthy();
   });
 
   it("surfaces the underlying provider failure when media understanding fails", async () => {
