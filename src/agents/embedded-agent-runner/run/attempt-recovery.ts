@@ -350,6 +350,10 @@ export async function recoverEmbeddedRunAttempt(input: {
       retryAfterMs: promptError
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,
+      maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
+      // Fallback and rotation both require a replay-safe attempt; without one the
+      // only recovery left is to wait out the floor and continue the transcript.
+      failoverEligible: currentAttemptReplaySafe,
       onRetry: async ({ attempt: retryAttempt, maxRetries, delayMs, reason }) => {
         const event = {
           stream: "run_status",

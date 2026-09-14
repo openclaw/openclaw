@@ -428,6 +428,9 @@ export async function runEmbeddedAttempt(
         codeModeEngaged: codeModeControlsEnabledForRun,
         providerRetryMaxRetries:
           preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings().maxRetries,
+        providerRetryMaxDelayMs:
+          preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings()
+            .maxRetryDelayMs,
         ...(catalogSession
           ? {
               bridgeCalls: {
