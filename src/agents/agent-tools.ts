@@ -271,6 +271,8 @@ type OpenClawCodingToolsOptions = {
   config?: OpenClawConfig;
   /** Explicitly distinguishes live Gateway session policy from a pinned run override. */
   sessionConfigSource?: "runtime" | "pinned";
+  /** Host-bound target for auxiliary history/search, separate from execution identity. */
+  sessionReadScopeKey?: string;
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
@@ -923,6 +925,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxed: Boolean(sandbox),
             config: options?.config,
             sessionConfigSource: options?.sessionConfigSource,
+            sessionReadScopeKey: options?.sessionReadScopeKey,
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,

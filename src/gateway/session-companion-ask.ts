@@ -12,10 +12,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
-import {
-  buildSessionCompanionRunConfig,
-  SESSION_COMPANION_TOOLS,
-} from "./session-companion-policy.js";
+import { SESSION_COMPANION_TOOLS } from "./session-companion-policy.js";
 import {
   trimSessionCompanionExchanges,
   type SessionCompanionThread,
@@ -197,7 +194,12 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       trigger: "manual",
       workspaceDir: params.workspaceDir,
       cwd: params.workspaceDir,
-      config: buildSessionCompanionRunConfig(params.cfg),
+      config: params.cfg,
+      // Invocation restrictions survive configured-runtime admission and reload.
+      // The internal execution session must not become the session-read target.
+      disableToolSearch: true,
+      requireWorkspaceOnly: true,
+      sessionReadScopeKey: params.sessionKey,
       codeModeOverride: false,
       prompt: current.content,
       provider: selection.runtimeProvider ?? selection.provider,

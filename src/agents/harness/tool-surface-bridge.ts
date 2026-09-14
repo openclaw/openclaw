@@ -68,6 +68,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   modelId?: string;
   modelProvider?: string;
   codeModeOverride?: boolean | "auto";
+  disableToolSearch?: true;
   modelToolsEnabled: boolean;
   prompt?: string;
   runId?: string;
@@ -93,6 +94,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     codeModeOverride: params.codeModeOverride,
+    disableToolSearch: params.disableToolSearch,
     toolsEnabled: params.modelToolsEnabled,
     disableTools: params.disableTools,
     isRawModelRun: params.isRawModelRun === true,
