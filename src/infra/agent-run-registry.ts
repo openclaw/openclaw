@@ -525,8 +525,8 @@ export function releaseAgentRunDelegatedAuthority(authority: AgentRunDelegatedAu
   return true;
 }
 
-/** Retained routing metadata alone cannot keep a dead writer alive. */
-export function hasLiveAgentRunContext(runId: string): boolean {
+/** Exact execution claims and scheduler queue leases, excluding UI projection metadata. */
+export function hasAgentRunContextExecutionOwner(runId: string): boolean {
   const state = getAgentRunRegistryState();
   const context = state.contexts.get(runId);
   if (!context || context.lifecycleGeneration !== state.lifecycleGeneration) {
@@ -535,8 +535,17 @@ export function hasLiveAgentRunContext(runId: string): boolean {
   const owners = state.owners.get(runId);
   return (
     (owners?.lifecycleGeneration === state.lifecycleGeneration && owners.claimIds.size > 0) ||
-    (state.queuedRunContextLeases?.get(context) ?? 0) > 0 ||
-    context.projectSessionActive === true
+    (state.queuedRunContextLeases?.get(context) ?? 0) > 0
+  );
+}
+
+/** Live display projection also includes a producer's active-session marker. */
+export function hasLiveAgentRunContext(runId: string): boolean {
+  const state = getAgentRunRegistryState();
+  const context = state.contexts.get(runId);
+  return (
+    context?.lifecycleGeneration === state.lifecycleGeneration &&
+    (hasAgentRunContextExecutionOwner(runId) || context.projectSessionActive === true)
   );
 }
 

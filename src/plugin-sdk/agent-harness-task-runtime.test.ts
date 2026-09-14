@@ -242,6 +242,42 @@ describe("agent-harness-task-runtime", () => {
     );
   });
 
+  it("rechecks the captured task during an asynchronous announcement", async () => {
+    const task = {
+      taskId: "native-task",
+      runtime: "subagent" as const,
+      taskKind: "example-harness",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session" as const,
+      runId: "example:child-1",
+      sourceId: "example:child-1",
+      task: "work",
+      status: "succeeded" as "succeeded" | "cancelled",
+      deliveryStatus: "pending" as const,
+      notifyPolicy: "silent" as const,
+      createdAt: 1,
+    };
+    vi.mocked(listTaskRecords).mockReturnValue([task]);
+    vi.mocked(deliverSubagentAnnouncement).mockImplementationOnce(async (params) => {
+      expect(params.isSourceSessionEffectsAllowed?.()).toBe(true);
+      await Promise.resolve();
+      task.status = "cancelled";
+      expect(params.isSourceSessionEffectsAllowed?.()).toBe(false);
+      return { delivered: false, path: "none" };
+    });
+    await expect(
+      deliverAgentHarnessTaskCompletion({
+        scope: createScope("agent:main:main"),
+        childSessionKey: task.runId,
+        childSessionId: "child-1",
+        announceId: "example:parent:child:succeeded",
+        status: "succeeded",
+        result: "result",
+      }),
+    ).resolves.toMatchObject({ delivered: false });
+  });
+
   it("checks durable direct delivery phases", () => {
     expect(
       isDurableAgentHarnessCompletionDelivery({

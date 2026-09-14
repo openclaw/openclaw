@@ -163,6 +163,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  beforeDispatch?: () => Promise<void>;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
   let currentUrl = new URL(params.url);
   let method = (params.init?.method ?? "GET").toUpperCase();
@@ -184,6 +185,8 @@ async function fetchWithMatrixGuardedRedirects(params: {
         policy: params.ssrfPolicy,
       });
       dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
+      // Authority can change during DNS resolution or a preceding redirect response.
+      await params.beforeDispatch?.();
       const response = await fetchWithMatrixDispatcher({
         url: currentUrl.toString(),
         init: {
@@ -267,6 +270,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
 export function createMatrixGuardedFetch(params: {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  beforeRequest?: (resource: RequestInfo | URL, init?: RequestInit) => Promise<void>;
 }): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
     const url = withoutMatrixStateAfterSyncParam(toFetchUrl(resource));
@@ -277,6 +281,10 @@ export function createMatrixGuardedFetch(params: {
       signal: signal ?? undefined,
       ssrfPolicy: params.ssrfPolicy,
       dispatcherPolicy: params.dispatcherPolicy,
+      // Redirects belong to the same original timeline operation and task owner.
+      beforeDispatch: params.beforeRequest
+        ? () => params.beforeRequest!(resource, init)
+        : undefined,
     });
 
     try {

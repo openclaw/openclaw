@@ -191,14 +191,17 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     transactionId?: string,
     beforeWireDispatch?: (dispatch: MatrixMessageWireDispatch) => Promise<void>,
   ): Promise<string> {
+    // Keep ephemeral sends on the same per-wire guard as durable transaction IDs.
+    const wireTransactionId =
+      transactionId ?? (beforeWireDispatch ? this.client.makeTxnId() : undefined);
     return await this.runSerializedRoomSend(roomId, async () => {
       return await this.withMessageWireDispatchGuard({
-        transactionId,
+        transactionId: wireTransactionId,
         guard: beforeWireDispatch,
         run: async () => {
-          if (transactionId) {
+          if (wireTransactionId) {
             const room = this.client.getRoom(roomId);
-            const existing = room?.getEventForTxnId?.(transactionId);
+            const existing = room?.getEventForTxnId?.(wireTransactionId);
             if (existing) {
               const existingId = existing.getId();
               if (
@@ -214,12 +217,12 @@ export abstract class MatrixClientCore extends MatrixClientBase {
                 return resent.event_id;
               }
               throw new Error(
-                `Matrix transaction ${transactionId} is already active with status ${existing.status ?? "unknown"}`,
+                `Matrix transaction ${wireTransactionId} is already active with status ${existing.status ?? "unknown"}`,
               );
             }
           }
           await this.prepareRoomForMessageSend(roomId, content);
-          const sent = await this.client.sendMessage(roomId, content as never, transactionId);
+          const sent = await this.client.sendMessage(roomId, content as never, wireTransactionId);
           return sent.event_id;
         },
       });

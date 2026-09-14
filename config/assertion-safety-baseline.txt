@@ -660,7 +660,7 @@ extensions/matrix/src/matrix/poll-types.ts	10
 extensions/matrix/src/matrix/probe.ts	1
 extensions/matrix/src/matrix/reaction-common.ts	1
 extensions/matrix/src/matrix/sdk.ts	8
-extensions/matrix/src/matrix/sdk/client-base.ts	7
+extensions/matrix/src/matrix/sdk/client-base.ts	6
 extensions/matrix/src/matrix/sdk/client-core.ts	15
 extensions/matrix/src/matrix/sdk/client-event-bridge.ts	2
 extensions/matrix/src/matrix/sdk/client-support.ts	1

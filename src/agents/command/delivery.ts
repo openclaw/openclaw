@@ -12,6 +12,7 @@ import {
   type NormalizeReplyOutcome,
   type NormalizeReplySkipReason,
 } from "../../auto-reply/reply/normalize-reply.js";
+import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import { formatBtwTextForExternalDelivery } from "../../auto-reply/reply/reply-payloads-base.js";
 import {
@@ -33,6 +34,7 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
@@ -40,6 +42,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   createOutboundPayloadPlan,
@@ -961,6 +964,23 @@ export async function deliverAgentCommandResult(
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
+      const assertPlatformSendCurrent = () => {
+        try {
+          params.assertDeliveryCurrent?.();
+        } catch (error) {
+          if (!isSessionWorkStartInvalidatedError(error)) {
+            throw error;
+          }
+          // Revoked task/session custody cannot leave a stale final queued for
+          // retry after this process-local assertion disappears.
+          throw new PlatformMessageNotDispatchedError("Agent final delivery custody was revoked", {
+            cause: error,
+            retryable: false,
+          });
+        }
+      };
+      // The outbound projection contains transport data, not private payload metadata.
+      const pendingFinalCompletion = resolvePendingFinalDeliveryCompletion(payloads);
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
       let send: DurableSendResult;
       try {
@@ -970,6 +990,12 @@ export async function deliverAgentCommandResult(
           to: deliveryTarget,
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
+          ...(pendingFinalCompletion
+            ? {
+                deliveryCompletion: pendingFinalCompletion,
+                deliveryIntentId: pendingFinalCompletion.deliveryId,
+              }
+            : {}),
           session: outboundSession,
           identity: resolveAgentOutboundIdentity(cfg, deliveryAgentId),
           replyPayloadSendingHook: {
@@ -991,6 +1017,8 @@ export async function deliverAgentCommandResult(
           durability: bestEffortDeliver ? "best_effort" : "required",
           signal: restartAbort.signal,
           onDeliveryIntent: restartAbort.dispose,
+          onPlatformSendDispatch: async () => assertPlatformSendCurrent(),
+          assertDirectAdapterHandoff: assertPlatformSendCurrent,
           onError: logDeliveryError,
           onPayload: logPayload,
           deps: createOutboundSendDeps(deps),

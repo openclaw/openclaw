@@ -63,6 +63,9 @@ export async function startGatewayEarlyRuntime(params: {
     await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
       const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
       ensureTaskRuntimeStateReady();
+      const { reconcileRetainedHarnessCompletionDeliveries } =
+        await import("../agents/agent-harness-completion-delivery.js");
+      reconcileRetainedHarnessCompletionDeliveries();
     });
   }
   // Startup failure can occur immediately after discovery; publish its owner first.

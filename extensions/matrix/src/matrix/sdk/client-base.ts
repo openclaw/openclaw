@@ -210,6 +210,12 @@ export abstract class MatrixClientBase {
     const guardedFetch = createMatrixGuardedFetch({
       ssrfPolicy: opts.ssrfPolicy,
       dispatcherPolicy: opts.dispatcherPolicy,
+      beforeRequest: async (resource, init) => {
+        const dispatch = resolveMessageWireDispatch(resource, init);
+        if (dispatch) {
+          await this.messageWireDispatchGuards.get(dispatch.transactionId)?.(dispatch);
+        }
+      },
     });
     this.client = createMatrixJsClient({
       baseUrl: homeserver,
@@ -218,13 +224,7 @@ export abstract class MatrixClientBase {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-      fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
-        const dispatch = resolveMessageWireDispatch(resource, init);
-        if (dispatch) {
-          await this.messageWireDispatchGuards.get(dispatch.transactionId)?.(dispatch);
-        }
-        return await guardedFetch(resource, init);
-      }) as typeof fetch,
+      fetchFn: guardedFetch,
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [

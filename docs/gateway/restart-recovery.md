@@ -74,6 +74,24 @@ attachment policy and context limits. The Codex plugin owns that native input
 path: update its artifact alongside the Gateway. An intentionally pinned older
 plugin does not acquire the fix from a core-only update.
 
+A detached harness completion that has entered a parent turn with an outbound
+channel route can retain an exact task, terminal outcome, and requester-session claim. After a crash, main-session recovery
+continues that admitted turn without starting the child again. The original
+completion identity remains distinct from the recovery run. A retained final
+receipt settles the task even if the old native monitor no longer exists; a
+pending recovery claim is not a delivered result. A later task outcome cannot authorize
+the earlier completion input or settle its receipt. Cancellation, session replacement,
+and missing or contradictory task identities do not authorize replay. A real held admission or a still-valid admitted input keeps recovery pending. Rejected input retains the task but releases the process monitor; it does not poll indefinitely. Native parent rotation must preserve the current connection and requester identity checks. Cold task reconstruction requires the saved native history owner. A later parent registration cannot supply missing historical ownership.
+
+This applies to newly recorded channel-delivery claims. Route-less, transcript-only
+and Control UI parents are not covered by this recovery change. Nor does it recover
+every older native completion or a completion that never reached parent admission. Progress messages, empty or
+truncated receipts, and uncertain sends cannot establish final delivery. The
+Gateway and Codex plugin must both be updated for recovery joining. Older builds
+may discard the added receipt fields while rewriting session metadata, even
+without a SQL schema change. Finish pending completion recovery before downgrading;
+do not delete consumed inputs or change source IDs to force another delivery.
+
 Pending delivery rows drain or retry after restart. When a delivery exhausts its
 retry budget, recovery reclaims expired producer custody. An active producer
 keeps ownership. Failed deliveries cannot send again, but retain the information

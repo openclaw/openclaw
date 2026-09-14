@@ -14,6 +14,7 @@ import {
   readActiveTranscriptEntryAnchor,
 } from "./session-accessor.js";
 import {
+  everySessionTranscriptUserInputFrom,
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
@@ -223,6 +224,97 @@ describe("SQLite active transcript event projection", () => {
     });
     await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
     expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({ id: "prior" });
+  });
+
+  it("streams only user control facts from an exact visible input within the read fence", async () => {
+    const provenance = {
+      kind: "internal_system",
+      sourceTool: "main_session_restart_recovery",
+      sourceSessionKey: scope.sessionKey,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("source", null, {
+          role: "user",
+          content: "x".repeat(100_000),
+          idempotencyKey: "source:user",
+          __openclaw: { runId: "source" },
+          provenance,
+        }),
+        transcriptMessage("tool-output", "source", {
+          role: "assistant",
+          content: "y".repeat(100_000),
+        }),
+        transcriptMessage("later-human", "tool-output", {
+          role: "user",
+          content: "new request",
+          idempotencyKey: "later:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    const facts: unknown[] = [];
+    expect(
+      everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
+        facts.push(message);
+        return true;
+      }),
+    ).toBe(true);
+    expect(facts).toEqual([
+      { role: "user", idempotencyKey: "source:user", __openclaw: { runId: "source" }, provenance },
+      { role: "user", idempotencyKey: "later:user", __openclaw: { runId: null }, provenance: null },
+    ]);
+    expect(JSON.stringify(facts).length).toBeLessThan(500);
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "later-human" });
+    if (!anchor) {
+      throw new Error("missing later admission anchor");
+    }
+    const fenced: unknown[] = [];
+    expect(
+      runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "fenced-turn", role: "user" },
+        () =>
+          everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
+            fenced.push(message);
+            return true;
+          }),
+      ),
+    ).toBe(true);
+    expect(fenced).toEqual([facts[0]]);
+    expect(
+      runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "fenced-turn", role: "user" },
+        () => everySessionTranscriptUserInputFrom(scope, "later:user", () => true),
+      ),
+    ).toBe(false);
+    let visited = 0;
+    expect(
+      everySessionTranscriptUserInputFrom(scope, "source:user", () => {
+        visited++;
+        return false;
+      }),
+    ).toBe(false);
+    expect(visited).toBe(1);
+
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset",
+      parentId: "later-human",
+      timestamp: "2026-09-13T00:00:00.000Z",
+      reason: "new",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("fresh", "reset", {
+          role: "user",
+          content: "new",
+          idempotencyKey: "fresh:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    expect(everySessionTranscriptUserInputFrom(scope, "source:user", () => true)).toBe(false);
+    expect(everySessionTranscriptUserInputFrom(scope, "fresh:user", () => true)).toBe(true);
   });
 
   it("keeps counting genuinely oversized post-reset events", async () => {
