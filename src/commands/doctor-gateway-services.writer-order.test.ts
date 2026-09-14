@@ -31,6 +31,7 @@ vi.mock("./doctor/repair-sequencing.js", () => ({
     changeNotes: [],
     configChangeNotes: [],
     warningNotes: [],
+    installedPluginIdRecovery: new Map(),
     authProfilesRepaired: false,
     modelRetirementRepairRan: false,
   }),

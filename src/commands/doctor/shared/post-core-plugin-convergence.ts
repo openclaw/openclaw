@@ -24,6 +24,10 @@ import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 // Link mandatory repairs before a package swap can remove this updater's old chunks.
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../../doctor-plugin-registry.js";
+import {
+  recoverInstalledPluginConfigIds,
+  type InstalledPluginIdRecovery,
+} from "./installed-plugin-id-recovery.js";
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "./update-phase.js";
 
@@ -36,6 +40,9 @@ type PostCoreConvergenceWarning = {
 };
 
 type PostCoreConvergenceResult = {
+  config: OpenClawConfig;
+  configChanges: string[];
+  installedPluginIdRecovery: InstalledPluginIdRecovery;
   changes: string[];
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];
@@ -197,6 +204,8 @@ export async function runPostCorePluginConvergence(params: {
    * map is what gets persisted and returned via `installRecords`.
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
+  /** Only a config-writing caller may plan recovery before smoke-checking that candidate. */
+  configPersistence?: "caller";
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<PostCoreConvergenceResult> {
@@ -253,17 +262,28 @@ export async function runPostCorePluginConvergence(params: {
   }));
 
   const records: Record<string, PluginInstallRecord> = repair.records;
+  const recovered =
+    params.configPersistence === "caller"
+      ? await recoverInstalledPluginConfigIds(params.cfg, env)
+      : { config: params.cfg, changes: [], notices: [], recovery: new Map() };
+  notices.push(
+    ...recovered.notices.map((message) => ({
+      reason: message,
+      message,
+      guidance: [REPAIR_GUIDANCE],
+    })),
+  );
   // Filter the smoke-check input to active records ONLY: configured /
   // enabled plugins, plus trusted-source-linked official sync targets
   // selected by `filterRecordsToActive`. Without this filter, a stale install
   // record for an inactive plugin could block the update even though the
   // gateway will never load it.
   const smoke = await runActivePluginPayloadSmokeCheck({
-    cfg: params.cfg,
+    cfg: recovered.config,
     records,
     env,
   });
-  const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records, env });
+  const smokeRecords = filterRecordsToActive({ cfg: recovered.config, records, env });
   const resolveInstallRecordPaths = (
     installRecords: Record<string, PluginInstallRecord>,
   ): Set<string> =>
@@ -305,6 +325,9 @@ export async function runPostCorePluginConvergence(params: {
   }
 
   return {
+    config: recovered.config,
+    configChanges: recovered.changes,
+    installedPluginIdRecovery: recovered.recovery,
     changes: [
       ...(staleManagedNpmBundledPluginRepair?.removedPluginIds.map(
         (pluginId) => `Removed stale managed install record for bundled plugin "${pluginId}".`,

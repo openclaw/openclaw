@@ -284,9 +284,12 @@ vi.mock("./doctor/repair-sequencing.js", async () => {
   );
   return {
     ...actual,
-    runDoctorRepairSequence: (params: unknown) => {
+    runDoctorRepairSequence: async (params: unknown) => {
       if (runDoctorRepairSequenceMock.getMockImplementation()) {
-        return runDoctorRepairSequenceMock(params);
+        return {
+          installedPluginIdRecovery: new Map(),
+          ...(await runDoctorRepairSequenceMock(params)),
+        };
       }
       return actual.runDoctorRepairSequence(
         params as Parameters<typeof actual.runDoctorRepairSequence>[0],
@@ -1386,7 +1389,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
   };
 });
 
-vi.mock("./doctor-config-analysis.js", () => {
+vi.mock("./doctor-config-analysis.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-config-analysis.js")>();
   function formatConfigKeyPath(parts: Array<string | number>): string {
     if (parts.length === 0) {
       return "<root>";
@@ -1421,6 +1425,8 @@ vi.mock("./doctor-config-analysis.js", () => {
   }
 
   return {
+    collectInvalidHookTransformsDirWarnings: actual.collectInvalidHookTransformsDirWarnings,
+    collectUnsupportedInternalHookEntryWarnings: actual.collectUnsupportedInternalHookEntryWarnings,
     collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
     formatConfigKeyPath,
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,

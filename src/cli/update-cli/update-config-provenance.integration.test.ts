@@ -47,7 +47,10 @@ vi.mock("../../plugins/update-cohort.js", () => ({
   },
 }));
 vi.mock("../../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
-  runPostCorePluginConvergence: async () => ({
+  runPostCorePluginConvergence: async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    config: cfg,
+    configChanges: [],
+    installedPluginIdRecovery: new Map(),
     changes: [],
     warnings: [],
     installRecords: {},
@@ -75,7 +78,10 @@ vi.mock("./update-command-fresh-doctor.js", async (importOriginal) => ({
   }),
 }));
 
-import { repairLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
+import {
+  planLegacyConfigForUpdateChannel,
+  repairLegacyConfigForUpdateChannel,
+} from "../../commands/doctor/legacy-config-repair.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
@@ -90,14 +96,30 @@ afterEach(() => {
 
 describe("update config provenance", () => {
   it.each([
-    { flow: "plugins", requestedChannel: undefined },
-    { flow: "legacy", requestedChannel: undefined },
-    ...["converge", "resume", "finalize"].flatMap((flow) =>
-      [undefined, "beta" as const].map((requestedChannel) => ({ flow, requestedChannel })),
+    ...Array.from(
+      [
+        { flow: "plugins", requestedChannel: undefined },
+        ...["converge", "resume", "finalize"].flatMap((flow) =>
+          [undefined, "beta" as const].map((requestedChannel) => ({ flow, requestedChannel })),
+        ),
+      ],
+      (scenario) => ({
+        ...scenario,
+        authoredToken: "${UPDATE_PROVENANCE_TOKEN}",
+        deferredLegacyPlan: false,
+      }),
+    ),
+    ...[false, true].flatMap((deferredLegacyPlan) =>
+      ["${UPDATE_PROVENANCE_TOKEN}", "$${UPDATE_PROVENANCE_TOKEN}"].map((authoredToken) => ({
+        flow: "legacy",
+        requestedChannel: undefined,
+        authoredToken,
+        deferredLegacyPlan,
+      })),
     ),
   ])(
-    "retains env refs through $flow (channel: $requestedChannel)",
-    async ({ flow, requestedChannel }) => {
+    "retains env refs through $flow (channel: $requestedChannel, token: $authoredToken, deferred: $deferredLegacyPlan)",
+    async ({ flow, requestedChannel, authoredToken, deferredLegacyPlan }) => {
       await withTempHome(async (home) => {
         controls.root = home;
         const stateDir = path.join(home, ".openclaw");
@@ -112,7 +134,7 @@ describe("update config provenance", () => {
             gateway: {
               mode: "local",
               ...(flow === "legacy" ? { bind: "localhost" } : {}),
-              auth: { mode: "token", token: "${UPDATE_PROVENANCE_TOKEN}" },
+              auth: { mode: "token", token: authoredToken },
             },
           }),
         );
@@ -121,7 +143,10 @@ describe("update config provenance", () => {
         const prepared = await createConfigIO({
           pluginValidation: "skip",
         }).readConfigFileSnapshotForWrite();
-        expect(prepared.snapshot.sourceConfig.gateway?.auth?.token).toBe("synthetic-before");
+        const escapedToken = authoredToken.startsWith("$${");
+        expect(prepared.snapshot.sourceConfig.gateway?.auth?.token).toBe(
+          escapedToken ? authoredToken.slice(1) : "synthetic-before",
+        );
         if (flow === "plugins") {
           expect(prepared.snapshot.valid).toBe(true);
           await updatePluginsAfterCoreUpdate({
@@ -134,13 +159,23 @@ describe("update config provenance", () => {
             pluginInstallRecords: {},
           });
         } else if (flow === "legacy") {
+          const before = await fs.readFile(configPath, "utf8");
+          const plan = deferredLegacyPlan
+            ? planLegacyConfigForUpdateChannel(prepared.snapshot, prepared.writeOptions)
+            : undefined;
+          if (deferredLegacyPlan) {
+            expect(plan).toBeDefined();
+          }
+          expect(await fs.readFile(configPath, "utf8")).toBe(before);
           vi.stubEnv("UPDATE_PROVENANCE_TOKEN", "synthetic-after");
           const result = await repairLegacyConfigForUpdateChannel({
             configSnapshot: prepared.snapshot,
             configWriteOptions: prepared.writeOptions,
+            plan,
             jsonMode: true,
           });
           expect(result.repaired).toBe(true);
+          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(before);
         } else if (flow === "converge") {
           await convergeUpdatePlugins({
             result: {
@@ -183,7 +218,7 @@ describe("update config provenance", () => {
           });
         }
         const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-        expect(saved.gateway?.auth?.token).toBe("${UPDATE_PROVENANCE_TOKEN}");
+        expect(saved.gateway?.auth?.token).toBe(authoredToken);
         if (flow !== "legacy") {
           expect(saved.gateway?.port).toBe(19001);
         } else {
@@ -195,7 +230,9 @@ describe("update config provenance", () => {
           expect(saved.update?.channel).toBeUndefined();
         }
         const after = await readConfigFileSnapshot();
-        expect(after.sourceConfig.gateway?.auth?.token).toBe("synthetic-after");
+        expect(after.sourceConfig.gateway?.auth?.token).toBe(
+          escapedToken ? authoredToken.slice(1) : "synthetic-after",
+        );
       });
     },
   );

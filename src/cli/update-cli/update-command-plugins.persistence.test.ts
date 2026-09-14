@@ -37,6 +37,9 @@ describe("updater plugin commit cancellation", () => {
             controller.abort(refusal);
           }
           return {
+            config: cfg,
+            configChanges: [],
+            installedPluginIdRecovery: new Map(),
             changes: [],
             warnings: [],
             errored: false,

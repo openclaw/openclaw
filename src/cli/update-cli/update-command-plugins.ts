@@ -1,7 +1,12 @@
 // Plugin synchronization and convergence after the core update.
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  prepareDoctorConfigReferenceSource,
+  restoreDoctorConfigEnvRefs,
+} from "../../commands/doctor/shared/config-flow-steps.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../commands/doctor/shared/configured-runtime-plugin-installs.js";
+import { assertInstalledPluginIdRecoveryCurrent } from "../../commands/doctor/shared/installed-plugin-id-recovery.js";
 import { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
@@ -12,6 +17,7 @@ import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/up
 import { getLogger } from "../../logging/logger.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
+import { resolvePluginInstallOwnerMigrations } from "../../plugins/install-transaction.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -20,6 +26,10 @@ import {
 import { listPersistedBundledPluginLocationBridges } from "../../plugins/location-bridges.js";
 import { isTrustedOfficialPluginInstallRecord } from "../../plugins/official-external-install-records.js";
 import type { MissingPluginInstallPayload } from "../../plugins/payload-verification.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "../../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { convergePluginReleaseCohort } from "../../plugins/update-cohort.js";
 import {
@@ -112,6 +122,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     return { ...invalid.result, assessment: { kind: "core-critical", reason: "invalid-config" } };
   }
 
+  const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);
   const clawHubTrustNotices = new Set<string>();
   const loggedPluginWarnings = new Set<string>();
   const pluginLogger = {
@@ -254,6 +265,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
+    configPersistence: "caller",
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
@@ -316,7 +328,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
   // Repair already persisted this authoritative map; the commit below must not
   // restore the pre-convergence records and discard successful repairs.
-  pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
+  pluginConfig = withPluginInstallRecords(convergence.config, convergence.installRecords);
   // Report retention only while the probed install survives convergence.
   for (const outcome of cohort.updateOutcomes) {
     const record = convergence.installRecords[outcome.pluginId];
@@ -362,13 +374,30 @@ export async function updatePluginsAfterCoreUpdate(params: {
       getLogger().warn(message);
     }
   }
-  if (convergence.changes.length > 0) {
+  if (convergence.changes.length > 0 || convergence.configChanges.length > 0) {
     pluginsChanged = true;
   }
 
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
+    // Old npm generations remain discoverable until final commit retires them.
+    // Same-run reference moves use updater facts, not durable-recovery absence checks.
+    const appliedPluginIdMigrations = Object.fromEntries(
+      Object.entries(resolvePluginInstallOwnerMigrations(cohort) ?? {}).filter(
+        ([fromId, toId]) =>
+          !Object.hasOwn(nextInstallRecords, fromId) && Object.hasOwn(nextInstallRecords, toId),
+      ),
+    );
+    const installedPluginIdRecovery = convergence.installedPluginIdRecovery;
     let nextConfig = withoutPluginInstallRecords(pluginConfig);
+    if (referenceSource) {
+      referenceSource.installedPluginIdRecovery = installedPluginIdRecovery;
+      nextConfig = restoreDoctorConfigEnvRefs(
+        nextConfig,
+        referenceSource,
+        appliedPluginIdMigrations,
+      );
+    }
     if (params.restoredAuthoredChannels !== undefined) {
       nextConfig = {
         ...nextConfig,
@@ -377,18 +406,53 @@ export async function updatePluginsAfterCoreUpdate(params: {
     }
     // Installed plugin metadata can own migrations that this process has not loaded yet.
     // Finalization runs fresh doctor plus strict validation before the update can complete.
-    await commitPluginInstallRecordsWithConfig({
-      beforePersistentEffect: params.beforePersistentEffect,
-      previousInstallRecords: pluginInstallRecords,
-      nextInstallRecords,
-      nextConfig,
-      baseHash: params.configSnapshot.hash,
-      writeOptions: {
-        ...params.configWriteOptions,
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
-    });
+    const commit = async (lease?: PluginLifecycleLeaseContext) => {
+      if (lease) {
+        await assertInstalledPluginIdRecoveryCurrent(
+          params.configSnapshot.sourceConfig,
+          installedPluginIdRecovery,
+          process.env,
+        );
+      }
+      return await commitPluginInstallRecordsWithConfig({
+        beforePersistentEffect: params.beforePersistentEffect,
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords,
+        nextConfig,
+        baseHash: params.configSnapshot.hash,
+        writeOptions: {
+          ...params.configWriteOptions,
+          ...(lease
+            ? {
+                assertCurrent: () => {
+                  params.configWriteOptions.assertCurrent?.();
+                  lease.assertOwned();
+                },
+                beforeCommit: async () => {
+                  await params.configWriteOptions.beforeCommit?.();
+                  await assertInstalledPluginIdRecoveryCurrent(
+                    params.configSnapshot.sourceConfig,
+                    installedPluginIdRecovery,
+                    process.env,
+                  );
+                },
+              }
+            : {}),
+          inputBase: "source",
+          skipPluginValidation: true,
+        },
+      });
+    };
+    if (installedPluginIdRecovery.size > 0) {
+      await withPluginLifecycleLease({}, commit);
+    } else {
+      await commit();
+    }
+    if (!params.json) {
+      for (const change of convergence.configChanges) {
+        runtime.log(theme.muted(change));
+      }
+    }
     await params.beforePersistentEffect?.();
     await refreshPluginRegistryAfterConfigMutation({
       configPath: params.configSnapshot.path,

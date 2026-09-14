@@ -3,7 +3,10 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
-import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
+import {
+  attachPluginInstallOwnerMigrations,
+  resolvePluginInstallOwnerMigrations,
+} from "./install-transaction.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   collectMissingPluginInstallPayloads,
@@ -173,7 +176,7 @@ export async function convergePluginReleaseCohort(params: {
     config = reconciled.config;
   }
 
-  return {
+  const result: PluginCohortConvergenceResult = {
     config,
     changed,
     npmChanged,
@@ -192,4 +195,7 @@ export async function convergePluginReleaseCohort(params: {
       env: params.env,
     }),
   };
+  return Object.keys(installOwnerMigrations).length > 0
+    ? attachPluginInstallOwnerMigrations(result, installOwnerMigrations)
+    : result;
 }

@@ -4,6 +4,10 @@ import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { resolveConfigIncludeWriteBoundary } from "../../config/mutate.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRawWithPlugins } from "../../config/validation.js";
+import {
+  prepareDoctorConfigReferenceSource,
+  restoreDoctorConfigEnvRefs,
+} from "./shared/config-flow-steps.js";
 import { containsAuthoredInclude } from "./shared/include-migration-ownership.js";
 import { migrateLegacyConfig } from "./shared/legacy-config-migrate.js";
 
@@ -85,7 +89,12 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     }
   }
   await replaceConfigFile({
-    sourceConfig: plan.nextConfig,
+    // The locked writer rereads the environment; preserve reference identity
+    // using the original planning pair before crossing that boundary.
+    sourceConfig: restoreDoctorConfigEnvRefs(
+      plan.nextConfig,
+      prepareDoctorConfigReferenceSource(plan.snapshot),
+    ),
     baseHash: plan.snapshot.hash,
     writeOptions: {
       // Reuse the canonical writer's fresh lock/path check and original include fences.

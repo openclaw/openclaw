@@ -543,13 +543,18 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOrigina
 });
 
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
-  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: params.baselineInstallRecords ?? {},
-  })),
+  runPostCorePluginConvergence: vi.fn(
+    async (params: { cfg: OpenClawConfig; baselineInstallRecords?: unknown }) => ({
+      config: params.cfg,
+      configChanges: [],
+      installedPluginIdRecovery: new Map(),
+      changes: [],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: params.baselineInstallRecords ?? {},
+    }),
+  ),
 }));
 
 vi.mock("../config/backup-rotation.js", async (importOriginal) => ({
@@ -1503,12 +1508,16 @@ describe("update-cli", () => {
   };
 
   const postCoreConvergenceResult = (
+    cfg: OpenClawConfig,
     overrides: Partial<{
       changes: string[];
       warnings: Array<{ pluginId?: string; reason: string; message: string; guidance: string[] }>;
       errored: boolean;
     }> = {},
   ) => ({
+    config: cfg,
+    configChanges: [],
+    installedPluginIdRecovery: new Map(),
     changes: [],
     warnings: [],
     errored: false,
@@ -4228,8 +4237,8 @@ describe("update-cli", () => {
   it("runs the final fresh doctor for convergence-only current-process changes", async () => {
     mockGitUpdateAfterMutation();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) =>
+      postCoreConvergenceResult(cfg, {
         changes: ["Repaired configured plugin install records."],
       }),
     );
@@ -4406,8 +4415,8 @@ describe("update-cli", () => {
   });
 
   it("returns convergence-only post-core changes for the parent to complete", async () => {
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) =>
+      postCoreConvergenceResult(cfg, {
         changes: ["Repaired configured plugin install records."],
       }),
     );
@@ -4460,10 +4469,10 @@ describe("update-cli", () => {
           'Plugin "reporting-fixture" could not be loaded. Run `openclaw doctor --fix` to check and repair the load problem.',
         guidance: ["openclaw doctor --fix"],
       };
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult({ warnings, errored }),
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+        ...postCoreConvergenceResult(cfg, { warnings, errored }),
         notices: [notice],
-      });
+      }));
       const { updatePluginsAfterCoreUpdate } =
         await import("./update-cli/update-command-plugins.js");
 
@@ -4558,10 +4567,10 @@ describe("update-cli", () => {
       false,
       { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
     );
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult(),
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult(cfg),
       installRecords: records,
-    });
+    }));
     const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
     const result = await updatePluginsAfterCoreUpdate({
       root: process.cwd(),
@@ -4647,10 +4656,13 @@ describe("update-cli", () => {
       false,
       { ...baseConfig, plugins: { ...baseConfig.plugins, installs: beforeRecords } },
     );
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult(),
-      installRecords: entry.removed ? {} : { discord: record },
-    });
+    const installRecords: Record<string, PluginInstallRecord> = entry.removed
+      ? {}
+      : { discord: record };
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult(cfg),
+      installRecords,
+    }));
     const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
     const result = await updatePluginsAfterCoreUpdate({
       root: process.cwd(),
@@ -4671,10 +4683,10 @@ describe("update-cli", () => {
       code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
       message: "Operator review token changed.",
     };
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult({ errored: true }),
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult(cfg, { errored: true }),
       outcomes: [consentOutcome],
-    });
+    }));
     const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
 
     const result = await updatePluginsAfterCoreUpdate({
@@ -4693,13 +4705,13 @@ describe("update-cli", () => {
   it("clears a retry notice when post-core repair succeeds", async () => {
     const failure = { pluginId: "demo", status: "error" as const, message: "Registry unavailable" };
     mockNpmPluginOutcomes([failure]);
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-      ...postCoreConvergenceResult({ changes: ['Repaired plugin "demo".'] }),
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult(cfg, { changes: ['Repaired plugin "demo".'] }),
       repairedPluginIds: ["demo"],
       installRecords: {
         demo: { source: "npm", spec: "@example/demo", installPath: "/p/demo", version: "1.0.1" },
       },
-    });
+    }));
     const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
 
     const result = await updatePluginsAfterCoreUpdate({
@@ -5447,10 +5459,10 @@ describe("update-cli", () => {
         fsSync.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
         return { config: current, changed: true, outcomes: [repaired] };
       });
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult(),
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+        ...postCoreConvergenceResult(cfg),
         installRecords: records,
-      });
+      }));
 
       await runPostCoreCommand({ yes: true, json, restart: false });
 
@@ -5556,10 +5568,10 @@ describe("update-cli", () => {
         false,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
       );
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult(),
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+        ...postCoreConvergenceResult(cfg),
         installRecords: repaired ? { demo: { ...record, version: "2.0.0" } } : records,
-      });
+      }));
 
       await updateCommand({ yes: true, json, restart: false });
 
@@ -7173,8 +7185,8 @@ describe("update-cli", () => {
 
   it("finishes the core update and retains extended-stable after a plugin convergence failure", async () => {
     await mockPackageInstallAtCaseDir();
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) =>
+      postCoreConvergenceResult(cfg, {
         warnings: [
           {
             pluginId: "demo",
@@ -7246,7 +7258,7 @@ describe("update-cli", () => {
         true,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: { brave: updatedRecord } } },
       );
-      runPostCorePluginConvergenceSpy.mockImplementationOnce(async () => {
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => {
         if (failure === "changed owner") {
           primeServiceCommand([
             "node",
@@ -7258,7 +7270,7 @@ describe("update-cli", () => {
           ]);
         }
         return {
-          ...postCoreConvergenceResult(),
+          ...postCoreConvergenceResult(cfg),
           installRecords: { brave: updatedRecord },
         };
       });
@@ -7526,10 +7538,10 @@ describe("update-cli", () => {
         false,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
       );
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult(),
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+        ...postCoreConvergenceResult(cfg),
         installRecords: records,
-      });
+      }));
 
       await updateCommand({ yes: true, json });
 
@@ -8390,7 +8402,9 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
       path.join(pkgRoot, "dist", "index.js"),
     );
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(postCoreConvergenceResult());
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) =>
+      postCoreConvergenceResult(cfg),
+    );
     vi.mocked(runExec).mockResolvedValue({ stdout: "", stderr: "" });
     mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
@@ -12002,10 +12016,10 @@ describe("update-cli", () => {
         true,
         { ...baseConfig, plugins: { ...baseConfig.plugins, installs: { brave: updated } } },
       );
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
-        ...postCoreConvergenceResult(),
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+        ...postCoreConvergenceResult(cfg),
         installRecords: { brave: updated },
-      });
+      }));
 
       if (!fallback || !restart || !writable) {
         await expect(updateCommand({ yes: true, restart, json: true })).rejects.toEqual(
