@@ -1,6 +1,10 @@
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import {
+  readInactiveSessionContextIdentities,
+  type SessionInactiveContextIdentities,
+} from "../../config/sessions/transcript-inactive-identities.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
@@ -97,6 +101,65 @@ function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
   );
 }
 
+/** Cached channel messages whose transcript turn a rewind/branch switch cut from the active path. */
+function isInactiveBranchWindowMessage(
+  message: PromptMessage,
+  identities: SessionInactiveContextIdentities,
+  channel: string | undefined,
+): boolean {
+  const transcriptId =
+    typeof message.session_transcript_id === "string" ? message.session_transcript_id.trim() : "";
+  if (transcriptId && identities.transcriptEntryIds.has(transcriptId)) {
+    return true;
+  }
+  const messageId = typeof message.message_id === "string" ? message.message_id.trim() : "";
+  // session: ids belong to transcript turns merged in earlier, not to the channel cache.
+  if (!messageId || messageId.startsWith("session:") || !channel) {
+    return false;
+  }
+  return identities.channelMessageIds.get(channel)?.has(messageId) === true;
+}
+
+async function pruneInactiveBranchWindowMessages(
+  params: { agentId?: string; sessionKey: string; storePath: string },
+  windows: ReturnType<typeof mergeableChatWindowEntries>,
+): Promise<void> {
+  if (
+    !windows.some(
+      (window) => Array.isArray(window.payload.messages) && window.payload.messages.length > 0,
+    )
+  ) {
+    return;
+  }
+  const identities = await readInactiveSessionContextIdentities({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  if (identities.transcriptEntryIds.size === 0 && identities.channelMessageIds.size === 0) {
+    return;
+  }
+  for (const window of windows) {
+    if (!Array.isArray(window.payload.messages)) {
+      continue;
+    }
+    const channel =
+      typeof window.source === "string" && window.source.trim()
+        ? window.source.trim().toLowerCase()
+        : undefined;
+    const retained = window.payload.messages.filter(
+      (message) =>
+        !Boolean(message) ||
+        typeof message !== "object" ||
+        Array.isArray(message) ||
+        !isInactiveBranchWindowMessage(message as PromptMessage, identities, channel),
+    );
+    if (retained.length !== window.payload.messages.length) {
+      window.payload = { ...window.payload, messages: retained };
+    }
+  }
+}
+
 /** Merges active canonical transcript turns into the prepared channel history in place. */
 export async function mergeSessionTranscriptContext(params: {
   agentId?: string;
@@ -121,6 +184,12 @@ export async function mergeSessionTranscriptContext(params: {
     throw new Error("Session transcript context requires an agent owner.");
   }
   const windows = mergeableChatWindowEntries(params.ctx);
+  // A rewind/branch switch leaves the channel cache untouched; drop window entries
+  // whose transcript turn is no longer on the active path before merging.
+  await pruneInactiveBranchWindowMessages(
+    { agentId, sessionKey: params.sessionKey, storePath: params.storePath },
+    windows,
+  );
   const turns = await readRecentUserAssistantTextForSession({
     agentId,
     sessionKey: params.sessionKey,

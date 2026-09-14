@@ -190,6 +190,88 @@ describe("buildTelegramMessageContext prompt context", () => {
     expect(JSON.stringify(promptContext)).not.toContain("older unrelated DM");
   });
 
+  it("tags projected window messages with their transcript id", async () => {
+    const cfg = {
+      agents: { defaults: {} },
+      channels: { telegram: { dmPolicy: "open", dmHistoryLimit: 0 } },
+    } as never;
+    const telegramCfg = {
+      dmPolicy: "open",
+      dmHistoryLimit: 0,
+    } as never;
+    const storePath = createTempSessionStorePath();
+    const messageContextRuntime = createTelegramMessageContextRuntime({
+      cfg,
+      accountId: "default",
+      ownerAgentId: "main",
+      opts: {
+        token: "test-token",
+        botInfo: { id: 7, username: "bot", first_name: "Bot" },
+      } as never,
+      telegramCfg,
+      telegramDeps: {
+        resolveStorePath: () => storePath,
+      } as never,
+    });
+    const chat = { id: 1234, type: "private", first_name: "Pat" } as const;
+    const currentMessage = {
+      chat,
+      message_id: 12,
+      date: 1_700_000_020,
+      text: "continue",
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+    } as never;
+
+    const promptContext = await messageContextRuntime.buildPromptContextForMessage(
+      { me: { id: 7, username: "bot", first_name: "Bot" } } as never,
+      currentMessage,
+      [
+        {
+          messageId: "11",
+          sender: "Bot",
+          senderId: "7",
+          timestamp: 1_700_000_010_000,
+          body: "projected reply",
+          promptContextProjectionMarker: {
+            kind: "valid",
+            projection: { transcriptMessageId: "assistant-1", partIndex: 0, finalPart: true },
+          },
+          sourceMessage: {
+            chat,
+            message_id: 11,
+            date: 1_700_000_010,
+            text: "projected reply",
+            from: { id: 7, is_bot: true, first_name: "Bot" },
+          },
+        },
+        {
+          messageId: "10",
+          sender: "Pat",
+          senderId: "1234",
+          timestamp: 1_700_000_000_000,
+          body: "plain cached user message",
+          sourceMessage: {
+            chat,
+            message_id: 10,
+            date: 1_700_000_000,
+            text: "plain cached user message",
+            from: { id: 1234, is_bot: false, first_name: "Pat" },
+          },
+        },
+      ] as never,
+      cfg,
+      telegramCfg,
+    );
+
+    const entry = promptContext[0] as TelegramPromptContextEntry;
+    const messages = (entry.payload as { messages: Array<Record<string, unknown>> }).messages;
+    expect(messages).toEqual([
+      expect.objectContaining({ message_id: "10" }),
+      expect.objectContaining({ message_id: "11", session_transcript_id: "assistant-1" }),
+    ]);
+    expect(messages[0]).not.toHaveProperty("session_transcript_id");
+  });
+
   it("bounds cached DM context with the per-sender override", async () => {
     const cfg = {
       agents: { defaults: {} },
