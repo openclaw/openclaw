@@ -1735,7 +1735,7 @@
     "docs:map:gen": "node scripts/docs-list.js --headings",
     "docs:spellcheck": "bash scripts/docs-spellcheck.sh",
     "docs:spellcheck:fix": "bash scripts/docs-spellcheck.sh --write",
-    "maturity:check": "node --import ./scripts/tsx.mjs scripts/qa/render-maturity-docs.ts --check",
+    "maturity:check": "node --import ./scripts/tsx.mjs scripts/qa/check-maturity.mts",
     "maturity:inventory": "node --import ./scripts/tsx.mjs scripts/qa/report-maturity-inventory.mts",
     "maturity:render": "node --import ./scripts/tsx.mjs scripts/qa/render-maturity-docs.ts",
     "dup:check": "node scripts/check-duplicates.mjs",

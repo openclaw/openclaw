@@ -197,3 +197,70 @@ export function collectAppMaturityInventory(repoRoot = process.cwd()): MaturityI
   }
   return { membersBySurface, unmapped, ignored };
 }
+
+const PLUGIN_SURFACE_BY_ID = new Map([
+  ["acpx", "app-sdk"],
+  ["brave", "web-search"],
+  ["codex", "agent-runtime"],
+  ["copilot", "agent-runtime"],
+  ["diagnostics-otel", "observability"],
+  ["diagnostics-prometheus", "observability"],
+  ["diffs", "tools"],
+  ["diffs-language-pack", "tools"],
+  ["duckduckgo", "web-search"],
+  ["exa", "web-search"],
+  ["firecrawl", "web-search"],
+  ["fish-audio-speech", "media"],
+  ["google-meet", "voice"],
+  ["gradium", "media"],
+  ["inworld", "media"],
+  ["llama-cpp", "local-models"],
+  ["lobster", "automation"],
+  ["memory-lancedb", "session-memory"],
+  ["mxc", "containers"],
+  ["openshell", "containers"],
+  ["parallel", "web-search"],
+  ["perplexity", "web-search"],
+  ["searxng", "web-search"],
+  ["tavily", "web-search"],
+  ["team-reports", "automation"],
+  ["teams-meetings", "voice"],
+  ["tokenjuice", "tools"],
+  ["voice-call", "voice-call"],
+  ["zoom-meetings", "voice"],
+]);
+
+type PluginCatalog = {
+  entries?: Array<{
+    openclaw?: { plugin?: { id?: string; label?: string } };
+  }>;
+};
+
+export function collectPluginMaturityInventory(
+  repoRoot = process.cwd(),
+): MaturityInventoryProjection {
+  const catalogPath = path.join(repoRoot, "scripts/lib/official-external-plugin-catalog.json");
+  const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8")) as PluginCatalog;
+  const membersBySurface = new Map<string, MaturityInventoryMember[]>();
+  const unmapped: MaturityInventoryMember[] = [];
+  for (const entry of catalog.entries ?? []) {
+    const id = entry.openclaw?.plugin?.id;
+    if (!id) {
+      continue;
+    }
+    const member = {
+      id,
+      label: entry.openclaw?.plugin?.label ?? id,
+      docsPath: `/plugins/reference/${id}`,
+    };
+    const surfaceId = PLUGIN_SURFACE_BY_ID.get(id);
+    if (!surfaceId) {
+      unmapped.push(member);
+      continue;
+    }
+    const members = membersBySurface.get(surfaceId) ?? [];
+    members.push(member);
+    membersBySurface.set(surfaceId, members);
+  }
+  return { membersBySurface, unmapped, ignored: [] };
+}

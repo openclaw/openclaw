@@ -2,6 +2,7 @@
 import {
   collectAppMaturityInventory,
   collectChannelMaturityInventory,
+  collectPluginMaturityInventory,
   collectProviderMaturityInventory,
   type MaturityInventoryProjection,
 } from "./maturity-inventory.mts";
@@ -29,5 +30,6 @@ const lines = [
   ...renderProjection("channels", collectChannelMaturityInventory(repoRoot)),
   ...renderProjection("providers", collectProviderMaturityInventory(repoRoot)),
   ...renderProjection("apps", collectAppMaturityInventory(repoRoot)),
+  ...renderProjection("plugins", collectPluginMaturityInventory(repoRoot)),
 ];
 process.stdout.write(`${lines.join("\n")}\n`);
