@@ -21,6 +21,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js";
+import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
@@ -62,16 +63,6 @@ const { announceSpy } = vi.hoisted(() => ({
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
 
 describe("subagent registry persistence", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -509,13 +500,13 @@ describe("subagent registry persistence", () => {
 
     const liveRuns = listSubagentRunsForRequester("agent:main:main");
     expect(liveRuns).toHaveLength(1);
-    expectFields(liveRuns[0], {
+    expectObjectFields(liveRuns[0], {
       runId: "run-live",
       childSessionKey: "agent:main:subagent:live-child",
       controllerSessionKey: "agent:main:subagent:live-controller",
       requesterSessionKey: "agent:main:main",
     });
-    expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
+    expectObjectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
     });
   });
@@ -850,6 +841,9 @@ describe("subagent registry persistence", () => {
   });
 
   registerSubagentOrphanTaskCases({
+    announceSpy,
+    flushQueuedRegistryWork,
+    readPersistedRegistry,
     writePersistedRegistry,
     writeChildSessionEntry,
     restartRegistry,
@@ -858,10 +852,10 @@ describe("subagent registry persistence", () => {
 
   it("finalizes restored runs whose restart interruption exceeded the recovery window", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-      expectFields(request, {
+      expectObjectFields(request, {
         method: "agent.wait",
       });
-      expectFields((request as { params?: unknown }).params, {
+      expectObjectFields((request as { params?: unknown }).params, {
         runId: "run-stale-aborted-restore",
       });
       return {
@@ -984,7 +978,7 @@ describe("subagent registry persistence", () => {
       getSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expectFields(resolved, {
+    expectObjectFields(resolved, {
       runId: "run-active",
       childSessionKey,
     });
@@ -1030,7 +1024,7 @@ describe("subagent registry persistence", () => {
       getLatestSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expectFields(resolved, {
+    expectObjectFields(resolved, {
       runId: "run-current-ended",
       childSessionKey,
     });

@@ -185,7 +185,10 @@ export function resolveCompletionFromSessionEntry(
     return {
       startedAt,
       endedAt,
-      outcome: { status: "error", error: "session completed before registry settled" },
+      outcome: {
+        status: "error",
+        error: "session completed before registry settled",
+      },
       reason: SUBAGENT_ENDED_REASON_ERROR,
     };
   }

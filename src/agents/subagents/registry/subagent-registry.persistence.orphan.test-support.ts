@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import { recordGatewayBootStart } from "../../../infra/gateway-boot-lifecycle.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { listTaskRecordPage } from "../../../tasks/task-registry-query.js";
@@ -13,17 +14,28 @@ import {
   getTaskRegistryStore,
 } from "../../../tasks/task-registry.store.js";
 import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
+import { loadGatewayBootSegmentsForAttribution } from "./subagent-orphan-attribution.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
-import { addSubagentRunForTests, testing } from "./subagent-registry.test-helpers.js";
+import {
+  addSubagentRunForTests,
+  getSubagentRunByChildSessionKey,
+  testing,
+} from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerSubagentOrphanTaskCases({
+  announceSpy,
+  flushQueuedRegistryWork,
+  readPersistedRegistry,
   writePersistedRegistry,
   writeChildSessionEntry,
   restartRegistry,
   waitForRegistryWork,
 }: {
+  announceSpy: () => Promise<"delivered" | "retryable">;
+  flushQueuedRegistryWork: () => Promise<void>;
+  readPersistedRegistry: () => { runs: Record<string, SubagentRunRecord> };
   writePersistedRegistry: (
     persisted: Record<string, unknown>,
     opts?: { seedChildSessions?: boolean },
@@ -37,6 +49,50 @@ export function registerSubagentOrphanTaskCases({
   restartRegistry: () => void;
   waitForRegistryWork: (predicate: () => boolean | Promise<boolean>) => Promise<void>;
 }) {
+  it("preserves stale unended restored runs for attributed sweeper recovery", async () => {
+    const now = Date.now();
+    const runId = "run-stale-unended-restore";
+    const childSessionKey = "agent:main:subagent:stale-unended-restore";
+    await writePersistedRegistry({
+      version: 2,
+      runs: {
+        [runId]: {
+          runId,
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "stale unended restored work",
+          cleanup: "keep",
+          createdAt: now - 3 * 60 * 60 * 1_000,
+          startedAt: now - 3 * 60 * 60 * 1_000,
+        },
+      },
+    });
+    const priorBootId = recordGatewayBootStart(process.env, now - 4 * 60 * 60 * 1_000);
+    expect(priorBootId).toBeDefined();
+    expect(recordGatewayBootStart(process.env, now - 2 * 60 * 60 * 1_000)).toBeDefined();
+    // Refresh the process-level boot snapshot after writing the two lifecycle
+    // rows so the production sweeper observes this test's persisted state.
+    loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
+
+    restartRegistry();
+    await flushQueuedRegistryWork();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readPersistedRegistry().runs?.[runId]).toBeDefined();
+
+    await testing.sweepOnceForTests();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome).toMatchObject({
+      status: "error",
+      // Attribution must name the persisted owning boot on every platform;
+      // exact host/process wording depends on authoritative kernel boot IDs.
+      error: expect.stringContaining(`(previous boot ${priorBootId} ended without a clean stop)`),
+    });
+    expect(announceSpy).toHaveBeenCalled();
+  });
+
   it("settles the linked task before retiring a stale orphan restored with a retained session", async () => {
     const now = Date.now();
     const runId = "run-stale-unended-restore";
@@ -147,11 +203,13 @@ export function registerSubagentOrphanTaskCases({
       },
     });
     restartRegistry();
+    await testing.sweepOnceForTests();
     await waitForRegistryWork(() => rejectedWrites > 0);
     await settleSubagentRegistryPersistenceWork();
     expect(findTaskByRunIdForStatus(runId)?.status).toBe("running");
     expect(loadSubagentRegistryFromSqlite().get(runId)?.cleanupCompletedAt).toBeUndefined();
     rejectTerminalWrites = false;
+    await testing.sweepOnceForTests();
     await waitForRegistryWork(() => findTaskByRunIdForStatus(runId)?.status === "failed");
     await waitForRegistryWork(
       () => loadSubagentRegistryFromSqlite().get(runId)?.cleanupCompletedAt !== undefined,

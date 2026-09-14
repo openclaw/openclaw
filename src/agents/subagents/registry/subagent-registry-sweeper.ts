@@ -10,7 +10,6 @@ import {
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
@@ -32,17 +31,14 @@ import {
   reconcileDurableSubagentKillIntent,
   reconcileProvisionalSubagentKill,
 } from "./subagent-registry-sweep-kill.js";
+import { reconcileStaleActiveSubagentRun } from "./subagent-registry-sweeper-orphan.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded, isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import {
-  loadSubagentSessionEntry,
-  resolveCompletionFromSessionEntry,
-  resolveSubagentRunOrphanReason,
-} from "./subagent-session-reconciliation.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
@@ -397,48 +393,12 @@ export function createSubagentRegistrySweeper(params: {
           const notStale = entry.execution.status === "queued" || getAgentRunContext(runId);
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
-            const orphanReason = resolveSubagentRunOrphanReason({ entry });
-            const sessionEntry = loadSubagentSessionEntry({
-              childSessionKey: entry.childSessionKey,
+            await reconcileStaleActiveSubagentRun({
+              runId,
+              entry,
+              now,
+              completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
             });
-            const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-              notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-            });
-            if (completion) {
-              await params.completeSubagentRunWithRecovery(
-                {
-                  runId,
-                  startedAt: completion.startedAt,
-                  endedAt: completion.endedAt,
-                  outcome: completion.outcome,
-                  reason: completion.reason,
-                  sendFarewell: true,
-                  accountId: entry.requesterOrigin?.accountId,
-                  triggerCleanup: true,
-                },
-                "sweeper-session-completion",
-              );
-              continue;
-            }
-
-            await params.completeSubagentRunWithRecovery(
-              {
-                runId,
-                expectedEntry: entry,
-                endedAt: now,
-                outcome: {
-                  status: "error",
-                  error: orphanReason
-                    ? `subagent run orphaned: ${orphanReason}`
-                    : "subagent run lost active execution context",
-                },
-                reason: SUBAGENT_ENDED_REASON_ERROR,
-                sendFarewell: true,
-                accountId: entry.requesterOrigin?.accountId,
-                triggerCleanup: true,
-              },
-              "sweeper-lost-context",
-            );
             continue;
           }
           // Retention starts after completion; a live run must never fall

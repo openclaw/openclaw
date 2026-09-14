@@ -39,12 +39,16 @@ export function createSubagentRegistryCompletionRuntime(config: {
           childSessionKey: current?.childSessionKey,
           error,
         });
-        if (!current) {
+        if (!current || (params.expectedEntry && current !== params.expectedEntry)) {
           return;
         }
       }
     }
 
+    // Reaching here means the loop's final catch already confirmed the row is
+    // still the bound one, and nothing awaits between that check and this read,
+    // so the fallback below reopens cleanup on the request's own entry rather
+    // than on a same-id successor.
     const latest = runs.get(params.runId);
     if (latest && typeof latest.execution.endedAt !== "number") {
       // The durable write rolled the in-memory entry back. Preserve the original
@@ -106,7 +110,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         runId: params.runId,
       });
       const current = runs.get(params.runId);
-      if (current) {
+      if (current && (!params.expectedEntry || current === params.expectedEntry)) {
         scheduleSubagentCompletionRetryAfterRestart(params, source, current);
       }
     }
