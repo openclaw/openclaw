@@ -221,5 +221,10 @@ capability boundary. OpenClaw does not provide a generic fallback because it
 cannot attest that an arbitrary native runtime honored those restrictions.
 
 The callback remains optional for experimental third-party harness
-compatibility. When the selected harness omits it, OpenClaw preserves the
-existing incomplete-turn error instead of risking repeated side effects.
+compatibility. When the selected harness omits it after a settled tool batch,
+OpenClaw uses its host-owned deterministic fallback without replaying tools or
+effects. Silent runs retain silence, detached runs do not append to durable
+session history, and cancellation before the transcript append commits suppresses
+the fallback. Once that append commits, its idempotency key owns the outcome and
+OpenClaw delivers the committed fallback exactly once even if cancellation races
+afterward.
