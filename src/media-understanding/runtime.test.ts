@@ -34,7 +34,9 @@ const mocks = vi.hoisted(() => {
     buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
-    extractStructuredWithModelFallback: vi.fn(async () => ({
+    extractStructuredWithModelFallback: vi.fn<
+      (req: Record<string, unknown>) => Promise<Record<string, unknown>>
+    >(async () => ({
       text: '{"ok":true}',
       parsed: { ok: true },
       model: "fallback-model",
@@ -968,9 +970,7 @@ describe("media-understanding runtime", () => {
       cfg: {} as OpenClawConfig,
     });
 
-    const call = mocks.extractStructuredWithModelFallback.mock.calls[0]?.[0] as
-      | { agentDir?: string }
-      | undefined;
+    const call = mocks.extractStructuredWithModelFallback.mock.calls[0]?.[0];
     expect(call?.agentDir).toBeTruthy();
   });
 

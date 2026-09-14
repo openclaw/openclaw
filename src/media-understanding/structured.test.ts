@@ -6,7 +6,9 @@ import { extractStructuredWithModelFallbackCore } from "./structured.js";
 import type { StructuredExtractionRequest } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  describeImagesWithModelCore: vi.fn(async () => ({
+  describeImagesWithModelCore: vi.fn<
+    (req: Record<string, unknown>) => Promise<{ text: string; model?: string }>
+  >(async () => ({
     text: '{"name":"lamp"}',
     model: "resolved-model",
   })),
@@ -60,7 +62,7 @@ describe("extractStructuredWithModelFallbackCore", () => {
     const result = await extractStructuredWithModelFallbackCore(request);
 
     expect(mocks.describeImagesWithModelCore).toHaveBeenCalledTimes(1);
-    const call = mocks.describeImagesWithModelCore.mock.calls[0]?.[0] as Record<string, unknown>;
+    const call = mocks.describeImagesWithModelCore.mock.calls[0]?.[0] ?? {};
     expect(call.images).toEqual([
       { buffer: Buffer.from("image-bytes"), fileName: "a.png", mime: "image/png" },
       { buffer: Buffer.from("more-bytes"), fileName: "b.jpg", mime: "image/jpeg" },
@@ -95,10 +97,7 @@ describe("extractStructuredWithModelFallbackCore", () => {
 
     const result = await extractStructuredWithModelFallbackCore(buildRequest({ jsonMode: false }));
 
-    const call = mocks.describeImagesWithModelCore.mock.calls.at(-1)?.[0] as Record<
-      string,
-      unknown
-    >;
+    const call = mocks.describeImagesWithModelCore.mock.calls.at(-1)?.[0] ?? {};
     expect(call.prompt).toContain("Return the extraction as concise text.");
     expect(result).toEqual({
       text: "a brass lamp",
