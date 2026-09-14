@@ -582,3 +582,41 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["anthropic"]);
   });
 });
+
+describe("resolveProviderAuths diagnostics", () => {
+  beforeAll(async () => {
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+  });
+
+  it("logs the profile it skipped when credential resolution throws", async () => {
+    const { authProfilesLog } = await import("../agents/auth-profiles/constants.js");
+    const debugSpy = vi.spyOn(authProfilesLog, "debug").mockImplementation(() => {});
+
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    resolveAuthProfileOrderMock.mockReturnValue(["anthropic:pro1"]);
+    const storeWithFailingProfile = {
+      profiles: {
+        "anthropic:pro1": { type: "oauth", provider: "anthropic", access: "unused" },
+      },
+    };
+    ensureAuthProfileStoreMock.mockReturnValue(storeWithFailingProfile);
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(storeWithFailingProfile);
+    resolveApiKeyForProfileMock.mockRejectedValue(
+      new Error('Secret surface unavailable for "store:teamstore:ANTHROPIC_PRO1_TOKEN"'),
+    );
+
+    await withTempHome(async (homeDir) => {
+      await resolveProviderAuthsForTest({ providers: ["anthropic"], agentDir: homeDir });
+    });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      "usage auth: skipped auth profile that failed to resolve",
+      expect.objectContaining({
+        profileId: "anthropic:pro1",
+        provider: "anthropic",
+        error: 'Secret surface unavailable for "store:teamstore:ANTHROPIC_PRO1_TOKEN"',
+      }),
+    );
+    debugSpy.mockRestore();
+  });
+});
