@@ -536,18 +536,19 @@ suite.define(() => {
         await pollLocatorText(startupStatus).toContain(label);
       };
 
-      for (const [state, generation, label] of [
+      const placementUpdates = [
         ["requested", 1, "Provisioning environment…"],
         ["provisioning", 2, "Provisioning environment…"],
         ["syncing", 3, "Preparing workspace…"],
         ["starting", 4, "Starting…"],
-      ] as const) {
+      ] as const;
+      for (const [state, generation, label] of placementUpdates) {
         await publishPlacement(state, generation, label, state === "starting");
         await page.clock.runFor(250);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
-      // Healthy parent and child reads are independent; placement updates must
-      // not add extra parent lookups regardless of which request starts first.
+      // Parent details read once initially and once per placement invalidation.
+      // Child lists have an independent cooldown, so their counts need not match.
       const parentReads = (await gateway.getRequests()).filter((request) => {
         const params = asNullableRecord(request.params);
         return (
@@ -558,7 +559,7 @@ suite.define(() => {
       const childReads = parentReads.filter((request) => request.method === "sessions.list");
       expect(childReads.length).toBeGreaterThan(0);
       expect(parentReads.filter((request) => request.method === "sessions.describe")).toHaveLength(
-        childReads.length,
+        1 + placementUpdates.length,
       );
       const neutralRow = page.locator('[data-session-key="agent:cloud:neutral-e2e"] a');
       await neutralRow.waitFor();
