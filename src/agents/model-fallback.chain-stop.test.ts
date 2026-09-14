@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -21,7 +22,10 @@ import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./embedded-agent-runner/run/terminal-outcome.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./embedded-agent-runner/run/terminal-timeout.js";
 import { FailoverError } from "./failover-error.js";
-import { AgentHarnessPreflightError } from "./harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+} from "./harness/errors.js";
 import { type ModelFallbackStepHandler, runFallbackAttempt } from "./model-fallback-attempt.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -557,4 +561,37 @@ describe("model fallback chain-stop diagnostics", () => {
       );
     },
   );
+  it("names a local coordination stop instead of skipping the tail in silence", async () => {
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new AgentHarnessSessionSupersededError("private supersede detail"));
+    await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toThrow(
+      "private supersede detail",
+    );
+    expect(run).toHaveBeenCalledOnce();
+    await capture.flush();
+    expect(fallbackRecords().at(-1)?.attributes).toMatchObject({
+      event: "model_fallback_chain_stopped",
+      reason: "local_runtime_coordination",
+      candidateProvider: "fixture-primary",
+      candidateModel: "fixture-model",
+      sessionId: "chain-stop-session",
+      lane: "chain-stop-lane",
+    });
+  });
+
+  it("names a transcript stop instead of skipping the tail in silence", async () => {
+    const run = vi.fn().mockRejectedValueOnce(new TranscriptNotContinuableError("assistant"));
+    await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toThrow(
+      TranscriptNotContinuableError,
+    );
+    expect(run).toHaveBeenCalledOnce();
+    await capture.flush();
+    expect(fallbackRecords().at(-1)?.attributes).toMatchObject({
+      event: "model_fallback_chain_stopped",
+      reason: "transcript_not_continuable",
+      candidateProvider: "fixture-primary",
+      candidateModel: "fixture-model",
+    });
+  });
 });

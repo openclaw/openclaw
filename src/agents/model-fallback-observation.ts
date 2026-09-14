@@ -356,7 +356,32 @@ export type ModelFallbackChainStopReason =
   | "caller_signal_aborted"
   | "agent_run_direct_abort"
   | "agent_run_restart_abort"
-  | "terminal_abort_wrapper";
+  | "terminal_abort_wrapper"
+  | "local_runtime_coordination"
+  | "transcript_not_continuable";
+
+/**
+ * Names the local, non-provider conditions that stop a chain at a rethrow site.
+ *
+ * The predicate lives in `model-fallback-attempt.ts`, which already imports this
+ * module, so the caller passes the classification instead of this module
+ * importing it back and closing a cycle.
+ */
+export function logLocalChainStop(
+  error: unknown,
+  candidate: { provider: string; model: string },
+  attribution?: { sessionId?: string; lane?: string },
+  transcriptNotContinuable?: boolean,
+): void {
+  logModelFallbackChainStopped({
+    reason: transcriptNotContinuable ? "transcript_not_continuable" : "local_runtime_coordination",
+    provider: candidate.provider,
+    model: candidate.model,
+    sessionId: attribution?.sessionId,
+    lane: attribution?.lane,
+    error,
+  });
+}
 
 /** Record a local or terminal stop separately from provider-failure decisions. */
 export function logModelFallbackChainStopped(params: {
