@@ -225,7 +225,7 @@ export async function runUpdateRepairWorker(
           attempts.push(attempt);
         }
         params.onEvent?.(message.event);
-      } else {
+      } else if (message.type === "result") {
         if (message.result.attempts.length > budget.maxTurns) {
           throw new Error("Candidate repair exceeded its turn budget.");
         }

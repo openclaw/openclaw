@@ -9,16 +9,26 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
+import {
+  withUpdateCommandExecutor,
+  withUpdateCommandExecutorChild,
+  type UpdateCommandChildGrant,
+} from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { installationTargetEnv } from "./installation-target-context.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "./update-managed-service-handoff-database.js";
 import { prepareUnattendedUpdateRepair, runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   updateRepairBudgetSchema,
   updateRepairWorkerMessageSchema,
   type UpdateRepairParams,
   type UpdateRepairResult,
+  type UpdateRepairTurnResult,
 } from "./update-repair-protocol.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
@@ -31,7 +41,12 @@ vi.mock("./update-repair-agent.runtime.js", async () => {
   ) as typeof import("./update-repair-agent.runtime.js");
 });
 
-async function runReleasedParentRepair(params: UpdateRepairParams): Promise<UpdateRepairResult> {
+async function runRepairEnvelope(
+  params: UpdateRepairParams,
+  delegation?:
+    | { grant: UpdateCommandChildGrant; bindChild: (pid: number) => void }
+    | "unowned-turn",
+): Promise<UpdateRepairResult | UpdateRepairTurnResult> {
   const child = spawn(
     process.execPath,
     [path.join(params.target.installRoot, "dist", "infra", "update-repair.worker.js")],
@@ -40,20 +55,23 @@ async function runReleasedParentRepair(params: UpdateRepairParams): Promise<Upda
       env: {
         ...process.env,
         NODE_DISABLE_COMPILE_CACHE: "1",
-        ...installationTargetEnv({
-          stateDir: params.target.stateDir,
-          configPath: params.target.configPath,
-          defaultWorkspaceDir: params.target.workspaceDir,
-        }),
+        ...(delegation
+          ? params.admissionEnv
+          : installationTargetEnv({
+              stateDir: params.target.stateDir,
+              configPath: params.target.configPath,
+              defaultWorkspaceDir: params.target.workspaceDir,
+            })),
       },
+      detached: Boolean(delegation) && process.platform !== "win32",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     },
   );
   const controller = new AbortController();
   let failure: unknown;
-  let result: UpdateRepairResult | undefined;
+  let result: UpdateRepairResult | UpdateRepairTurnResult | undefined;
   const timer = setTimeout(() => {
-    failure = new Error("Released-parent worker timed out.");
+    failure = new Error("Repair worker timed out.");
     controller.abort(failure);
     child.kill("SIGKILL");
   }, 90_000);
@@ -64,13 +82,33 @@ async function runReleasedParentRepair(params: UpdateRepairParams): Promise<Upda
         if (code === 0 && result && !failure) {
           resolve(result);
         } else {
-          reject(toErrorObject(failure, `Released-parent worker exited ${code}.`));
+          reject(toErrorObject(failure, `Repair worker exited ${code}.`));
         }
       });
       child.on("message", (raw) => {
         void (async () => {
           const message = updateRepairWorkerMessageSchema.parse(raw);
           if (message.type === "ready") {
+            if (delegation) {
+              if (typeof delegation !== "string") {
+                if (!child.pid) {
+                  throw new Error("Repair worker has no PID.");
+                }
+                delegation.bindChild(child.pid);
+              }
+              child.send({
+                type: "turn",
+                runId: params.runId,
+                executor: typeof delegation === "string" ? undefined : delegation.grant,
+                requester: params.requester,
+                target: params.target,
+                prompt: "Repair the missing marker using the configured tools.",
+                wallClockMs: 90_000,
+                timeoutMs: 60_000,
+                maxToolCalls: 2,
+              });
+              return;
+            }
             const {
               phase: _phase,
               beforeVersion,
@@ -92,7 +130,7 @@ async function runReleasedParentRepair(params: UpdateRepairParams): Promise<Upda
           } else if (message.type === "validate") {
             const validation = await params.validate(controller.signal);
             child.send({ type: "validation-result", id: message.id, validation });
-          } else if (message.type === "result") {
+          } else if (message.type === "result" || message.type === "turn-result") {
             result = message.result;
           }
         })().catch((error: unknown) => {
@@ -162,6 +200,10 @@ describe("update repair with a local model provider", () => {
     { phase: "validating", revoke: "run", entry: "worker" },
     { phase: "verifying", revoke: "none", entry: "released-parent" },
     { phase: "verifying", revoke: "none", entry: "manual" },
+    { phase: "validating", revoke: "none", entry: "turn" },
+    { phase: "verifying", revoke: "none", entry: "turn" },
+    { phase: "verifying", revoke: "none", entry: "unowned-turn" },
+    { phase: "verifying", revoke: "none", entry: "unidentified-turn" },
   ] as const)(
     "checks repair scope before host exec during $phase ($entry, $revoke)",
     async ({ phase, revoke, entry }) => {
@@ -307,12 +349,46 @@ describe("update repair with a local model provider", () => {
                   };
                 },
               };
+              const runTurn = async () => {
+                const control = state.path("executor-control");
+                await fs.mkdir(control, { mode: 0o700 });
+                const databasePath = path.join(control, "managed-update-handoffs.sqlite");
+                const identity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+                  captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+                );
+                return withUpdateCommandExecutor(
+                  run.runId,
+                  async (executor) => {
+                    const fence = await executor.enter(state.workspaceDir);
+                    return withUpdateCommandExecutorChild(
+                      fence,
+                      params.target.installRoot,
+                      (grant, bindChild) =>
+                        runRepairEnvelope(
+                          entry === "unidentified-turn" ? { ...params, runId: undefined } : params,
+                          { grant, bindChild },
+                        ),
+                    );
+                  },
+                  { existingAuthority: { ...identity, installKey: state.workspaceDir } },
+                );
+              };
+              if (entry === "unowned-turn" || entry === "unidentified-turn") {
+                await expect(
+                  entry === "unowned-turn" ? runRepairEnvelope(params, entry) : runTurn(),
+                ).rejects.toThrow("worker exited 1");
+                expect(issuedRepair).toBe(false);
+                await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+                return;
+              }
               const result =
-                entry === "released-parent"
-                  ? await runReleasedParentRepair(params)
-                  : entry === "manual"
-                    ? await runUpdateRepairLoop(params)
-                    : await prepareUnattendedUpdateRepair(params);
+                entry === "turn"
+                  ? await runTurn()
+                  : entry === "released-parent"
+                    ? await runRepairEnvelope(params)
+                    : entry === "manual"
+                      ? await runUpdateRepairLoop(params)
+                      : await prepareUnattendedUpdateRepair(params);
 
               expect(errors).toEqual([]);
               if (revoke !== "none") {
@@ -326,11 +402,19 @@ describe("update repair with a local model provider", () => {
                 }
                 return;
               }
-              expect(result, JSON.stringify(result)).toMatchObject({
-                status: "repaired",
-                finalValidation: { ok: true, score: 1 },
-                attempts: [{ toolCalls: 2, summary: "Created the target repair marker." }],
-              });
+              expect(result, JSON.stringify(result)).toMatchObject(
+                entry === "turn"
+                  ? {
+                      status: "completed",
+                      toolCalls: 2,
+                      summary: "Created the target repair marker.",
+                    }
+                  : {
+                      status: "repaired",
+                      finalValidation: { ok: true, score: 1 },
+                      attempts: [{ toolCalls: 2, summary: "Created the target repair marker." }],
+                    },
+              );
               expect(
                 requests.some((body) => body.tools?.some((tool) => tool.name === "exec")),
               ).toBe(true);
