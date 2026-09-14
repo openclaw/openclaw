@@ -21,6 +21,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 // Matrix tests cover sdk plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
 import {
@@ -1063,6 +1064,7 @@ describe("MatrixClient request hardening", () => {
     "fresh-device-restart",
     "existing-device-restart",
     "durable-prefixed",
+    "deferred-runtime",
     "storage-failure",
     "missing-database",
     "missing-account",
@@ -1089,8 +1091,9 @@ describe("MatrixClient request hardening", () => {
       });
     }
     try {
+      const stateRuntime = getMatrixRuntime().state;
       const fetchMock = vi.fn(async () => {
-        const snapshot = readMatrixIdbSnapshotJson(storageRoot);
+        const snapshot = readMatrixIdbSnapshotJson(storageRoot, stateRuntime);
         expect(snapshot).not.toBeNull();
         expect(JSON.parse(snapshot!)).toEqual([
           expect.objectContaining({
@@ -1106,9 +1109,21 @@ describe("MatrixClient request hardening", () => {
         idbSnapshotPath: path.join(storageRoot, "crypto-idb-snapshot.json"),
         cryptoDatabasePrefix: prefix,
         ssrfPolicy: { allowPrivateNetwork: true },
+        stateRuntime,
       });
       expect(client).toBeInstanceOf(MatrixClient);
       const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch;
+      if (mode === "deferred-runtime") {
+        setMatrixRuntime({
+          ...getMatrixRuntime(),
+          state: {
+            ...stateRuntime,
+            openSyncKeyedStore: () => {
+              throw new Error("ambient Matrix runtime is unavailable");
+            },
+          },
+        });
+      }
       const upload = fetchFn(`${baseUrl}/_matrix/client/v3/keys/upload`, {
         method: "POST",
         body: '{"one_time_keys":{"signed_curve25519:fixture":{"key":"public"}}}',
@@ -1116,7 +1131,8 @@ describe("MatrixClient request hardening", () => {
       if (
         mode === "fresh-device-restart" ||
         mode === "existing-device-restart" ||
-        mode === "durable-prefixed"
+        mode === "durable-prefixed" ||
+        mode === "deferred-runtime"
       ) {
         await expect(upload).resolves.toBeInstanceOf(Response);
         expect(fetchMock).toHaveBeenCalledTimes(1);

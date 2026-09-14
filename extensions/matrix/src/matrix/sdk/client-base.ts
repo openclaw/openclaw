@@ -207,6 +207,7 @@ export abstract class MatrixClientBase {
           encryptionEnabled: this.encryptionEnabled,
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
+          stateRuntime: this.stateRuntime,
         });
         const pendingGuard = this.messageWireDispatchGuards.beforeRequest(resource, init);
         if (pendingGuard) {
