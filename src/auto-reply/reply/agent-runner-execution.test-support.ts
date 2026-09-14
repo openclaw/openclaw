@@ -79,7 +79,7 @@ const state = vi.hoisted(() => ({
 }));
 
 export const GENERIC_RUN_FAILURE_TEXT =
-  "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+  "⚠️ The agent stopped before producing a reply. Your request remains in this conversation. OpenClaw did not replay it automatically because earlier actions may have completed. Verify any requested actions, then retry the request.";
 export function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
   return {
     id,

@@ -308,7 +308,7 @@ export function renderSanitizedUserFacingText(
 }
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+  "⚠️ The agent stopped before producing a reply. Your request remains in this conversation. OpenClaw did not replay it automatically because earlier actions may have completed. Verify any requested actions, then retry the request.";
 const HEARTBEAT_FAILURE_LEAD = "⚠️ Heartbeat check failed before it could produce an update";
 const HEARTBEAT_FAILURE_TAIL = "The main chat session remains available.";
 export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}. ${HEARTBEAT_FAILURE_TAIL}`;

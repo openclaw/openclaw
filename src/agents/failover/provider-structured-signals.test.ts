@@ -189,18 +189,18 @@ describe("provider failover hook structured signals", () => {
     {
       errorType: "upstream_error",
       detail: "provider internal error",
-      hint: "This is usually temporary — try again shortly.",
+      hint: "Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
     },
     {
       errorBody: '{"error":{"type":"upstream_error"}}',
       detail: "provider internal error",
-      hint: "This is usually temporary — try again shortly.",
+      hint: "Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
     },
     {
       errorMessage: undefined,
       errorType: "upstream_error",
       detail: "provider internal error",
-      hint: "This is usually temporary — try again shortly.",
+      hint: "Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
     },
   ])(
     "carries structured $errorCode $errorType $errorBody into safe composed copy",
@@ -237,7 +237,7 @@ describe("provider failover hook structured signals", () => {
       providerOwner: { id: "prepared-owner", classifyFailoverReason },
     });
     expect(text).toBe(
-      "⚠️ custom-route/test-model request failed (provider internal error, HTTP 403). This is usually temporary — try again shortly.",
+      "⚠️ custom-route/test-model request failed (provider internal error, HTTP 403). Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
     );
     expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
     expect(classifyFailoverReason).toHaveBeenCalledWith(

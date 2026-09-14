@@ -1053,7 +1053,7 @@ describe("executeAgentTurn: provider failures", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
         "⚠️ LLM request failed (provider internal error). " +
-          "This is usually temporary — try again shortly.",
+          "Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
       );
       expect(result.payload.text).not.toContain("Something exploded");
     }

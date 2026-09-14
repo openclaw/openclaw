@@ -20,6 +20,14 @@ type AssistantRequestFailureCopyFacts = {
   code?: string;
 };
 
+type AssistantRequestFailureContract = {
+  classification: string;
+  summary: string;
+  requestState: "preserved";
+  replayState: "not_replayed";
+  recovery: string;
+};
+
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
   SQLITE_BUSY:
     "the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
@@ -54,6 +62,90 @@ const ASSISTANT_REQUEST_FAILURE_REASON = {
   unknown: "",
 } satisfies Record<FailoverReason, string>;
 
+const VERIFY_BEFORE_RETRY_RECOVERY =
+  "OpenClaw did not replay it automatically because earlier actions may have completed. Verify any requested actions, then retry the request.";
+
+const RETRY_PRESERVED_REQUEST_RECOVERY =
+  "OpenClaw did not replay it automatically. Retry the preserved request.";
+
+function renderFailureContract(contract: AssistantRequestFailureContract): string {
+  return `⚠️ ${contract.summary} Your request remains in this conversation. ${contract.recovery}`;
+}
+
+/** Build a redacted, actionable failure contract from trusted classified facts. */
+function buildAssistantRequestFailureContract(
+  facts: AssistantRequestFailureCopyFacts,
+): AssistantRequestFailureContract | undefined {
+  if (facts.storageFailure) {
+    return {
+      classification: `gateway_storage.${facts.storageFailure.toLowerCase()}`,
+      summary: `Agent run failed: ${STORAGE_FAILURE_COPY[facts.storageFailure]}`,
+      requestState: "preserved",
+      replayState: "not_replayed",
+      recovery: RETRY_PRESERVED_REQUEST_RECOVERY,
+    };
+  }
+  if (facts.code === "incomplete_tool_call") {
+    return {
+      classification: "provider.incomplete_tool_call",
+      summary: "The provider returned an unfinished tool call.",
+      requestState: "preserved",
+      replayState: "not_replayed",
+      recovery: VERIFY_BEFORE_RETRY_RECOVERY,
+    };
+  }
+  const provider = facts.provider?.trim();
+  const model = facts.model?.trim();
+  const target = provider && model ? `${provider}/${model}` : provider || model;
+  const normalizedReason =
+    facts.reason === "timeout" && typeof facts.status === "number" && facts.status >= 500
+      ? "server_error"
+      : facts.reason;
+  const reason = normalizedReason ? ASSISTANT_REQUEST_FAILURE_REASON[normalizedReason] : undefined;
+  const httpStatus = facts.status;
+  const status =
+    typeof httpStatus === "number" &&
+    Number.isInteger(httpStatus) &&
+    httpStatus >= 100 &&
+    httpStatus <= 599
+      ? `HTTP ${httpStatus}`
+      : undefined;
+  const unclassified =
+    !facts.reason || facts.reason === "unclassified" || facts.reason === "unknown";
+  if (!reason && !status && !target) {
+    return undefined;
+  }
+  const details = [reason, status].filter(Boolean);
+  const summary = `${target ? `${target} request failed` : "LLM request failed"}${details.length > 0 ? ` (${details.join(", ")})` : ""}.`;
+  const classification = normalizedReason
+    ? `provider.${normalizedReason}`
+    : status
+      ? "provider.http_error"
+      : unclassified
+        ? "provider.unclassified"
+        : "provider.request_failed";
+  let recovery = RETRY_PRESERVED_REQUEST_RECOVERY;
+  if (facts.reason === "auth" || facts.reason === "auth_permanent") {
+    recovery = "Re-authenticate the provider, then retry the preserved request.";
+  } else if (facts.reason === "billing") {
+    recovery = `Check ${provider ? `${provider} billing` : "provider billing"}, then retry the preserved request.`;
+  } else if (
+    normalizedReason !== "overloaded" &&
+    normalizedReason !== "server_error" &&
+    normalizedReason !== "timeout" &&
+    normalizedReason !== "rate_limit"
+  ) {
+    recovery = VERIFY_BEFORE_RETRY_RECOVERY;
+  }
+  return {
+    classification,
+    summary,
+    requestState: "preserved",
+    replayState: "not_replayed",
+    recovery,
+  };
+}
+
 /** Render classified facts without exposing raw provider response text. */
 export function renderAssistantRequestFailureCopy(
   facts: AssistantRequestFailureCopyFacts,
@@ -80,17 +172,19 @@ export function renderAssistantRequestFailureCopy(
     httpStatus <= 599
       ? `HTTP ${httpStatus}`
       : undefined;
-  // A recognized provider terminal can have no displayable reason.
   const unclassified =
     !facts.reason || facts.reason === "unclassified" || facts.reason === "unknown";
   if (!reason && !status && (!target || unclassified)) {
     return target ? `⚠️ Agent run failed (${model ? "model" : "provider"}: ${target}).` : undefined;
   }
+  if (normalizedReason === "server_error") {
+    const contract = buildAssistantRequestFailureContract(facts);
+    return contract ? renderFailureContract(contract) : undefined;
+  }
   const details = [reason, status].filter(Boolean);
   const summary = `⚠️ ${target ? `${target} request failed` : "LLM request failed"}${details.length > 0 ? ` (${details.join(", ")})` : ""}.`;
   if (
     normalizedReason === "overloaded" ||
-    normalizedReason === "server_error" ||
     normalizedReason === "timeout" ||
     normalizedReason === "rate_limit"
   ) {

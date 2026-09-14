@@ -130,4 +130,16 @@ describe("renderAssistantRequestFailureCopy", () => {
       "⚠️ openai/test-model request failed (authentication failed). Re-authenticate the provider and try again.",
     );
   });
+
+  it("turns HTTP 502 into explicit request-preserving recovery copy", () => {
+    expect(
+      renderAssistantRequestFailureCopy({
+        ...target,
+        reason: "server_error",
+        status: 502,
+      }),
+    ).toBe(
+      "⚠️ openai/test-model request failed (provider internal error, HTTP 502). Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
+    );
+  });
 });

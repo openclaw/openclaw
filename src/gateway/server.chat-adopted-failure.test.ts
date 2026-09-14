@@ -106,7 +106,7 @@ it("reports an adopted pre-model failure as one visible failure over the Gateway
     expect(accepted.ok).toBe(true);
     expect(accepted.payload).toMatchObject({ runId, status: "started" });
     const failed = await terminal;
-    expect(JSON.stringify(failed)).toContain("Something went wrong");
+    expect(JSON.stringify(failed)).toContain("Your request remains in this conversation");
     expect(JSON.stringify(failed)).not.toContain(originalError.message);
     const replay = await rpcReq(socket, "chat.send", request);
     expect(replay.ok).toBe(false);

@@ -191,7 +191,7 @@ describe("formatAssistantErrorText", () => {
 
       expect(userFacing).toBe(
         "⚠️ openai/gpt-5.6-luna request failed (provider internal error, HTTP 500). " +
-          "This is usually temporary — try again shortly.",
+          "Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
       );
       expect(userFacing).not.toContain("opaque-provider-canary");
     },
@@ -291,7 +291,7 @@ describe("formatAssistantErrorText", () => {
 
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "⚠️ openai/gpt-5.6-luna request failed (provider internal error). " +
-        "This is usually temporary — try again shortly.",
+        "Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.",
     );
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {

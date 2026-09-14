@@ -249,7 +249,7 @@ describe("handleAgentEnd", () => {
     const meta = firstWarnMeta(ctx);
     const expectedError =
       "⚠️ LLM request failed (provider internal error). " +
-      "This is usually temporary — try again shortly.";
+      "Your request remains in this conversation. OpenClaw did not replay it automatically. Retry the preserved request.";
     expect(meta.error).toBe(expectedError);
     const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
     expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");

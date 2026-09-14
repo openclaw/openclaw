@@ -158,9 +158,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "partial answer");
       expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
       expect(answerDraftStream.update).toHaveBeenLastCalledWith(
-        expect.stringMatching(
-          /^partial answer\n\n.*Something went wrong while processing your request\. Please try again, or use \/new to start a fresh session\.$/,
-        ),
+        expect.stringMatching(/^partial answer\n\n.*Your request remains in this conversation\./),
         expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
       );
       expect(answerDraftStream.clear).not.toHaveBeenCalled();

@@ -161,7 +161,7 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
       text: "partial telegram reply",
     });
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("Something went wrong") }),
+      expect.objectContaining({ text: expect.stringContaining("Your request remains") }),
     );
   });
 
@@ -269,7 +269,7 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
 
       expect(delivered.map(({ kind }) => kind)).toEqual(progress ? ["tool", "final"] : ["final"]);
       expect(delivered.at(-1)?.payload).toMatchObject({
-        text: expect.stringContaining("Something went wrong"),
+        text: expect.stringContaining("Your request remains"),
         isError: true,
       });
       expect(JSON.stringify(delivered)).not.toContain(resolverError.message);
