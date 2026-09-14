@@ -60,6 +60,19 @@ describe("Side chat failed-question history", () => {
     expect(threads.view("one").failedQuestion).toBeNull();
   });
 
+  it.each([{ history: ["A", "A"] }, { history: ["A", "B", "A"] }])(
+    "keeps one failed attempt after the final answered exchange in $history",
+    async ({ history }) => {
+      const threads = new ChatSessionCompanionThreads();
+      await threads.hydrate("one", async () => ({
+        exchanges: history.map((question) => ({ question, answer: "Answered", ts: 1 })),
+      }));
+      await threads.submit("one", "Failed", unavailable);
+      await threads.submit("one", "Next", answered("Recovered", 2));
+      expect(questions(threads)).toEqual([...history, "Failed", "Next"]);
+    },
+  );
+
   it("does not erase earlier failed attempts when later answers repeat their question", async () => {
     const threads = new ChatSessionCompanionThreads();
     await threads.submit("one", "B", unavailable);
@@ -103,13 +116,25 @@ describe("Side chat failed-question history", () => {
     expect(questions(threads)).toEqual([]);
   });
 
-  it("bounds local failed-question history", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    for (let index = 0; index < 30; index += 1) {
-      await threads.submit("one", "Question " + index, unavailable);
-    }
-    expect(questions(threads)).toHaveLength(24);
-    expect(questions(threads).at(0)).toBe("Question 5");
-    expect(threads.view("one").failedQuestion).toBe("Question 29");
-  });
+  it.each([0, 24])(
+    "bounds local failed-question history with %i repeated answers",
+    async (count) => {
+      const threads = new ChatSessionCompanionThreads();
+      await threads.hydrate("one", async () => ({
+        exchanges: Array.from({ length: count }, () => ({
+          question: "A",
+          answer: "Answered",
+          ts: 1,
+        })),
+      }));
+      for (let index = 0; index < 30; index += 1) {
+        await threads.submit("one", "Question " + index, unavailable);
+      }
+      expect(questions(threads)).toEqual([
+        ...Array.from({ length: count }, () => "A"),
+        ...Array.from({ length: 24 }, (_, index) => "Question " + (index + 5)),
+      ]);
+      expect(threads.view("one").failedQuestion).toBe("Question 29");
+    },
+  );
 });

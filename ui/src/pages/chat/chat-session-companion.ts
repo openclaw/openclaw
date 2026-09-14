@@ -35,22 +35,23 @@ type ChatSessionCompanionFailure = {
   afterExchangeKey: string | null;
 };
 
-/** Merge local failed questions with the Gateway-owned answered exchanges. */
 export function sessionCompanionDisplayTurns(
   thread: ChatSessionCompanionThread,
 ): Array<SessionCompanionExchange | ChatSessionCompanionFailure> {
-  const failures = thread.previousFailures ?? [];
-  const exchangeKeys = new Set(thread.exchanges.map(exchangeKey));
-  const turns: Array<SessionCompanionExchange | ChatSessionCompanionFailure> = failures.filter(
-    (failure) => !failure.afterExchangeKey || !exchangeKeys.has(failure.afterExchangeKey),
-  );
-  for (const exchange of thread.exchanges) {
-    turns.push(
-      exchange,
-      ...failures.filter((failure) => failure.afterExchangeKey === exchangeKey(exchange)),
-    );
+  if (!thread.previousFailures?.length) {
+    return thread.exchanges;
   }
-  return turns;
+  const anchors = new Map<string, Array<SessionCompanionExchange | ChatSessionCompanionFailure>>();
+  const groups = thread.exchanges.map((exchange) => {
+    const group: Array<SessionCompanionExchange | ChatSessionCompanionFailure> = [exchange];
+    anchors.set(exchangeKey(exchange), group);
+    return group;
+  });
+  const turns: Array<SessionCompanionExchange | ChatSessionCompanionFailure> = [];
+  for (const failure of thread.previousFailures) {
+    (anchors.get(failure.afterExchangeKey ?? "") ?? turns).push(failure);
+  }
+  return turns.concat(...groups);
 }
 
 type MutableCompanionThread = ChatSessionCompanionThread & {
@@ -195,9 +196,7 @@ export class ChatSessionCompanionThreads {
       return;
     }
     const retrying = thread.failedQuestion === normalized;
-    // Retry updates the same question in place. A different follow-up must not
-    // erase the unanswered question merely because it never became an exchange.
-    if (thread.failedQuestion && thread.hint && thread.failedQuestion !== normalized) {
+    if (thread.failedQuestion && thread.hint && !retrying) {
       thread.previousFailures = [
         ...(thread.previousFailures ?? []),
         {
@@ -215,9 +214,10 @@ export class ChatSessionCompanionThreads {
     thread.draft = "";
     thread.revision += 1;
     const token = Symbol(key);
-    const knownExchanges = new Set(thread.exchanges.map(exchangeKey));
+    const exchangeKeys = thread.exchanges.map(exchangeKey);
+    const knownExchanges = new Set(exchangeKeys);
     if (!retrying) {
-      thread.questionAfterExchangeKey = [...knownExchanges].at(-1) ?? null;
+      thread.questionAfterExchangeKey = exchangeKeys.at(-1) ?? null;
     }
     this.submissionTokens.set(key, token);
     this.notify();
