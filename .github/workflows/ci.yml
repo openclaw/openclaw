@@ -5725,6 +5725,123 @@ jobs:
           path: /var/tmp/openclaw-robolectric-m2
           key: ${{ steps.robolectric-cache.outputs.cache-primary-key }}
 
+  android-access-native:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: needs.preflight.outputs.run_android_job == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - page-size: 4096
+            image: google_apis
+          - page-size: 16384
+            image: google_apis_ps16k
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_KIND: android
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: *owned_checkout_run
+
+      - name: Checkout CI Android toolchain action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
+      - name: Setup Android toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
+      - name: Setup Node environment for native resources
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+
+      - name: Run packaged Access crypto on Android
+        shell: bash
+        env:
+          EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
+          SYSTEM_IMAGE: system-images;android-36;${{ matrix.image }};x86_64
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS/$RUNNER_ARCH" = Linux/X64
+          test -c /dev/kvm
+          /usr/bin/sudo /usr/bin/setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install emulator "$SYSTEM_IMAGE"
+          acceleration="$(/usr/bin/timeout --signal=TERM --kill-after=2s 15s emulator -accel-check 2>&1)"
+          printf '%s\n' "$acceleration"
+          grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
+          printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
+          emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; wait "$emulator_pid" || true' EXIT
+          /usr/bin/timeout --signal=TERM --kill-after=2s 180s bash -c '
+            adb -s emulator-5554 wait-for-device
+            until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done
+          '
+          test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d '\r')" = "$EXPECTED_PAGE_SIZE"
+          if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
+            # The ps16k image simulates 16 KiB on x86_64; compatibility mode must not hide loader failures.
+            adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
+            adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
+            test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
+            test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
+          fi
+          node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
+            :app:connectedPlayDebugAndroidTest \
+            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
+            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
+            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          apk="$(python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import xml.etree.ElementTree as ET
+          import zipfile
+          reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
+          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')
+                   if case.get('classname') == 'ai.openclaw.app.gateway.CloudflareAccessNativeTest']
+          assert len(cases) == 1, 'The packaged native test must execute exactly once'
+          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'The packaged native test failed or skipped'
+          directory = Path('apps/android/app/build/outputs/apk/play/debug')
+          metadata = json.loads((directory / 'output-metadata.json').read_text())
+          assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'
+          assert len(metadata['elements']) == 1, 'Expected one universal playDebug APK'
+          element = metadata['elements'][0]
+          filename = element['outputFile']
+          assert not element['filters'] and Path(filename).name == filename and filename.endswith('.apk')
+          selected = directory / filename
+          with zipfile.ZipFile(selected) as archive:
+              libraries = {name for name in archive.namelist() if name.endswith('/libsodium.so')}
+          assert libraries == {f'lib/{abi}/libsodium.so' for abi in ('armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64')}
+          print(selected)
+          PY
+          )"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+
+      - name: Upload Access native test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-access-native-${{ matrix.page-size }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          path: |
+            apps/android/app/build/outputs/androidTest-results/connected/**
+            apps/android/app/build/reports/androidTests/connected/**
+          if-no-files-found: error
+          retention-days: 14
+
   docker-seed-e2e:
     permissions:
       contents: read
@@ -5816,6 +5933,7 @@ jobs:
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android
+      - android-access-native
       - docker-seed-e2e
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
@@ -5857,6 +5975,7 @@ jobs:
             ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
+            android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_job == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |
           set -euo pipefail
