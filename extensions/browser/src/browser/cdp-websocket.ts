@@ -33,12 +33,20 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
+  abortSignal?: AbortSignal;
+  abortListener?: () => void;
+};
+
+export type CdpSendOptions = {
+  /** Cancel this command without closing the socket, for reads that have no side effects. */
+  signal?: AbortSignal;
 };
 
 export type CdpSendFn = (
   method: string,
   params?: Record<string, unknown>,
   sessionId?: string,
+  options?: CdpSendOptions,
 ) => Promise<unknown>;
 
 export class CdpSocketError extends Error {
@@ -172,10 +180,19 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
       ? normalizeBrowserTimerDelayMs(opts.commandTimeoutMs)
       : undefined;
 
+  const cleanupPending = (p: Pending) => {
+    if (p.timer !== undefined) {
+      clearTimeout(p.timer);
+    }
+    if (p.abortSignal && p.abortListener) {
+      p.abortSignal.removeEventListener("abort", p.abortListener);
+    }
+  };
   const send: CdpSendFn = (
     method: string,
     params?: Record<string, unknown>,
     sessionId?: string,
+    sendOptions?: CdpSendOptions,
   ) => {
     const id = nextId++;
     const msg = { id, method, params, sessionId };
@@ -198,11 +215,29 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
         }, commandTimeoutMs);
       }
       pending.set(id, entry);
+      if (sendOptions?.signal) {
+        const abortSignal = sendOptions.signal;
+        const abortListener = () => {
+          if (pending.get(id) !== entry) {
+            return;
+          }
+          pending.delete(id);
+          cleanupPending(entry);
+          reject(toStringifiedError(abortSignal.reason));
+        };
+        entry.abortSignal = abortSignal;
+        entry.abortListener = abortListener;
+        abortSignal.addEventListener("abort", abortListener, { once: true });
+        if (abortSignal.aborted) {
+          abortListener();
+          return;
+        }
+      }
       try {
         ws.send(JSON.stringify(msg));
       } catch (err) {
         pending.delete(id);
-        clearTimeout(entry.timer);
+        cleanupPending(entry);
         reject(toStringifiedError(err));
       }
     });
@@ -210,7 +245,7 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
 
   const closeWithError = (err: Error) => {
     for (const [, p] of pending) {
-      clearTimeout(p.timer);
+      cleanupPending(p);
       p.reject(err);
     }
     pending.clear();
@@ -240,7 +275,7 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
         return;
       }
       pending.delete(parsed.id);
-      clearTimeout(p.timer);
+      cleanupPending(p);
       if (parsed.error?.message) {
         p.reject(new CdpSocketError("protocol", parsed.error.message));
         return;
@@ -399,12 +434,20 @@ export async function withCdpSocket<T>(
       try {
         await openPromise;
       } catch (err) {
+        // openPromise is only rejected via `ws.once('error', err => reject(err))`
+        // or the close event's `new Error(...)`; the former always carries an
+        // Error from Node's `ws` library, the latter is already an Error. The
+        // non-Error wrap is defensive and structurally unreachable.
+        /* c8 ignore next */
         closeWithError(toStringifiedError(err));
+        // Cancellation on the final attempt must not become a handshake error.
         opts?.signal?.throwIfAborted();
         if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
           throw err;
         }
-        // Retry only before commands can have side effects.
+        // Retry only handshake failures. Once CDP commands are flowing, callers
+        // own retry semantics because commands may already have side effects.
+        // Cancelled route requests must not keep retrying Chrome handshakes.
         await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
           (error: unknown) => {
             opts?.signal?.throwIfAborted();
@@ -427,6 +470,8 @@ export async function withCdpSocket<T>(
       closeWithError(toStringifiedError(err));
       throw err;
     } finally {
+      // Keep cancellation active after the handshake so in-flight CDP commands
+      // are rejected when their owning route is cancelled.
       opts?.signal?.removeEventListener("abort", abortSocket);
       ws.close();
     }

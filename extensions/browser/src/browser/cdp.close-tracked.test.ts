@@ -135,4 +135,144 @@ describe("closeTrackedCdpTarget", () => {
     ).resolves.toEqual({ status: "closed" });
     expect(sawClose).toBe(true);
   });
+
+  it("cancels an unanswered target lookup before issuing the close write", async () => {
+    const controller = new AbortController();
+    let resolveTargetLookup: () => void = () => {};
+    const targetLookupReceived = new Promise<void>((resolve) => {
+      resolveTargetLookup = resolve;
+    });
+    let sawClose = false;
+    const wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    servers.push(wsServer);
+    await listen(wsServer);
+    wsServer.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const message = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
+        if (message.method === "Target.getTargets") {
+          resolveTargetLookup();
+        } else if (message.method === "Target.closeTarget") {
+          sawClose = true;
+        }
+      });
+    });
+
+    const browserWebSocketUrl = `ws://127.0.0.1:${(wsServer.address() as AddressInfo).port}/devtools/browser/TEST`;
+    const httpServer = createServer((_, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ webSocketDebuggerUrl: browserWebSocketUrl }));
+    });
+    servers.push(httpServer);
+    httpServer.listen(0, "127.0.0.1");
+    await listen(httpServer);
+    const cdpUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+    const ownership = await resolveCdpTabOwnership({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "OWNED",
+    });
+    if (ownership.status !== "durable") {
+      throw new Error("expected durable ownership");
+    }
+
+    const startedAt = Date.now();
+    const operation = closeTrackedCdpTarget({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "OWNED",
+      expectedProfileFingerprint: ownership.profileFingerprint,
+      expectedBrowserInstanceFingerprint: ownership.browserInstanceFingerprint,
+      signal: controller.signal,
+      timeoutMs: 5_000,
+    });
+    await targetLookupReceived;
+    controller.abort(new Error("browser request cancelled"));
+
+    await expect(operation).rejects.toThrow("browser request cancelled");
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(sawClose).toBe(false);
+  }, 3_000);
+
+  it("settles an admitted target close before reporting request cancellation", async () => {
+    const controller = new AbortController();
+    let resolveCloseCommand: () => void = () => {};
+    const closeCommandReceived = new Promise<void>((resolve) => {
+      resolveCloseCommand = resolve;
+    });
+    let resolveCloseResponse: () => void = () => {};
+    const closeResponseSent = new Promise<void>((resolve) => {
+      resolveCloseResponse = resolve;
+    });
+    let releaseCloseResponse: () => void = () => {};
+    const closeResponseGate = new Promise<void>((resolve) => {
+      releaseCloseResponse = resolve;
+    });
+    const wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    servers.push(wsServer);
+    await listen(wsServer);
+    wsServer.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const message = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
+        if (message.method === "Target.getTargets") {
+          socket.send(
+            JSON.stringify({
+              id: message.id,
+              result: { targetInfos: [{ targetId: "OWNED", type: "page" }] },
+            }),
+          );
+        } else if (message.method === "Target.closeTarget") {
+          resolveCloseCommand();
+          void closeResponseGate.then(() => {
+            socket.send(JSON.stringify({ id: message.id, result: { success: true } }));
+            resolveCloseResponse();
+          });
+        }
+      });
+    });
+
+    const browserWebSocketUrl = `ws://127.0.0.1:${(wsServer.address() as AddressInfo).port}/devtools/browser/TEST`;
+    const httpServer = createServer((_, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ webSocketDebuggerUrl: browserWebSocketUrl }));
+    });
+    servers.push(httpServer);
+    httpServer.listen(0, "127.0.0.1");
+    await listen(httpServer);
+    const cdpUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+    const ownership = await resolveCdpTabOwnership({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "OWNED",
+    });
+    if (ownership.status !== "durable") {
+      throw new Error("expected durable ownership");
+    }
+
+    const operation = closeTrackedCdpTarget({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "OWNED",
+      expectedProfileFingerprint: ownership.profileFingerprint,
+      expectedBrowserInstanceFingerprint: ownership.browserInstanceFingerprint,
+      signal: controller.signal,
+      timeoutMs: 5_000,
+    });
+    await closeCommandReceived;
+    let operationSettled = false;
+    void operation.then(
+      () => {
+        operationSettled = true;
+      },
+      () => {
+        operationSettled = true;
+      },
+    );
+    controller.abort(new Error("browser request cancelled"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(operationSettled).toBe(false);
+
+    releaseCloseResponse();
+    await closeResponseSent;
+    await expect(operation).rejects.toThrow("browser request cancelled");
+  }, 3_000);
 });

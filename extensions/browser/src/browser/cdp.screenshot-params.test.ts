@@ -133,7 +133,7 @@ describe("CDP screenshot params", () => {
       [];
     expect(wsUrl).toBe("ws://localhost:9222/devtools/page/X");
     expect(typeof sendCallback).toBe("function");
-    expect(options).toEqual({ commandTimeoutMs: 12_345 });
+    expect(options).toMatchObject({ commandTimeoutMs: 12_345 });
   });
 
   it("captures the full document without writing or guessing emulation state", async () => {
