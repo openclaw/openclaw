@@ -215,9 +215,15 @@ export function createSessionManagedListRefresh(
     if (!refresh.background || entry.pending) {
       return refreshManagedList(entry, refresh);
     }
+    entry.queued = refresh;
     return host.background(entry, async () => {
-      if (managedLists.get(entry.key) === entry && entry.listeners.size > 0) {
-        await refreshManagedList(entry, refresh);
+      // An explicit replacement can satisfy this invalidation while admission is held.
+      if (
+        managedLists.get(entry.key) === entry &&
+        entry.listeners.size > 0 &&
+        (entry.pending || entry.queued?.background)
+      ) {
+        await refreshManagedList(entry, entry.queued?.background ? entry.queued : refresh);
       }
     });
   };
