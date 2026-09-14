@@ -1,5 +1,8 @@
 // Vitest project config tests validate aggregate Vitest project wiring.
-import { afterEach, describe, expect, it } from "vitest";
+import { globSync } from "node:fs";
+import path from "node:path";
+import { afterEach, assert, describe, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { resolveExtensionTestConfig } from "../scripts/lib/extension-test-plan.mts";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
@@ -32,6 +35,10 @@ import {
   createContractsVitestConfig,
   pluginContractPatterns,
 } from "./vitest/vitest.contracts-shared.ts";
+import {
+  databaseWorkerExtensionTestFiles,
+  databaseWorkerExtensionTestRoots,
+} from "./vitest/vitest.extension-database-workers-paths.mjs";
 import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.extension-database-workers.config.ts";
 import { createExtensionImessageVitestConfig } from "./vitest/vitest.extension-imessage.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
@@ -39,11 +46,15 @@ import { createGatewayMethodsIsolatedVitestConfig } from "./vitest/vitest.gatewa
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
 import {
+  gatewayDatabaseWorkerTestFiles,
   gatewayMethodsIsolatedTestFiles,
   gatewayServerIsolatedTestFiles,
 } from "./vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
-import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
+import {
+  createGatewayProjectShardVitestConfig,
+  createGatewayVitestConfig,
+} from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
   repoRoot,
@@ -60,16 +71,9 @@ import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
-const scopedGatewayMethodsIsolatedTestFiles = [
-  "server-methods/agent.test.ts",
-  "server-methods/board.runtime-boundaries.test.ts",
-  "server-methods/chat.reset-visible-yield.test.ts",
-  "server-methods/health.owner-routing.test.ts",
-  "server-methods/system-agent-setup-control-ui.test.ts",
-  "server-methods/users-preferences.test.ts",
-  "server-methods/usage.test.ts",
-  "server-methods/usage.sessions-usage.test.ts",
-];
+const scopedGatewayMethodsIsolatedTestFiles = gatewayMethodsIsolatedTestFiles.map((file) =>
+  file.replace(/^src\/gateway\//u, ""),
+);
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
@@ -118,6 +122,57 @@ describe("projects vitest config", () => {
     expect(Number(report!.slice("ROOT_PROJECT_RESOLUTION ".length))).toBeGreaterThan(0);
   });
 
+  it.each(["all", "worker", "mixed"] as const)(
+    "preserves Gateway fallback coverage for %s selection",
+    async (selection) => {
+      const [workerFile] = gatewayDatabaseWorkerTestFiles;
+      assert(workerFile);
+      const ordinaryFile = "src/gateway/config-reload.test.ts";
+      const selected = selection === "worker" ? [workerFile] : [workerFile, ordinaryFile];
+      const env = {
+        OPENCLAW_GATEWAY_PROJECT_SHARDS: "0",
+        OPENCLAW_VITEST_INCLUDE_FILE:
+          selection === "all"
+            ? undefined
+            : patternFiles.writePatternFile("gateway-fallback-include.json", selected),
+      };
+      const resolved = await resolveConfig(
+        { config: false },
+        createGatewayProjectShardVitestConfig(env),
+      );
+      const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
+      expect(projects.map((project) => project.name)).toEqual([
+        "gateway",
+        "gateway-database-workers",
+      ]);
+      expect(projects.map((project) => project.pool)).toEqual(["forks", "forks"]);
+      const original = requireTestConfig(createGatewayVitestConfig(env));
+      expect(original.pool).toBe("threads");
+      for (const project of projects) {
+        expect(project.runner).toBe(original.runner);
+        expect(project.setupFiles).toEqual(original.setupFiles);
+      }
+      const filesByProject = projects.map((project) => {
+        const exclude = project.exclude.map((pattern) =>
+          path.isAbsolute(pattern) ? path.relative(project.dir, pattern) : pattern,
+        );
+        return globSync(project.include, { cwd: project.dir, exclude }).map((file) =>
+          path.relative(repoRoot, path.join(project.dir, file)).replaceAll("\\", "/"),
+        );
+      });
+      const files = filesByProject.flat();
+      expect(new Set(files).size).toBe(files.length);
+      expect(filesByProject[1]?.toSorted()).toEqual(
+        (selection === "all" ? gatewayDatabaseWorkerTestFiles : [workerFile]).toSorted(),
+      );
+      if (selection === "all") {
+        expect(filesByProject[0]).toContain(ordinaryFile);
+      } else {
+        expect(files.toSorted()).toEqual(selected.toSorted());
+      }
+    },
+  );
+
   it("keeps root and full-suite agent projects aligned with canonical owners", () => {
     const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
     const agentConfigs = new Set(agentVitestProjectConfigs);
@@ -149,6 +204,7 @@ describe("projects vitest config", () => {
     expect(methodsIsolatedConfig.pool).toBe("forks");
     expect(normalizeConfigPath(methodsIsolatedConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(methodsIsolatedConfig.include).toEqual(scopedGatewayMethodsIsolatedTestFiles);
+    expect(methodsIsolatedConfig.include).toContain("server-methods/transcripts.test.ts");
     expect(serverConfig.pool).toBe("forks");
     expect(serverConfig.isolate).toBe(false);
     expect(serverConfig.fileParallelism).toBe(false);
@@ -160,6 +216,7 @@ describe("projects vitest config", () => {
     expect(serverConfig.exclude).toContain("server-plugin-subagent-runtime.overrides.test.ts");
     expect(gatewayFallback.exclude).toContain(overrideFixture);
     expect(methodsConfig.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(methodsConfig.exclude).toContain("src/gateway/server-methods/transcripts.test.ts");
     expect(methodsConfig.exclude).toContain(
       "src/gateway/server-methods/health.owner-routing.test.ts",
     );
@@ -173,6 +230,7 @@ describe("projects vitest config", () => {
       "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
     );
     expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/transcripts.test.ts");
     expect(gatewayFallback.exclude).toContain(
       "src/gateway/server-methods/health.owner-routing.test.ts",
     );
@@ -605,12 +663,12 @@ describe("projects vitest config", () => {
       ).toContain(project);
       expect(testConfig.pool).toBe("forks");
       expect(testConfig.isolate).toBe(true);
-      expect(testConfig.include).toEqual([
-        "logbook/**/*.test.ts",
-        "team-reports/**/*.test.ts",
-        "workboard/**/*.test.ts",
-        "imessage/src/approval-reactions.persistence.test.ts",
-      ]);
+      expect(testConfig.include).toEqual(
+        [
+          ...databaseWorkerExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
+          ...databaseWorkerExtensionTestFiles,
+        ].map((file) => file.replace(/^extensions\//u, "")),
+      );
       expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
         `${pluginId}/**`,
       );

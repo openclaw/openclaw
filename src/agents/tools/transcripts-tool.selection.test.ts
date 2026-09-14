@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import { activeSessions } from "../../transcripts/capture.js";
 import type {
@@ -18,10 +21,11 @@ vi.mock("../../transcripts/provider-registry.js", () => ({
   listTranscriptSourceProviders: () => [],
 }));
 const tempDirs = createTempDirTracker();
-afterEach(() => {
+afterEach(async () => {
   activeSessions.clear();
   vi.restoreAllMocks();
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });

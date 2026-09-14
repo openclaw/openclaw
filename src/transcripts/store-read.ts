@@ -624,7 +624,7 @@ function readTranscriptUtterancePage(
 /** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
 export function readStoredTranscriptNotes(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
 ): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
   const row = executeSqliteQueryTakeFirstSync(

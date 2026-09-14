@@ -33,6 +33,8 @@ import {
   summarizeTaskRecordsForFlowInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
 import { readTaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
+import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
+import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -232,6 +234,30 @@ function createSharedStateWorkerBackend(
             ...(observed ? { current: observed } : {}),
           };
         }
+      }
+      switch (command.type) {
+        case "transcripts.sessionEntries":
+        case "transcripts.matches":
+        case "transcripts.session":
+        case "transcripts.entry":
+        case "transcripts.latest":
+        case "transcripts.notes":
+        case "transcripts.libraryEntry":
+        case "transcripts.recentStopped":
+        case "transcripts.summaryRevision":
+        case "transcripts.utterances":
+        case "transcripts.summary": {
+          const database = open();
+          ensureMeetingTranscriptsSchema({
+            database,
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+            readOnly: command.input.readOnly,
+          });
+          return executeTranscriptRead(database.db, command);
+        }
+        default:
+          break;
       }
       const { db } = open();
       return runSqliteDeferredTransactionSync(db, () => {

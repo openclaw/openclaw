@@ -80,3 +80,4 @@ export {
 } from "./test-helpers/meeting-plugin-contract.js";
 export { defineMeetingChromeCleanupTests } from "./test-helpers/meeting-chrome-contract.js";
 export { defineMeetingSessionFlowTests } from "./test-helpers/meeting-session-contract.js";
+export { useMeetingTestState } from "./test-helpers/meeting-state.js";

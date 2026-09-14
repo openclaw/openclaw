@@ -39,7 +39,10 @@ import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-p
 import { databaseWorkerExtensionTestFiles } from "../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
-import { gatewayPluginTestFiles } from "../test/vitest/vitest.gateway-server-paths.mjs";
+import {
+  gatewayDatabaseWorkerTestFiles,
+  gatewayPluginTestFiles,
+} from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
@@ -272,6 +275,8 @@ const FULL_AGENTIC_VITEST_CONFIG = "test/vitest/vitest.full-agentic.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
 const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
+const GATEWAY_DATABASE_WORKERS_VITEST_CONFIG =
+  "test/vitest/vitest.gateway-database-workers.config.ts";
 const GATEWAY_METHODS_VITEST_CONFIG = "test/vitest/vitest.gateway-methods.config.ts";
 const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
@@ -488,6 +493,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   bundled: BUNDLED_VITEST_CONFIG,
   gateway: GATEWAY_VITEST_CONFIG,
   gatewayCore: GATEWAY_CORE_VITEST_CONFIG,
+  gatewayDatabaseWorkers: GATEWAY_DATABASE_WORKERS_VITEST_CONFIG,
   gatewayClient: GATEWAY_CLIENT_VITEST_CONFIG,
   gatewayMethods: GATEWAY_METHODS_VITEST_CONFIG,
   gatewayServer: GATEWAY_SERVER_VITEST_CONFIG,
@@ -3576,6 +3582,9 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   } else if (isDatabaseWorkerCoreTestFile(relative)) {
     return "infra";
   }
+  if (gatewayDatabaseWorkerTestFiles.includes(relative)) {
+    return beforeDatabaseWorkerOwnership ? "gateway" : "gatewayDatabaseWorkers";
+  }
   if (isAgentsCoreIsolatedTestFile(relative)) {
     return agentVitestProjectOwners.coreIsolated.kind;
   }
@@ -3946,6 +3955,7 @@ export function buildVitestRunPlans(
     relative: toRepoRelativeTarget(targetArg, cwd),
     kind: classifyTarget(targetArg, cwd),
   }));
+  const hasGatewayAggregateTarget = classifiedTargets.some(({ kind }) => kind === "gateway");
   const explicitConfigTargets = classifiedTargets.map(({ relative }) => relative);
   const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter((file) =>
     [...requestedTargetArgs, ...activeTargetArgs].some((targetArg) => {
@@ -3980,6 +3990,9 @@ export function buildVitestRunPlans(
     }
     return explicitConfigTargets
       .filter((config) => !hasE2eTarget || config !== PACKAGE_CONTRACT_VITEST_CONFIG)
+      .filter(
+        (config) => !hasGatewayAggregateTarget || config !== GATEWAY_DATABASE_WORKERS_VITEST_CONFIG,
+      )
       .flatMap((config) =>
         createBoundedExtensionPlans(
           {
@@ -4009,14 +4022,21 @@ export function buildVitestRunPlans(
       continue;
     }
 
-    // Package builds clean shared outputs. Mixed E2E selections keep their
-    // original serial owner instead of introducing a concurrent artifact writer.
-    const kind = hasE2eTarget && targetKind === "packageContract" ? "e2e" : targetKind;
+    // A requested Gateway aggregate already owns its worker tests. Watch also
+    // keeps that aggregate; mixed E2E selections retain their serial build owner.
+    const kind =
+      targetKind === "gatewayDatabaseWorkers" && (watchMode || hasGatewayAggregateTarget)
+        ? "gateway"
+        : hasE2eTarget && targetKind === "packageContract"
+          ? "e2e"
+          : targetKind;
     const current = groupedTargets.get(kind) ?? [];
     current.push(
       ...(hasE2eTarget && relative === PACKAGE_CONTRACT_VITEST_CONFIG
         ? packageContractTestFiles
-        : [targetArg]),
+        : kind === "gateway" && relative === GATEWAY_DATABASE_WORKERS_VITEST_CONFIG
+          ? gatewayDatabaseWorkerTestFiles
+          : [targetArg]),
     );
     groupedTargets.set(kind, current);
   }

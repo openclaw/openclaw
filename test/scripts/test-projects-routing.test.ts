@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../vitest/vitest.package-contract-paths.mjs";
 
 const {
@@ -678,9 +679,9 @@ describe("test-projects args", () => {
       expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)));
     }
 
-    // Mixed E2E runs coalesce package contracts with runtime readers. Other
-    // importer owners and every include-vs-forwarded shape must still match
-    // the standalone selection.
+    // Mixed E2E runs coalesce package contracts, and Gateway aggregates include
+    // worker tests. Other importer owners and every include-vs-forwarded shape
+    // must still match the standalone selection.
     for (const plan of plans) {
       expect(plan.watchMode).toBe(false);
       for (const file of plan.includePatterns ?? plan.forwardedArgs) {
@@ -688,7 +689,10 @@ describe("test-projects args", () => {
           plan.config === "test/vitest/vitest.e2e.config.ts" &&
           packageContractTestFiles.includes(file)
             ? "test/vitest/vitest.package-contract.config.ts"
-            : plan.config;
+            : plan.config === "test/vitest/vitest.gateway.config.ts" &&
+                gatewayDatabaseWorkerTestFiles.includes(file)
+              ? "test/vitest/vitest.gateway-database-workers.config.ts"
+              : plan.config;
         expect(buildVitestRunPlans([file])).toEqual([
           {
             config,

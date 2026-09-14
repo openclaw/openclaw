@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -27,7 +28,10 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
 const logGateway = { warn: vi.fn() };
 
 function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
@@ -267,6 +271,7 @@ describe("transcript Gateway read authorization and errors", () => {
       });
       const profile = ensureProfileForEmail("url-reader@example.test");
       const caller = client(profile.id);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const selector = transcriptSessionSelector(session);
       const publicOutputs: string[] = [];
@@ -466,6 +471,7 @@ describe("meeting transcript RPC", () => {
   afterEach(async () => {
     activeSessions.clear();
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });

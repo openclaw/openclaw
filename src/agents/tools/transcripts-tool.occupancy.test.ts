@@ -5,9 +5,13 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import { activeSessions, createTranscriptSessionId } from "../../transcripts/capture.js";
+import { readConfiguredTranscriptStarts } from "../../transcripts/configured-start-status.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
@@ -17,9 +21,10 @@ import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const tempDirs = createTempDirTracker();
-afterEach(() => {
+afterEach(async () => {
   activeSessions.clear();
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
@@ -191,6 +196,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         await h.store.writeSession(session);
         await h.store.appendUtteranceForSession(session, { text: "Archived speech" });
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await withPluginRuntimeRegistryScope(h.registry, async () => {
         const service = h.service();
@@ -293,18 +299,21 @@ describe("occupancy-driven transcript lifecycle", () => {
         return { ok: true, session: request.session };
       });
       await withPluginRuntimeRegistryScope(h.registry, async () => {
-        const service = h.service([{ ...h.entry, whenOccupied, sessionId: configuredSessionId }]);
+        const autoStart = [{ ...h.entry, whenOccupied, sessionId: configuredSessionId }];
+        const service = h.service(autoStart);
         try {
           service.start();
           await entered[0]!.promise;
           for (let count = 1; count < 3; count++) {
-            await vi.waitFor(() => expect(identities).toHaveLength(count));
-            expect(identities).toHaveLength(count);
-            if (whenOccupied) {
-              await vi.waitFor(async () =>
-                expect((await h.store.listSessionEntries())[0]?.session.stoppedAt).toBeDefined(),
-              );
-            }
+            await vi.waitFor(
+              () => {
+                expect(identities).toHaveLength(count);
+                expect(readConfiguredTranscriptStarts({ autoStart })?.get(0)?.diagnostic).toBe(
+                  "retrying",
+                );
+              },
+              { interval: 0 },
+            );
             await vi.advanceTimersByTimeAsync(5_000);
           }
           await entered[2]!.promise;
@@ -518,6 +527,12 @@ describe("occupancy-driven transcript lifecycle", () => {
     "reopens only within the window after a %i ms gateway gap",
     async (gap) => {
       const h = harness();
+      const entered = Array.from({ length: 2 }, () => createDeferred());
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        h.requests.push(request);
+        entered[h.requests.length - 1]!.resolve();
+        return { ok: true, session: request.session };
+      });
       await withPluginRuntimeRegistryScope(h.registry, async () => {
         const first = h.service([{ ...h.entry, title: "Original meeting" }]);
         let original: TranscriptStartRequest;
@@ -525,18 +540,21 @@ describe("occupancy-driven transcript lifecycle", () => {
           first.start();
           await vi.waitFor(() => expect(h.watches).toHaveLength(1));
           h.watches[0]!.onOccupied();
+          await entered[0]!.promise;
           original = await h.started(1);
           await original.onUtterance({ text: "Before restart" });
         } finally {
           await first.stop();
         }
         await vi.advanceTimersByTimeAsync(gap);
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         const second = h.service([{ ...h.entry, title: "Future meeting" }]);
         try {
           second.start();
           await vi.waitFor(() => expect(h.watches).toHaveLength(2));
           h.watches[1]!.onOccupied();
+          await entered[1]!.promise;
           const reopened = await h.started(2);
           const within = gap < 10 * 60_000;
           expect(reopened.session.sessionId === original.session.sessionId).toBe(within);

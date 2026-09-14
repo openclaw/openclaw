@@ -1,4 +1,5 @@
 import {
+  gatewayDatabaseWorkerTestFiles,
   gatewayServerBackedHttpTestFiles,
   gatewayServerExcludedTestFiles,
   gatewayServerIsolatedTestFiles,
@@ -13,6 +14,7 @@ export function createGatewayServerVitestConfig(env?: Record<string, string | un
       dir: "src/gateway",
       env,
       exclude: [
+        ...gatewayDatabaseWorkerTestFiles,
         "src/gateway/server-methods/**/*.test.ts",
         ...gatewayServerExcludedTestFiles,
         ...gatewayServerIsolatedTestFiles,

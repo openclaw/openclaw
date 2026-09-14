@@ -110,6 +110,7 @@ export const fullSuiteVitestShards = [
     name: "agentic",
     projects: [
       "test/vitest/vitest.gateway-core.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
       "test/vitest/vitest.gateway-methods-isolated.config.ts",

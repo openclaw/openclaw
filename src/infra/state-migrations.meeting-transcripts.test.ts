@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -17,7 +18,10 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
 
 async function seedLegacySession(params: {
   stateDir: string;
@@ -181,6 +185,7 @@ describe("meeting transcript Doctor migration", () => {
         .get("meeting-transcripts-files-v1"),
     ).toEqual({ status: "archived", removed_source: 1, source_record_count: 2 });
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: databaseEnv(stateDir),
@@ -212,6 +217,7 @@ describe("meeting transcript Doctor migration", () => {
         stateDir,
       });
       expect(result.warnings).toEqual([]);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
         env: databaseEnv(stateDir),

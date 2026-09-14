@@ -83,7 +83,10 @@ import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isola
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
-import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
+import {
+  boundaryTestFiles,
+  bundledPluginDependentUnitTestFiles,
+} from "./vitest/vitest.unit-paths.mjs";
 import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
 
@@ -1028,6 +1031,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultInfraConfig);
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual(["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles]);
+    expect(testConfig.exclude).toEqual(expect.arrayContaining(boundaryTestFiles));
     for (const file of databaseWorkerCoreTestFiles) {
       expect(matchingExcludePatterns(testConfig.exclude ?? [], file), file).toEqual([]);
     }

@@ -7,7 +7,10 @@ import {
 import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../src/state/openclaw-state-db.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -238,6 +241,7 @@ defineDiscordVoiceTests(
               expectedManager: manager,
             });
             providerStop.mockRestore();
+            await closeOpenClawStateDatabaseAsync();
             closeOpenClawStateDatabaseForTest();
             tempDirs.cleanup();
           }

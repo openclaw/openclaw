@@ -12,6 +12,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import { activeSessions, readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
+import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
 import * as providerRegistry from "./provider-registry.js";
 import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
@@ -296,7 +297,9 @@ describe("configured transcript source provenance", () => {
         transcripts: { autoStart: [source] },
       });
       let current = f.ctx.config;
+      const entered = createDeferred<TranscriptStartRequest>();
       const start = vi.fn(async (candidate: TranscriptStartRequest) => {
+        entered.resolve(candidate);
         await candidate.onUtterance({ text: `Valid note ${start.mock.calls.length}`, final: true });
         if (start.mock.calls.length > failures) {
           return {
@@ -316,18 +319,34 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx, () => current);
       try {
         service.start();
-        await vi.waitFor(async () =>
-          expect((await f.read()).configuredSources[0]).toMatchObject({
-            startDiagnostic: "retrying",
-            state: "unknown",
-          }),
+        const request = await entered.promise;
+        await vi.waitFor(
+          () =>
+            expect(
+              readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic,
+            ).toBe("retrying"),
+          { interval: 0 },
         );
-        const request = start.mock.calls[0]![0];
+        expect((await f.read()).configuredSources[0]).toMatchObject({
+          startDiagnostic: "retrying",
+          state: "unknown",
+        });
         const admitted = structuredClone(request.session);
         const before = await f.store.readSession(admitted.sessionId);
         current = { transcripts: { autoStart: [{ ...source, title: "Future title" }] } };
-        await vi.advanceTimersByTimeAsync(65_000);
         const attempts = Math.min(failures + 1, 12);
+        for (let attempt = 2; attempt <= attempts; attempt++) {
+          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.waitFor(
+            () => {
+              expect(start).toHaveBeenCalledTimes(attempt);
+              expect(
+                readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic,
+              ).toBe(attempt > failures ? undefined : attempt === 12 ? "start-failed" : "retrying");
+            },
+            { interval: 0 },
+          );
+        }
         expect(start).toHaveBeenCalledTimes(attempts);
         for (const [candidate] of start.mock.calls) {
           expect(candidate.session).toEqual(admitted);
@@ -640,7 +659,7 @@ describe("configured transcript source provenance", () => {
         );
         if (pending) {
           await vi.advanceTimersByTimeAsync(5_000);
-          expect(start).toHaveBeenCalledTimes(2);
+          await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2), { interval: 0 });
         }
         const session = start.mock.calls[0]![0].session;
         if (mode === "manual") {

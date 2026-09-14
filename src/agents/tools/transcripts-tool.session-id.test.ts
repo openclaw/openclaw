@@ -7,6 +7,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -98,6 +99,7 @@ afterEach(async () => {
     pendingStops.clear();
     getTranscriptSourceProviderMock.mockReset();
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
   }
@@ -178,6 +180,7 @@ describe("transcripts bounded export names", () => {
         expect(asOptionalRecord(stopped.details)?.summaryExportError).toBeUndefined();
         expect(stop.mock.calls[0]?.[0].sessionId === handle).toBe(true);
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const summarized = await tool.execute("summarize", {
         action: "summarize",
@@ -216,6 +219,7 @@ describe("transcripts bounded export names", () => {
     for (const sessionId of ids) {
       await capture(harness, "import", sessionId);
     }
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const entries = await harness.store.listSessionEntries();
     expect(new Set(entries.map((entry) => entry.selector)).size).toBe(2);
@@ -250,6 +254,7 @@ describe("transcripts bounded export names", () => {
     harness.active.delete(sessionId);
     expect(harness.stop.mock.calls[0]?.[0].sessionId === sessionId).toBe(true);
     expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     for (const entry of [older, current]) {
       expect((await harness.store.readSession(entry.selector))?.startedAt).toBe(
@@ -308,9 +313,11 @@ describe("transcripts bounded export names", () => {
         .set({ markdown })
         .where("session_id", "=", sessionId),
     );
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await store.writeSession({ ...session, stoppedAt: "2026-07-01T11:00:00.000Z" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const entry = await store.readSessionEntry(sessionId);
     expect(entry?.session.sessionId === sessionId).toBe(true);

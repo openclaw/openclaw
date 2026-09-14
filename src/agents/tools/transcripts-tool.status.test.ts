@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
@@ -14,8 +17,9 @@ vi.mock("../../transcripts/provider-registry.js", () => ({
 const tempDirs = createTempDirTracker();
 
 describe("transcripts status display", () => {
-  afterEach(() => {
+  afterEach(async () => {
     getTranscriptSourceProviderMock.mockReset();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
   });
