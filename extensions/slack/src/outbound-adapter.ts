@@ -30,6 +30,7 @@ import {
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { readSlackPreRenderedText, slackPreRenderedText } from "./pre-rendered-text.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import {
   resolveSlackQuestionActionIds,
@@ -238,6 +239,7 @@ async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
         ? { nativeDataFallbackBaseText: params.nativeDataFallbackBaseText }
         : {}),
       ...(params.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+      ...(readSlackPreRenderedText(params.formatting) ? { textIsSlackMrkdwn: true } : {}),
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(params.deliveryQueueId ? { deliveryQueueId: params.deliveryQueueId } : {}),
       ...(params.onPlatformSendDispatch
@@ -251,7 +253,7 @@ async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
           }
         : {}),
     };
-    return await send(params.to, params.text, sendOptions);
+    return await send(params.to, slackPreRenderedText(params.text, params.formatting), sendOptions);
   };
 }
 
