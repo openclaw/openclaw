@@ -151,9 +151,11 @@ Notes:
 - `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
   image/audio/video understanding.
 - `extractStructuredWithModel(...)` is the plugin-facing seam for bounded
-  provider-owned image-first extraction. Include at least one image input;
-  text inputs are supplemental context. Product plugins own their routes and
-  schemas while OpenClaw owns the provider/runtime boundary.
+  image-first extraction. Providers with a native `extractStructured` hook run
+  it; other image-capable providers use the generic model-backed fallback
+  (prompted JSON validated against the supplied schema). Include at least one
+  image input; text inputs are supplemental context. Product plugins own their
+  routes and schemas while OpenClaw owns the provider/runtime boundary.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 

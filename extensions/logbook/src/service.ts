@@ -34,8 +34,9 @@ const MODEL_MISSING_LOG_INTERVAL_MS = 10 * 60 * 1000;
 const CAPTURE_FAILURE_PAUSE_TICKS = 10;
 const CAPTURE_FAILURE_THRESHOLD = 3;
 const JPEG_QUALITY = 0.6;
-// Only Codex currently implements the structured image-extraction contract.
-// Borrowed defaults must not select a provider that will fail every batch.
+// Codex implements the structured image-extraction contract natively; other
+// image-capable providers route through the generic model-backed fallback.
+// Keep the borrowed default on the native implementation for now.
 const STRUCTURED_MEDIA_PROVIDER = "codex";
 type SnapshotPayload = {
   format?: string;

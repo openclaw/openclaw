@@ -101,6 +101,9 @@ JavaScript-only host export; its declarations are excluded from the package.
     });
 
     // Structured image extraction through a specific provider/model.
+    // Providers with a native extractStructured hook (codex) run it; any
+    // other image-capable provider/model uses the generic model-backed
+    // fallback, which prompts for JSON and validates it against jsonSchema.
     // Include at least one image; text inputs are supplemental context.
     // receiptImageBuffer is your own image bytes, not an SDK-provided value.
     const evidence = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
