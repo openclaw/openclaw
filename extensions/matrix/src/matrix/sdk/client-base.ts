@@ -10,7 +10,6 @@ import {
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
@@ -32,6 +31,7 @@ import {
 } from "./client-support.js";
 import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
+import { getLoadedMatrixCryptoRuntime, loadMatrixCryptoRuntime } from "./crypto-runtime-loader.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
@@ -42,17 +42,6 @@ import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 import type { MatrixVerificationSummary } from "./verification-manager.js";
-
-type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
-
-let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
-
-export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
-  import("./crypto-runtime.js").then((runtime) => {
-    loadedMatrixCryptoRuntime = runtime;
-    return runtime;
-  }),
-);
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
@@ -611,7 +600,7 @@ export abstract class MatrixClientBase {
     }
     await activePeriodicPersist;
     if (persist) {
-      const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
+      const runtime = getLoadedMatrixCryptoRuntime() ?? (await loadMatrixCryptoRuntime());
       await runtime.persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
         databasePrefix: this.cryptoDatabasePrefix,
