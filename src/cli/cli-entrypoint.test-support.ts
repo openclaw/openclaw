@@ -63,3 +63,17 @@ export const gatewayDirectStopEntrypoints = {
     distWorkerPath: "process/gateway-work-admission.js",
   },
 } as const;
+
+// Extra update roots share the native fixture generation.
+export const updateExecutorEntrypoints = {
+  lease: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-managed-service-handoff-lease",
+    distWorkerPath: "infra/update-managed-service-handoff-lease.js",
+  },
+  activation: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/package-update-activation",
+    distWorkerPath: "infra/package-update-activation.js",
+  },
+} as const;

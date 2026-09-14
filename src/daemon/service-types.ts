@@ -8,6 +8,11 @@ export type GatewayServiceEnv = Record<string, string | undefined>;
 
 /** Arguments required to render/install a managed gateway service. */
 export type GatewayServiceInstallArgs = {
+  /** Preserve the existing enable policy during an update-owned definition rebind. */
+  preserveAutoStart?: boolean;
+  beforeMutation?: () => Promise<void>;
+  /** Live caller authority, retained at every native write boundary. */
+  assertCurrent?: () => void;
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
@@ -31,6 +36,8 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** Revalidate captured binding after native lock and config admission, before effects. */
+  beforeMutation?: () => Promise<void>;
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;

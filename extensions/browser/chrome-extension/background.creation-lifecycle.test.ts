@@ -263,6 +263,47 @@ describe("physical tab creation authority", () => {
     expect(h.debuggerSendCommand).toHaveBeenCalledWith({ tabId: 101 }, "Page.navigate", { url });
   });
 
+  it.each(["unchanged", "removed-group", "native-blank", "incognito"] as const)(
+    "checks current authority after a delayed same-group blank snapshot: %s",
+    async (state) => {
+      const h = await setup("selected");
+      await h.create();
+      await h.attach();
+      const initialTab = { ...(await h.tabsGet(101)) };
+      const url = "https://example.com/destination";
+      h.debuggerSendCommand.mockImplementationOnce(async () => {
+        h.updateTab(101, { url, pendingUrl: undefined }, false);
+        h.debuggerEventListener?.({ tabId: 101 }, "Page.frameNavigated", {
+          frame: { id: "main", loaderId: "destination", url },
+        });
+        if (state === "removed-group") {
+          h.updateTab(101, { groupId: -1 }, false);
+        } else if (state === "native-blank") {
+          h.updateTab(101, { url: "about:blank" }, false);
+        } else if (state === "incognito") {
+          h.updateTab(101, { incognito: true }, false);
+        }
+        h.tabsUpdatedListener?.(101, { groupId: initialTab.groupId }, initialTab);
+        return { frameId: "main", loaderId: "destination" };
+      });
+      const result = await h.request({
+        type: "cdp",
+        tabId: 101,
+        method: "Page.navigate",
+        params: { url },
+      });
+      if (state === "unchanged") {
+        expect(result, JSON.stringify(result)).toMatchObject({
+          type: "result",
+          result: { frameId: "main", loaderId: "destination" },
+        });
+        expect(h.debuggerDetach).not.toHaveBeenCalled();
+      } else {
+        expect(result, JSON.stringify(result)).toMatchObject({ type: "error" });
+      }
+    },
+  );
+
   it("retires on a root document commit, but not an iframe commit", async () => {
     const h = await setup();
     await h.create();

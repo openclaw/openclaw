@@ -1,4 +1,10 @@
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import type {
+  PackageDirectoryIdentity,
+  PackageIntegrityFingerprint,
+} from "../../infra/package-update-integrity.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { ManagedGatewayUpdateVerdict } from "./update-command-service-plan.js";
 import type { WindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -30,4 +36,21 @@ export type UpdateRestartParams = {
   shouldRestart: boolean;
   updateStepTimeoutMs: number;
   serviceRuntimeRefreshRequired?: boolean;
+};
+
+/** Observation of service A, never evidence of package B restoration or authority. */
+export type OriginalManagedServiceRuntime = {
+  root: string;
+  nodeRunner: string;
+  version: string | null;
+  buildId?: string;
+  schemaVersions?: OpenClawSchemaVersions;
+  verified: boolean;
+  definition: { command: GatewayServiceCommandConfig; fingerprint: string; rebound?: string };
+  service: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
+  packageIdentity: PackageDirectoryIdentity;
+  packageFingerprint?: PackageIntegrityFingerprint;
+  packageFingerprintWarning?: string;
+  launcher: { path: string; realPath: string; fingerprint: string; targetFingerprint: string };
+  nodeIdentity: string;
 };

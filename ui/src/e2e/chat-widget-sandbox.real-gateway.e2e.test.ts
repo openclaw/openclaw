@@ -14,6 +14,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { withCanvasFailureDiagnostics } from "./canvas-lifecycle-diagnostic.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -189,56 +190,62 @@ suite.define(() => {
           ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
           : {}),
       },
-      async ({ page }) => {
-        const canvasReads: unknown[] = [];
-        page.on("websocket", (socket) => {
-          socket.on("framesent", ({ payload }) => {
-            const request = JSON.parse(payload.toString()) as { method?: string; params?: unknown };
-            if (request.method === "canvas.document.view") {
-              canvasReads.push(request.params);
+      async ({ page }) =>
+        withCanvasFailureDiagnostics(page, async () => {
+          const canvasReads: unknown[] = [];
+          page.on("websocket", (socket) => {
+            socket.on("framesent", ({ payload }) => {
+              const request = JSON.parse(payload.toString()) as {
+                method?: string;
+                params?: unknown;
+              };
+              if (request.method === "canvas.document.view") {
+                canvasReads.push(request.params);
+              }
+            });
+          });
+          const response = await page.goto(url.toString());
+          expect(response?.status()).toBe(200);
+          await waitForControlUiGatewayReady(page);
+          const outer = page
+            .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
+            .first();
+          const inner = outer.contentFrame().frameLocator("iframe");
+          await inner.getByRole("heading", { name: "Live widget proof" }).waitFor();
+          await inner
+            .getByRole("textbox", { name: "Local note" })
+            .fill("Persisted bytes, isolated UI");
+          const a2uiOuter = page
+            .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
+            .nth(1);
+          const a2uiInner = a2uiOuter.contentFrame().frameLocator("iframe");
+          await a2uiInner.getByText("A2UI live proof", { exact: true }).waitFor();
+          expect(canvasReads).toHaveLength(2);
+          expect(canvasReads).toEqual(expect.arrayContaining([{ docId }, { docId: a2uiDocId }]));
+          expect(await outer.getAttribute("src")).toContain("/mcp-app-sandbox");
+          const opaque = await inner.locator("body").evaluate(() => {
+            try {
+              void window.top?.document;
+              return false;
+            } catch {
+              return true;
             }
           });
-        });
-        const response = await page.goto(url.toString());
-        expect(response?.status()).toBe(200);
-        await waitForControlUiGatewayReady(page);
-        const outer = page
-          .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
-          .first();
-        const inner = outer.contentFrame().frameLocator("iframe");
-        await inner.getByRole("heading", { name: "Live widget proof" }).waitFor();
-        await inner
-          .getByRole("textbox", { name: "Local note" })
-          .fill("Persisted bytes, isolated UI");
-        const a2uiOuter = page
-          .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
-          .nth(1);
-        const a2uiInner = a2uiOuter.contentFrame().frameLocator("iframe");
-        await a2uiInner.getByText("A2UI live proof", { exact: true }).waitFor();
-        expect(canvasReads).toHaveLength(2);
-        expect(canvasReads).toEqual(expect.arrayContaining([{ docId }, { docId: a2uiDocId }]));
-        expect(await outer.getAttribute("src")).toContain("/mcp-app-sandbox");
-        const opaque = await inner.locator("body").evaluate(() => {
-          try {
-            void window.top?.document;
-            return false;
-          } catch {
-            return true;
+          expect(opaque).toBe(true);
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "real-gateway-widget.png"),
+            });
+            await writeFile(
+              path.join(suite.artifactDir, "real-gateway-evidence.json"),
+              JSON.stringify(
+                { docId, a2uiDocId, canvasReads, opaque, sessionKey, gatewayPort: owner.port },
+                null,
+                2,
+              ),
+            );
           }
-        });
-        expect(opaque).toBe(true);
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "real-gateway-widget.png") });
-          await writeFile(
-            path.join(suite.artifactDir, "real-gateway-evidence.json"),
-            JSON.stringify(
-              { docId, a2uiDocId, canvasReads, opaque, sessionKey, gatewayPort: owner.port },
-              null,
-              2,
-            ),
-          );
-        }
-      },
+        }),
     );
   });
 

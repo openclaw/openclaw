@@ -82,7 +82,8 @@ type PackageDoctorOptions = {
         requester?: Readonly<UpdateRequester>;
         inputHash: string;
         changes: UpdateDoctorConfigChange[];
-        assertRequesterCurrent: () => void;
+        assertCurrent: () => void;
+        assertBoundChildCurrent: () => void;
       }
     | undefined;
 };
@@ -95,7 +96,7 @@ export function preparePackageDoctorContext(params: {
   inputHash?: string | null;
   changes: UpdateDoctorConfigChange[];
   assertCurrent: () => void;
-  assertRequesterCurrent: () => void;
+  assertBoundChildCurrent: () => void;
 }) {
   params.assertCurrent();
   if (!params.capable) {
@@ -110,15 +111,14 @@ export function preparePackageDoctorContext(params: {
     requester: params.requester,
     inputHash: params.inputHash ?? hashConfigRaw(null),
     changes: params.changes,
-    // Delegation suspends the parent's mutation fence. Requester checks must
-    // remain usable until the child owner hands input to its bound process.
-    assertRequesterCurrent: params.assertRequesterCurrent,
+    assertCurrent: params.assertCurrent,
+    assertBoundChildCurrent: params.assertBoundChildCurrent,
   };
 }
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   const context = params.getDoctorContext?.();
-  context?.assertRequesterCurrent();
+  context?.assertCurrent();
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
     return null;
@@ -161,7 +161,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     ? await readUpdateConfigSnapshot(resolveConfigPath(doctorEnv))
     : undefined;
   const runDoctor = (executor?: UpdateCommandChildGrant, beforeInput?: (pid: number) => void) => {
-    context?.assertRequesterCurrent();
     const input: UpdateDoctorInput | undefined =
       context && executor
         ? {
@@ -208,14 +207,18 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         : {}),
     });
   };
+  // Admission is a parent operation; once delegated, only the child binder may
+  // check native custody until the process tree settles and the parent resumes.
+  context?.assertCurrent();
   const doctorStep = context
     ? await withUpdateCommandExecutorChild(context.executorFence, params.root, (grant, bindChild) =>
         runDoctor(grant, (pid) => {
-          context.assertRequesterCurrent();
           bindChild(pid);
+          context.assertBoundChildCurrent();
         }),
       )
     : await runDoctor();
+  context?.assertCurrent();
   const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
   if (configSnapshot) {
     // Only the child writer can attribute bytes to Doctor; a later read may contain an operator save.
@@ -476,7 +479,7 @@ export async function runPackageInstallUpdate(
     packageRoot: pkgRoot,
     // Artifact equality cannot skip a method switch or retained-runtime staging.
     requirePackageReplacement:
-      params.installKind === "git" || params.requirePackageReplacement === true,
+      params.requirePackageReplacement === true || params.installKind === "git",
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),

@@ -347,6 +347,7 @@ it("holds admitted work until the caller releases it", async () => {
     lifetime.run(async () => {
       const root = createTempDir("oc-profile-help-");
       const ordering = path.join(root, "hash-order.jsonl");
+      const drained = path.join(root, "event-loop-drained");
       const preload = path.join(root, "observe-hash-order.mjs");
       fs.writeFileSync(
         preload,
@@ -354,6 +355,9 @@ it("holds admitted work until the caller releases it", async () => {
 import fs from "node:fs";
 import inspector from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
+if (process.argv[1]?.endsWith("run-vitest-profile-child.mts")) {
+  process.on("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "drained"));
+}
 let profiling = false;
 inspector.Session = class extends inspector.Session {
   async post(method, ...params) {
@@ -397,6 +401,8 @@ syncBuiltinESMExports();`,
       ).toEqual([{ tlsLoaded: false, profiling: mode === "main" }]);
       expect(result.code, result.output).toBe(0);
       expect(result.output).toContain("Usage:");
+      expect(fs.existsSync(drained), result.output).toBe(true);
+      expect(fs.readdirSync(path.join(root, "profiles"))).toHaveLength(mode === "main" ? 1 : 0);
     }),
   );
 

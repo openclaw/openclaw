@@ -367,7 +367,9 @@ describe("scripts/pr wrappers", () => {
       { cwd: caller, encoding: "utf8", env: fixture.env },
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toBe(`<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n`);
+    expect(result.stdout).toBe(
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<false>\n`,
+    );
   });
 
   itPosix(
@@ -408,6 +410,21 @@ describe("scripts/pr wrappers", () => {
     },
   );
 
+  itPosix("forwards deferred cleanup without weakening native dispatch", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      ["merge-run", "123", "--defer-cleanup"],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe("<123>\n<false>\n<>\n<>\n<>\n<true>\n");
+  });
+
   itPosix("rejects ambiguous body flags and keeps recovery confirmation mandatory", () => {
     const fixture = makeMismatchedWrapperRepo();
     for (const args of [
@@ -415,6 +432,7 @@ describe("scripts/pr wrappers", () => {
       ["merge-run", "123", "--body-file", ""],
       ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
+      ["merge-run", "123", "--defer-cleanup", "--defer-cleanup"],
       ["merge-recover", "123", "a".repeat(40), "--body-file", "one"],
       ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
     ]) {
@@ -451,7 +469,7 @@ describe("scripts/pr wrappers", () => {
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toBe(
-          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n`,
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<false>\n`,
         );
       }
     }

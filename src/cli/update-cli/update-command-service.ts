@@ -36,6 +36,7 @@ import {
   isPackageManagerUpdateMode,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
+import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   UpdateServiceLoadBoundaryError,
@@ -49,10 +50,8 @@ import {
   resolveUpdatedGatewayRestartPort,
   type ManagedGatewayUpdateVerdict,
 } from "./update-command-service-plan.js";
-import {
-  hasLoadedLaunchdKeepAliveSupervisor,
-  recoverLaunchAgentAndRecheckGatewayHealth,
-} from "./update-command-service-recovery.js";
+import { recoverLaunchAgentAndRecheckGatewayHealth } from "./update-command-service-recovery.js";
+import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 import { recordUpdateGatewayHealth, verifyUpdatedGateway } from "./update-command-verification.js";
 
 export {
@@ -214,6 +213,7 @@ export async function recordFailedUpdateGatewayState(
 }
 
 export async function maybeRestartService(params: {
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   serviceLoadBoundary?: UpdateServiceLoadBoundary;
   shouldRestart: boolean;
   result: UpdateRunResult;
@@ -443,7 +443,10 @@ export async function maybeRestartService(params: {
           }
         } catch (err) {
           assertCurrent();
-          if (err instanceof UpdateCommandRecoveryPendingError) {
+          if (
+            err instanceof UpdateCommandRecoveryPendingError ||
+            err instanceof UpdateServiceLoadBoundaryError
+          ) {
             throw err;
           }
           if (activation.serviceLoadBoundary) {
@@ -611,7 +614,10 @@ export async function maybeRestartService(params: {
       }
     } catch (err) {
       assertCurrent();
-      if (err instanceof UpdateServiceLoadBoundaryError) {
+      if (
+        err instanceof UpdateServiceLoadBoundaryError ||
+        err instanceof UpdateCommandRecoveryPendingError
+      ) {
         throw err;
       }
       if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {

@@ -19,6 +19,7 @@ import {
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.js";
+import { reportQuotaStatusFailure } from "./quota-reset-status.diagnostics.test-support.js";
 
 type QuotaFixture = Awaited<ReturnType<typeof createQuotaResetFixture>>;
 type SavedState = {
@@ -161,23 +162,29 @@ async function captureFinalStatus(
       await card.waitFor({ state: "visible" });
       const badge = card.locator(".model-providers__head .settings-status");
       let previousStatus: string | undefined;
-      await expect
-        .poll(
-          async () => {
-            const badgeStatus = (await badge.textContent())?.trim();
-            if (badgeStatus !== previousStatus) {
-              observations.push({
-                action: "provider-status-poll",
-                ts: Date.now(),
-                status: badgeStatus,
-              });
-              previousStatus = badgeStatus;
-            }
-            return badgeStatus;
-          },
-          { timeout: 60_000 },
-        )
-        .toBe("Ready");
+      let observedBadge: string | undefined;
+      try {
+        await expect
+          .poll(
+            async () => {
+              const badgeStatus = (observedBadge = (await badge.textContent())?.trim());
+              if (badgeStatus !== previousStatus) {
+                observations.push({
+                  action: "provider-status-poll",
+                  ts: Date.now(),
+                  status: badgeStatus,
+                });
+                previousStatus = badgeStatus;
+              }
+              return badgeStatus;
+            },
+            { timeout: 60_000 },
+          )
+          .toBe("Ready");
+      } catch (error) {
+        reportQuotaStatusFailure(observations, observedBadge);
+        throw error;
+      }
       observations.push({
         action: "control-ui-provider-status",
         status: (await badge.textContent())?.trim(),

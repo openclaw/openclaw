@@ -1890,6 +1890,13 @@ describe("launchd uninstall", () => {
 });
 
 describe("launchd install", () => {
+  it.each([false, true])("preserves install enable policy=%s", async (preserveAutoStart) => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({ ...defaultLaunchAgentFixture(env), preserveAutoStart });
+    expect(launchctlCommandNames().includes("enable")).toBe(!preserveAutoStart);
+    expect(launchctlCommandNames()).toContain("bootstrap");
+  });
+
   it("refuses an in-band reinstall before booting out its own LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
 
@@ -2077,62 +2084,66 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).toEqual(["print", "print", "enable", "bootstrap", "print"]);
   });
 
-  it("restores the exact prior plist and supervision after external bootstrap failure", async () => {
-    const env = createDefaultLaunchdEnv();
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
-    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
-    const previousEnv = "export OPENCLAW_GATEWAY_PORT='18789'\n";
-    const previousWrapper = '#!/bin/sh\n. "$1"\nshift\nexec "$@"\n';
-    const previous = createTestLaunchAgentPlist({
-      label: "ai.openclaw.gateway",
-      programArguments: [
-        "/bin/sh",
-        wrapperPath,
-        envFilePath,
-        "/previous/node",
-        "/previous/openclaw.mjs",
-        "gateway",
-      ],
-    });
-    state.files.set(plistPath, previous);
-    state.files.set(envFilePath, previousEnv);
-    state.files.set(wrapperPath, previousWrapper);
-    state.fileModes.set(envFilePath, 0o600);
-    state.fileModes.set(wrapperPath, 0o700);
-    state.serviceLoaded = true;
-    state.serviceRunning = true;
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
+  it.each([false, true])(
+    "restores prior supervision with preserveAutoStart=%s",
+    async (preserveAutoStart) => {
+      const env = createDefaultLaunchdEnv();
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+      const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+      const previousEnv = "export OPENCLAW_GATEWAY_PORT='18789'\n";
+      const previousWrapper = '#!/bin/sh\n. "$1"\nshift\nexec "$@"\n';
+      const previous = createTestLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: [
+          "/bin/sh",
+          wrapperPath,
+          envFilePath,
+          "/previous/node",
+          "/previous/openclaw.mjs",
+          "gateway",
+        ],
+      });
+      state.files.set(plistPath, previous);
+      state.files.set(envFilePath, previousEnv);
+      state.files.set(wrapperPath, previousWrapper);
+      state.fileModes.set(envFilePath, 0o600);
+      state.fileModes.set(wrapperPath, 0o700);
+      state.serviceLoaded = true;
+      state.serviceRunning = true;
+      state.bootstrapError = "Operation not permitted";
+      state.bootstrapTransient = true;
 
-    await expect(
-      installLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-        programArguments: defaultProgramArguments,
-        environment: { OPENCLAW_GATEWAY_PORT: "19000" },
-      }),
-    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+          preserveAutoStart,
+          environment: { OPENCLAW_GATEWAY_PORT: "19000" },
+        }),
+      ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
 
-    expect(state.files.get(plistPath)).toBe(previous);
-    expect(state.files.get(envFilePath)).toBe(previousEnv);
-    expect(state.files.get(wrapperPath)).toBe(previousWrapper);
-    expect(state.fileModes.get(envFilePath)).toBe(0o600);
-    expect(state.fileModes.get(wrapperPath)).toBe(0o700);
-    expect(state.serviceLoaded).toBe(true);
-    expect(state.serviceRunning).toBe(true);
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "print",
-      "bootout",
-      "unload",
-      "enable",
-      "bootstrap",
-      "print",
-      "enable",
-      "bootstrap",
-    ]);
-  });
+      expect(state.files.get(plistPath)).toBe(previous);
+      expect(state.files.get(envFilePath)).toBe(previousEnv);
+      expect(state.files.get(wrapperPath)).toBe(previousWrapper);
+      expect(state.fileModes.get(envFilePath)).toBe(0o600);
+      expect(state.fileModes.get(wrapperPath)).toBe(0o700);
+      expect(state.serviceLoaded).toBe(true);
+      expect(state.serviceRunning).toBe(true);
+      expect(launchctlCommandNames()).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "unload",
+        ...(preserveAutoStart ? [] : ["enable"]),
+        "bootstrap",
+        "print",
+        ...(preserveAutoStart ? [] : ["enable"]),
+        "bootstrap",
+      ]);
+    },
+  );
 
   it("refuses install and stage before any user LaunchAgent mutation", async () => {
     const env = createDefaultLaunchdEnv();

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withGatewayServiceRebindCapture } from "../../daemon/service-rebind.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
@@ -53,7 +54,11 @@ export async function runGatewayServiceUpdateCommand(
       !isRecord(input.executor.originalParent) ||
       !isRecord(input.executor.databaseIdentity) ||
       typeof input.executor.originalChildKey !== "string" ||
-      !isRecord(input.executor.spawner)
+      !isRecord(input.executor.spawner) ||
+      ((Object.hasOwn(input.executor, "retainedParent") ||
+        Object.hasOwn(input.executor, "retainedChildKey")) &&
+        (!isRecord(input.executor.retainedParent) ||
+          typeof input.executor.retainedChildKey !== "string"))
     ) {
       throw new Error("Invalid native update executor input.");
     }
@@ -71,7 +76,14 @@ export async function runGatewayServiceUpdateCommand(
     // Destination admission never replaces the original installation's live authority.
     await withDelegatedUpdateCommandExecutor(grant, grant.runId, grant.root, async (fence) =>
       withGatewayServiceUpdateAuthority(fence.assertCurrent, async () => {
-        await operation();
+        if (input.originalDefinition !== undefined) {
+          if (action !== "install" || typeof input.originalDefinition !== "string") {
+            throw new Error("Invalid rebind action.");
+          }
+          await withGatewayServiceRebindCapture(input.originalDefinition, operation);
+        } else {
+          await operation();
+        }
       }),
     );
   } catch (cause) {

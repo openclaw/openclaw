@@ -197,6 +197,7 @@ async function restoreLaunchAgentInstallArtifacts(params: {
   label: string;
   plistPath: string;
   snapshot: LaunchAgentInstallSnapshot;
+  preserveAutoStart?: boolean;
 }): Promise<void> {
   await restoreLaunchAgentOwnedFile({
     path: resolveLaunchAgentEnvFilePath(params.env, params.label),
@@ -230,6 +231,7 @@ async function restoreLaunchAgentInstall(params: {
   label: string;
   plistPath: string;
   snapshot: LaunchAgentInstallSnapshot;
+  preserveAutoStart?: boolean;
 }): Promise<void> {
   const serviceTarget = `${params.domain}/${params.label}`;
   // A failed bootstrap may leave no registered job. Restore files directly in
@@ -259,6 +261,7 @@ async function restoreLaunchAgentInstall(params: {
       plistPath: params.plistPath,
       actionHint: "openclaw gateway start",
       retryPendingTeardown: true,
+      skipEnable: params.preserveAutoStart,
     });
   }
 }
@@ -281,6 +284,7 @@ async function activateLaunchAgent(params: {
   env: GatewayServiceEnv;
   plistPath: string;
   snapshot: LaunchAgentInstallSnapshot;
+  preserveAutoStart?: boolean;
 }) {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(params.env);
@@ -300,6 +304,7 @@ async function activateLaunchAgent(params: {
       plistPath: params.plistPath,
       actionHint: "openclaw gateway install --force",
       retryPendingTeardown: true,
+      skipEnable: params.preserveAutoStart,
     });
   } catch (error) {
     try {
@@ -309,6 +314,7 @@ async function activateLaunchAgent(params: {
         label,
         plistPath: params.plistPath,
         snapshot: params.snapshot,
+        preserveAutoStart: params.preserveAutoStart,
       });
     } catch (rollbackError) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -367,6 +373,7 @@ export async function installLaunchAgent(
     env: args.env,
     plistPath,
     snapshot,
+    preserveAutoStart: args.preserveAutoStart,
   });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the

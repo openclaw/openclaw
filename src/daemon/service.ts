@@ -37,6 +37,7 @@ import {
   withGatewayServiceOperationLock,
   withSystemdServiceReadBinding,
 } from "./service-operation-lock.js";
+import { captureGatewayServiceRebind } from "./service-rebind.js";
 import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
@@ -57,6 +58,7 @@ import type {
   GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
+import { getGatewayServiceUpdateNativeCommand } from "./service-update-authority.js";
 import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { isSystemdServiceAbsent } from "./systemd-scope.js";
@@ -322,11 +324,13 @@ async function readGatewayServiceStateWithBinding(
       runtime: { status: "stopped", missingUnit: true },
     };
   }
-  const [installed, loadState, runtime, definitionMutationCapability] = await Promise.all([
+  const readInstalled = async () =>
     command !== null
       ? true
-      : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
-    readGatewayServiceLoadState(service, { env: systemdReadBinding ? baseEnv : env, timeoutMs }),
+      : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false);
+  const readLoadState = () =>
+    readGatewayServiceLoadState(service, { env: systemdReadBinding ? baseEnv : env, timeoutMs });
+  const readRuntime = () =>
     service
       .readRuntime(env, {
         timeoutMs,
@@ -335,8 +339,9 @@ async function readGatewayServiceStateWithBinding(
         ...(args.requireEffective && args.requireLoadedCommand ? { requireLoaded: true } : {}),
         ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
       })
-      .catch((error: unknown) => createServiceRuntimeInspectionFailure(error)),
-    // Update policy needs definition authority; ordinary status/start reads do not.
+      .catch((error: unknown) => createServiceRuntimeInspectionFailure(error));
+  // Update policy needs definition authority; ordinary status/start reads do not.
+  const readDefinitionCapability = async () =>
     args.requireEffective
       ? service
           .readDefinitionMutationCapability?.({
@@ -347,8 +352,23 @@ async function readGatewayServiceStateWithBinding(
             ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
           })
           .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const)
-      : undefined,
-  ]);
+      : undefined;
+  // A delegated native child suspends the parent fence. Join each read before
+  // another can use the parent's direct native peer; ordinary reads stay parallel.
+  const [installed, loadState, runtime, definitionMutationCapability] =
+    getGatewayServiceUpdateNativeCommand()
+      ? ([
+          await readInstalled(),
+          await readLoadState(),
+          await readRuntime(),
+          await readDefinitionCapability(),
+        ] as const)
+      : await Promise.all([
+          readInstalled(),
+          readLoadState(),
+          readRuntime(),
+          readDefinitionCapability(),
+        ]);
   systemdReadBinding?.verify();
   return {
     inspectionReason:
@@ -572,9 +592,17 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
 };
 
 function guardGatewayServiceMutation<
-  TArgs extends { env?: GatewayServiceEnv; assertCurrent?: () => void },
+  TArgs extends {
+    env?: GatewayServiceEnv;
+    assertCurrent?: () => void;
+    beforeMutation?: () => Promise<void>;
+  },
   TResult,
->(action: string, mutate: (args: TArgs) => Promise<TResult>): (args: TArgs) => Promise<TResult> {
+>(
+  action: string,
+  mutate: (args: TArgs) => Promise<TResult>,
+  readCommand?: GatewayService["readCommand"],
+): (args: TArgs) => Promise<TResult> {
   return async (args) => {
     // Mutations must satisfy both lifecycle ownership and durable-config
     // version guards before invoking any platform service manager.
@@ -590,7 +618,20 @@ function guardGatewayServiceMutation<
       };
       await assertFutureConfigActionAllowed(action);
       assertCurrent();
-      const result = await mutate({ ...args, assertCurrent });
+      await args.beforeMutation?.();
+      assertCurrent();
+      const result = readCommand
+        ? await captureGatewayServiceRebind(
+            () => readCommand(args.env ?? process.env, { requireEffective: true }),
+            assertCurrent,
+            (preserveAutoStart) =>
+              mutate({
+                ...args,
+                assertCurrent,
+                ...(preserveAutoStart ? { preserveAutoStart: true } : {}),
+              }),
+          )
+        : await mutate({ ...args, assertCurrent });
       assertCurrent();
       return result;
     });
@@ -601,7 +642,11 @@ function withGatewayServiceMutationGuards(service: GatewayService): GatewayServi
   return {
     ...service,
     stage: guardGatewayServiceMutation("rewrite the gateway service", service.stage),
-    install: guardGatewayServiceMutation("install or rewrite the gateway service", service.install),
+    install: guardGatewayServiceMutation(
+      "install or rewrite the gateway service",
+      service.install,
+      service.readCommand,
+    ),
     uninstall: guardGatewayServiceMutation("uninstall the gateway service", service.uninstall),
     start: guardGatewayServiceMutation("start the gateway service", service.start),
     stop: guardGatewayServiceMutation("stop the gateway service", service.stop),

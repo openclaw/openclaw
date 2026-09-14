@@ -142,6 +142,19 @@ export function createTabDocumentProvenance({ access }) {
   }
 
   return {
+    isInitialBlank: (tab) =>
+      tab.url === "about:blank" || (!tab.url && tab.pendingUrl === "about:blank"),
+    async readTab(tabId, readNativeTab) {
+      // A native root commit can overtake Chrome's snapshot callback. Discard it
+      // before consuming provenance, without recapturing the admitted epoch.
+      let root;
+      let tab;
+      do {
+        root = lifecycle(tabId).root;
+        tab = await readNativeTab();
+      } while (root !== lifecycle(tabId).root);
+      return tab;
+    },
     get: (tabId) => documents.get(tabId),
     rootRevision: (tabId) => lifecycle(tabId).root,
     resolveTabUpdate: (tabId, tab, change) => {

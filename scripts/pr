@@ -325,14 +325,15 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>]
+  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>] [--defer-cleanup]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
     --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
     Empty files are valid. Explicit/source co-authors and preview credit backed by tree-changing PR commits or PR authorship are retained; known machine credit is excluded. Queue merges reject it.
+    --defer-cleanup retains confirmed merge evidence, task worktree and branches for later operator-owned cleanup.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--defer-cleanup]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
@@ -434,7 +435,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path=""
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" defer_cleanup=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -445,6 +446,11 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --defer-cleanup)
+            [ "$defer_cleanup" = false ] || { usage; exit 2; }
+            defer_cleanup=true
+            shift
+            ;;
           --auto-merge)
             [ "$cmd" = merge-run ] && [ "$auto_merge" = false ] || { usage; exit 2; }
             auto_merge=true
@@ -591,7 +597,7 @@ main() {
       merge_verify "$pr"
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$defer_cleanup"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

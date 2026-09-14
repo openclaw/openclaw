@@ -440,6 +440,8 @@ merge_run() {
   local recovery_oid="${3:-}" recovery_record="" recovery_actor=""
   local replacement_head="${4:-}" replacement_artifacts="" recovery_captures=()
   local body_path="${5:-}" captured_body="" merge_body_snapshot=""
+  local defer_cleanup="${6:-false}"
+  case "$defer_cleanup" in true|false) ;; *) return 2 ;; esac
   [ -z "$body_path" ] || body_path=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$body_path") || return 1
   if [ -n "$replacement_head" ] &&
     { [ -z "$recovery_oid" ] || ! [[ "$replacement_head" =~ ^[0-9a-f]{40}$ ]]; }; then
@@ -749,6 +751,14 @@ merge_run() {
       "$(jq -r .actualParentSha .local/merge-crabbox-parent-audit.json)"
   fi
   merge_outcome_post_comment "$pr" "$comment_body" || return 1
+
+  if [ "$defer_cleanup" = true ]; then
+    echo "Merge confirmed; cleanup deferred. Retained outcome: $MERGE_OUTCOME_OID"
+    echo "landed commit: $landed_sha"
+    echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
+    echo "$MERGE_REPO_URL/pull/$pr"
+    return 0
+  fi
 
   # Only this uninterrupted completion path owns cleanup. The exact-head lease
   # protects advanced/different-head recreations, but cannot detect same-SHA recreation.

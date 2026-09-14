@@ -352,6 +352,8 @@ type ManagedServiceStopParams = {
   shouldRestart: boolean;
   jsonMode: boolean;
   phase?: "inspect" | "prepare";
+  /** Package/helper root can differ from the inspected service during a rebind. */
+  handoffRoot?: string;
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<
     PreManagedServiceStop,
@@ -406,7 +408,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       !blockMessage ||
       ((params.phase === "inspect" || process.platform === "linux") &&
         (await isCurrentManagedServiceUpdateHandoffProcess({
-          root: params.root,
+          root: params.handoffRoot ?? params.root,
           runId: params.updateRun?.runId,
         })))
     ) {

@@ -3733,31 +3733,37 @@ describe("systemd service install and uninstall", () => {
     }));
   });
 
-  it("activates the OPENCLAW_SYSTEMD_UNIT override during install", async () => {
-    await withNodeSystemdFixture(async ({ env, unitPath }) => {
-      execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(systemctlUserSuccess("daemon-reload"))
-        .mockImplementationOnce(systemctlUserSuccess("enable", NODE_SERVICE))
-        .mockImplementationOnce(systemctlUserSuccess("restart", NODE_SERVICE));
+  it.each([false, true])(
+    "activates the unit with preserveAutoStart=%s",
+    async (preserveAutoStart) => {
+      await withNodeSystemdFixture(async ({ env, unitPath }) => {
+        execFileMock
+          .mockImplementationOnce(systemctlUserSuccess("status"))
+          .mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
+        if (!preserveAutoStart) {
+          execFileMock.mockImplementationOnce(systemctlUserSuccess("enable", NODE_SERVICE));
+        }
+        execFileMock.mockImplementationOnce(systemctlUserSuccess("restart", NODE_SERVICE));
 
-      await installSystemdService(
-        nodeSystemdServiceFixture(env, {
-          description: "OpenClaw Node Host",
-          environment: {
-            OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
-          },
-        }),
-      );
+        await installSystemdService(
+          nodeSystemdServiceFixture(env, {
+            preserveAutoStart,
+            description: "OpenClaw Node Host",
+            environment: {
+              OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+            },
+          }),
+        );
 
-      const unit = await fs.readFile(unitPath, "utf8");
-      expect(unitPath).toMatch(/openclaw-node\.service$/);
-      expect(unit).toContain("Description=OpenClaw Node Host");
-      expect(unit).toContain("openclaw node run");
-      expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
-      expect(execFileMock).toHaveBeenCalledTimes(4);
-    });
-  });
+        const unit = await fs.readFile(unitPath, "utf8");
+        expect(unitPath).toMatch(/openclaw-node\.service$/);
+        expect(unit).toContain("Description=OpenClaw Node Host");
+        expect(unit).toContain("openclaw node run");
+        expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
+        expect(execFileMock).toHaveBeenCalledTimes(preserveAutoStart ? 3 : 4);
+      });
+    },
+  );
 
   it.each([
     {

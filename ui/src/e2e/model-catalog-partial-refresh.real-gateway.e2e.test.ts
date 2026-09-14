@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { connectGatewayClient } from "../../../src/gateway/test-helpers.e2e.ts";
 import config from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
 import {
   createOpenClawTestInstance,
@@ -9,6 +10,7 @@ import {
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance;
@@ -66,7 +68,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("retains existing-chat controls after another provider fails to refresh", async () => {
+  it("retains existing-chat controls after another provider fails to refresh", async (context) => {
     const call = async (method: string, params: Record<string, unknown>) => {
       const result = await instance.cli([
         "gateway",
@@ -89,21 +91,41 @@ suite.define(() => {
       model: "openai/gpt-5.4",
     });
     await call("sessions.patch", { key, thinkingLevel: "high" });
-    let catalog: ModelCatalogResult = JSON.parse(
-      await call("models.list", { agentId: "main", view: "configured", refresh: true }),
-    );
-    await expect
-      .poll(async () => {
-        if (catalog.pendingProviders?.length) {
-          catalog = JSON.parse(await call("models.list", { agentId: "main", view: "configured" }));
-        }
-        return catalog.pendingProviders ?? [];
-      })
-      .toEqual([]);
-    await fs.writeFile(
-      path.join(suite.artifactDir, "models-list.json"),
-      JSON.stringify(catalog, null, 2),
-    );
+    // Poll the existing Gateway, not a newly bootstrapped CLI process per read.
+    // Keep the original RPC and polling budgets, and join the one client lifetime.
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${instance.port}`,
+      token: config.gateway.auth.token,
+      clientName: "cli",
+      mode: "cli",
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      requestTimeoutMs: 30_000,
+    });
+    context.onTestFinished(() => client.stopAndWait());
+    let catalog = await client.request<ModelCatalogResult>("models.list", {
+      agentId: "main",
+      view: "configured",
+      refresh: true,
+    });
+    try {
+      await expect
+        .poll(async () => {
+          if (catalog.pendingProviders?.length) {
+            catalog = await client.request<ModelCatalogResult>("models.list", {
+              agentId: "main",
+              view: "configured",
+            });
+          }
+          return catalog.pendingProviders ?? [];
+        })
+        .toEqual([]);
+    } finally {
+      await fs.writeFile(
+        path.join(suite.artifactDir, "models-list.json"),
+        JSON.stringify(catalog, null, 2),
+      );
+    }
     expect(catalog.refreshFailed).toBe(true);
     expect(catalog.providerOutcomes).toContainEqual({
       provider: "github-copilot",
@@ -136,12 +158,13 @@ suite.define(() => {
           await model.click();
           // A failed background refresh must not add chrome above a usable list.
           await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();
-          // CLI discovery starts with agent hydration and can outlive model loading.
-          await composer
-            .locator(
-              '[data-chat-model-target-group="cliAgents"] [data-chat-model-catalog-state="loading"]',
-            )
-            .waitFor({ state: "detached" });
+          // A usable option can precede selected-agent hydration. Model and CLI
+          // discovery settle independently; neither loading row is a refresh error.
+          await expect
+            .poll(() => composer.locator('[data-chat-model-catalog-state="loading"]').count(), {
+              timeout: controlUiE2eWaitTimeoutMs,
+            })
+            .toBe(0);
           const catalogNotices = await composer
             .locator("[data-chat-model-catalog-state]")
             .evaluateAll((nodes) =>

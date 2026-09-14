@@ -9,7 +9,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { isUsableNode, recoverNodeRuntime } from "../../node-runtime-recovery.mjs";
+import {
+  findUsableNodeRuntime,
+  isUsableNode,
+  recoverNodeRuntime,
+} from "../../node-runtime-recovery.mjs";
 import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -939,5 +943,31 @@ describe("candidate admission probe", () => {
 
       expect(isUsableNode(candidate)).toBe(false);
     });
+  });
+});
+
+it("selects a target-compatible inherited runtime even when the current CLI is supported", async () => {
+  await withRecoveryHome(async (home) => {
+    mocks.currentAdmitted = true;
+    const oldNode = await writeFixture(path.join(home, "old", "node"));
+    const newNode = await writeFixture(path.join(home, "new", "node"));
+    const probe = expectDefined(mocks.probe.getMockImplementation(), "runtime probe");
+    mocks.admissible.add(oldNode);
+    mocks.admissible.add(newNode);
+    mocks.probe.mockImplementation((filename, args, options) => {
+      const result = probe(filename, args, options);
+      const payload = JSON.parse(result.stdout);
+      payload.version = filename === newNode ? "26.8.1" : "24.19.0";
+      return { ...result, stdout: JSON.stringify(payload) };
+    });
+    const selected = await findUsableNodeRuntime({
+      env: {
+        HOME: home,
+        PATH: [path.dirname(oldNode), path.dirname(newNode)].join(path.delimiter),
+      },
+      acceptVersion: (version) => version.startsWith("26."),
+    });
+    expect(selected).toEqual({ nodePath: newNode, reason: "PATH" });
+    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 });

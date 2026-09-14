@@ -440,7 +440,7 @@ begin_pr_operation_validation_phase
 if [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-false}"
 fi
 `,
   );
@@ -466,6 +466,7 @@ fi
     replacementHead = "",
     bodyPath = "",
     completionOid = "",
+    deferCleanup = false,
   ) => {
     const result = spawnSync(
       process.execPath,
@@ -478,6 +479,7 @@ fi
         replacementHead,
         bodyPath,
         completionOid,
+        String(deferCleanup),
       ],
       { cwd, env: { ...env, OPENCLAW_PR_MERGE_METHOD: method }, encoding: "utf8", timeout: 20_000 },
     );
@@ -2572,6 +2574,21 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       reviewedSha: f.head,
       sourceRevision: "c".repeat(64),
     });
+  });
+  it("defers cleanup after verified landing without deleting task sources", () => {
+    const f = fixture();
+    const run = f.run(false, undefined, undefined, "", "", "", "", true);
+    expect(run.status, run.output).toBe(0);
+    expect(f.record()).toMatchObject({ phase: "commented" });
+    expect(f.state().pr.state).toBe("MERGED");
+    expect(f.state().posts).toBe(1);
+    expect(f.state().mutations).toBe(1);
+    expect(existsSync(f.worktree)).toBe(true);
+    expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    expect(run.output).toContain("cleanup deferred");
+    expect(f.run().status).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(existsSync(f.worktree)).toBe(true);
   });
   it("does not delete an advanced remote branch and reports cleanup pending", () => {
     const f = fixture();

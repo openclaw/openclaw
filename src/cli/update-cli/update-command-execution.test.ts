@@ -76,7 +76,6 @@ describe("mutable update execution", () => {
     async (_allowance, timeoutMs, verified, failure) =>
       withTestDir({ prefix: "previous-gateway-readiness-" }, async (root) => {
         const readyAtMs = 400_000;
-        mockProcessPlatform("linux");
         let elapsedMs = 0;
         const epochMs = Date.now();
         vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
@@ -135,6 +134,7 @@ describe("mutable update execution", () => {
           });
           const service = gatewayService.resolveGatewayService();
           vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+          vi.spyOn(service, "isLoaded").mockResolvedValue(true);
           vi.spyOn(service, "readRuntime").mockResolvedValue({ status: "running", pid: 8000 });
           vi.spyOn(service, "readCommand").mockResolvedValue({
             programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
@@ -154,6 +154,11 @@ describe("mutable update execution", () => {
               },
             }),
           );
+          mocks.nativeSupport.mockImplementation(async (candidate) => {
+            candidate.executor.assertCurrent();
+            expect(candidate.root).toBe(root);
+            return true;
+          });
           mocks.validateCanary.mockResolvedValue({
             status: "ok",
             phase: "readiness",
@@ -173,7 +178,11 @@ describe("mutable update execution", () => {
             if (phase === "prepare") {
               stoppedAtMs = elapsedMs;
             }
-            return inspectOrStopService(phase);
+            const stopped = inspectOrStopService(phase);
+            if (stopped.serviceUpdateVerdict?.kind === "owned") {
+              stopped.serviceUpdateVerdict = { ...stopped.serviceUpdateVerdict, root };
+            }
+            return stopped;
           });
           mocks.runPackageUpdate.mockImplementation(
             async (
@@ -197,7 +206,18 @@ describe("mutable update execution", () => {
               params.opts.run = { runId: "replacement-run", env: { OPENCLAW_STATE_DIR: root } };
             };
           }
-          const execution = await executeMutableUpdate(params);
+          const coordinator = path.join(root, "coordinator");
+          await fs.mkdir(coordinator);
+          vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
+          const runId = createUpdateRun({ trigger: "cli" }, { env: managedEnv }).runId;
+          params.opts.run = { runId, env: managedEnv };
+          const execution = await withUpdateCommandExecutor(runId, async (executor) => {
+            mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+              admitExecutor(await executor.enter(root));
+            });
+            return executeMutableUpdate(params);
+          });
+          expect(mocks.nativeSupport).toHaveBeenCalledOnce();
           if (failure === "executor") {
             expect(execution?.result.status).toBe("error");
             expect(execution?.failure?.detail).toContain("lost its original executor");
@@ -275,8 +295,8 @@ describe("mutable update execution", () => {
           },
         );
         const result = await withUpdateCommandExecutor(runId, async (executor) => {
-          mocks.prepareMutableUpdate.mockImplementation(async () => {
-            params.opts.run!.executorFence = await executor.enter(dir);
+          mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+            admitExecutor(await executor.enter(dir));
           });
           return executeMutableUpdate(params);
         });

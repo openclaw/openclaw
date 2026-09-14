@@ -348,7 +348,7 @@ push_prep_head_to_pr_branch() {
   local remote_prep_tree
   local_prep_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
   remote_prep_tree=$(git rev-parse "pr-$pr-verify^{tree}")
-  git branch -D "pr-$pr-verify" 2>/dev/null || true
+  git branch -d "pr-$pr-verify" 2>/dev/null || true
   if [ "$local_prep_tree" != "$remote_prep_tree" ]; then
     echo "Pushed PR head tree differs from the prepared local tree."
     exit 1

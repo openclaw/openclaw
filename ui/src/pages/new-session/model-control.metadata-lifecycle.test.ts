@@ -82,6 +82,47 @@ function retainedAccountDraft() {
 }
 
 describe("new-session model metadata lifecycle", () => {
+  it.each([false, true])(
+    "waits for agent hydration after a usable partial catalog (refreshFailed=%s)",
+    async (refreshFailed) => {
+      const model: ModelCatalogEntry = {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        available: true,
+      };
+      const agent = { id: "main", model: { primary: "openai/gpt-5.4" } };
+      const { context, request } = contextWith([model]);
+      request.mockResolvedValue({
+        models: [model],
+        refreshFailed,
+        providerOutcomes: [
+          { provider: "openai", status: "ready" },
+          { provider: "github-copilot", status: "unavailable" },
+        ],
+      });
+      const control = new NewSessionModelControl(() => undefined);
+      try {
+        control.load(context, "main", true);
+        const draw = (hydrated: boolean) =>
+          renderControl(control, context, "main", hydrated ? agent : null);
+        await vi.waitFor(() =>
+          expect(
+            draw(false).querySelector('[data-chat-model-option="openai/gpt-5.4"]'),
+          ).not.toBeNull(),
+        );
+        // This was the real-Gateway test's premature snapshot boundary.
+        expect(
+          draw(false).querySelector('[data-chat-model-catalog-state="loading"]'),
+        ).not.toBeNull();
+        expect(draw(true).querySelector("[data-chat-model-catalog-state]")).toBeNull();
+        expect(request).toHaveBeenCalledOnce();
+      } finally {
+        control.reset();
+      }
+    },
+  );
+
   it("enables a cooled-down model on reopen without a catalog event", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const model: ModelCatalogEntry = {

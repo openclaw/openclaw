@@ -13,6 +13,8 @@ param(
     [switch]$DryRun,
     [switch]$NodeOnly,
     [string]$NodePrefix,
+    [ValidatePattern("^\d+\.\d+\.\d+$")]
+    [string]$NodeVersion,
     [switch]$Help
 )
 
@@ -38,6 +40,7 @@ Options:
   -DryRun                 Print actions only
   -NodeOnly               Install only a private Node.js runtime; do not change PATH
   -NodePrefix <path>      Absolute private directory for -NodeOnly (required)
+  -NodeVersion <version>  Exact private Node.js version for -NodeOnly
   -Help                   Show this help
 "@ | Write-Output
     return
@@ -520,15 +523,16 @@ function Save-InstallerDownload {
 }
 
 function Resolve-PortableNodeDownload {
+    param([string]$Version)
     $architecture = Get-WindowsPortableArchitecture
     $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"
     $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
-        Where-Object { $_.version -match '^v26\.' } |
+        Where-Object { if ($Version) { $_.version -eq "v$Version" } else { $_.version -match '^v26\.' } } |
         Select-Object -First 1
 
     if (-not $release -or -not $release.version) {
-        throw "Could not resolve latest Node.js 26 release metadata."
+        throw "Could not resolve Node.js release metadata for $(if ($Version) { $Version } else { 'latest 26' })."
     }
 
     $fileKey = "win-$architecture-zip"
@@ -628,9 +632,9 @@ function Install-PortableNode {
 }
 
 function Install-PrivateNode {
-    param([Parameter(Mandatory = $true)][string]$Prefix)
+    param([Parameter(Mandatory = $true)][string]$Prefix, [string]$Version)
 
-    $download = Resolve-PortableNodeDownload
+    $download = Resolve-PortableNodeDownload -Version $Version
     $temporaryRoot = Join-Path $script:InstallerTempDirectory ("openclaw-private-node-" + [guid]::NewGuid().ToString("N"))
     $archive = Join-Path $temporaryRoot $download.Name
     $checksums = Join-Path $temporaryRoot "SHASUMS256.txt"
@@ -2227,15 +2231,15 @@ function Main {
             return $true
         }
         try {
-            Install-PrivateNode -Prefix ([System.IO.Path]::GetFullPath($NodePrefix))
+            Install-PrivateNode -Prefix ([System.IO.Path]::GetFullPath($NodePrefix)) -Version $NodeVersion
         } catch {
             Write-Host "Error: Node.js update failed: $($_.Exception.Message)" -ForegroundColor Red
             Fail-Install
         }
         return
     }
-    if (-not [string]::IsNullOrWhiteSpace($NodePrefix)) {
-        Write-Host "Error: -NodePrefix requires -NodeOnly." -ForegroundColor Red
+    if (-not [string]::IsNullOrWhiteSpace($NodePrefix) -or -not [string]::IsNullOrWhiteSpace($NodeVersion)) {
+        Write-Host "Error: -NodePrefix and -NodeVersion require -NodeOnly." -ForegroundColor Red
         Fail-Install -Code 2
         return
     }

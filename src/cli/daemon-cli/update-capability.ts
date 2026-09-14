@@ -2,7 +2,12 @@ import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-au
 
 export function writeGatewayServiceUpdateCapability(): void {
   process.stdout.write(
-    JSON.stringify({ updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT, targetRootBinding: true }),
+    JSON.stringify({
+      updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT,
+      targetRootBinding: true,
+      retainedOwnerBinding: true,
+      originalDefinitionBinding: true,
+    }),
   );
 }
 

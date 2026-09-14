@@ -7,10 +7,6 @@ import { createTabGroupRevocations } from "./tab-group-revocations.js";
 
 const DENIED_TAB_IDS_KEY = "deniedTabIdsV1";
 
-function initialBlankDocument(tab) {
-  return tab.url === "about:blank" || (!tab.url && tab.pendingUrl === "about:blank");
-}
-
 /**
  * Owns access mode, durable browser-session pauses, and revocation epochs.
  * Every authority-bearing caller captures an epoch and checks through here.
@@ -69,18 +65,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     reviseDiscovery: () => (discoveryRevision += 1),
   });
 
-  async function readTabDocument(tabId) {
-    // A native root commit can overtake Chrome's snapshot callback. Discard it
-    // before consuming provenance, without recapturing the admitted epoch.
-    let root;
-    let tab;
-    do {
-      root = documents.rootRevision(tabId);
-      tab = await chromeApi.tabs.get(tabId);
-    } while (root !== documents.rootRevision(tabId));
-    return tab;
-  }
-
   const mutateStorage = (task) => {
     const pending = storageChain.then(task, task);
     storageChain = pending.catch(() => undefined);
@@ -121,7 +105,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       eligibility.reason !== "restricted" ||
       !created?.initialBlank ||
       !created.isCurrent() ||
-      !initialBlankDocument(tab)
+      !documents.isInitialBlank(tab)
     ) {
       return eligibility;
     }
@@ -272,7 +256,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         tabRevisions.get(tab.id)?.access ?? 0,
       ),
       isCurrent,
-      initialBlank: message.url === "about:blank" && initialBlankDocument(tab),
+      initialBlank: message.url === "about:blank" && documents.isInitialBlank(tab),
       handedOff: false,
       groupId: tab.groupId,
       grouping: false,
@@ -334,7 +318,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
             current.id === tab.id &&
             current.windowId === tab.windowId &&
             ((created.initialBlank &&
-              initialBlankDocument(current) &&
+              documents.isInitialBlank(current) &&
               (!current.pendingUrl || current.pendingUrl === "about:blank")) ||
               (effectiveTabUrl(current) === effectiveTabUrl(created.tab) &&
                 (!current.url || current.url === effectiveTabUrl(created.tab)))) &&
@@ -470,7 +454,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       !selectedGroupChange &&
       !attachedEpoch &&
       tab?.id === tabId &&
-      initialBlankDocument(tab) &&
+      documents.isInitialBlank(tab) &&
       !tab.incognito &&
       (!tab.pendingUrl || tab.pendingUrl === "about:blank")
         ? [...pendingCreations].filter(
@@ -481,6 +465,21 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
           )
         : [];
     const proof = attachedEpoch && provenEpochs.get(attachedEpoch);
+    if (
+      selectedGroupChange &&
+      change.groupId === proof?.groupId &&
+      change.url === undefined &&
+      change.status === undefined &&
+      tab?.id === tabId &&
+      !tab.incognito &&
+      !tab.pendingUrl &&
+      epochIsCurrent(tabId, attachedEpoch)
+    ) {
+      // A same-group notification does not change document authority. Its full
+      // Tab snapshot may predate the native root commit; inspectTab still checks
+      // the current native tab before any subsequent command is admitted.
+      return attachedEpoch;
+    }
     const canRenew =
       proof?.tabId === tabId &&
       epochIsCurrent(tabId, attachedEpoch) &&
@@ -521,7 +520,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     }
     let tab;
     try {
-      tab = await readTabDocument(tabId);
+      tab = await documents.readTab(tabId, () => chromeApi.tabs.get(tabId));
     } catch {
       return { accessible: false, eligible: false, denied: false, reason: "missing", tab: null };
     }
@@ -546,7 +545,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     if (mode === ACCESS_MODE_SELECTED && selected) {
       let current;
       try {
-        current = await readTabDocument(tabId);
+        current = await documents.readTab(tabId, () => chromeApi.tabs.get(tabId));
       } catch {
         return { accessible: false, eligible: false, denied: false, reason: "missing", tab: null };
       }

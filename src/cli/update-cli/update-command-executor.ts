@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import { randomUUID } from "node:crypto";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
@@ -15,27 +14,49 @@ import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { createUpdateActivationDeadline } from "./update-command-activation.js";
+import {
+  childLineageDigest,
+  resolveUpdateCommandChildBinding,
+  type UpdateCommandChildGrant,
+} from "./update-command-executor-grant.js";
+import type {
+  ChildOperation,
+  ChildPurpose,
+  ManagedUpdateLeaseAuthority,
+  UpdateCommandExecutor,
+} from "./update-command-executor.types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 
-/** A live invocation, never a serialized claim, PID or recovered history row. */
-export type UpdateCommandExecutor = {
-  /** Acquire only after read-only service admission, before the first mutable phase. */
-  enter(
-    root: string,
-    options?: { preflight?: true; activationTimeoutMs?: number },
-  ): Promise<UpdateRecoveryFence>;
-};
+export type { UpdateCommandChildGrant } from "./update-command-executor-grant.js";
+export type { UpdateCommandExecutor } from "./update-command-executor.types.js";
 
-type ManagedUpdateLeaseAuthority = ManagedUpdateLeaseDatabaseIdentity &
-  Readonly<{ installKey: string; owner: string }>;
 const admittedAuthorities = new WeakMap<UpdateRecoveryFence, ManagedUpdateLeaseAuthority>();
+const admittedRunIds = new WeakMap<UpdateRecoveryFence, string>();
+const retainedOwners = new WeakMap<UpdateRecoveryFence, string>();
+
+/** Compatibility requirement from a live admission, never a serialized claim. */
+export function requiresRetainedUpdateCommandOwner(fence: UpdateRecoveryFence): boolean {
+  captureUpdateCommandExecutorAuthority(fence);
+  return retainedOwners.has(fence);
+}
+
+/** Validate the actual retained service lease, never an observed path or caller claim. */
+export function assertRetainedUpdateCommandRoot(fence: UpdateRecoveryFence, root: string): void {
+  captureUpdateCommandExecutorAuthority(fence);
+  if (retainedOwners.get(fence) !== resolveUpdateInstallRoot(root)) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Service recovery requires its retained executor root.",
+    );
+  }
+}
 
 export function captureUpdateCommandExecutorAuthority(
   fence: UpdateRecoveryFence,
+  expectedRunId?: string,
 ): ManagedUpdateLeaseAuthority {
   fence.assertCurrent();
   const authority = admittedAuthorities.get(fence);
-  if (!authority) {
+  if (!authority || (expectedRunId !== undefined && admittedRunIds.get(fence) !== expectedRunId)) {
     throw new UpdateCommandRecoveryPendingError("Package recovery requires its admitted executor.");
   }
   return authority;
@@ -52,65 +73,22 @@ export function releaseUpdateCommandPreflightForHandoff(fence: UpdateRecoveryFen
   release();
 }
 
-/** Private correlation sent only to the spawned candidate's stdin. The receiver
- * independently reads both live owners and checks its own PID/start identity. */
-export type UpdateCommandChildGrant = {
-  runId: string;
-  root: string;
-  databasePath: string;
-  parent: ManagedHandoffLease;
-  /** Original owner and its lineage survive a package-generation change. */
-  originalParent?: ManagedHandoffLease;
-  originalChildKey?: string;
-  spawner?: ManagedHandoffLease;
-  childKey: string;
-  databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
-};
-type ChildOperation<T> = (
-  grant: UpdateCommandChildGrant,
-  bindChild: (pid: number) => void,
-) => Promise<T>;
 const childOwners = new WeakMap<
   UpdateRecoveryFence,
-  <T>(root: string, operation: ChildOperation<T>) => Promise<T>
+  <T>(root: string, operation: ChildOperation<T>, purpose?: ChildPurpose) => Promise<T>
 >();
 
 export async function withUpdateCommandExecutorChild<T>(
   fence: UpdateRecoveryFence,
   root: string,
   operation: ChildOperation<T>,
+  purpose?: ChildPurpose,
 ): Promise<T> {
   const owner = childOwners.get(fence);
   if (!owner) {
     throw new UpdateCommandRecoveryPendingError("Child continuation requires its live executor.");
   }
-  return await owner(root, operation);
-}
-
-// Correlate the transported lineage with the spawning owner's recorded child
-// names. This is not another credential: live rows and PID/start checks still
-// authorize the receiver. A mirror cannot be substituted for its original root.
-function childLineageDigest(
-  original: ManagedHandoffLease,
-  spawner: ManagedHandoffLease,
-  parent: ManagedHandoffLease,
-  database: ManagedUpdateLeaseDatabaseIdentity,
-): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        database.databasePath,
-        database.databaseIdentity,
-        database.parentIdentity,
-        [original, spawner, parent].map((lease) => [
-          lease.key,
-          lease.owner,
-          lease.payload,
-          lease.updatedAt,
-        ]),
-      ]),
-    )
-    .digest("hex");
+  return await owner(root, operation, purpose);
 }
 
 /** One child interval, shared by direct and delegated executors. */
@@ -121,11 +99,13 @@ function createChildOwner(params: {
     parent: ManagedHandoffLease;
     original: ManagedHandoffLease;
     spawner: ManagedHandoffLease;
+    /** A cross-root updater retains its original service owner through every child. */
+    retainedParent?: ManagedHandoffLease;
     databasePath: string;
     databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
   };
   assertBase: () => void;
-  onStart?: () => void;
+  onStart?: (purpose?: ChildPurpose) => void;
 }) {
   let admissionOpen = true;
   let delegating = false;
@@ -152,19 +132,20 @@ function createChildOwner(params: {
         throw failure;
       }
     },
-    run<T>(root: string, operation: ChildOperation<T>): Promise<T> {
+    run<T>(root: string, operation: ChildOperation<T>, purpose?: ChildPurpose): Promise<T> {
       params.assertBase();
       assertIdle();
       if (!admissionOpen) {
         throw new UpdateCommandRecoveryPendingError("Child executor admission is closed.");
       }
-      const { store, parent, original, spawner, databasePath, databaseIdentity } = params.binding();
+      const { store, parent, original, spawner, retainedParent, databasePath, databaseIdentity } =
+        params.binding();
       if (!databaseIdentity) {
         throw new UpdateCommandRecoveryPendingError(
           "Native child requires its pinned lease database.",
         );
       }
-      params.onStart?.();
+      params.onStart?.(purpose);
       const candidateRoot = resolveUpdateInstallRoot(root);
       let candidateParent = parent;
       let acquiredParent = false;
@@ -184,7 +165,11 @@ function createChildOwner(params: {
         let outcome: { result: T } | { error: unknown };
         try {
           params.assertBase();
-          if (candidateRoot !== parent.key) {
+          if (candidateRoot === original.key) {
+            candidateParent = original;
+          } else if (retainedParent && candidateRoot === retainedParent.key) {
+            candidateParent = retainedParent;
+          } else if (candidateRoot !== parent.key) {
             const acquired = store.acquire(candidateRoot, randomUUID(), { kind: "update" });
             if (acquired.kind !== "acquired") {
               throw new UpdateCommandRecoveryPendingError(
@@ -197,9 +182,20 @@ function createChildOwner(params: {
           assertOwners();
           // Keep the full original spawner lineage AND the active generation.
           // Neither root may be reclaimed while a nested process group survives.
-          const parents =
-            candidateParent.key === original.key ? [spawner] : [spawner, candidateParent];
-          const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity)}`;
+          const parents = [
+            ...new Map(
+              [
+                spawner,
+                ...(retainedParent ? [retainedParent] : []),
+                ...(candidateParent.key === original.key ? [] : [candidateParent]),
+              ].map((owner) => [owner.key, owner]),
+            ).values(),
+          ];
+          const candidateChildIndex =
+            candidateParent.key === original.key
+              ? 0
+              : parents.findIndex((owner) => owner.key === candidateParent.key);
+          const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent)}`;
           for (const childParent of parents) {
             const acquired = store.acquire(
               `${childParent.key}/.openclaw-update-child-${childName}`,
@@ -221,8 +217,15 @@ function createChildOwner(params: {
             originalParent: original,
             spawner,
             originalChildKey: children[0]!.key,
-            childKey: children[children.length - 1]!.key,
+            childKey: children[candidateChildIndex]!.key,
             databaseIdentity,
+            ...(retainedParent
+              ? {
+                  retainedParent,
+                  retainedChildKey:
+                    children[parents.findIndex((owner) => owner.key === retainedParent.key)]!.key,
+                }
+              : {}),
           };
           const result = await operation(grant, (pid) => {
             assertOwners();
@@ -253,8 +256,10 @@ function createChildOwner(params: {
         try {
           // Release the active generation before the original lineage, as in
           // the shipped finalizer. A failed release never reactivates the parent.
-          if (children.length > 1 && !store.release(children[1]!)) {
-            throw new UpdateCommandRecoveryPendingError("Candidate executor has not settled.");
+          for (let index = children.length - 1; index > 0; index--) {
+            if (!store.release(children[index]!)) {
+              throw new UpdateCommandRecoveryPendingError("Candidate executor has not settled.");
+            }
           }
           if (acquiredParent && !store.release(candidateParent)) {
             throw new UpdateCommandRecoveryPendingError("Candidate installation release failed.");
@@ -306,84 +311,18 @@ export async function withDelegatedUpdateCommandExecutor<T>(
   const activation = createUpdateActivationDeadline();
   return await activation.run(() =>
     withCommandProcessScope(async () => {
-      const original = grant.originalParent ?? grant.parent;
-      const spawner = grant.spawner ?? original;
-      const childPrefix = `${original.key}/.openclaw-update-child-`;
-      const childName = grant.childKey.slice(
-        grant.childKey.lastIndexOf("/.openclaw-update-child-") + "/.openclaw-update-child-".length,
-      );
-      // v2026.9.4 sent this exact private-stdin format. Pin its existing database
-      // before reading/admitting the live parent and registered receiver. Modern
-      // names cannot downgrade by stripping their lineage or supplied physical pin.
-      const legacyGrant =
-        !grant.originalParent &&
-        !grant.spawner &&
-        !grant.originalChildKey &&
-        !grant.databaseIdentity &&
-        grant.childKey === `${grant.parent.key}/.openclaw-update-child-${childName}` &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(childName);
-      const databaseIdentity = legacyGrant
-        ? captureManagedUpdateLeaseDatabaseIdentity(grant.databasePath)
-        : grant.databaseIdentity;
-      const databasePath = databaseIdentity?.databasePath ?? grant.databasePath;
-      const store = createManagedHandoffLeaseStore({
+      const {
+        original,
+        spawner,
+        databaseIdentity,
         databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity: databaseIdentity,
-      });
-      const parent = store.read(resolveUpdateInstallRoot(root));
-      const originalChild = store.read(grant.originalChildKey ?? grant.childKey);
-      const child = store.read(grant.childKey);
-      const lineageBound = Boolean(
-        grant.originalParent &&
-        grant.databaseIdentity &&
-        grant.spawner &&
-        grant.originalChildKey &&
-        grant.originalChildKey === `${spawner.key}/.openclaw-update-child-${childName}` &&
-        grant.childKey ===
-          `${grant.parent.key === original.key ? spawner.key : grant.parent.key}/.openclaw-update-child-${childName}` &&
-        /^[0-9a-f-]{36}-lineage-[0-9a-f]{64}$/.test(childName) &&
-        childName.endsWith(
-          `-lineage-${childLineageDigest(original, spawner, grant.parent, grant.databaseIdentity)}`,
-        ),
-      );
-      if (
-        (!lineageBound && !legacyGrant) ||
-        (!legacyGrant && databasePath !== grant.databasePath) ||
-        grant.runId !== runId ||
-        grant.root !== resolveUpdateInstallRoot(root) ||
-        parent.kind !== "current" ||
-        !isDeepStrictEqual(parent.lease, grant.parent) ||
-        parent.lease.action.kind !== "update" ||
-        parent.lease.version === 3 ||
-        !store.current(original) ||
-        original.action.kind !== "update" ||
-        original.version === 3 ||
-        !store.current(spawner) ||
-        spawner.action.kind !== "update" ||
-        spawner.version === 3 ||
-        (spawner.key !== original.key &&
-          (!spawner.key.startsWith(childPrefix) || spawner.owner !== runId)) ||
-        process.ppid !== spawner.executor.pid ||
-        !(grant.originalChildKey ?? grant.childKey).startsWith(
-          `${spawner.key}/.openclaw-update-child-`,
-        ) ||
-        !grant.childKey.startsWith(`${parent.lease.key}/.openclaw-update-child-`) ||
-        originalChild.kind !== "current" ||
-        originalChild.lease.owner !== runId ||
-        originalChild.lease.action.kind !== "update" ||
-        originalChild.lease.version === 3 ||
-        !isDeepStrictEqual(originalChild.lease.helper, spawner.executor) ||
-        child.kind !== "current" ||
-        child.lease.owner !== runId ||
-        child.lease.action.kind !== "update" ||
-        child.lease.version === 3 ||
-        !isDeepStrictEqual(child.lease.helper, spawner.executor)
-      ) {
-        throw new UpdateCommandRecoveryPendingError(
-          "Candidate executor binding does not match its parent.",
-        );
-      }
+        store,
+        parent,
+        originalChild,
+        child,
+        retained,
+        retainedChild,
+      } = resolveUpdateCommandChildBinding(grant, runId, root);
       let active = true;
       const isLive = (identity: ManagedHandoffLease["executor"]) =>
         store.isPidAlive(identity.pid) &&
@@ -395,14 +334,20 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           !store.current(original) ||
           !isLive(original.helper) ||
           !isLive(original.executor) ||
-          !store.current(parent.lease) ||
-          !isLive(parent.lease.helper) ||
-          !isLive(parent.lease.executor) ||
+          !store.current(parent) ||
+          !isLive(parent.helper) ||
+          !isLive(parent.executor) ||
           !store.current(spawner) ||
           !isLive(spawner.helper) ||
           !isLive(spawner.executor) ||
-          !store.owns(originalChild.lease, "executor") ||
-          !store.owns(child.lease, "executor")
+          !store.owns(originalChild, "executor") ||
+          !store.owns(child, "executor") ||
+          (retained &&
+            (!retainedChild ||
+              !store.current(retained) ||
+              !isLive(retained.helper) ||
+              !isLive(retained.executor) ||
+              !store.owns(retainedChild, "executor")))
         ) {
           throw new UpdateCommandRecoveryPendingError(
             "Candidate executor ownership is no longer current.",
@@ -413,9 +358,10 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         runId,
         binding: () => ({
           store,
-          parent: parent.lease,
+          parent,
           original,
-          spawner: originalChild.lease,
+          spawner: originalChild,
+          ...(retained ? { retainedParent: retained } : {}),
           databasePath,
           databaseIdentity,
         }),
@@ -428,11 +374,14 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           owner.assertIdle();
         },
       };
-      childOwners.set(fence, (childRoot, childOperation) => owner.run(childRoot, childOperation));
+      childOwners.set(fence, (childRoot, childOperation, purpose) =>
+        owner.run(childRoot, childOperation, purpose),
+      );
       let outcome: { result: T } | { error: unknown };
       try {
         fence.assertCurrent();
         if (databaseIdentity) {
+          admittedRunIds.set(fence, runId);
           admittedAuthorities.set(
             fence,
             Object.freeze({
@@ -441,6 +390,9 @@ export async function withDelegatedUpdateCommandExecutor<T>(
               owner: original.owner,
             }),
           );
+        }
+        if (retained) {
+          retainedOwners.set(fence, retained.key);
         }
         if (options) {
           activation.start(root, options.activationTimeoutMs);
@@ -468,6 +420,8 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         active = false;
         childOwners.delete(fence);
         admittedAuthorities.delete(fence);
+        admittedRunIds.delete(fence);
+        retainedOwners.delete(fence);
       }
       if ("error" in outcome) {
         throw outcome.error;
@@ -496,9 +450,19 @@ export async function withUpdateCommandExecutor<T>(
       let store: ReturnType<typeof createManagedHandoffLeaseStore> | undefined;
       let lease: ManagedHandoffLease | undefined;
       let borrowed = false;
+      let serviceLease: ManagedHandoffLease | undefined;
+      let serviceKey: string | undefined;
+      let admissionComplete = false;
       const assertBase = () => {
         activation.assertCurrent();
-        if (!active || !store || !lease || !store.owns(lease, "executor")) {
+        if (
+          !active ||
+          !admissionComplete ||
+          !store ||
+          !lease ||
+          !store.owns(lease, "executor") ||
+          (serviceLease && !store.owns(serviceLease, "executor"))
+        ) {
           throw new UpdateCommandRecoveryPendingError(
             "Update executor ownership is no longer current.",
           );
@@ -506,7 +470,7 @@ export async function withUpdateCommandExecutor<T>(
       };
       const assertCurrent = () => {
         assertBase();
-        if (lease?.version === 3) {
+        if (lease?.version === 3 || serviceLease?.version === 3) {
           throw new UpdateCommandRecoveryPendingError(
             "Parent executor has unresolved native custody.",
           );
@@ -517,7 +481,12 @@ export async function withUpdateCommandExecutor<T>(
       const children = createChildOwner({
         runId,
         assertBase,
-        onStart: () => preflightReleases.delete(fence),
+        onStart: (purpose) => {
+          // Preserve only an existing eligibility entry. Nothing can re-arm it.
+          if (!purpose?.auxiliaryPreflight) {
+            preflightReleases.delete(fence);
+          }
+        },
         binding: () => {
           if (!store || !lease || !databasePath) {
             throw new UpdateCommandRecoveryPendingError("Child executor admission is closed.");
@@ -527,15 +496,22 @@ export async function withUpdateCommandExecutor<T>(
             parent: lease,
             original: lease,
             spawner: lease,
+            ...(serviceLease ? { retainedParent: serviceLease } : {}),
             databasePath,
             databaseIdentity: admittedAuthorities.get(fence),
           };
         },
       });
       activation.signal.addEventListener("abort", () => children.close(), { once: true });
-      childOwners.set(fence, (root, childOperation) => {
-        assertCurrent();
-        return children.run(root, childOperation);
+      childOwners.set(fence, async (root, childOperation, purpose) => {
+        try {
+          assertCurrent();
+          return await children.run(root, childOperation, purpose);
+        } catch (error) {
+          // Failure revokes eligibility before a catching caller can attempt handoff.
+          preflightReleases.delete(fence);
+          throw error;
+        }
       });
       const executor: UpdateCommandExecutor = {
         async enter(root, enterOptions) {
@@ -551,9 +527,18 @@ export async function withUpdateCommandExecutor<T>(
           if (options?.existingAuthority && root !== key) {
             throw new UpdateCommandRecoveryPendingError("Recovery installation key changed.");
           }
+          const requestedServiceKey = enterOptions?.serviceRoot
+            ? resolveUpdateInstallRoot(enterOptions.serviceRoot)
+            : undefined;
+          const distinctServiceKey = requestedServiceKey === key ? undefined : requestedServiceKey;
+          if (options?.existingAuthority && distinctServiceKey) {
+            throw new UpdateCommandRecoveryPendingError(
+              "Recovery cannot acquire a new service root.",
+            );
+          }
           if (lease) {
             assertCurrent();
-            if (lease.key !== key) {
+            if (lease.key !== key || serviceKey !== distinctServiceKey) {
               throw new UpdateCommandRecoveryPendingError("Update executor installation changed.");
             }
             if (!enterOptions?.preflight) {
@@ -610,6 +595,17 @@ export async function withUpdateCommandExecutor<T>(
               }
               lease = acquired.lease;
             }
+            serviceKey = distinctServiceKey;
+            if (serviceKey) {
+              const acquired = store.acquire(serviceKey, randomUUID(), { kind: "update" });
+              if (acquired.kind !== "acquired") {
+                throw new UpdateCommandRecoveryPendingError(
+                  "Another update executor owns the managed service installation.",
+                );
+              }
+              serviceLease = acquired.lease;
+            }
+            admissionComplete = true;
             assertCurrent();
             const authority = Object.freeze({
               ...(options?.existingAuthority ??
@@ -627,19 +623,36 @@ export async function withUpdateCommandExecutor<T>(
             });
             assertCurrent();
             admittedAuthorities.set(fence, authority);
+            admittedRunIds.set(fence, runId);
+            if (serviceLease) {
+              retainedOwners.set(fence, serviceLease.key);
+            }
             if (enterOptions?.preflight && !borrowed) {
               preflightReleases.set(fence, () => {
                 assertCurrent();
-                if (!store || !lease || children.pending || !store.release(lease)) {
+                if (!store || !lease || children.pending) {
                   throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
                 }
-                // Never reactivate this fence; the supervised helper must acquire its own.
                 active = false;
-                lease = undefined;
                 children.close();
                 childOwners.delete(fence);
                 admittedAuthorities.delete(fence);
+                admittedRunIds.delete(fence);
+                retainedOwners.delete(fence);
                 preflightReleases.delete(fence);
+                if (serviceLease) {
+                  if (!store.release(serviceLease)) {
+                    throw new UpdateCommandRecoveryPendingError(
+                      "Preflight service owner release failed.",
+                    );
+                  }
+                  serviceLease = undefined;
+                }
+                if (!store.release(lease)) {
+                  throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
+                }
+                // The supervised helper must acquire its own owners.
+                lease = undefined;
               });
             }
             if (enterOptions?.activationTimeoutMs !== undefined) {
@@ -688,7 +701,14 @@ export async function withUpdateCommandExecutor<T>(
       preflightReleases.delete(fence);
       childOwners.delete(fence);
       admittedAuthorities.delete(fence);
+      admittedRunIds.delete(fence);
+      retainedOwners.delete(fence);
       try {
+        if (serviceLease && store && (serviceLease.version === 3 || !store.release(serviceLease))) {
+          throw new UpdateCommandRecoveryPendingError(
+            "Managed service executor release could not be confirmed.",
+          );
+        }
         if (lease && store && (lease.version === 3 || (!borrowed && !store.release(lease)))) {
           throw new UpdateCommandRecoveryPendingError(
             "Update executor release could not be confirmed.",
