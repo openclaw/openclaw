@@ -2382,7 +2382,12 @@ describe("runCodexAppServerAttempt", () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
       ...(options?.enableHeartbeatTool === true
-        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        ? [
+            {
+              ...createRuntimeDynamicTool("heartbeat_respond"),
+              catalogMode: "direct-only" as const,
+            },
+          ]
         : []),
     ]);
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -2398,7 +2403,10 @@ describe("runCodexAppServerAttempt", () => {
     };
     const registeredTools = [
       createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("heartbeat_respond"),
+      {
+        ...createRuntimeDynamicTool("heartbeat_respond"),
+        catalogMode: "direct-only" as const,
+      },
     ];
     const normalBridge = createCodexToolBridgeForTest(
       createHeartbeatRunParams(),
@@ -2411,7 +2419,13 @@ describe("runCodexAppServerAttempt", () => {
     const heartbeatParams = createHeartbeatRunParams("heartbeat");
     const heartbeatBridge = createCodexToolBridgeForTest(
       heartbeatParams,
-      [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
+      [
+        createRuntimeDynamicTool("message"),
+        {
+          ...createRuntimeDynamicTool("heartbeat_respond"),
+          catalogMode: "direct-only" as const,
+        },
+      ],
       registeredTools,
     );
     const heartbeatInstructions = testing.buildDeveloperInstructions(heartbeatParams, {
@@ -2436,7 +2450,7 @@ describe("runCodexAppServerAttempt", () => {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
         (tool) => tool.name === "heartbeat_respond",
       );
-      expect(heartbeat).not.toHaveProperty("namespace");
+      expect(heartbeat?.namespace).toBe("openclaw_direct");
       expect(heartbeat).not.toHaveProperty("deferLoading");
     }
     expect(codexDynamicToolsFingerprint(heartbeatBridge.specs)).toBe(

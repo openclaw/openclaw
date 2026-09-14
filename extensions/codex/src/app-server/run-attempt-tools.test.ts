@@ -13,9 +13,14 @@ function createAttemptParams(
 }
 
 describe("Codex direct tool loading", () => {
-  const projectTool = (name: string) =>
+  const projectTool = (name: string, catalogMode?: "direct-only") =>
     projectCodexDynamicTools([
-      { name, description: `Use ${name}`, parameters: { type: "object", properties: {} } },
+      {
+        name,
+        description: `Use ${name}`,
+        parameters: { type: "object", properties: {} },
+        ...(catalogMode ? { catalogMode } : {}),
+      },
     ]).tools;
 
   it("keeps the available ring-zero tool directly callable", () => {
@@ -30,14 +35,27 @@ describe("Codex direct tool loading", () => {
   });
 
   it("keeps the registered heartbeat result tool directly callable", () => {
-    const heartbeatTools = projectTool("heartbeat_respond");
-    expect(
-      createCodexDynamicToolSpecs({
-        entries: heartbeatTools,
-        loading: "searchable",
-        directToolNames: resolveCodexDynamicToolDirectNames(createAttemptParams(), heartbeatTools),
+    const heartbeatTools = projectTool("heartbeat_respond", "direct-only");
+    const specs = createCodexDynamicToolSpecs({
+      entries: heartbeatTools,
+      loading: "searchable",
+      directToolNames: resolveCodexDynamicToolDirectNames(createAttemptParams(), heartbeatTools),
+    });
+    expect(specs).toEqual([
+      expect.objectContaining({
+        type: "namespace",
+        name: "openclaw_direct",
+        tools: [
+          expect.objectContaining({
+            type: "function",
+            name: "heartbeat_respond",
+          }),
+        ],
       }),
-    ).toEqual([expect.objectContaining({ type: "function", name: "heartbeat_respond" })]);
+    ]);
+    expect(specs[0]?.type === "namespace" ? specs[0].tools[0] : undefined).not.toHaveProperty(
+      "deferLoading",
+    );
   });
 
   it.each([false, true])(
