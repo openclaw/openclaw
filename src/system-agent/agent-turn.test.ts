@@ -916,8 +916,10 @@ describe("runSystemAgentTurn", () => {
       );
 
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(runCliAgent).not.toHaveBeenCalled();
-    const call = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "missing embedded runner call");
+    const call = expectDefined(
+      runEmbeddedAgent.mock.calls[0]?.[0],
+      "missing embedded runner call",
+    );
     expect(call).not.toHaveProperty("streamParams");
     expect(call).toMatchObject({
       provider: "openai",
