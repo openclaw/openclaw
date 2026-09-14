@@ -172,6 +172,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           preparedModelRuntime: options?.preparedModelRuntime,
           authProfileStore: options?.authProfileStore,
           workspaceDir,
+          // Keep file access on the task root without changing model/provider context.
+          cwd: options?.sandboxRoot ?? resolveWorkspaceRoot(options?.cwd ?? workspaceDir),
           sandbox,
           fsPolicy: options?.fsPolicy,
           agentChannel: options?.agentChannel,

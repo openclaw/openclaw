@@ -146,6 +146,12 @@ one local image path or permitted URL, or `paths` for several; `maxImages`
 limits the combined list and defaults to 20. Codex's native implementation
 accepts one local filesystem `path`. Callers must follow the active tool schema.
 
+The OpenClaw-provided loader resolves relative image paths against the current
+task directory, including a managed worktree. Workspace-only file access uses
+that task directory; sandboxed reads remain on the sandbox filesystem bridge.
+This does not grant access to sibling worktrees or change the canonical agent
+workspace used for model and provider configuration.
+
 Existing policy entries named `image` must be migrated to `view_image`; run
 `openclaw doctor --fix` to update supported config policy surfaces and persisted
 automation `toolsAllow` lists.
