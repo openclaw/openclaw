@@ -545,6 +545,27 @@ export function expectDispatchParams(expected: Record<string, unknown>) {
   return expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), expected);
 }
 
+export function createPromptContextFixture(
+  messages: Array<{
+    message_id: string;
+    sender: string;
+    body: string;
+    timestamp_ms?: number;
+    is_reply_target?: boolean;
+    media_type?: string;
+    media_path?: string;
+  }>,
+): NonNullable<TelegramMessageContext["ctxPayload"]["ChannelStructuredContext"]> {
+  return [
+    {
+      label: "Conversation context",
+      source: "telegram",
+      type: "chat_window",
+      payload: { order: "chronological", relation: "selected_for_current_message", messages },
+    },
+  ];
+}
+
 export function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
   const base = {
     ctxPayload: {},
@@ -562,7 +583,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     threadSpec: { id: 777, scope: "dm" },
     historyKey: undefined,
     historyLimit: 0,
-    groupHistories: new Map(),
     route: { agentId: "default", accountId: "default" },
     skillFilter: undefined,
     sendTyping: vi.fn(),

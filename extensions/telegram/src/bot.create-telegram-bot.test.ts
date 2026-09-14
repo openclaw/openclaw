@@ -116,6 +116,7 @@ const { resolveTelegramConversationRoute } = await import("./conversation-route.
 const {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
+  resetTelegramMessageCacheForTest,
   resetTelegramTopicNameCacheForTest,
 } = await import("./runtime.test-support.js");
 const { setTelegramRuntime } = await import("./runtime.js");
@@ -512,6 +513,125 @@ describe("createTelegramBot", () => {
   });
 
   // groupPolicy tests
+
+  describe("cached group history admission", () => {
+    let chatId: number;
+
+    beforeEach(() => {
+      chatId = nextForumCacheChatId();
+      resetTelegramMessageCacheForTest();
+      installTelegramTopicStateForTest();
+    });
+
+    afterEach(() => {
+      resetTelegramMessageCacheForTest();
+      clearTelegramRuntimeForTest();
+    });
+
+    function startHistoryBot(historyLimit = 20) {
+      const config: OpenClawConfig = {
+        channels: {
+          telegram: {
+            commands: { native: false },
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["111"],
+            historyLimit,
+            groups: { "*": { requireMention: true } },
+          },
+        },
+        agents: { defaults: { userTimezone: "UTC" } },
+      };
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      return getMessageHandler();
+    }
+
+    function groupMessage(id: number, text: string, extra: Record<string, unknown> = {}) {
+      return {
+        message: {
+          chat: { id: chatId, type: "group", title: "Discussion" },
+          from: { id: 111, is_bot: false, first_name: "Alice" },
+          date: 1736380800 + id,
+          message_id: id,
+          text,
+          ...extra,
+        },
+        me: telegramBotInfoForTest,
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+    }
+
+    function dispatchedContext() {
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      return expectDefined(replySpy.mock.calls[0]?.[0], "dispatched Telegram context");
+    }
+
+    it("keeps admitted history when newer commands are addressed to another bot", async () => {
+      const handle = startHistoryBot(2);
+      await handle(groupMessage(1, "The release moved to Friday"));
+      for (const id of [2, 3]) {
+        await handle(
+          groupMessage(id, "/status@other_bot", {
+            entities: [{ type: "bot_command", offset: 0, length: 17 }],
+          }),
+        );
+      }
+      expect(replySpy).not.toHaveBeenCalled();
+      await handle(
+        groupMessage(4, "@openclaw_bot summarize the discussion", {
+          entities: [{ type: "mention", offset: 0, length: 13 }],
+        }),
+      );
+      expect(JSON.stringify(dispatchedContext().ChannelStructuredContext)).toContain(
+        "The release moved to Friday",
+      );
+    });
+
+    it("retains ordinary supergroup replies for a later fresh mention", async () => {
+      const handle = startHistoryBot();
+      const chat = { id: chatId, type: "supergroup", title: "Discussion", is_forum: false };
+      const root = groupMessage(101, "Release discussion", { chat });
+      await handle(root);
+      await handle(
+        groupMessage(102, "The release moved to Friday", {
+          chat,
+          message_thread_id: 101,
+          reply_to_message: root.message,
+        }),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+      await handle(
+        groupMessage(103, "@openclaw_bot summarize the discussion", {
+          chat,
+          entities: [{ type: "mention", offset: 0, length: 13 }],
+        }),
+      );
+      const context = dispatchedContext();
+      expect(context.SessionKey).not.toContain(":topic:");
+      expect(JSON.stringify(context.ChannelStructuredContext)).toContain(
+        "The release moved to Friday",
+      );
+    });
+
+    it("excludes pre-reset ambient history after restarting with native commands disabled", async () => {
+      const handle = startHistoryBot();
+      await handle(groupMessage(201, "The release moved to Friday"));
+      expect(replySpy).not.toHaveBeenCalled();
+
+      resetTelegramMessageCacheForTest();
+      onSpy.mockClear();
+      const restartedHandle = startHistoryBot();
+      expect(restartedHandle).not.toBe(handle);
+      await restartedHandle(
+        groupMessage(202, "/new What context is visible?", {
+          entities: [{ type: "bot_command", offset: 0, length: 4 }],
+        }),
+      );
+      expect(JSON.stringify(dispatchedContext().ChannelStructuredContext ?? [])).not.toContain(
+        "The release moved to Friday",
+      );
+    });
+  });
 
   it("installs grammY throttler", () => {
     createTelegramBot({ token: "tok" });

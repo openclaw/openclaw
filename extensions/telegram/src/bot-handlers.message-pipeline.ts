@@ -129,6 +129,7 @@ export function createTelegramMessagePipeline({
   const { resolveTelegramSessionState, resolvePromptContextAmbientWatermark } = sessionRuntime;
   const {
     recordMessageForReplyChain,
+    markHistoryEligible,
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,
@@ -490,16 +491,6 @@ export function createTelegramMessagePipeline({
           });
         }
       }
-      const promptContext = await buildPromptContextForMessage(
-        params.ctx,
-        params.msg,
-        replyChainNodes,
-        runtimeCfg,
-        runtimeTelegramCfg,
-        params.options,
-        promptContextMediaByMessageId,
-        params.promptContextMessageSelection,
-      );
       const result = await processMessage({
         ctx: params.ctx,
         allMedia: params.allMedia,
@@ -520,10 +511,32 @@ export function createTelegramMessagePipeline({
             return await finalizeSpooledReplayResult(completed);
           },
         },
-        options: params.options,
+        options: {
+          ...params.options,
+          recordHistoryEligible: () =>
+            markHistoryEligible({
+              accountId,
+              chatId: params.msg.chat.id,
+              botUserId: params.ctx.me?.id,
+              messageIds: (params.options?.bufferedMessages?.length
+                ? params.options.bufferedMessages
+                : [params.msg]
+              ).map((message) => String(message.message_id)),
+            }),
+          readPromptContext: (threadSpec) =>
+            buildPromptContextForMessage(
+              params.ctx,
+              params.msg,
+              replyChainNodes,
+              runtimeCfg,
+              runtimeTelegramCfg,
+              { ...params.options, threadSpec },
+              promptContextMediaByMessageId,
+              params.promptContextMessageSelection,
+            ),
+        },
         replyMedia,
         replyChain,
-        promptContext,
       });
       if (spooledReplay) {
         return await finalizeSpooledReplayResult(result);

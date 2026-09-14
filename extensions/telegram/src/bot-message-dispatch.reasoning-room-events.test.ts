@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
+  createPromptContextFixture,
   createReasoningStreamContext,
   createStatusReactionController,
   createTelegramDraftStream,
@@ -55,7 +56,19 @@ function createGroupFixture(
   const { commandAuthorized, topicId } = params;
   const entries = params.entries ?? [{ sender: "Alice", body: "lunch at two", timestamp: 1 }];
   const historyKey = `telegram:group:${GROUP_CHAT_ID}${topicId ? `:topic:${topicId}` : ""}`;
-  const groupHistories = new Map([[historyKey, entries]]);
+  const inboundHistory = entries.map((entry, index) => ({
+    sender: entry.sender,
+    body: entry.body,
+    timestamp: entry.timestamp,
+    messageId: String(index + 1),
+  }));
+  const promptContext = createPromptContextFixture(
+    inboundHistory.map(({ messageId, timestamp, ...entry }) => ({
+      ...entry,
+      message_id: messageId,
+      timestamp_ms: timestamp,
+    })),
+  );
   const context = (
     messageId: number,
     body: string,
@@ -66,6 +79,8 @@ function createGroupFixture(
       ...overrides,
       ctxPayload: {
         InboundEventKind: kind,
+        InboundHistory: structuredClone(inboundHistory),
+        ChannelStructuredContext: structuredClone(promptContext),
         SessionKey: GROUP_SESSION_KEY,
         ChatType: "group",
         MessageSid: String(messageId),
@@ -83,10 +98,9 @@ function createGroupFixture(
       isGroup: true,
       historyKey,
       historyLimit: 10,
-      groupHistories,
       threadSpec: topicId ? { id: topicId, scope: "forum" } : { id: undefined, scope: "none" },
     });
-  return { context, groupHistories, historyKey };
+  return { context, inboundHistory, promptContext };
 }
 
 function mockSupersedingRoomEvents() {
@@ -308,7 +322,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
   });
 
   it("runs ambient room events as tool-only invisible turns", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture({
+    const { context, inboundHistory, promptContext } = createGroupFixture({
       entries: [{ sender: "Alice", body: "side chatter", timestamp: 1 }],
     });
     const statusReactionController = createStatusReactionController();
@@ -352,11 +366,14 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     expect(statusReactionController.setCompacting).not.toHaveBeenCalled();
     expect(statusReactionController.setThinking).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
+    for (const [dispatch] of dispatchReplyWithBufferedBlockDispatcher.mock.calls) {
+      expect(dispatch.ctx.InboundHistory).toEqual(inboundHistory);
+      expect(dispatch.ctx.ChannelStructuredContext).toEqual(promptContext);
+    }
   });
 
   it("keeps room-event history when a newer turn supersedes dispatch", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture();
+    const { context, inboundHistory, promptContext } = createGroupFixture();
     const { releaseFirst, secondStarted } = mockSupersedingRoomEvents();
 
     const firstPromise = dispatchWithContext({
@@ -372,11 +389,14 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     releaseFirst();
     await Promise.all([firstPromise, secondPromise]);
 
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
+    for (const [dispatch] of dispatchReplyWithBufferedBlockDispatcher.mock.calls) {
+      expect(dispatch.ctx.InboundHistory).toEqual(inboundHistory);
+      expect(dispatch.ctx.ChannelStructuredContext).toEqual(promptContext);
+    }
   });
 
   it("keeps delivered room-event history when a newer turn supersedes dispatch", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture();
+    const { context, inboundHistory, promptContext } = createGroupFixture();
     const { firstStarted, releaseFirst, secondStarted } = mockSupersedingRoomEvents();
 
     const firstPromise = dispatchWithContext({
@@ -398,11 +418,14 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     releaseFirst();
     await Promise.all([firstPromise, secondPromise]);
 
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
+    for (const [dispatch] of dispatchReplyWithBufferedBlockDispatcher.mock.calls) {
+      expect(dispatch.ctx.InboundHistory).toEqual(inboundHistory);
+      expect(dispatch.ctx.ChannelStructuredContext).toEqual(promptContext);
+    }
   });
 
   it("keeps topic room-event history for a send to another topic", async () => {
-    const { context, groupHistories, historyKey } = createGroupFixture({
+    const { context, inboundHistory, promptContext } = createGroupFixture({
       entries: [{ sender: "Alice", body: "topic 77 context", timestamp: 1 }],
       topicId: 77,
     });
@@ -427,7 +450,10 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     releaseFirst();
     await Promise.all([firstPromise, secondPromise]);
 
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
+    for (const [dispatch] of dispatchReplyWithBufferedBlockDispatcher.mock.calls) {
+      expect(dispatch.ctx.InboundHistory).toEqual(inboundHistory);
+      expect(dispatch.ctx.ChannelStructuredContext).toEqual(promptContext);
+    }
   });
 
   it("does not let room events supersede active user-request dispatch", async () => {

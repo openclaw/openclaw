@@ -21,10 +21,66 @@ type ConversationReadInvocationOrigin = NonNullable<
 >;
 
 export type TelegramMessageMutationContext = {
+  sessionKey?: string | null;
+  sessionId?: string | null;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAccountId?: string | null;
   toolContext?: ChannelThreadingToolContext;
 };
+
+/** Cached history requires exact host-owned conversation authority. */
+export function resolveTelegramCachedHistoryScope(params: {
+  chatId?: string | number;
+  threadId?: number;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  context?: TelegramMessageMutationContext;
+}): { accountId: string; chatId: string; threadId?: number } {
+  const origin = params.context?.conversationReadOrigin;
+  if (
+    origin !== "direct-operator" &&
+    (origin !== "delegated" || !params.context?.sessionKey?.trim())
+  ) {
+    throw new Error(CONVERSATION_BINDING_ERROR);
+  }
+  const chatId = resolveTelegramConversationReadChatId(params);
+  const target = parseTelegramTarget(String(params.chatId ?? chatId));
+  const current = resolveCurrentTelegramConversation(params.context?.toolContext, chatId);
+  const currentTargets = [
+    params.context?.toolContext?.currentChannelId,
+    params.context?.toolContext?.currentMessagingTarget,
+  ];
+  // Direct-message topics must not collapse into forum or topicless reads.
+  if (
+    target.directMessagesTopicId !== undefined ||
+    currentTargets.some(
+      (value) => value && parseTelegramTarget(value).directMessagesTopicId !== undefined,
+    )
+  ) {
+    throw new Error("Telegram cached history does not support direct-message topics.");
+  }
+  const threadId =
+    params.threadId ??
+    target.messageThreadId ??
+    (origin === "delegated" ? current.threadId : undefined);
+  if (
+    !/^-?\d+$/.test(chatId) ||
+    (params.threadId !== undefined &&
+      target.messageThreadId !== undefined &&
+      params.threadId !== target.messageThreadId) ||
+    (origin === "delegated" && threadId !== current.threadId)
+  ) {
+    throw new Error(CONVERSATION_BINDING_ERROR);
+  }
+  const accountId =
+    origin === "delegated"
+      ? resolveMatchingTelegramRequesterAccount(params)
+      : normalizeOptionalAccountId(params.accountId ?? resolveDefaultTelegramAccountId(params.cfg));
+  if (!accountId) {
+    throw new Error(CONVERSATION_BINDING_ERROR);
+  }
+  return { accountId, chatId, ...(threadId !== undefined ? { threadId } : {}) };
+}
 
 const TOPIC_BINDING_ERROR =
   "Delegated Telegram message mutation requires a provider-observed binding to the exact current topic and account.";
@@ -95,7 +151,7 @@ export function resolveTelegramConversationReadChatId(params: {
     params.context?.toolContext?.currentMessagingTarget;
   const requestedTarget = params.chatId ?? currentTarget;
   if (requestedTarget == null || !String(requestedTarget).trim()) {
-    throw new Error("Telegram emoji-list requires a chatId or current Telegram conversation.");
+    throw new Error("Telegram conversation read requires a chatId or current conversation.");
   }
   const target = parseTelegramTarget(String(requestedTarget));
   if (params.context?.conversationReadOrigin === "direct-operator") {

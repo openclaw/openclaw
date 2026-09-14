@@ -135,7 +135,6 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       threadSpec: { id: undefined, scope: "none" },
       historyKey: undefined,
       historyLimit: 0,
-      groupHistories: new Map(),
       route: {
         agentId: "default",
         accountId: "default",

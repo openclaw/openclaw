@@ -21,7 +21,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -60,10 +60,9 @@ import {
 import {
   isTelegramHistoryEntryAfterAmbientWatermark,
   isTelegramChatWindowPromptContext,
-  mergeTelegramGroupHistoryPromptContext,
-  recordTelegramGroupHistoryEntry,
   retainTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
+  telegramGroupHistoryEntries,
 } from "./group-history-window.js";
 import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH, type TelegramReplyChainEntry } from "./message-cache.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
@@ -240,7 +239,6 @@ export async function buildTelegramInboundContextPayload(params: {
   historyKey?: string;
   historyLimit: number;
   dmHistoryLimit: number;
-  groupHistories: Map<string, HistoryEntry[]>;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
@@ -294,7 +292,6 @@ export async function buildTelegramInboundContextPayload(params: {
     historyKey,
     historyLimit,
     dmHistoryLimit,
-    groupHistories,
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
@@ -581,13 +578,7 @@ export async function buildTelegramInboundContextPayload(params: {
   let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
   let groupHistoryPromptEntries: HistoryEntry[] = [];
   if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
-    const bufferedHistoryCount = groupHistories.get(historyKey)?.length ?? 0;
-    const fullGroupHistoryEntries = (
-      createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
-        historyKey,
-        limit: bufferedHistoryCount,
-      }) ?? []
-    )
+    const fullGroupHistoryEntries = telegramGroupHistoryEntries(baseVisiblePromptContext)
       .filter((entry) =>
         isTelegramHistoryEntryAfterAmbientWatermark(entry, ambientTranscriptWatermark),
       )
@@ -603,10 +594,7 @@ export async function buildTelegramInboundContextPayload(params: {
         entries: groupHistoryPromptEntries,
       })
     : baseVisiblePromptContext;
-  const visiblePromptContext = mergeTelegramGroupHistoryPromptContext({
-    promptContext: retainedVisiblePromptContext,
-    entries: groupHistoryPromptEntries,
-  });
+  const visiblePromptContext = retainedVisiblePromptContext;
 
   const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
     groupConfig,
@@ -865,22 +853,6 @@ export async function buildTelegramInboundContextPayload(params: {
       TopicName: isForum && topicName ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
-  if (isGroup && historyKey) {
-    recordTelegramGroupHistoryEntry({
-      historyMap: groupHistories,
-      historyKey,
-      limit: historyLimit,
-      entry: {
-        sender: buildSenderLabel(msg, senderId || chatId),
-        body:
-          rawBody ||
-          (stickerCacheHit ? bodyText : undefined) ||
-          formatMediaPlaceholderText(currentMediaFacts),
-        timestamp: msg.date ? msg.date * 1000 : undefined,
-        messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-      },
-    });
-  }
 
   const pinnedMainDmOwner = !isGroup
     ? sessionRuntime.resolvePinnedMainDmOwnerFromAllowlist({

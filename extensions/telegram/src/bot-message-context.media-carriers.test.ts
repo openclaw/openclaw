@@ -1,6 +1,9 @@
 import type { Message } from "grammy/types";
 import { describe, expect, it, vi } from "vitest";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import {
+  buildTelegramMessageContextForTest,
+  createTelegramCachedContextForTest,
+} from "./bot-message-context.test-harness.js";
 import { describeReplyTarget } from "./bot/helpers.js";
 
 vi.mock("./sticker-vision.runtime.js", () => ({
@@ -177,8 +180,8 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
   });
 
-  it("keeps primary media bodies empty while recording formatted group history", async () => {
-    const groupHistories = new Map();
+  it("keeps primary media bodies empty and native media in cached context", async () => {
+    const cache = await createTelegramCachedContextForTest();
     const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: -1001, type: "supergroup", title: "Ops" },
@@ -186,7 +189,6 @@ describe("buildTelegramMessageContext media carriers", () => {
         photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
       },
       allMedia: [{ kind: "image" }],
-      groupHistories,
       historyLimit: 5,
     });
 
@@ -195,7 +197,21 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.CommandSource).toBeUndefined();
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("<media:image>");
+    expect(context).not.toBeNull();
+    await cache.read(context!.msg);
+    const promptContext = await cache.read({
+      ...context!.msg,
+      message_id: 2,
+      photo: undefined,
+      text: "What was the image?",
+    });
+    expect(promptContext).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          messages: [expect.objectContaining({ message_id: "1", media_type: "image" })],
+        }),
+      }),
+    ]);
   });
 
   it("admits an unavailable native sticker as a type-only fact", async () => {
@@ -222,9 +238,9 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.StickerMediaIncluded).toBeUndefined();
   });
 
-  it("preserves cached sticker descriptions in group history", async () => {
-    const groupHistories = new Map();
-    await buildTelegramMessageContextForTest({
+  it("preserves cached sticker descriptions in the current turn and native kinds in history", async () => {
+    const cache = await createTelegramCachedContextForTest();
+    const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: -1002, type: "supergroup", title: "Stickers" },
         text: undefined,
@@ -246,10 +262,25 @@ describe("buildTelegramMessageContext media carriers", () => {
           stickerMetadata: { cachedDescription: "A waving sticker" },
         },
       ],
-      groupHistories,
       historyLimit: 5,
     });
 
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("[Sticker] A waving sticker");
+    expect(context?.ctxPayload.BodyForAgent).toBe("[Sticker] A waving sticker");
+    expect(context?.ctxPayload.Sticker).toMatchObject({ cachedDescription: "A waving sticker" });
+    expect(context).not.toBeNull();
+    await cache.read(context!.msg);
+    const promptContext = await cache.read({
+      ...context!.msg,
+      message_id: 2,
+      sticker: undefined,
+      text: "What was the sticker?",
+    });
+    expect(promptContext).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          messages: [expect.objectContaining({ message_id: "1", media_type: "sticker" })],
+        }),
+      }),
+    ]);
   });
 });

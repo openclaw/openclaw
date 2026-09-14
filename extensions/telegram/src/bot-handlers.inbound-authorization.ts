@@ -429,8 +429,7 @@ export function createTelegramHandlerAuthorization({
             })
           : await isTelegramDmAccessAllowed({
               dmPolicy,
-              msg: params.msg,
-              chatId: params.chatId,
+              senderId: String(params.msg.from?.id ?? params.chatId),
               effectiveDmAllow,
               accountId,
             });

@@ -1,6 +1,5 @@
 // Telegram plugin module recovers dispatch routing and group-history context.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -13,9 +12,9 @@ import {
 } from "./bot/helpers.js";
 import {
   isTelegramHistoryEntryAfterAmbientWatermark,
-  mergeTelegramGroupHistoryPromptContext,
   retainTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
+  telegramGroupHistoryEntries,
 } from "./group-history-window.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -110,52 +109,9 @@ function buildRecoveredTelegramChatActionSender(params: {
   };
 }
 
-function migrateRecoveredTelegramGroupHistory(params: {
+export async function resolveDispatchTelegramContext(params: {
   context: TelegramMessageContext;
-  recoveredHistoryKey?: string;
-}) {
-  const originalHistoryKey = params.context.historyKey;
-  const recoveredHistoryKey = params.recoveredHistoryKey;
-  if (
-    !params.context.isGroup ||
-    !originalHistoryKey ||
-    !recoveredHistoryKey ||
-    originalHistoryKey === recoveredHistoryKey ||
-    params.context.historyLimit <= 0
-  ) {
-    return;
-  }
-  // Topic recovery mutates the raw in-memory buffer before any prompt is built;
-  // prompt readers apply the ambient transcript watermark after recovery.
-  const originalEntries = params.context.groupHistories.get(originalHistoryKey);
-  if (!originalEntries?.length) {
-    return;
-  }
-  const messageId = params.context.ctxPayload.MessageSid;
-  const rawBody = params.context.ctxPayload.RawBody;
-  const entryIndex = originalEntries.findLastIndex((entry) => {
-    if (messageId && entry.messageId === messageId) {
-      return true;
-    }
-    return !messageId && typeof rawBody === "string" && entry.body === rawBody;
-  });
-  if (entryIndex === -1) {
-    return;
-  }
-  const [entry] = originalEntries.splice(entryIndex, 1);
-  if (!entry) {
-    return;
-  }
-  createChannelHistoryWindow({ historyMap: params.context.groupHistories }).record({
-    historyKey: recoveredHistoryKey,
-    limit: params.context.historyLimit,
-    entry,
-  });
-}
-
-export function resolveDispatchTelegramContext(params: {
-  context: TelegramMessageContext;
-}): TelegramMessageContext {
+}): Promise<TelegramMessageContext> {
   const threadSpec = resolveDispatchTelegramThreadSpec({
     chatId: params.context.chatId,
     ctxPayload: params.context.ctxPayload,
@@ -182,9 +138,11 @@ export function resolveDispatchTelegramContext(params: {
   const recoveredHistoryKey = params.context.isGroup
     ? buildTelegramGroupPeerId(params.context.chatId, threadSpec)
     : params.context.historyKey;
+  // The cache keeps provider-observed topics immutable; recovery reselects, never moves rows.
+  const recoveredCacheContext = (await params.context.readPromptContext?.(threadSpec)) ?? [];
   const recoveredHistoryEntries =
     recoveredHistoryKey && params.context.historyLimit > 0
-      ? (params.context.groupHistories.get(recoveredHistoryKey) ?? [])
+      ? telegramGroupHistoryEntries(recoveredCacheContext)
           .filter((entry) =>
             isTelegramHistoryEntryAfterAmbientWatermark(
               entry,
@@ -219,18 +177,11 @@ export function resolveDispatchTelegramContext(params: {
         : undefined
       : params.context.ctxPayload.InboundHistory;
   const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
-    promptContext: params.context.ctxPayload.ChannelStructuredContext ?? [],
+    promptContext: recoveredCacheContext,
     entries: recoveredPromptHistoryEntries,
   });
   const recoveredPromptContext =
-    recoveredPromptHistoryEntries.length > 0
-      ? mergeTelegramGroupHistoryPromptContext({
-          promptContext: recoveredPromptContextBase ?? [],
-          entries: recoveredPromptHistoryEntries,
-        })
-      : recoveredPromptContextBase?.length
-        ? recoveredPromptContextBase
-        : undefined;
+    recoveredPromptContextBase.length > 0 ? recoveredPromptContextBase : undefined;
   const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
     context: params.context,
     threadId: threadSpec.id,
@@ -241,7 +192,6 @@ export function resolveDispatchTelegramContext(params: {
     threadId: threadSpec.id,
     action: "record_voice",
   });
-  migrateRecoveredTelegramGroupHistory({ context: params.context, recoveredHistoryKey });
   if (threadSpec.id != null) {
     // Keep the admitted payload object intact; replacing it would discard the
     // host-only participant carrier before canonical run admission.

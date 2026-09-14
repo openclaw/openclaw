@@ -126,7 +126,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
   const {
     bot,
     account,
-    groupHistories,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -216,7 +215,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       ownerAgentId: opts.ownerAgentId,
       historyLimit: turnSettings.historyLimit,
       dmHistoryLimit: turnSettings.dmHistoryLimit,
-      groupHistories,
       dmPolicy: turnSettings.dmPolicy,
       allowFrom: turnSettings.allowFrom,
       groupAllowFrom: turnSettings.groupAllowFrom,

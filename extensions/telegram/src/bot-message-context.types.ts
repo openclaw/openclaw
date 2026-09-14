@@ -12,7 +12,6 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
@@ -36,6 +35,10 @@ export type TelegramChannelIngressResolver = (
 
 export type TelegramMessageContextOptions = {
   threadSpec?: TelegramThreadSpec;
+  /** Read after admission, and again if dispatch recovers a more specific topic. */
+  readPromptContext?: (thread: TelegramThreadSpec) => Promise<TelegramPromptContextEntry[]>;
+  /** Mark independently admitted messages in the existing cache, not their embedded replies. */
+  recordHistoryEligible?: () => Promise<void>;
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
@@ -116,7 +119,6 @@ export type BuildTelegramMessageContextParams = {
   ownerAgentId?: string;
   historyLimit: number;
   dmHistoryLimit: number;
-  groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;

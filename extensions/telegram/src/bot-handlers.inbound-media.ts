@@ -401,6 +401,7 @@ export function createTelegramInboundMedia({
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           threadSpec: entry.threadSpec,
+          bufferedMessages: entry.messages.map(({ msg }) => msg),
           ...(finalIngressMessageId != null
             ? { messageIdOverride: String(finalIngressMessageId) }
             : {}),

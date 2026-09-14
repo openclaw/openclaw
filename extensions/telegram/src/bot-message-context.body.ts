@@ -32,7 +32,6 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -43,7 +42,6 @@ import type {
   TelegramMessageContextOptions,
 } from "./bot-message-context.types.js";
 import {
-  buildSenderLabel,
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
@@ -64,7 +62,6 @@ import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
-import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
@@ -162,8 +159,6 @@ export async function resolveTelegramInboundBody(params: {
   providerMentionPatterns?: BuildMentionRegexesOptions["providerPolicy"];
   requireMention?: boolean;
   options?: TelegramMessageContextOptions;
-  groupHistories: Map<string, HistoryEntry[]>;
-  historyLimit: number;
   logger: TelegramLogger;
 }): Promise<TelegramInboundBodyResult | null> {
   const {
@@ -189,8 +184,6 @@ export async function resolveTelegramInboundBody(params: {
     providerMentionPatterns,
     requireMention,
     options,
-    groupHistories,
-    historyLimit,
     logger,
   } = params;
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
@@ -407,17 +400,7 @@ export async function resolveTelegramInboundBody(params: {
   });
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-    recordTelegramGroupHistoryEntry({
-      historyMap: groupHistories,
-      historyKey,
-      limit: historyLimit,
-      entry: {
-        sender: buildSenderLabel(msg, senderId || chatId),
-        body: historyBody,
-        timestamp: msg.date ? msg.date * 1000 : undefined,
-        messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-      },
-    });
+    await options?.recordHistoryEligible?.();
     if (sessionKey && resolveTelegramGroupIngestEnabled({ cfg, chatId, accountId, topicConfig })) {
       fireAndForgetHook(
         triggerInternalHook(

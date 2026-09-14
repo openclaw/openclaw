@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
+  createPromptContextFixture,
   createStatusReactionController,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
@@ -13,8 +14,11 @@ import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness
 describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
   it("does not send visible error fallbacks for room events", async () => {
     const historyKey = "telegram:group:-100123";
-    const groupHistories = new Map([
-      [historyKey, [{ sender: "Alice", body: "quiet failure", timestamp: 1 }]],
+    const inboundHistory = [
+      { sender: "Alice", body: "quiet failure", timestamp: 1, messageId: "100" },
+    ];
+    const promptContext = createPromptContextFixture([
+      { sender: "Alice", body: "quiet failure", timestamp_ms: 1, message_id: "100" },
     ]);
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("provider down"));
 
@@ -22,6 +26,8 @@ describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
       context: createContext({
         ctxPayload: {
           InboundEventKind: "room_event",
+          InboundHistory: structuredClone(inboundHistory),
+          ChannelStructuredContext: structuredClone(promptContext),
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: "101",
@@ -37,14 +43,17 @@ describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
         isGroup: true,
         historyKey,
         historyLimit: 10,
-        groupHistories,
         threadSpec: { id: undefined, scope: "none" },
       }),
       streamMode: "partial",
     });
 
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(groupHistories.get(historyKey)).toHaveLength(1);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    const dispatched = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]![0].ctx;
+    expect(dispatched.InboundHistory).toEqual(inboundHistory);
+    expect(dispatched.ChannelStructuredContext).toEqual(promptContext);
+    expect(dispatched.BodyForAgent).toBe("ambient failure");
   });
 
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {

@@ -1,9 +1,10 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
   describeTelegramDispatch,
   createBot,
   createContext,
+  createPromptContextFixture,
   createDraftStream,
   createTelegramDraftStream,
   deliverInboundReplyWithMessageSendContext,
@@ -20,7 +21,7 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
-  it("keeps the host-bound payload object while recovering forum routing", () => {
+  it("keeps the host-bound payload object while recovering forum routing", async () => {
     const ctxPayload = {
       From: "telegram:group:-1003774691294:topic:1",
       MessageThreadId: 1,
@@ -34,7 +35,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
       threadSpec: { id: 1, scope: "forum" },
     });
 
-    const recovered = resolveDispatchTelegramContext({ context });
+    const recovered = await resolveDispatchTelegramContext({ context });
 
     expect(recovered.ctxPayload).toBe(ctxPayload);
     expect(recovered.ctxPayload).toMatchObject({
@@ -44,19 +45,13 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
     });
   });
 
-  it("moves recovered room-event history out of the original topic", async () => {
+  it("reselects recovered room-event history without changing native topic observations", async () => {
     const oldHistoryKey = "-1003774691294:topic:1";
-    const recoveredHistoryKey = "-1003774691294:topic:3731";
-    const groupHistories = new Map([
-      [
-        oldHistoryKey,
-        [
-          { sender: "Alice", body: "general topic context", timestamp: 1 },
-          { sender: "Cara", body: "ambient leak", timestamp: 2, messageId: "27787" },
-        ],
-      ],
-      [recoveredHistoryKey, [{ sender: "Bob", body: "recovered topic context", timestamp: 3 }]],
+    const recoveredContext = createPromptContextFixture([
+      { sender: "Bob", body: "recovered topic context", timestamp_ms: 3, message_id: "27786" },
     ]);
+    const originalContext = structuredClone(recoveredContext);
+    const readPromptContext = vi.fn(async () => recoveredContext);
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
@@ -84,47 +79,47 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
         threadSpec: { id: 1, scope: "forum" },
         historyKey: oldHistoryKey,
         historyLimit: 10,
-        groupHistories,
+        readPromptContext,
       }),
       replyToMode: "off",
       streamMode: "off",
     });
 
-    expect(groupHistories.get(oldHistoryKey)).toEqual([
-      expect.objectContaining({ body: "general topic context" }),
-    ]);
-    expect(groupHistories.get(recoveredHistoryKey)).toEqual([
-      expect.objectContaining({ body: "recovered topic context" }),
-      expect.objectContaining({ body: "ambient leak", messageId: "27787" }),
-    ]);
+    expect(readPromptContext).toHaveBeenCalledExactlyOnceWith({ id: 3731, scope: "forum" });
+    expect(recoveredContext).toEqual(originalContext);
+    const dispatchParams = mockCallArg(
+      dispatchReplyWithBufferedBlockDispatcher,
+    ) as DispatchReplyWithBufferedBlockDispatcherArgs;
+    expect(dispatchParams.ctx).toMatchObject({
+      RawBody: "ambient leak",
+      MessageSid: "27787",
+      InboundHistory: [
+        { sender: "Bob", body: "recovered topic context", timestamp: 3, messageId: "27786" },
+      ],
+    });
+    expect(JSON.stringify(dispatchParams.ctx.ChannelStructuredContext)).not.toContain(
+      "ambient leak",
+    );
   });
 
   it("omits transcript-owned ambient rows from recovered room-event prompt text", async () => {
     const oldHistoryKey = "-1003774691294:topic:1";
-    const recoveredHistoryKey = "-1003774691294:topic:3731";
-    const groupHistories = new Map([
-      [
-        oldHistoryKey,
-        [{ sender: "Cara", body: "ambient current", timestamp: 3, messageId: "27787" }],
-      ],
-      [
-        recoveredHistoryKey,
-        [
-          {
-            sender: "Alice",
-            body: "persisted recovered ambient one",
-            timestamp: 1,
-            messageId: "199",
-          },
-          {
-            sender: "Bob",
-            body: "persisted recovered ambient two",
-            timestamp: 2,
-            messageId: "200",
-          },
-        ],
-      ],
+    const recoveredContext = createPromptContextFixture([
+      {
+        sender: "Alice",
+        body: "persisted recovered ambient one",
+        timestamp_ms: 1,
+        message_id: "199",
+      },
+      {
+        sender: "Bob",
+        body: "persisted recovered ambient two",
+        timestamp_ms: 2,
+        message_id: "200",
+      },
     ]);
+    const originalContext = structuredClone(recoveredContext);
+    const readPromptContext = vi.fn(async () => recoveredContext);
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
@@ -156,7 +151,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
         threadSpec: { id: 1, scope: "forum" },
         historyKey: oldHistoryKey,
         historyLimit: 10,
-        groupHistories,
+        readPromptContext,
       }),
       replyToMode: "off",
       streamMode: "off",
@@ -171,31 +166,22 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
       MessageSid: "27787",
       SenderName: "Cara",
     });
+    expect(readPromptContext).toHaveBeenCalledExactlyOnceWith({ id: 3731, scope: "forum" });
+    expect(recoveredContext).toEqual(originalContext);
     expect(dispatchParams.ctx.InboundHistory).toBeUndefined();
     expect(dispatchParams.ctx.ChannelStructuredContext).toBeUndefined();
   });
 
-  it("moves recovered user-request history out of the original topic", async () => {
+  it("reselects user-request history after the self watermark without changing current text", async () => {
     const oldHistoryKey = "-1003774691294:topic:1";
-    const recoveredHistoryKey = "-1003774691294:topic:3731";
     const currentBody = "quote [Current message - respond to this] literally";
-    const groupHistories = new Map([
-      [
-        oldHistoryKey,
-        [
-          { sender: "Alice", body: "general topic context", timestamp: 1 },
-          { sender: "Cara", body: currentBody, timestamp: 4, messageId: "27789" },
-        ],
-      ],
-      [
-        recoveredHistoryKey,
-        [
-          { sender: "Bob", body: "before self marker", timestamp: 2 },
-          { sender: "OpenClaw (you)", body: "self marker", timestamp: 3 },
-          { sender: "Dana", body: "after watermark", timestamp: 4 },
-        ],
-      ],
+    const recoveredContext = createPromptContextFixture([
+      { sender: "Bob", body: "before self marker", timestamp_ms: 2, message_id: "27784" },
+      { sender: "OpenClaw (you)", body: "self marker", timestamp_ms: 3, message_id: "27785" },
+      { sender: "Dana", body: "after watermark", timestamp_ms: 4, message_id: "27786" },
     ]);
+    const originalContext = structuredClone(recoveredContext);
+    const readPromptContext = vi.fn(async () => recoveredContext);
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
       delivery: {
@@ -235,27 +221,20 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
         threadSpec: { id: 1, scope: "forum" },
         historyKey: oldHistoryKey,
         historyLimit: 10,
-        groupHistories,
+        readPromptContext,
       }),
       replyToMode: "off",
       streamMode: "off",
     });
 
-    expect(groupHistories.get(oldHistoryKey)).toEqual([
-      expect.objectContaining({ body: "general topic context" }),
-    ]);
-    expect(groupHistories.get(recoveredHistoryKey)).toEqual([
-      expect.objectContaining({ body: "before self marker" }),
-      expect.objectContaining({ body: "self marker" }),
-      expect.objectContaining({ body: "after watermark" }),
-      expect.objectContaining({ body: currentBody, messageId: "27789" }),
-    ]);
+    expect(readPromptContext).toHaveBeenCalledExactlyOnceWith({ id: 3731, scope: "forum" });
+    expect(recoveredContext).toEqual(originalContext);
     const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
       threadId: 3731,
     });
     const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
     expect(outboundCtxPayload.InboundHistory).toEqual([
-      expect.objectContaining({ body: "after watermark" }),
+      expect.objectContaining({ body: "after watermark", messageId: "27786" }),
     ]);
     expect(outboundCtxPayload).toMatchObject({
       Body: currentBody,

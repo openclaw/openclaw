@@ -1,8 +1,13 @@
 // Telegram plugin module implements bot message context harness behavior.
 import { createHash } from "node:crypto";
+import type { Message } from "grammy/types";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
+import { resolveTelegramMessageThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
@@ -33,7 +38,6 @@ type BuildTelegramMessageContextForTestParams = {
   dmPolicy?: BuildTelegramMessageContextParams["dmPolicy"];
   historyLimit?: number;
   dmHistoryLimit?: number;
-  groupHistories?: Map<string, import("openclaw/plugin-sdk/reply-history").HistoryEntry[]>;
   ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
   botApi?: Record<string, unknown>;
   sendChatActionHandler?: BuildTelegramMessageContextParams["sendChatActionHandler"];
@@ -150,7 +154,6 @@ export async function buildTelegramMessageContextForTest(
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: params.historyLimit ?? 0,
     dmHistoryLimit: params.dmHistoryLimit ?? 10,
-    groupHistories: params.groupHistories ?? new Map(),
     dmPolicy: params.dmPolicy ?? "open",
     allowFrom: ["*"],
     groupAllowFrom: [],
@@ -166,6 +169,67 @@ export async function buildTelegramMessageContextForTest(
       })),
     sendChatActionHandler: params.sendChatActionHandler ?? ({ sendChatAction: vi.fn() } as never),
   });
+}
+
+/** Exercise the same cache reader as ingress without a second history owner. */
+export async function createTelegramCachedContextForTest(cfg: OpenClawConfig = {}) {
+  const { expect } = await loadVitestModule();
+  setTelegramPluginStateRuntimeForTests();
+  const telegramCfg = cfg.channels?.telegram ?? { groupPolicy: "open" as const, historyLimit: 10 };
+  const runtimeCfg = { ...cfg, channels: { ...cfg.channels, telegram: telegramCfg } };
+  const runtime = createTelegramMessageContextRuntime({
+    cfg: runtimeCfg,
+    accountId: "default",
+    ownerAgentId: "main",
+    opts: {
+      token: "test-token",
+      botInfo: {
+        id: 7,
+        is_bot: true,
+        username: "bot",
+        first_name: "Bot",
+        can_join_groups: true,
+        can_read_all_group_messages: true,
+        can_manage_bots: false,
+        supports_inline_queries: false,
+        supports_join_request_queries: false,
+        can_connect_to_business: false,
+        has_main_web_app: false,
+        has_topics_enabled: false,
+        allows_users_to_create_topics: false,
+      },
+    },
+    telegramCfg,
+    telegramDeps: {
+      resolveStorePath: () => resolveSessionStorePathForTest(expect.getState().currentTestName),
+    } as never,
+  });
+  return {
+    ...runtime,
+    async read(message: Message | Record<string, unknown>, threadSpec?: TelegramThreadSpec) {
+      const msg = {
+        date: 1_700_000_000,
+        from: { id: 42, is_bot: false, first_name: "Alice" },
+        ...Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined)),
+      } as Message;
+      const observedThread = threadSpec ?? resolveTelegramMessageThreadSpec(msg);
+      await runtime.recordMessageForReplyChain(msg, observedThread);
+      await runtime.markHistoryEligible({
+        accountId: "default",
+        chatId: msg.chat.id,
+        messageIds: [String(msg.message_id)],
+        botUserId: 7,
+      });
+      return await runtime.buildPromptContextForMessage(
+        { me: { id: 7, is_bot: true, username: "bot", first_name: "Bot" } } as never,
+        msg,
+        await runtime.buildReplyChainForMessage(msg),
+        runtimeCfg,
+        telegramCfg,
+        { threadSpec: observedThread },
+      );
+    },
+  };
 }
 
 let buildTelegramMessageContextLoader:

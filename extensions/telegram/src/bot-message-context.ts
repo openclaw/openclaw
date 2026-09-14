@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot message context behavior.
 import type { ReactionTypeEmoji } from "grammy/types";
 import {
   resolveAckReaction,
@@ -107,7 +106,9 @@ export type TelegramMessageContext = {
   isForum: boolean;
   historyKey?: string;
   historyLimit: BuildTelegramMessageContextParams["historyLimit"];
-  groupHistories: BuildTelegramMessageContextParams["groupHistories"];
+  readPromptContext?: NonNullable<
+    BuildTelegramMessageContextParams["options"]
+  >["readPromptContext"];
   route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
   skillFilter: TelegramMessageContextPayload["skillFilter"];
   sendTyping: () => Promise<void>;
@@ -134,7 +135,6 @@ export const buildTelegramMessageContext = async ({
   ownerAgentId,
   historyLimit,
   dmHistoryLimit,
-  groupHistories,
   dmPolicy,
   allowFrom,
   groupAllowFrom,
@@ -484,8 +484,6 @@ export const buildTelegramMessageContext = async ({
     providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
     requireMention: Boolean(requireMention),
     options,
-    groupHistories,
-    historyLimit,
     logger,
   });
   if (!bodyResult) {
@@ -505,6 +503,11 @@ export const buildTelegramMessageContext = async ({
     });
   }
 
+  await options?.recordHistoryEligible?.();
+  const selectedPromptContext = options?.readPromptContext
+    ? await options.readPromptContext(threadSpec)
+    : promptContext;
+
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     cfg,
     primaryCtx,
@@ -512,7 +515,7 @@ export const buildTelegramMessageContext = async ({
     allMedia,
     replyMedia,
     replyChain,
-    promptContext,
+    promptContext: selectedPromptContext,
     isGroup,
     isForum,
     chatId,
@@ -527,7 +530,6 @@ export const buildTelegramMessageContext = async ({
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     dmHistoryLimit,
-    groupHistories,
     groupConfig,
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
@@ -678,7 +680,7 @@ export const buildTelegramMessageContext = async ({
     isForum,
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
-    groupHistories,
+    readPromptContext: options?.readPromptContext,
     route,
     skillFilter,
     sendTyping,

@@ -13,17 +13,13 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "./format.js";
-import {
-  recordTelegramGroupHistoryEntry,
-  selectTelegramGroupHistoryAfterLastSelf,
-} from "./group-history-window.js";
+import { selectTelegramGroupHistoryAfterLastSelf } from "./group-history-window.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
 } from "./message-cache.js";
-import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
 import {
   beginTelegramPollRegistration,
   getPreparedTelegramPollAnswer,
@@ -5993,48 +5989,27 @@ describe("editMessageTelegram", () => {
     const storePath = `/tmp/openclaw-telegram-edit-history-${process.pid}-${Date.now()}.json`;
     const cfg = { session: { store: storePath } };
     const chat = { id: -100123, type: "supergroup" as const, title: "Ops" };
-    const historyKey = `${chat.id}:topic:77`;
-    const groupHistory = new Map<
-      string,
-      Array<{ sender: string; body: string; messageId: string; timestamp: number }>
-    >();
-    recordTelegramGroupHistoryEntry({
-      historyMap: groupHistory,
-      historyKey,
-      limit: 50,
-      entry: {
-        sender: "OpenClaw (you)",
-        body: "original response",
-        messageId: "902",
-        timestamp: 1_779_394_740_000,
-      },
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
     });
-    recordTelegramGroupHistoryEntry({
-      historyMap: groupHistory,
-      historyKey,
-      limit: 50,
-      entry: {
-        sender: "Teammate",
-        body: "context that must remain visible",
-        messageId: "903",
-        timestamp: 1_779_394_741_000,
-      },
-    });
-    const unregister = registerTelegramOutboundGroupHistoryRecorder({
-      accountId: "default",
-      recorder: (record) =>
-        recordTelegramGroupHistoryEntry({
-          historyMap: groupHistory,
-          historyKey,
-          limit: 50,
-          entry: {
-            sender: "OpenClaw (you)",
-            body: record.text ?? "<media>",
-            messageId: String(record.messageId),
-            timestamp: record.timestamp ?? 0,
-          },
-        }),
-    });
+    for (const [id, body, sender] of [
+      [902, "original response", "OpenClaw (you)"],
+      [903, "context that must remain visible", "Teammate"],
+    ] as const) {
+      await cache.record({
+        accountId: "default",
+        chatId: chat.id,
+        threadId: 77,
+        msg: {
+          chat,
+          message_id: id,
+          date: 1_779_394_740 + id - 902,
+          text: body,
+          from: { id: id === 902 ? 42 : 43, first_name: sender, is_bot: id === 902 },
+          message_thread_id: 77,
+        },
+      });
+    }
     botApi.editMessageText.mockResolvedValue({
       chat,
       message_id: 902,
@@ -6044,16 +6019,23 @@ describe("editMessageTelegram", () => {
       text: "authoritative edited response",
     });
 
-    try {
-      await editMessageTelegram(chat.id, 902, "authoritative edited response", {
-        token: "42:test-token",
-        cfg,
-      });
-    } finally {
-      unregister();
-    }
-
-    const entries = groupHistory.get(historyKey) ?? [];
+    await editMessageTelegram(chat.id, 902, "authoritative edited response", {
+      token: "42:test-token",
+      cfg,
+    });
+    const entries = (
+      await cache.recentBefore({
+        accountId: "default",
+        chatId: chat.id,
+        threadId: 77,
+        messageId: "904",
+        limit: 50,
+      })
+    ).map((node) => ({
+      sender: node.sender ?? "unknown",
+      body: node.body ?? "",
+      messageId: node.messageId,
+    }));
     expect(entries.map((entry) => entry.messageId)).toEqual(["902", "903"]);
     expect(selectTelegramGroupHistoryAfterLastSelf(entries)).toEqual([
       expect.objectContaining({

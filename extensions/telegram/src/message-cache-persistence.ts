@@ -36,6 +36,8 @@ export type TelegramResolvedMedia = {
 export type PersistedTelegramMessageCacheValue = {
   version: typeof TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION;
   sourceMessage: Message;
+  /** Set only by the admitted-history or successful outbound owner, never embedded replies. */
+  historyEligible?: true;
   botUserId?: number;
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
   resolvedMedia?: TelegramResolvedMedia;

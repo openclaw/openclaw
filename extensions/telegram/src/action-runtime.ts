@@ -39,6 +39,7 @@ import {
   type TelegramButtonBuildOptions,
   type TelegramDroppedControl,
 } from "./button-types.js";
+import { readTelegramCachedHistory } from "./cached-history-read.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -104,6 +105,7 @@ const TELEGRAM_ACTION_ALIASES = {
   "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
+  read: "read",
   searchSticker: "searchSticker",
   send: "sendMessage",
   sendMessage: "sendMessage",
@@ -116,9 +118,6 @@ const TELEGRAM_ACTION_ALIASES = {
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
-type ConversationReadInvocationOrigin = NonNullable<
-  ChannelMessageActionContext["conversationReadOrigin"]
->;
 type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
 
 function readTelegramForumTopicIconColor(
@@ -427,21 +426,17 @@ async function describeTelegramAllowedReactionSample(params: {
 export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
-  options?: {
+  options?: TelegramMessageMutationContext & {
     mediaAccess?: ChannelMessageActionContext["mediaAccess"];
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
-    sessionKey?: string | null;
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
     deliveryRetryOwner?: ChannelMessageActionContext["deliveryRetryOwner"];
     onPlatformSendDispatch?: ChannelMessageActionContext["onPlatformSendDispatch"];
     assertDirectAdapterHandoff?: ChannelMessageActionContext["assertDirectAdapterHandoff"];
     skipQueue?: boolean;
-    conversationReadOrigin?: ConversationReadInvocationOrigin;
-    requesterAccountId?: string | null;
     reply?: ChannelMessageActionContext["reply"];
-    toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
   rejectTelegramNativeButtonParams(params);
@@ -461,6 +456,12 @@ export async function handleTelegramAction(
       inboundEventKind: options?.inboundEventKind,
     });
   };
+
+  if (action === "read") {
+    return jsonResult(
+      await readTelegramCachedHistory({ params, cfg, accountId, context: options }),
+    );
+  }
 
   if (action === "emoji-list") {
     if (!isActionEnabled("reactions")) {

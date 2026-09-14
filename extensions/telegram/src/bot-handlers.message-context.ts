@@ -23,9 +23,11 @@ import {
   buildSenderName,
   getTelegramTextParts,
   resolveTelegramPrimaryMedia,
+  resolveTelegramMessageThreadSpec,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { selectAllowedTelegramCachedContext } from "./cached-history-access.js";
 import {
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
@@ -38,6 +40,7 @@ import {
 } from "./group-history-window.js";
 import {
   resolveTelegramMessageCacheScope,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   type TelegramResolvedMedia,
 } from "./message-cache-persistence.js";
 import {
@@ -392,6 +395,7 @@ export function createTelegramMessageContextRuntime({
   ): TelegramReplyChainEntry => {
     const {
       sourceMessage: _sourceMessage,
+      historyEligible: _historyEligible,
       resolvedMedia: _resolvedMedia,
       promptContextProjectionMarker: _promptContextProjectionMarker,
       threadBinding: _threadBinding,
@@ -452,8 +456,32 @@ export function createTelegramMessageContextRuntime({
       senderId: msg.from?.id,
     });
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
-    const currentNode = await messageCache.get({ accountId, chatId: msg.chat.id, messageId });
-    const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+    const threadSpec = options?.threadSpec ?? resolveTelegramMessageThreadSpec(msg);
+    const threadId = threadSpec.id;
+    const allowedGroupIds =
+      isGroup && groupHistoryLimit > 0
+        ? await selectAllowedTelegramCachedContext({
+            cfg: runtimeCfg,
+            telegramCfg: runtimeTelegramCfg,
+            accountId,
+            chatId: msg.chat.id,
+            threadSpec,
+            botId: ctx.me?.id ?? opts.botInfo?.id,
+            botUsername: ctx.me?.username ?? opts.botInfo?.username,
+            groupAllowFrom:
+              opts.groupAllowFrom ??
+              runtimeTelegramCfg.groupAllowFrom ??
+              runtimeTelegramCfg.allowFrom ??
+              opts.allowFrom,
+            nodes: await messageCache.recentBefore({
+              accountId,
+              chatId: msg.chat.id,
+              messageId: String(Number(messageId) + 1),
+              threadId,
+              limit: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+            }),
+          })
+        : undefined;
     const conversationContext =
       isGroup && groupHistoryLimit <= 0
         ? []
@@ -469,17 +497,24 @@ export function createTelegramMessageContextRuntime({
             ...(options?.promptContextMinTimestampMs !== undefined
               ? { minTimestampMs: options.promptContextMinTimestampMs }
               : {}),
-            ...(isGroup && options?.promptContextAmbientWatermark !== undefined
+            ...(isGroup
+              ? {
+                  boundaryNodeMatches: (node: TelegramCachedMessageNode) =>
+                    allowedGroupIds?.has(node.messageId) === true,
+                }
+              : {}),
+            ...(isGroup
               ? {
                   includeNode: (
                     node: TelegramCachedMessageNode,
                     flags?: { replyTarget?: boolean },
                   ) =>
                     flags?.replyTarget === true ||
-                    isTelegramHistoryEntryAfterAmbientWatermark(
-                      node,
-                      options.promptContextAmbientWatermark,
-                    ),
+                    (allowedGroupIds?.has(node.messageId) === true &&
+                      isTelegramHistoryEntryAfterAmbientWatermark(
+                        node,
+                        options?.promptContextAmbientWatermark,
+                      )),
                 }
               : {}),
           });
@@ -501,11 +536,31 @@ export function createTelegramMessageContextRuntime({
         chatId: msg.chat.id,
         messageId: selectedMessageId,
       });
-      if (node?.messageId) {
+      // Explicitly selected album members are current-turn media, not a future
+      // ambient window. Authorize that host-selected member separately.
+      const selectedGroupIds =
+        isGroup && node && groupHistoryLimit > 0
+          ? await selectAllowedTelegramCachedContext({
+              cfg: runtimeCfg,
+              telegramCfg: runtimeTelegramCfg,
+              accountId,
+              chatId: msg.chat.id,
+              threadSpec,
+              botId: ctx.me?.id ?? opts.botInfo?.id,
+              botUsername: ctx.me?.username ?? opts.botInfo?.username,
+              groupAllowFrom:
+                opts.groupAllowFrom ??
+                runtimeTelegramCfg.groupAllowFrom ??
+                runtimeTelegramCfg.allowFrom ??
+                opts.allowFrom,
+              nodes: [node],
+            })
+          : undefined;
+      if (node?.messageId && (!isGroup || selectedGroupIds?.has(node.messageId))) {
         conversationContextById.set(node.messageId, { node });
       }
     }
-    const cacheEntries = Array.from(conversationContextById.values()).map((entry) => ({
+    let cacheEntries = Array.from(conversationContextById.values()).map((entry) => ({
       node: entry.node,
       message: toPromptContextMessage(
         entry.node,
@@ -514,6 +569,27 @@ export function createTelegramMessageContextRuntime({
         entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
       ),
     }));
+    if (isGroup) {
+      // UTF-8 bytes conservatively bound tokens even for dense/CJK text. The current
+      // request never enters this optional background slice. Keep whole entries so
+      // transcript projection dedupe never claims text that was truncated away.
+      let remainingBytes = 16 * 1024 - 2; // Reserve the JSON array brackets.
+      cacheEntries = cacheEntries
+        .toSorted((a, b) => Number(b.node.messageId) - Number(a.node.messageId))
+        .slice(0, groupHistoryLimit)
+        .filter(({ message }) => {
+          const bytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
+          if (bytes > remainingBytes) {
+            // Keep a contiguous recent suffix: skipping an oversized self reply
+            // must not resurrect older messages across the last-self watermark.
+            remainingBytes = 0;
+            return false;
+          }
+          remainingBytes -= bytes;
+          return true;
+        })
+        .toReversed();
+    }
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );
@@ -546,6 +622,7 @@ export function createTelegramMessageContextRuntime({
 
   return {
     recordMessageForReplyChain,
+    markHistoryEligible: messageCache.markHistoryEligible,
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,

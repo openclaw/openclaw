@@ -699,7 +699,6 @@ function createDirectDispatchContext(cfg: OpenClawConfig): TelegramDispatchParam
     threadSpec: { scope: "none" },
     isForum: false,
     historyLimit: 0,
-    groupHistories: new Map(),
     skillFilter: undefined,
     route: {
       accountId: "default",
@@ -1327,7 +1326,9 @@ describe("createTelegramBot", () => {
   });
 
   it("dedupes outbound prompt-context sends with ambient group history", async () => {
+    setTelegramPluginStateRuntimeForTests();
     const cfg = {
+      session: { store: telegramBotDepsForTest.resolveStorePath(undefined, { agentId: "main" }) },
       messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
       channels: {
         telegram: {
@@ -3303,12 +3304,13 @@ describe("createTelegramBot", () => {
       },
     ]);
     // Media-less unmentioned messages must reach the canonical mention gate so
-    // the rolling group history window records them (not just the reply cache).
+    // cache history admission records them, rather than promoting raw observations.
     expect(payload.InboundHistory).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           body: "Please run the maintenance step later.",
-          sender: "Requester id:111",
+          sender: "Requester",
+          messageId: "501",
         }),
       ]),
     );

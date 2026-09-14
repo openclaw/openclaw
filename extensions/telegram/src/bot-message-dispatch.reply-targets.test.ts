@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
@@ -21,10 +21,7 @@ import {
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
-import {
-  recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual,
-  registerTelegramOutboundGroupHistoryRecorder,
-} from "./outbound-message-context.js";
+import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
 
 describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
   it("does not build native quote candidates when reply mode is off", async () => {
@@ -445,11 +442,6 @@ describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
       text: "Final answer",
       timestamp: transcriptTimestamp,
     });
-    const groupHistoryRecorder = vi.fn();
-    const unregisterGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
-      accountId: "default",
-      recorder: groupHistoryRecorder,
-    });
     recordOutboundMessageForPromptContext.mockImplementation(
       recordOutboundMessageForPromptContextActual,
     );
@@ -468,16 +460,11 @@ describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
       return { queuedFinal: true };
     });
 
-    try {
-      await dispatchWithContext({ context, streamMode: "off" });
-    } finally {
-      unregisterGroupHistoryRecorder();
-    }
+    await dispatchWithContext({ context, streamMode: "off" });
 
     expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledTimes(1);
     expect(recordOutboundMessageForPromptContext).toHaveBeenCalledTimes(1);
-    expect(groupHistoryRecorder).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext, 0), {
       messageId: 2001,
       text: "Final answer",

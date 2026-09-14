@@ -259,7 +259,6 @@ export async function editMessageTelegram(
           chatId,
           message: editedMessage,
           messageId: editedMessage.message_id,
-          recordGroupHistory: false,
           successfulSendThread,
           ...(botUserId !== undefined ? { botUserId } : {}),
           ...(editedMessage.message_thread_id !== undefined

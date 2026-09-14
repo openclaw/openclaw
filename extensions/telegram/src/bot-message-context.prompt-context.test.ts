@@ -290,7 +290,7 @@ describe("buildTelegramMessageContext prompt context", () => {
     );
   });
 
-  it("preserves richer chat-window fields when merging duplicate group history", async () => {
+  it("preserves richer cache chat-window fields in the group history projection", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       message: {
         message_id: 11,
@@ -301,19 +301,6 @@ describe("buildTelegramMessageContext prompt context", () => {
         message_thread_id: 99,
       },
       historyLimit: 10,
-      groupHistories: new Map([
-        [
-          "-1001234567890:topic:99",
-          [
-            {
-              messageId: "10",
-              sender: "Pat",
-              timestamp: 1_700_000_000_000,
-              body: "Earlier with media",
-            },
-          ],
-        ],
-      ]),
       promptContext: [
         {
           label: "Conversation context",
@@ -356,7 +343,6 @@ describe("buildTelegramMessageContext prompt context", () => {
   });
 
   it("keeps an explicit reply target while omitting cached context before the latest bot reply", async () => {
-    const historyKey = "-1001234567890";
     const previousUserMessage = {
       messageId: "10",
       sender: "Pat",
@@ -378,7 +364,6 @@ describe("buildTelegramMessageContext prompt context", () => {
         entities: [{ type: "mention", offset: 0, length: 4 }],
       },
       historyLimit: 10,
-      groupHistories: new Map([[historyKey, [previousUserMessage, previousBotReply]]]),
       promptContext: [
         {
           label: "Conversation context",
@@ -439,31 +424,37 @@ describe("buildTelegramMessageContext prompt context", () => {
         entities: [{ type: "mention", offset: 0, length: 4 }],
       },
       historyLimit: 10,
-      groupHistories: new Map([
-        [
-          "-1001234567890",
-          [
-            {
-              messageId: "10",
-              sender: "Sam",
-              timestamp: 1_700_000_000_000,
-              body: "persisted ambient one",
-            },
-            {
-              messageId: "11",
-              sender: "Lee",
-              timestamp: 1_700_000_001_000,
-              body: "persisted ambient two",
-            },
-            {
-              messageId: "12",
-              sender: "Mira",
-              timestamp: 1_700_000_002_000,
-              body: "unpersisted gap",
-            },
-          ],
-        ],
-      ]),
+      promptContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "10",
+                sender: "Sam",
+                timestamp_ms: 1_700_000_000_000,
+                body: "persisted ambient one",
+              },
+              {
+                message_id: "11",
+                sender: "Lee",
+                timestamp_ms: 1_700_000_001_000,
+                body: "persisted ambient two",
+              },
+              {
+                message_id: "12",
+                sender: "Mira",
+                timestamp_ms: 1_700_000_002_000,
+                body: "unpersisted gap",
+              },
+            ],
+          },
+        },
+      ],
       sessionRuntime: {
         readAmbientTranscriptWatermark: ({ key }) =>
           key === '["telegram","default","-1001234567890",""]'
@@ -505,25 +496,31 @@ describe("buildTelegramMessageContext prompt context", () => {
         entities: [{ type: "mention", offset: 0, length: 4 }],
       },
       historyLimit: 1,
-      groupHistories: new Map([
-        [
-          "-1001234567890",
-          [
-            {
-              messageId: "12",
-              sender: "Mira",
-              timestamp: 1_700_000_002_000,
-              body: "unpersisted gap",
-            },
-            {
-              messageId: "11",
-              sender: "Lee",
-              timestamp: 1_700_000_001_000,
-              body: "late persisted ambient",
-            },
-          ],
-        ],
-      ]),
+      promptContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "12",
+                sender: "Mira",
+                timestamp_ms: 1_700_000_002_000,
+                body: "unpersisted gap",
+              },
+              {
+                message_id: "11",
+                sender: "Lee",
+                timestamp_ms: 1_700_000_001_000,
+                body: "late persisted ambient",
+              },
+            ],
+          },
+        },
+      ],
       sessionRuntime: {
         readAmbientTranscriptWatermark: () => ({
           sessionId: "session-current",
@@ -553,25 +550,31 @@ describe("buildTelegramMessageContext prompt context", () => {
         channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
       },
       historyLimit: 10,
-      groupHistories: new Map([
-        [
-          "-1001234567890",
-          [
-            {
-              messageId: "10",
-              sender: "Sam",
-              timestamp: 1_700_000_000_000,
-              body: "persisted ambient one",
-            },
-            {
-              messageId: "11",
-              sender: "Lee",
-              timestamp: 1_700_000_001_000,
-              body: "persisted ambient two",
-            },
-          ],
-        ],
-      ]),
+      promptContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "10",
+                sender: "Sam",
+                timestamp_ms: 1_700_000_000_000,
+                body: "persisted ambient one",
+              },
+              {
+                message_id: "11",
+                sender: "Lee",
+                timestamp_ms: 1_700_000_001_000,
+                body: "persisted ambient two",
+              },
+            ],
+          },
+        },
+      ],
       sessionRuntime: {
         readAmbientTranscriptWatermark: ({ key }) =>
           key === '["telegram","default","-1001234567890",""]'
@@ -642,31 +645,37 @@ describe("buildTelegramMessageContext prompt context", () => {
         entities: [{ type: "mention", offset: 0, length: 4 }],
       },
       historyLimit: 10,
-      groupHistories: new Map([
-        [
-          "-1001234567890",
-          [
-            {
-              messageId: "10",
-              sender: "Sam",
-              timestamp: 1_700_000_000_000,
-              body: "persisted ambient one",
-            },
-            {
-              messageId: "11",
-              sender: "Lee",
-              timestamp: 1_700_000_001_000,
-              body: "persisted ambient two",
-            },
-            {
-              messageId: "12",
-              sender: "Mira",
-              timestamp: 1_700_000_002_000,
-              body: "unpersisted gap",
-            },
-          ],
-        ],
-      ]),
+      promptContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "10",
+                sender: "Sam",
+                timestamp_ms: 1_700_000_000_000,
+                body: "persisted ambient one",
+              },
+              {
+                message_id: "11",
+                sender: "Lee",
+                timestamp_ms: 1_700_000_001_000,
+                body: "persisted ambient two",
+              },
+              {
+                message_id: "12",
+                sender: "Mira",
+                timestamp_ms: 1_700_000_002_000,
+                body: "unpersisted gap",
+              },
+            ],
+          },
+        },
+      ],
       sessionRuntime: {
         readAmbientTranscriptWatermark,
         resolveAmbientTranscriptWatermarkKey,

@@ -1,9 +1,9 @@
 // Telegram tests cover bot message context.require mention plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
-const { buildTelegramMessageContextForTest } =
+const { buildTelegramMessageContextForTest, createTelegramCachedContextForTest } =
   await import("./bot-message-context.test-harness.js");
-const { buildTelegramSelfSenderName } = await import("./group-history-window.js");
+import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 
 describe("buildTelegramMessageContext requireMention precedence", () => {
   function buildForumMessage(threadId = 99) {
@@ -104,7 +104,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
   });
 
   it("keeps room events as context with default group history mode", async () => {
-    const groupHistories = new Map();
+    const cache = await createTelegramCachedContextForTest();
     const cfg = {
       messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
     };
@@ -112,7 +112,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       cfg,
       message: { ...buildForumMessage(99), text: "side chatter" },
       historyLimit: 10,
-      groupHistories,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -121,8 +120,16 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
+    const promptContext = await cache.read({ ...buildForumMessage(99), text: "side chatter" });
+    expect(promptContext).toEqual([]);
+    const nextPromptContext = await cache.read({
+      ...buildForumMessage(99),
+      message_id: 2,
+      text: "next turn",
+    });
     const ctx = await buildTelegramMessageContextForTest({
       cfg,
+      promptContext: nextPromptContext,
       message: {
         ...buildForumMessage(99),
         message_id: 2,
@@ -135,7 +142,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
         },
       },
       historyLimit: 10,
-      groupHistories,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -153,7 +159,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
   });
 
   it("passes prior silent room events to the next default ambient turn", async () => {
-    const groupHistories = new Map();
+    const cache = await createTelegramCachedContextForTest();
     const cfg = {
       messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
     };
@@ -161,7 +167,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       cfg,
       message: { ...buildForumMessage(99), text: "Tell Sam deploy moved" },
       historyLimit: 10,
-      groupHistories,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -170,11 +175,21 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
+    const promptContext = await cache.read({
+      ...buildForumMessage(99),
+      text: "Tell Sam deploy moved",
+    });
+    expect(promptContext).toEqual([]);
+    const nextPromptContext = await cache.read({
+      ...buildForumMessage(99),
+      message_id: 2,
+      text: "next turn",
+    });
     const ctx = await buildTelegramMessageContextForTest({
       cfg,
+      promptContext: nextPromptContext,
       message: { ...buildForumMessage(99), message_id: 2, text: "What changed?" },
       historyLimit: 10,
-      groupHistories,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -190,7 +205,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
   });
 
   it("passes user requests to later default ambient turns", async () => {
-    const groupHistories = new Map();
+    const cache = await createTelegramCachedContextForTest();
     const cfg = {
       messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
     };
@@ -202,7 +217,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
         entities: [{ type: "mention", offset: 0, length: 4 }],
       },
       historyLimit: 10,
-      groupHistories,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -211,11 +225,21 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
+    const promptContext = await cache.read({
+      ...buildForumMessage(99),
+      text: "@bot note the deploy moved",
+    });
+    expect(promptContext).toEqual([]);
+    const nextPromptContext = await cache.read({
+      ...buildForumMessage(99),
+      message_id: 2,
+      text: "next turn",
+    });
     const ctx = await buildTelegramMessageContextForTest({
       cfg,
+      promptContext: nextPromptContext,
       message: { ...buildForumMessage(99), message_id: 2, text: "What now?" },
       historyLimit: 10,
-      groupHistories,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -231,22 +255,26 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
   });
 
   it("uses outbound self entries as the non-destructive user-request watermark", async () => {
-    const historyKey = "-1001234567890:topic:99";
-    const groupHistories = new Map([
-      [
-        historyKey,
-        [
-          { sender: "Alice", body: "before self marker", timestamp: 1, messageId: "1" },
-          {
-            sender: buildTelegramSelfSenderName("OpenClaw"),
-            body: "self marker body",
-            timestamp: 2,
-            messageId: "2",
-          },
-          { sender: "Riley", body: "after watermark", timestamp: 3, messageId: "3" },
-        ],
-      ],
-    ]);
+    const promptContext: TelegramPromptContextEntry[] = [
+      {
+        label: "Conversation context",
+        source: "telegram",
+        type: "chat_window",
+        payload: {
+          messages: [
+            { sender: "Alice", body: "before self marker", timestamp_ms: 1, message_id: "1" },
+            {
+              sender: "OpenClaw (you)",
+              body: "self marker body",
+              timestamp_ms: 2,
+              message_id: "2",
+            },
+            { sender: "Riley", body: "after watermark", timestamp_ms: 3, message_id: "3" },
+          ],
+        },
+      },
+    ];
+    const originalContext = structuredClone(promptContext);
     const cfg = {
       messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
     };
@@ -260,7 +288,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
         entities: [{ type: "mention", offset: 0, length: 4 }],
       },
       historyLimit: 10,
-      groupHistories,
+      promptContext,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -289,7 +317,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       cfg,
       message: { ...buildForumMessage(99), message_id: 5, text: "ambient after watermark" },
       historyLimit: 10,
-      groupHistories,
+      promptContext,
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -298,6 +326,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
+    expect(promptContext).toEqual(originalContext);
     expect(roomEvent?.ctxPayload.InboundEventKind).toBe("room_event");
     expect(JSON.stringify(roomEvent?.ctxPayload.ChannelStructuredContext)).toContain(
       "before self marker",

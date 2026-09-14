@@ -1,4 +1,3 @@
-// Telegram plugin module implements dm access behavior.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
@@ -41,14 +40,14 @@ function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSe
 async function decideTelegramDmAccess(params: {
   accountId: string;
   dmPolicy: DmPolicy;
-  sender: TelegramSenderIdentity;
+  senderId: string;
   effectiveDmAllow: NormalizedAllowFrom;
 }) {
   const result = await createTelegramIngressResolver({ accountId: params.accountId }).message({
-    subject: createTelegramIngressSubject(params.sender.candidateId),
+    subject: createTelegramIngressSubject(params.senderId),
     conversation: {
       kind: "direct",
-      id: params.sender.candidateId,
+      id: params.senderId,
     },
     dmPolicy: params.dmPolicy,
     groupPolicy: "disabled",
@@ -59,19 +58,17 @@ async function decideTelegramDmAccess(params: {
 
 export async function isTelegramDmAccessAllowed(params: {
   dmPolicy: DmPolicy;
-  msg: Message;
-  chatId: number;
+  senderId: string;
   effectiveDmAllow: NormalizedAllowFrom;
   accountId: string;
 }): Promise<boolean> {
   if (params.dmPolicy === "disabled") {
     return false;
   }
-  const sender = resolveTelegramSenderIdentity(params.msg, params.chatId);
   const access = await decideTelegramDmAccess({
     accountId: params.accountId,
     dmPolicy: params.dmPolicy,
-    sender,
+    senderId: params.senderId,
     effectiveDmAllow: params.effectiveDmAllow,
   });
   return access.decision === "allow";
@@ -110,7 +107,7 @@ export async function enforceTelegramDmAccess(params: {
   const access = await decideTelegramDmAccess({
     accountId,
     dmPolicy,
-    sender,
+    senderId: sender.candidateId,
     effectiveDmAllow,
   });
   if (access.decision === "allow") {

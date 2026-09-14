@@ -44,6 +44,7 @@ const TELEGRAM_MESSAGE_ACTION_MAP = {
   "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
+  read: "read",
   send: "sendMessage",
   sticker: "sendSticker",
   "sticker-search": "searchSticker",
@@ -151,6 +152,7 @@ function describeTelegramMessageTool({
     };
   }
   const actions = new Set<ChannelMessageActionName>();
+  actions.add("read");
   if (discovery.isEnabled("sendMessage")) {
     actions.add("send");
   }
@@ -207,7 +209,7 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
-  providerOwnedReadGates: ["react", "edit", "delete", "emoji-list"],
+  providerOwnedReadGates: ["read", "react", "edit", "delete", "emoji-list"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },
@@ -243,6 +245,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     mediaLocalRoots,
     mediaReadFile,
     sessionKey,
+    sessionId,
     inboundEventKind,
     toolContext,
     conversationReadOrigin,
@@ -261,6 +264,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       conversationReadOrigin: _modelConversationReadOrigin,
       mediaAccess: _modelMediaAccess,
       requesterAccountId: _modelRequesterAccountId,
+      sessionKey: _modelSessionKey,
+      sessionId: _modelSessionId,
       reply: _modelReply,
       toolContext: _modelToolContext,
       ...runtimeParams
@@ -284,6 +289,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         mediaLocalRoots,
         mediaReadFile,
         sessionKey,
+        sessionId,
         inboundEventKind,
         gatewayClientScopes,
         deliveryRetryOwner,

@@ -101,20 +101,13 @@ function createTelegramInboundHandlers(
   };
 
   const normalizeChannelPostMessage = (post: Message): Message => {
-    const chatId = post.chat.id;
-    const syntheticFrom = post.sender_chat
-      ? {
-          id: post.sender_chat.id,
-          is_bot: true as const,
-          first_name: post.sender_chat.title || "Channel",
-          username: post.sender_chat.username,
-        }
-      : {
-          id: chatId,
-          is_bot: true as const,
-          first_name: post.chat.title || "Channel",
-          username: post.chat.username,
-        };
+    const sender = post.sender_chat ?? post.chat;
+    const syntheticFrom = {
+      id: sender.id,
+      is_bot: true as const,
+      first_name: sender.title || "Channel",
+      ...(sender.username ? { username: sender.username } : {}),
+    };
     return {
       ...post,
       from: post.from ?? syntheticFrom,
