@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
+import {
+  bindInProcessSubagentResume,
+  readInProcessSubagentResume,
+} from "../../gateway/in-process-subagent-resume.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -43,6 +47,34 @@ describe("trusted in-process Gateway session creation", () => {
     mocks.dispatch.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
     mocks.callGateway.mockReset().mockResolvedValue({ status: "ok" });
     mocks.callGatewayTool.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
+  });
+
+  it("keeps task resume authority inside trusted in-process admission and refuses transport fallback", async () => {
+    const subagentResume = {
+      caller: { agentId: "main", sessionKey: "agent:main:main", assertCurrent: vi.fn() },
+      childSessionKey: "agent:main:dashboard:child",
+      childSessionId: "child-session",
+      previousRunId: "paused-run",
+      taskRunId: "original-task",
+      generation: 1,
+      createdAt: 100,
+    };
+    const request = bindInProcessSubagentResume(
+      {
+        method: "agent",
+        params: { message: "Continue", sessionKey: subagentResume.childSessionKey },
+      },
+      subagentResume,
+    );
+    await callAgentToolGatewayRequest(request);
+    expect(mocks.dispatch).toHaveBeenCalledWith("agent", request.params, expect.anything());
+    expect(readInProcessSubagentResume(mocks.dispatch.mock.calls[0]?.[2])).toBe(subagentResume);
+    expect(request.params).not.toHaveProperty("subagentResume");
+    mocks.hasContext = false;
+    await expect(callAgentToolGatewayRequest(request)).rejects.toThrow(
+      "trusted in-process Gateway dispatch",
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("surfaces creation provenance only on in-process dispatch", async () => {
