@@ -281,7 +281,14 @@ describe("dispatchSmsInboundEvent", () => {
       expect.objectContaining({
         url: msg.media[0]?.url,
         maxBytes: 5 * 1024 * 1024,
-        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+        ssrfPolicy: {
+          hostnameAllowlist: [
+            "api.twilio.com",
+            "mms.twiliocdn.com",
+            "media.twiliocdn.com",
+            "s3-external-1.amazonaws.com",
+          ],
+        },
         timeoutMs: 60_000,
         retry: {
           attempts: 2,
