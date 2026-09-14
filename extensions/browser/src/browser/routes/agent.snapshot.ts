@@ -368,6 +368,7 @@ export function registerBrowserAgentSnapshotRoutes(
             : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
           const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
+          const externalHeadless = await profileRuntime?.externalBrowserMode?.headless;
           capture = {
             buffer: await captureScreenshot({
               wsUrl: tab.wsUrl ?? "",
@@ -376,9 +377,8 @@ export function registerBrowserAgentSnapshotRoutes(
               format: type,
               quality: type === "jpeg" ? 85 : undefined,
               timeoutMs,
-              headless:
-                profileRuntime?.running?.headless ??
-                (await profileRuntime?.externalBrowserMode?.headless),
+              headless: profileRuntime?.running?.headless ?? externalHeadless,
+              signal,
             }),
           };
         }

@@ -31,6 +31,7 @@ import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./n
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
 export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
 export { snapshotRoleViaCdp } from "./cdp-role-snapshot.js";
+export { captureScreenshot } from "./cdp.screenshot.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
 /** Read committed document identities from a page-level CDP target. */
@@ -43,50 +44,6 @@ export async function getDocumentIdentitiesViaCdp(opts: {
     commandTimeoutMs: opts.timeoutMs ?? 5000,
     ...(opts.lookup ? { lookup: opts.lookup } : {}),
   });
-}
-
-/** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
-export async function captureScreenshot(opts: {
-  wsUrl: string;
-  lookup?: typeof dnsLookupCb;
-  fullPage?: boolean;
-  format?: "png" | "jpeg";
-  quality?: number; // jpeg only (0..100)
-  timeoutMs?: number;
-  /** Effective launch mode recorded on the owned Chrome process, when known. */
-  headless?: boolean;
-}): Promise<Buffer> {
-  return await withCdpSocket(
-    opts.wsUrl,
-    async (send) => {
-      await send("Page.enable");
-
-      // Headless background tabs need activation to produce a frame. Preserve
-      // focus only when the browser process is authoritatively known headed.
-      if (opts.headless !== false) {
-        await send("Page.bringToFront").catch(() => {});
-      }
-
-      const format = opts.format ?? "png";
-      const quality =
-        format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
-
-      // This path has no Playwright viewport owner. Chromium captures the whole
-      // document without changing its layout; emulated pages use their owner session.
-      const result = (await send("Page.captureScreenshot", {
-        format,
-        ...(quality !== undefined ? { quality } : {}),
-        ...(opts.fullPage ? { captureBeyondViewport: true } : {}),
-      })) as { data?: string };
-
-      const base64 = result?.data;
-      if (!base64) {
-        throw new Error("Screenshot failed: missing data");
-      }
-      return Buffer.from(base64, "base64");
-    },
-    { commandTimeoutMs: opts.timeoutMs, lookup: opts.lookup },
-  );
 }
 
 /** Create a new browser target after applying navigation and CDP SSRF policy. */
