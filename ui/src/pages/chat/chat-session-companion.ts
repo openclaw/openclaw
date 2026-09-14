@@ -12,6 +12,7 @@ const COMPANION_ASK_TIMEOUT_MS = 70_000;
 
 export type ChatSessionCompanionThread = {
   exchanges: SessionCompanionExchange[];
+  previousFailures?: ChatSessionCompanionFailure[];
   loading: boolean;
   pendingQuestion: string | null;
   failedQuestion: string | null;
@@ -27,8 +28,34 @@ export type ChatSessionCompanionThread = {
   draft: string;
 };
 
+type ChatSessionCompanionFailure = {
+  question: string;
+  hint: NonNullable<ChatSessionCompanionThread["hint"]>;
+  /** The answered exchange preceding this failure, not a client-clock timestamp. */
+  afterExchangeKey: string | null;
+};
+
+/** Merge local failed questions with the Gateway-owned answered exchanges. */
+export function sessionCompanionDisplayTurns(
+  thread: ChatSessionCompanionThread,
+): Array<SessionCompanionExchange | ChatSessionCompanionFailure> {
+  const failures = thread.previousFailures ?? [];
+  const exchangeKeys = new Set(thread.exchanges.map(exchangeKey));
+  const turns: Array<SessionCompanionExchange | ChatSessionCompanionFailure> = failures.filter(
+    (failure) => !failure.afterExchangeKey || !exchangeKeys.has(failure.afterExchangeKey),
+  );
+  for (const exchange of thread.exchanges) {
+    turns.push(
+      exchange,
+      ...failures.filter((failure) => failure.afterExchangeKey === exchangeKey(exchange)),
+    );
+  }
+  return turns;
+}
+
 type MutableCompanionThread = ChatSessionCompanionThread & {
   failedQuestionKnownExchanges: ReadonlySet<string> | null;
+  questionAfterExchangeKey: string | null;
   revision: number;
 };
 
@@ -61,6 +88,7 @@ function createThread(): MutableCompanionThread {
     pendingQuestion: null,
     failedQuestion: null,
     failedQuestionKnownExchanges: null,
+    questionAfterExchangeKey: null,
     hint: null,
     retryable: false,
     draft: "",
@@ -120,6 +148,8 @@ export class ChatSessionCompanionThreads {
         answer,
         ts,
       }));
+      // Earlier failures record past request outcomes. The RPC has no attempt ID,
+      // so only the current failed question participates in answer recovery.
       if (
         thread.failedQuestion &&
         thread.exchanges.some(
@@ -130,6 +160,7 @@ export class ChatSessionCompanionThreads {
       ) {
         thread.failedQuestion = null;
         thread.failedQuestionKnownExchanges = null;
+        thread.questionAfterExchangeKey = null;
         thread.hint = null;
         thread.retryable = false;
       }
@@ -163,6 +194,19 @@ export class ChatSessionCompanionThreads {
     if (thread.pendingQuestion) {
       return;
     }
+    const retrying = thread.failedQuestion === normalized;
+    // Retry updates the same question in place. A different follow-up must not
+    // erase the unanswered question merely because it never became an exchange.
+    if (thread.failedQuestion && thread.hint && thread.failedQuestion !== normalized) {
+      thread.previousFailures = [
+        ...(thread.previousFailures ?? []),
+        {
+          question: thread.failedQuestion,
+          hint: thread.hint,
+          afterExchangeKey: thread.questionAfterExchangeKey,
+        },
+      ].slice(-MAX_COMPANION_EXCHANGES);
+    }
     thread.pendingQuestion = normalized;
     thread.failedQuestion = null;
     thread.failedQuestionKnownExchanges = null;
@@ -172,6 +216,9 @@ export class ChatSessionCompanionThreads {
     thread.revision += 1;
     const token = Symbol(key);
     const knownExchanges = new Set(thread.exchanges.map(exchangeKey));
+    if (!retrying) {
+      thread.questionAfterExchangeKey = [...knownExchanges].at(-1) ?? null;
+    }
     this.submissionTokens.set(key, token);
     this.notify();
     try {
@@ -184,6 +231,7 @@ export class ChatSessionCompanionThreads {
         { question: normalized, answer: result.answer, ts: result.ts },
       ].slice(-MAX_COMPANION_EXCHANGES);
       thread.failedQuestionKnownExchanges = null;
+      thread.questionAfterExchangeKey = null;
     } catch (error) {
       if (this.submissionTokens.get(key) !== token) {
         return;

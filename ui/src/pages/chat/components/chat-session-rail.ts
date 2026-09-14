@@ -21,7 +21,10 @@ import {
   loadChatObserverDisplayPreference,
   storeChatObserverDisplayPreference,
 } from "../chat-observer-display.ts";
-import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
+import {
+  sessionCompanionDisplayTurns,
+  type ChatSessionCompanionThread,
+} from "../chat-session-companion.ts";
 import { renderMessageMarkdown } from "./chat-message-text.ts";
 import { createSessionRailComposer } from "./chat-session-rail-composer.ts";
 
@@ -191,6 +194,7 @@ const SESSION_RAIL_STARTER_KEYS = ["changed", "stopped", "remaining"] as const;
 function companionHasActivity(thread: ChatSessionCompanionThread): boolean {
   return (
     thread.exchanges.length > 0 ||
+    (thread.previousFailures?.length ?? 0) > 0 ||
     thread.pendingQuestion !== null ||
     thread.failedQuestion !== null ||
     thread.draft.length > 0
@@ -512,7 +516,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   private renderThread() {
-    const scrollKey = `${this.companion.exchanges.length}:${this.companion.pendingQuestion ?? ""}:${this.companion.failedQuestion ?? ""}`;
+    const turns = sessionCompanionDisplayTurns(this.companion);
+    const scrollKey = `${turns.length}:${this.companion.pendingQuestion ?? ""}:${this.companion.failedQuestion ?? ""}`;
     const syncScroll = (element: Element | undefined) => {
       if (!(element instanceof HTMLElement) || element.dataset.railScrollKey === scrollKey) {
         return;
@@ -529,13 +534,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         ${ref(syncScroll)}
       >
         ${
-          this.companion.loading && this.companion.exchanges.length === 0
+          this.companion.loading && turns.length === 0
             ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
             : nothing
         }
         ${
           !this.companion.loading &&
-          this.companion.exchanges.length === 0 &&
+          turns.length === 0 &&
           !this.companion.pendingQuestion &&
           !(this.companion.failedQuestion && this.companion.hint)
             ? renderPanelEmptyState({
@@ -545,8 +550,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               })
             : nothing
         }
-        ${this.companion.exchanges.map((exchange) =>
-          this.renderExchange(exchange.question, exchange.answer, exchange.ts),
+        ${turns.map((turn) =>
+          "hint" in turn
+            ? html`<article class="chat-session-rail__exchange chat-session-rail__exchange--error">
+                ${this.renderQuestion(turn.question)}
+                <div class="chat-session-rail__hint">${t(companionHintKey(turn.hint))}</div>
+              </article>`
+            : this.renderExchange(turn.question, turn.answer, turn.ts),
         )}
         ${
           this.companion.failedQuestion && this.companion.hint
