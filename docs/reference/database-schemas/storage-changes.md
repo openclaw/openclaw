@@ -217,6 +217,21 @@ no-op commits do not reopen a disposed handle. Native deletion and archive
 preparation still run outside the writer; the subsequent commit rechecks its
 native owner's authority after any awaited admission.
 
+Foreground history preparation resolves durable stores and reads cold-archive
+metadata on the existing history read worker. It captures registry facts and a
+single database request lifetime before asynchronous discovery, then narrows that
+same lifetime to the resolved physical owner. Retirement during discovery revokes
+the request. A registry write during unresolved discovery also rejects that read,
+even when the changed registration belongs to another store; ordinary transcript
+appends do not change this registry generation. Each queued restoration rereads metadata after earlier cold operations
+settle; payload verification and restoration retain their existing mutation worker.
+Page requests carry that physical target and captured registry facts into their
+operation-scoped registry reads, so a persistent worker cannot select a different
+store from an old registry memo. Initial probes share work only within one captured
+registry generation; page snapshots stop sharing when dispatched.
+Incognito preparation still uses its process-held database. Reclamation authorization
+and cold-maintenance selection retain their existing native owners.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while any required first full integrity and foreign-key checks run on the same

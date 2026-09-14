@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionColdReadPreparation,
+  SessionColdReadTarget,
+} from "./session-cold-storage-preparation.js";
 import {
   assertSessionTranscriptHot,
   SessionTranscriptColdError,
@@ -35,22 +39,22 @@ export function readHotSessionTranscriptSnapshot<T>(
 /** A peer can archive after restoration settles but before the read completes. */
 export async function readRestoredSessionTranscript<T>(
   scope: SessionTranscriptReadScope,
-  read: () => T | Promise<T>,
-  options?: { readOnly?: boolean },
+  read: (resolved?: SessionColdReadTarget) => T | Promise<T>,
+  options?: { readOnly?: boolean; prepareColdRead?: SessionColdReadPreparation },
 ): Promise<T> {
   // Read workers report cold storage to their host; only the host restores it.
   if (options?.readOnly) {
     return read();
   }
   const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript(scope);
+  const resolved = await restoreSessionColdTranscript(scope, options?.prepareColdRead);
   try {
-    return await read();
+    return await read(resolved);
   } catch (error) {
     if (!(error instanceof SessionTranscriptColdError) || error.sessionId !== scope.sessionId) {
       throw error;
     }
-    await restoreSessionColdTranscript(scope);
-    return await read();
+    const restored = await restoreSessionColdTranscript(scope, options?.prepareColdRead);
+    return await read(restored);
   }
 }

@@ -6,6 +6,7 @@ import {
   isSameOpenClawAgentDatabasePath,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
+import type { OpenClawAgentDatabaseResourceSelection } from "../../state/openclaw-agent-db-resources.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
   isIncognitoOpenClawAgentSqlitePath,
@@ -245,6 +246,35 @@ export function resolveUnsuffixedSqliteTargetFromSessionStorePath(
     agentId: normalizeAgentId(path.basename(agentDir)),
     path: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
   };
+}
+
+/** Capture every lexical target before ownership discovery can await a Worker. */
+export function captureSqliteStoreResourceSelection(
+  storePath: string,
+  options: Pick<ResolveSqliteStoreTargetOptions, "agentId" | "defaultAgentId" | "env"> = {},
+): OpenClawAgentDatabaseResourceSelection {
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const requestedAgentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
+  if (
+    target.agentId ||
+    (requestedAgentId &&
+      isIncognitoOpenClawAgentSqlitePath(target.path, {
+        agentId: requestedAgentId,
+        env: options.env,
+      }))
+  ) {
+    return { agentId: target.agentId ?? requestedAgentId, paths: [target.path] };
+  }
+  if (path.resolve(storePath).endsWith(".sqlite")) {
+    // An exact shared store's physical owner is unknown until its registry and file are read.
+    return { paths: [target.path] };
+  }
+  const agentId = normalizeAgentId(options.agentId ?? options.defaultAgentId ?? "main");
+  const numberedPath = path.join(
+    path.dirname(target.path),
+    `${path.basename(target.path, ".sqlite")}.${agentId}.sqlite`,
+  );
+  return { agentId, paths: [target.path, numberedPath], numberedPath };
 }
 
 /** Resolves the SQLite database target that owns a legacy session store path. */

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -32,10 +33,35 @@ type AgentDatabaseRegistryMemo = {
 };
 // A plugin may first open a hot-created agent; its registration must invalidate
 // native discovery even when subsequent callers reuse the shared connection.
-const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
-  Symbol.for("openclaw.agentDatabaseRegistryMemo"),
-  () => ({}),
-);
+const registry = resolveGlobalSingleton<{
+  memo?: AgentDatabaseRegistryMemo;
+  operation: AsyncLocalStorage<{
+    snapshot: OpenClawAgentDatabaseRegistrySnapshot;
+    active: boolean;
+  }>;
+}>(Symbol.for("openclaw.agentDatabaseRegistryMemo"), () => ({
+  operation: new AsyncLocalStorage(),
+}));
+
+export type OpenClawAgentDatabaseRegistrySnapshot = {
+  pathname: string;
+  entries: readonly OpenClawRegisteredAgentDatabase[];
+};
+/** Keep captured registry facts scoped to one Worker operation, including nested async readers. */
+export async function withOpenClawAgentDatabaseRegistrySnapshot<T>(
+  snapshot: OpenClawAgentDatabaseRegistrySnapshot | undefined,
+  read: () => Promise<T>,
+): Promise<T> {
+  if (!snapshot) {
+    return read();
+  }
+  const scope = { snapshot, active: true };
+  try {
+    return await registry.operation.run(scope, read);
+  } finally {
+    scope.active = false;
+  }
+}
 
 function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -188,10 +214,52 @@ export async function inspectOpenClawRegisteredAgentDatabases(
   return readRegisteredAgentDatabases(options, true);
 }
 
+/** Capture the existing memo before Worker admission; stale results cannot republish it. */
+export function captureOpenClawAgentDatabaseRegistry(options: AgentDatabaseRegistryListOptions) {
+  const memo = activateRegisteredAgentDatabasesMemo(options);
+  return {
+    generation: memo.token,
+    pathname: memo.pathname,
+    entries: memo.entries ? cloneRegisteredAgentDatabases(memo.entries) : undefined,
+    assertCurrent: () => {
+      if (registry.memo !== memo) {
+        throw new Error(
+          "Agent database registry changed during history preparation; retry the read",
+        );
+      }
+    },
+    publish: (entries: readonly OpenClawRegisteredAgentDatabase[]) => {
+      if (registry.memo === memo && memo.entries === undefined) {
+        memo.entries = cloneRegisteredAgentDatabases(entries);
+      }
+    },
+  };
+}
+
+/** Fresh operation facts for a Worker; never adopt the Worker's process-local registry memo. */
+export function readOpenClawAgentDatabaseRegistrySnapshot(options: OpenClawStateDatabaseOptions) {
+  return readRegisteredAgentDatabases(
+    { ...options, includeIncompatibleSchemaVersions: true },
+    false,
+  );
+}
+
 /** List agent databases recorded in the shared OpenClaw state registry. */
 export function listOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
+  const operation = registry.operation.getStore();
+  const snapshot = operation?.active ? operation.snapshot : undefined;
+  if (
+    snapshot &&
+    ((options.path === undefined && options.env === undefined) ||
+      resolveAgentDatabaseRegistryPath(options) === snapshot.pathname)
+  ) {
+    const entries = cloneRegisteredAgentDatabases(snapshot.entries);
+    return options.includeIncompatibleSchemaVersions
+      ? entries
+      : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+  }
   const memo = activateRegisteredAgentDatabasesMemo(options);
   if (memo.entries) {
     const entries = cloneRegisteredAgentDatabases(memo.entries);
@@ -201,10 +269,7 @@ export function listOpenClawRegisteredAgentDatabases(
   }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
   // query share one process-held state handle instead of opening two connections.
-  const entries = readRegisteredAgentDatabases(
-    { ...options, includeIncompatibleSchemaVersions: true },
-    false,
-  );
+  const entries = readOpenClawAgentDatabaseRegistrySnapshot(options);
   memo.entries = entries;
   const cloned = cloneRegisteredAgentDatabases(entries);
   return options.includeIncompatibleSchemaVersions

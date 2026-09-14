@@ -9,6 +9,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { registerOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -47,6 +48,7 @@ import {
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import * as transcriptWorkers from "./session-transcript-worker-runtime.js";
 
 const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
@@ -60,11 +62,21 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-async function createFixture() {
+async function createFixture(store: "canonical" | "exact" | "custom" = "canonical") {
   const root = tempDirs.make("openclaw-cold-roundtrip-");
-  const storePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const storePath =
+    store === "canonical"
+      ? path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite")
+      : path.join(root, "custom.sqlite");
   databasePaths.push(storePath);
-  return createSessionColdStorageFixture(storePath);
+  const fixture = await createSessionColdStorageFixture(storePath);
+  return {
+    ...fixture,
+    readScope: {
+      ...fixture.scope,
+      storePath: store === "custom" ? path.join(root, "custom.json") : storePath,
+    },
+  };
 }
 
 async function archiveFixture(fixture: Awaited<ReturnType<typeof createFixture>>) {
@@ -154,6 +166,66 @@ async function embedFixtureArchive(fixture: Awaited<ReturnType<typeof createFixt
 }
 
 describe("cold transcript storage workers", () => {
+  it.each(["canonical", "exact", "custom"] as const)(
+    "does not create missing storage during $0 history preparation",
+    async (store) => {
+      const root = tempDirs.make("openclaw-cold-missing-");
+      const storePath =
+        store === "canonical"
+          ? path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite")
+          : path.join(root, store === "custom" ? "custom.json" : "shared.sqlite");
+      await restoreSessionColdTranscript({
+        agentId: "main",
+        sessionId: "missing",
+        storePath,
+        env: { OPENCLAW_STATE_DIR: root },
+      });
+      expect(await fs.readdir(root, { recursive: true })).toEqual([]);
+    },
+  );
+
+  it.each(["database retirement", "registry changes"] as const)(
+    "keeps %s authoritative while history preparation is pending",
+    async (change) => {
+      const fixture = await createFixture(change === "registry changes" ? "exact" : "canonical");
+      const entered = createDeferred();
+      const release = createDeferred();
+      const original = transcriptWorkers.runSessionColdPreparationWorkerRequest;
+      vi.spyOn(transcriptWorkers, "runSessionColdPreparationWorkerRequest").mockImplementation(
+        async (input) => {
+          const result = await original(input);
+          entered.resolve();
+          await release.promise;
+          return result;
+        },
+      );
+      const restoration = restoreSessionColdTranscript(fixture.scope);
+      const result = restoration.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await entered.promise;
+        if (change === "database retirement") {
+          closeOpenClawAgentDatabaseByPath(fixture.options.path, fixture.options.agentId);
+        } else {
+          registerOpenClawAgentDatabase({
+            agentId: "unrelated",
+            path: path.join(path.dirname(fixture.options.path), "unrelated.sqlite"),
+          });
+        }
+      } finally {
+        release.resolve();
+      }
+      expect(await result).toMatchObject({
+        message:
+          change === "database retirement"
+            ? "SQLite mutation Worker request was revoked"
+            : "Agent database registry changed during history preparation; retry the read",
+      });
+    },
+  );
+
   it("bounds aggregate archive bytes per pass and continues with the remaining large transcript", async () => {
     const root = tempDirs.make("openclaw-cold-byte-budget-");
     const storePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -638,10 +710,15 @@ describe("cold transcript storage workers", () => {
     }
   });
 
-  it.each(["file", "sqlite"] as const)(
-    "restores exact history and projections from %s after reopening",
-    async (storage) => {
-      const fixture = await createFixture();
+  it.each([
+    { storage: "file", store: "canonical" },
+    { storage: "sqlite", store: "canonical" },
+    { storage: "file", store: "exact" },
+    { storage: "file", store: "custom" },
+  ] as const)(
+    "restores exact history and projections from $storage after reopening ($store store)",
+    async ({ storage, store }) => {
+      const fixture = await createFixture(store);
       const { archivePath, bytes } = await archiveFixture(fixture);
       if (storage === "sqlite") {
         runOpenClawAgentWriteTransaction(({ db: database }) => {
@@ -656,12 +733,12 @@ describe("cold transcript storage workers", () => {
         await fs.unlink(archivePath);
       }
       closeOpenClawAgentDatabasesForTest();
-      await restoreSessionColdTranscript(fixture.scope);
+      await restoreSessionColdTranscript(fixture.readScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
       expect(fixture.database().prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
       expect(fixture.database().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      await restoreSessionColdTranscript(fixture.scope);
+      await restoreSessionColdTranscript(fixture.readScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
     },
   );

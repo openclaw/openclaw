@@ -12,85 +12,93 @@ import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { readSessionHistorySnapshotAsync } from "./session-history-state.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
-it("reads a sparse page in the transcript worker and shares equivalent queued requests", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "worker-sparse-history",
-      sessionKey: "agent:main:worker-sparse-history",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
-    const entry = { sessionId: target.sessionId, updatedAt: 1 };
-    await replaceSessionEntry(target, entry);
-    const ids = Array.from({ length: 252 }, (_, index) => `row-${index}`);
-    await replaceTranscriptEvents(target, [
-      { type: "session", version: 3, id: target.sessionId },
-      ...ids.map((id, index) => ({
-        type: "message",
-        id,
-        parentId: ids[index - 1] ?? null,
-        message:
-          index === 0
-            ? { role: "user", content: "Question before silent activity" }
-            : {
-                role: "assistant",
-                content: index === ids.length - 1 ? "Visible final answer" : "NO_REPLY",
-              },
-      })),
-    ]);
-    await waitForSessionTranscriptProjection(target);
-    const params = {
-      entry,
-      provider: undefined,
-      sessionId: target.sessionId,
-      storePath: target.storePath,
-      sessionAgentId: target.agentId,
-      canonicalKey: target.sessionKey,
-      max: 2,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 8000,
-      offset: undefined,
-      messageId: undefined,
-    };
-    const diagnostics = channel("openclaw.worker.task");
-    const tasks: unknown[] = [];
-    const record = (value: unknown) => {
-      if (
-        typeof value === "object" &&
-        value !== null &&
-        "worker" in value &&
-        typeof value.worker === "string" &&
-        value.worker.startsWith("session-transcript.worker")
-      ) {
-        tasks.push(value);
+it.each(["canonical", "custom", "exact"] as const)(
+  "reads a sparse page in the transcript worker and shares equivalent queued requests ($0 store)",
+  async (store) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "worker-sparse-history",
+        sessionKey: "agent:main:worker-sparse-history",
+        storePath:
+          store === "canonical"
+            ? path.join(state.sessionsDir(), "sessions.json")
+            : state.statePath(store === "custom" ? "history.json" : "history.sqlite"),
+      };
+      const entry = { sessionId: target.sessionId, updatedAt: 1 };
+      await replaceSessionEntry(target, entry);
+      const ids = Array.from({ length: 252 }, (_, index) => `row-${index}`);
+      await replaceTranscriptEvents(target, [
+        { type: "session", version: 3, id: target.sessionId },
+        ...ids.map((id, index) => ({
+          type: "message",
+          id,
+          parentId: ids[index - 1] ?? null,
+          message:
+            index === 0
+              ? { role: "user", content: "Question before silent activity" }
+              : {
+                  role: "assistant",
+                  content: index === ids.length - 1 ? "Visible final answer" : "NO_REPLY",
+                },
+        })),
+      ]);
+      await waitForSessionTranscriptProjection(target);
+      const params = {
+        entry,
+        provider: undefined,
+        sessionId: target.sessionId,
+        storePath: target.storePath,
+        sessionAgentId: target.agentId,
+        canonicalKey: target.sessionKey,
+        max: 2,
+        maxHistoryBytes: 100_000,
+        effectiveMaxChars: 8000,
+        offset: undefined,
+        messageId: undefined,
+      };
+      const diagnostics = channel("openclaw.worker.task");
+      const tasks: unknown[] = [];
+      const record = (value: unknown) => {
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          "worker" in value &&
+          typeof value.worker === "string" &&
+          value.worker.startsWith("session-transcript.worker")
+        ) {
+          tasks.push(value);
+        }
+      };
+      diagnostics.subscribe(record);
+      try {
+        const pages = await Promise.all(
+          Array.from({ length: 4 }, () => readChatHistoryPage(params)),
+        );
+        for (const page of pages) {
+          expect(page.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
+          expect(page.pagination).toMatchObject({ totalMessages: 252, rawPageMessages: 252 });
+        }
+        expect(tasks.length).toBeGreaterThan(0);
+        expect(tasks.length).toBeLessThan(pages.length);
+      } finally {
+        diagnostics.unsubscribe(record);
       }
-    };
-    diagnostics.subscribe(record);
-    try {
-      const pages = await Promise.all(Array.from({ length: 4 }, () => readChatHistoryPage(params)));
-      for (const page of pages) {
-        expect(page.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
-        expect(page.pagination).toMatchObject({ totalMessages: 252, rawPageMessages: 252 });
-      }
-      expect(tasks.length).toBeGreaterThan(0);
-      expect(tasks.length).toBeLessThan(pages.length);
-    } finally {
-      diagnostics.unsubscribe(record);
-    }
 
-    const http = await readSessionHistorySnapshotAsync({
-      target: { ...target, sessionEntry: entry },
-      limit: 2,
+      const http = await readSessionHistorySnapshotAsync({
+        target: { ...target, sessionEntry: entry },
+        limit: 2,
+      });
+      expect(http.history.items).toBe(http.history.messages);
+      expect(http.history.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
+      expect(http.history.hasMore).toBe(false);
+      expect(http.rawTranscriptSeq).toBe(252);
+
+      const anchored = await readChatHistoryPage({ ...params, messageId: ids[0] });
+      expect(anchored.messages.map(readChatHistoryMessageId)).toEqual([ids[0]]);
     });
-    expect(http.history.items).toBe(http.history.messages);
-    expect(http.history.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
-    expect(http.history.hasMore).toBe(false);
-    expect(http.rawTranscriptSeq).toBe(252);
-
-    const anchored = await readChatHistoryPage({ ...params, messageId: ids[0] });
-    expect(anchored.messages.map(readChatHistoryMessageId)).toEqual([ids[0]]);
-  });
-});
+  },
+);
 
 it("reads a new branch and reset interval after earlier worker pages settle", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

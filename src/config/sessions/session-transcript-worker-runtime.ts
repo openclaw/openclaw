@@ -12,6 +12,7 @@ import {
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 import type {
+  SessionColdPreparationWorkerInput,
   SessionEntryWorkerInput,
   SessionBranchSummaryWorkerInput,
   SessionTranscriptHistoryWorkerInput,
@@ -36,8 +37,8 @@ const sessionEntries = new WorkerTaskPool<
 >({ workerUrl, maxWorkers: 1, sharedCompute: true });
 
 const historyPages = new WorkerTaskPool<
-  SessionTranscriptHistoryWorkerInput,
-  SessionTranscriptWorkerReply<"history-page">
+  SessionTranscriptHistoryWorkerInput | SessionColdPreparationWorkerInput,
+  SessionTranscriptWorkerReply<"history-page"> | SessionTranscriptWorkerReply<"cold-preparation">
 >({ workerUrl, maxWorkers: 1 });
 
 // Branch scans share background compute admission without delaying foreground history or context.
@@ -47,7 +48,12 @@ const branchSummaries = new WorkerTaskPool<
 >({ workerUrl, maxWorkers: 1, sharedCompute: true });
 
 function unwrapReply<
-  Kind extends "model-context" | "session-entry" | "history-page" | "branch-summaries",
+  Kind extends
+    | "model-context"
+    | "session-entry"
+    | "history-page"
+    | "branch-summaries"
+    | "cold-preparation",
 >(reply: SessionTranscriptWorkerReply<Kind>) {
   if (reply.ok) {
     return reply.value;
@@ -109,9 +115,13 @@ export async function runSessionHistoryWorkerRequest(
   prepare: () => SessionTranscriptHistoryWorkerInput,
   inputBytes: number,
 ) {
-  return unwrapReply<"history-page">(
+  const result = unwrapReply<"history-page" | "cold-preparation">(
     await historyPages.run(prepare, { inputBytes, timeoutMs: 60_000 }),
   );
+  if ("target" in result) {
+    throw new Error("Session history worker returned preparation instead of a page");
+  }
+  return result;
 }
 
 export async function runSessionBranchSummaryWorkerRequest(
@@ -135,4 +145,19 @@ export async function runSessionBranchSummaryWorkerRequest(
       },
     ),
   );
+}
+
+export async function runSessionColdPreparationWorkerRequest(
+  request: SessionColdPreparationWorkerInput["request"],
+) {
+  const result = unwrapReply<"history-page" | "cold-preparation">(
+    await historyPages.run(
+      { kind: "cold-preparation", request },
+      { inputBytes: JSON.stringify(request).length * 2, timeoutMs: 60_000 },
+    ),
+  );
+  if (!("target" in result)) {
+    throw new Error("Session history worker returned a page instead of preparation");
+  }
+  return result;
 }

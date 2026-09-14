@@ -8,7 +8,11 @@ import {
   closeOpenClawAgentDatabasesAsync,
   registerOpenClawAgentDatabaseAsyncResource,
 } from "./openclaw-agent-db-lifecycle.js";
-import { hasOpenClawAgentDatabaseAsyncResources } from "./openclaw-agent-db-resources.js";
+import {
+  hasOpenClawAgentDatabaseAsyncResources,
+  registerUnresolvedOpenClawAgentDatabaseAsyncResource,
+  drainAgentDatabaseResources,
+} from "./openclaw-agent-db-resources.js";
 
 const root = path.join(os.tmpdir(), `agent-resource-lifecycle-${process.pid}`);
 
@@ -113,3 +117,97 @@ it("retains a failed close after unregistering and retries it before readmission
   expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   registerOpenClawAgentDatabaseAsyncResource(resource)();
 });
+
+it.each(["custom.sqlite", "custom.worker.sqlite", "custom.worker.2.sqlite"])(
+  "retains retirement during unresolved target discovery for %s",
+  async (name) => {
+    const gate = createDeferredCore();
+    const pathname = path.join(root, name);
+    const revoke = vi.fn();
+    const registration = registerUnresolvedOpenClawAgentDatabaseAsyncResource(
+      {
+        agentId: "worker",
+        paths: [path.join(root, "custom.sqlite"), path.join(root, "custom.worker.sqlite")],
+        numberedPath: path.join(root, "custom.worker.sqlite"),
+      },
+      { revoke, close: () => gate.promise },
+    );
+    const closing = closeOpenClawAgentDatabaseByPathAsync(pathname, "worker");
+    try {
+      expect(revoke).toHaveBeenCalledOnce();
+      expect(() => registration.bind({ agentId: "worker", path: pathname })).toThrow("are closing");
+    } finally {
+      gate.resolve();
+      await closing;
+      registration.unregister();
+    }
+    // Completing retirement must not revive the request that was already revoked.
+    expect(() => registration.bind({ agentId: "worker", path: pathname })).toThrow("are closing");
+  },
+);
+
+it("narrows discovery custody to its bound owner without canceling sibling stores", async () => {
+  const first = path.join(root, "custom.sqlite");
+  const chosen = path.join(root, "custom.worker.3.sqlite");
+  const revoke = vi.fn();
+  const registration = registerUnresolvedOpenClawAgentDatabaseAsyncResource(
+    {
+      agentId: "worker",
+      paths: [first, path.join(root, "custom.worker.sqlite")],
+      numberedPath: path.join(root, "custom.worker.sqlite"),
+    },
+    { revoke, close: async () => {} },
+  );
+  try {
+    await closeOpenClawAgentDatabaseByPathAsync(path.join(root, "custom.other.3.sqlite"), "other");
+    expect(revoke).not.toHaveBeenCalled();
+    expect(() =>
+      registration.bind({ agentId: "worker", path: path.join(root, "other.sqlite") }),
+    ).toThrow("outside");
+    registration.bind({ agentId: "worker", path: chosen });
+    await closeOpenClawAgentDatabaseByPathAsync(first, "worker");
+    expect(revoke).not.toHaveBeenCalled();
+    await closeOpenClawAgentDatabaseByPathAsync(chosen, "worker");
+    expect(revoke).toHaveBeenCalledOnce();
+  } finally {
+    registration.unregister();
+  }
+});
+
+it("retains agent-only retirement until an exact shared store's physical owner is known", async () => {
+  const registration = registerUnresolvedOpenClawAgentDatabaseAsyncResource(
+    { paths: [path.join(root, "shared.sqlite")] },
+    { revoke: () => {}, close: async () => {} },
+  );
+  try {
+    await drainAgentDatabaseResources({ agentId: "physical-owner" }, async () => {});
+    expect(() =>
+      registration.bind({ agentId: "physical-owner", path: path.join(root, "shared.sqlite") }),
+    ).toThrow("are closing");
+  } finally {
+    registration.unregister();
+  }
+});
+
+it.each([
+  { supplied: "", owner: "main" },
+  { supplied: " Worker ", owner: "worker" },
+])(
+  "normalizes exact resource ownership before matching retirement ($owner)",
+  async ({ supplied, owner }) => {
+    const pathname = path.join(root, "normalized.sqlite");
+    const revoke = vi.fn();
+    const unregister = registerOpenClawAgentDatabaseAsyncResource({
+      agentId: supplied,
+      path: pathname,
+      revoke,
+      close: async () => {},
+    });
+    try {
+      await closeOpenClawAgentDatabaseByPathAsync(pathname, owner);
+      expect(revoke).toHaveBeenCalledOnce();
+    } finally {
+      unregister();
+    }
+  },
+);

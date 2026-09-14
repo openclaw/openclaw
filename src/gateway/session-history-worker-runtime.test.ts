@@ -10,11 +10,29 @@ import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/ses
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 
 const runWorker = vi.hoisted(() => vi.fn());
+const preparation = vi.hoisted(() => ({
+  enabled: false,
+  generation: Symbol("registry"),
+  run: vi.fn(),
+}));
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
   runSessionHistoryWorkerRequest: runWorker,
+  runSessionColdPreparationWorkerRequest: preparation.run,
 }));
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
-  readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => read(),
+  readRestoredSessionTranscript: async (
+    scope: { agentId: string; sessionId: string; storePath?: string; sessionKey?: string },
+    read: (target: { agentId: string; sessionId: string; path?: string }) => unknown,
+    options?: {
+      prepareColdRead?: (
+        request: { scope: typeof scope },
+        generation: symbol,
+      ) => Promise<{ target: typeof scope }>;
+    },
+  ) =>
+    preparation.enabled && options?.prepareColdRead
+      ? read((await options.prepareColdRead({ scope }, preparation.generation)).target)
+      : read({ ...scope, path: scope.storePath }),
 }));
 
 type RpcRequest = Extract<SessionHistoryWorkerRequest, { kind: "rpc" }>;
@@ -25,6 +43,9 @@ const queued: Array<{
 
 beforeEach(() => {
   queued.length = 0;
+  preparation.enabled = false;
+  preparation.generation = Symbol("registry");
+  preparation.run.mockReset();
   runWorker.mockReset().mockImplementation((prepare: () => SessionTranscriptHistoryWorkerInput) => {
     const result = createDeferred<SessionHistoryWorkerResult>();
     queued.push({ prepare, result });
@@ -174,4 +195,43 @@ it("bounds coalesced waiters and releases their capacity without cloning cancell
       messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
     });
   }
+});
+
+it("shares an initial probe only within its captured registry generation", async () => {
+  preparation.enabled = true;
+  const replies = [
+    createDeferred<{
+      target: { agentId: string; sessionId: string; path: string };
+      archive: undefined;
+    }>(),
+    createDeferred<{
+      target: { agentId: string; sessionId: string; path: string };
+      archive: undefined;
+    }>(),
+  ];
+  preparation.run
+    .mockImplementationOnce(() => replies[0]!.promise)
+    .mockImplementationOnce(() => replies[1]!.promise);
+  const first = readSessionHistoryPageInWorker(request());
+  const shared = readSessionHistoryPageInWorker(request());
+  expect(preparation.run).toHaveBeenCalledOnce();
+  preparation.generation = Symbol("changed registry");
+  const successor = readSessionHistoryPageInWorker(request());
+  expect(preparation.run).toHaveBeenCalledTimes(2);
+  for (const reply of replies) {
+    reply.resolve({
+      target: {
+        agentId: "main",
+        sessionId: "history-worker",
+        path: "/tmp/history-worker-fixture/sessions.json",
+      },
+      archive: undefined,
+    });
+  }
+  await vi.waitFor(() => expect(queued).toHaveLength(1));
+  queued[0]!.prepare();
+  queued[0]!.result.resolve(page("one page after prepared scopes"));
+  const result = await Promise.all([first, shared, successor]);
+  expect(result[0]).toEqual(result[1]);
+  expect(result[1]).toEqual(result[2]);
 });

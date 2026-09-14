@@ -35,6 +35,11 @@ import {
 import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
+  captureOpenClawAgentDatabaseRegistry,
+  readOpenClawAgentDatabaseRegistrySnapshot,
+  withOpenClawAgentDatabaseRegistrySnapshot,
+} from "./openclaw-agent-db-registry-listing.js";
+import {
   createOpenClawAgentDatabasePathMatcher,
   isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
@@ -1316,7 +1321,7 @@ describe("openclaw agent database", () => {
     expect(fs.existsSync(stateDatabasePath)).toBe(false);
   });
 
-  it("rotates the registry token on pathname switches and committed writes", () => {
+  it("rotates the registry token on pathname switches and committed writes", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const otherEnv = { OPENCLAW_STATE_DIR: createTempStateDir() };
@@ -1334,10 +1339,22 @@ describe("openclaw agent database", () => {
     expect(readOpenClawAgentDatabaseRegistryToken({ env: otherEnv })).not.toBe(firstToken);
     const returnedToken = readOpenClawAgentDatabaseRegistryToken({ env });
     expect(returnedToken).not.toBe(firstToken);
+    const pendingRead = captureOpenClawAgentDatabaseRegistry({ env });
+    const beforeRegistration = readOpenClawAgentDatabaseRegistrySnapshot({ env });
 
     registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
     const registeredToken = readOpenClawAgentDatabaseRegistryToken({ env });
     expect(registeredToken).not.toBe(returnedToken);
+    expect(() => pendingRead.assertCurrent()).toThrow("registry changed");
+    pendingRead.publish(beforeRegistration);
+    await withOpenClawAgentDatabaseRegistrySnapshot(
+      { pathname: pendingRead.pathname, entries: beforeRegistration },
+      async () => {
+        await Promise.resolve();
+        expect(listOpenClawRegisteredAgentDatabases()).toEqual([]);
+        expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+      },
+    );
     expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
       expect.objectContaining({ agentId: "worker-1", path: databasePath }),
     ]);

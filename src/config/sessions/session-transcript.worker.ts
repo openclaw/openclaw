@@ -6,12 +6,17 @@ import type {
 import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { OpenClawAgentDatabaseRegistrySnapshot } from "../../state/openclaw-agent-db-registry-listing.js";
 import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type {
+  SessionColdPreparationRequest,
+  SessionColdPreparationResult,
+} from "./session-cold-storage-preparation.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -46,7 +51,13 @@ export type SessionEntryWorkerInput = {
 export type SessionTranscriptHistoryWorkerInput = {
   kind: "history-page";
   request: SessionHistoryWorkerRequest;
+  registrySnapshot?: OpenClawAgentDatabaseRegistrySnapshot;
   admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+export type SessionColdPreparationWorkerInput = {
+  kind: "cold-preparation";
+  request: SessionColdPreparationRequest;
 };
 
 export type SessionBranchSummaryWorkerInput = {
@@ -55,6 +66,7 @@ export type SessionBranchSummaryWorkerInput = {
 };
 
 type SessionTranscriptWorkerValues = {
+  "cold-preparation": SessionColdPreparationResult;
   "branch-summaries": SessionBranchSummaryReadResult;
   "history-page": SessionHistoryWorkerResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
@@ -82,8 +94,14 @@ serveWorkerTasks(
       | SessionModelContextWorkerInput
       | SessionEntryWorkerInput
       | SessionTranscriptHistoryWorkerInput
-      | SessionBranchSummaryWorkerInput;
+      | SessionBranchSummaryWorkerInput
+      | SessionColdPreparationWorkerInput;
     try {
+      if (request.kind === "cold-preparation") {
+        const { prepareSessionColdTranscriptRead } =
+          await import("./session-cold-storage-preparation.js");
+        return { ok: true, value: prepareSessionColdTranscriptRead(request.request) };
+      }
       if (request.kind === "branch-summaries") {
         const { readSessionBranchSummariesInWorker } =
           await import("./session-accessor.sqlite-branches.js");
@@ -101,27 +119,37 @@ serveWorkerTasks(
             };
           }
           if (request.kind === "history-page") {
-            const options = { readOnly: true, deferProfileDisplay: true };
-            if (request.request.kind === "rpc") {
-              const { readChatHistoryPageLocal } =
-                await import("../../gateway/server-methods/chat-history-pages.js");
-              return {
-                ok: true,
-                value: {
-                  kind: "rpc",
-                  page: await readChatHistoryPageLocal(request.request.params, options),
-                },
-              };
-            }
-            const { readSessionHistorySnapshotLocal } =
-              await import("../../gateway/session-history-state.js");
-            return {
-              ok: true,
-              value: {
-                kind: "http",
-                snapshot: await readSessionHistorySnapshotLocal(request.request.params, options),
+            const { withOpenClawAgentDatabaseRegistrySnapshot } =
+              await import("../../state/openclaw-agent-db-registry-listing.js");
+            return await withOpenClawAgentDatabaseRegistrySnapshot(
+              request.registrySnapshot,
+              async () => {
+                const options = { readOnly: true, deferProfileDisplay: true };
+                if (request.request.kind === "rpc") {
+                  const { readChatHistoryPageLocal } =
+                    await import("../../gateway/server-methods/chat-history-pages.js");
+                  return {
+                    ok: true,
+                    value: {
+                      kind: "rpc",
+                      page: await readChatHistoryPageLocal(request.request.params, options),
+                    },
+                  };
+                }
+                const { readSessionHistorySnapshotLocal } =
+                  await import("../../gateway/session-history-state.js");
+                return {
+                  ok: true,
+                  value: {
+                    kind: "http",
+                    snapshot: await readSessionHistorySnapshotLocal(
+                      request.request.params,
+                      options,
+                    ),
+                  },
+                };
               },
-            };
+            );
           }
           const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
             await import("../../../packages/memory-host-sdk/src/host/session-files.js");

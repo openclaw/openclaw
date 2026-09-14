@@ -14,6 +14,7 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
+import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -97,7 +98,7 @@ export type ResolvedTranscriptScope = ResolvedSqliteScope & {
   sessionId: string;
 };
 
-type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
+export type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
 
@@ -343,13 +344,13 @@ export function resolveSqliteScope(
   };
 }
 
-export function resolveSqliteReadScope(
-  scope: Pick<
-    SessionTranscriptReadScope,
-    "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
-  >,
-  targetCache?: SessionSqliteTargetResolutionCache,
-): ResolvedSqliteReadScope {
+type SqliteReadScopeInput = Pick<
+  SessionTranscriptReadScope,
+  "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
+>;
+
+/** Logical identity and incognito routing require no database access. */
+export function resolveSqliteReadScopeIdentity(scope: SqliteReadScopeInput) {
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const scopedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : parsedAgentId;
@@ -360,6 +361,19 @@ export function resolveSqliteReadScope(
     ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
     : scope.storePath;
   const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
+  return { sessionKey, effectiveStorePath, effectiveAgentId };
+}
+
+export function resolveSqliteReadScope(
+  scope: Pick<
+    SessionTranscriptReadScope,
+    "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
+  >,
+  targetCache?: SessionSqliteTargetResolutionCache,
+  registeredDatabases?: readonly OpenClawRegisteredAgentDatabase[],
+): ResolvedSqliteReadScope {
+  const { sessionKey, effectiveStorePath, effectiveAgentId } =
+    resolveSqliteReadScopeIdentity(scope);
   const storeTarget = effectiveStorePath
     ? resolveCachedSqliteStoreTarget(
         {
@@ -367,6 +381,7 @@ export function resolveSqliteReadScope(
           defaultAgentId: scope.defaultAgentId,
           env: scope.env,
           storePath: effectiveStorePath,
+          registeredDatabases,
         },
         targetCache,
       )
@@ -396,6 +411,7 @@ function resolveCachedSqliteStoreTarget(
     defaultAgentId?: string;
     env?: NodeJS.ProcessEnv;
     storePath: string;
+    registeredDatabases?: readonly OpenClawRegisteredAgentDatabase[];
   },
   targetCache: SessionSqliteTargetResolutionCache | undefined,
 ): ReturnType<typeof resolveSqliteTargetFromSessionStorePath> {
@@ -403,6 +419,7 @@ function resolveCachedSqliteStoreTarget(
     return resolveSqliteTargetFromSessionStorePath(params.storePath, {
       agentId: params.agentId,
       defaultAgentId: params.defaultAgentId,
+      registeredDatabases: params.registeredDatabases,
       ...(params.env ? { env: params.env } : {}),
     });
   }
@@ -418,6 +435,7 @@ function resolveCachedSqliteStoreTarget(
   const resolved = resolveSqliteTargetFromSessionStorePath(params.storePath, {
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
+    registeredDatabases: params.registeredDatabases,
     ...(params.env ? { env: params.env } : {}),
   });
   envCache.set(cacheKey, resolved);
@@ -499,9 +517,10 @@ export function resolveSqliteTranscriptReadScope(
     "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
   >,
   targetCache?: SessionSqliteTargetResolutionCache,
+  registeredDatabases?: readonly OpenClawRegisteredAgentDatabase[],
 ): ResolvedTranscriptReadScope {
   return {
-    ...resolveSqliteReadScope(scope, targetCache),
+    ...resolveSqliteReadScope(scope, targetCache, registeredDatabases),
     sessionId: scope.sessionId,
   };
 }

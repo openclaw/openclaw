@@ -2,8 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  registerUnresolvedOpenClawAgentDatabaseAsyncResource,
+  type OpenClawAgentDatabaseResourceSelection,
+} from "../../state/openclaw-agent-db-resources.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidation,
@@ -17,10 +20,19 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import type { SqliteSessionReclamationAdmissionDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
 
+export type SqliteMutationWorkerAuthority = {
+  assertCurrent: () => void;
+  commitGate: SharedArrayBuffer;
+  bindDatabase: (target: { agentId: string; path: string }) => void;
+};
+
 /** Register before the first await and drain through the parent's retained claim release. */
 export function withSqliteMutationWorkerLifetime<T>(
-  options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
-  run: (request: { assertCurrent: () => void; commitGate: SharedArrayBuffer }) => Promise<T>,
+  options: (
+    | { agentId: string; path: string }
+    | { selection: OpenClawAgentDatabaseResourceSelection }
+  ) & { env?: NodeJS.ProcessEnv },
+  run: (request: SqliteMutationWorkerAuthority) => Promise<T>,
 ): Promise<T> {
   const completion = createDeferredCore();
   const state = captureOpenClawStateDatabaseReadAdmission(
@@ -38,12 +50,13 @@ export function withSqliteMutationWorkerLifetime<T>(
     }
     state.assertCurrent();
   };
-  const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
-    agentId: options.agentId,
-    path: options.path,
-    revoke,
-    close: () => completion.promise,
-  });
+  const resource = registerUnresolvedOpenClawAgentDatabaseAsyncResource(
+    "selection" in options
+      ? options.selection
+      : { agentId: options.agentId, paths: [options.path] },
+    { revoke, close: () => completion.promise },
+  );
+  const unregisterAgent = resource.unregister;
   let unregisterState: () => void;
   try {
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
@@ -61,7 +74,14 @@ export function withSqliteMutationWorkerLifetime<T>(
   return Promise.resolve()
     .then(() => {
       assertCurrent();
-      return run({ assertCurrent, commitGate });
+      return run({
+        assertCurrent,
+        commitGate,
+        bindDatabase: (target) => {
+          assertCurrent();
+          resource.bind(target);
+        },
+      });
     })
     .finally(() => {
       completion.resolve();
