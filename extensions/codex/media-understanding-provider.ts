@@ -2,14 +2,12 @@
  * Codex-backed media understanding provider for bounded image description and
  * structured extraction turns.
  */
-import {
-  buildStructuredExtractionPrompt,
-  normalizeStructuredExtractionResult,
-  type ImagesDescriptionRequest,
-  type ImagesDescriptionResult,
-  type MediaUnderstandingProvider,
-  type StructuredExtractionRequest,
-  type StructuredExtractionResult,
+import type {
+  ImagesDescriptionRequest,
+  ImagesDescriptionResult,
+  MediaUnderstandingProvider,
+  StructuredExtractionRequest,
+  StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import type { CodexBoundedTurnOptions } from "./src/app-server/bounded-turn.js";
 import type { CodexUserInput } from "./src/app-server/protocol.js";
@@ -115,6 +113,10 @@ async function extractCodexStructured(
   }
   req.signal?.throwIfAborted();
   const { runBoundedCodexAppServerTurn } = await import("./src/app-server/bounded-turn.js");
+  // Deferred like bounded-turn above: the media-understanding barrel loads
+  // shared media runtime modules that must stay out of registration imports.
+  const { buildStructuredExtractionPrompt, normalizeStructuredExtractionResult } =
+    await import("openclaw/plugin-sdk/media-understanding");
   req.signal?.throwIfAborted();
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
@@ -129,7 +131,7 @@ async function extractCodexStructured(
     taskLabel: "structured extraction",
     developerInstructions:
       "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
-    input: buildCodexStructuredInput(req),
+    input: buildCodexStructuredInput(req, buildStructuredExtractionPrompt(req)),
     requiredModalities: ["text", "image"],
     isolation: "configured-transport",
   });
@@ -151,9 +153,12 @@ function buildCodexImagePrompt(req: ImagesDescriptionRequest): string {
   return `${prompt}\n\nAnalyze all ${req.images.length} images together.`;
 }
 
-function buildCodexStructuredInput(req: StructuredExtractionRequest): CodexUserInput[] {
+function buildCodexStructuredInput(
+  req: StructuredExtractionRequest,
+  prompt: string,
+): CodexUserInput[] {
   return [
-    { type: "text", text: buildStructuredExtractionPrompt(req), text_elements: [] },
+    { type: "text", text: prompt, text_elements: [] },
     ...req.input.map((entry) => {
       if (entry.type === "text") {
         return { type: "text" as const, text: entry.text, text_elements: [] };
