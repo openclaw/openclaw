@@ -46,6 +46,7 @@ async function withOAuthTempRoot(
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -54,6 +55,7 @@ afterEach(async () => {
 
 describe("OAuth refresh generation fence", () => {
   it("keeps serialized provider I/O outside locks and settles after observer timeout", async () => {
+    vi.useFakeTimers();
     const profileId = "openai:default";
     const expired = createCredential({
       access: "serialized-access",
@@ -117,7 +119,9 @@ describe("OAuth refresh generation fence", () => {
     expect(JSON.parse(persisted)[profileId].access).toMatch(
       /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:access:[a-f0-9]{64}$/,
     );
-    await expect(first).rejects.toThrow("exceeded hard timeout");
+    const firstTimedOut = expect(first).rejects.toThrow("exceeded hard timeout");
+    await vi.advanceTimersByTimeAsync(10);
+    await firstTimedOut;
     const peerRefresh = vi.fn(async () => null);
     const peer = run(peerRefresh);
     expect(peerRefresh).not.toHaveBeenCalled();
