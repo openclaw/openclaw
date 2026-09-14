@@ -34,6 +34,7 @@ declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2eChromium: { executablePath: string; available: boolean };
     controlUiE2eCleanup: { timeoutMs: number; pool: "forks"; isolate: true };
+    controlUiE2ePrebuiltGeneration: string;
   }
 }
 

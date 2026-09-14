@@ -1,5 +1,9 @@
+import { inspectShippedPluginInstallConfigRecords } from "../../../config/plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "../../../config/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { validateConfigObjectRawWithPlugins } from "../../../config/validation.js";
+import { withoutPluginInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 type StateMigrationConfigInput = {
@@ -10,6 +14,7 @@ type StateMigrationConfigInput = {
 export function resolveStateMigrationConfigInput(params: {
   snapshot: ConfigFileSnapshot;
   baseConfig: OpenClawConfig;
+  migrationPluginsConverged?: true;
 }): StateMigrationConfigInput | null {
   const pluginDoctorConfig = (params.snapshot.sourceConfig ??
     params.snapshot.config ??
@@ -20,6 +25,20 @@ export function resolveStateMigrationConfigInput(params: {
       : { cfg: params.baseConfig };
   }
   const migrationSource = pluginDoctorConfig ?? params.snapshot.parsed;
+  if (
+    params.migrationPluginsConverged === true &&
+    pluginDoctorConfig !== undefined &&
+    inspectShippedPluginInstallConfigRecords(pluginDoctorConfig).status === "valid"
+  ) {
+    // Installed inventory now owns these records. Use a validated projection to
+    // admit state migration without retiring any authored locators before it runs.
+    const projected = withoutPluginInstallRecords(pluginDoctorConfig);
+    const { next } = applyLegacyDoctorMigrations(projected);
+    const validated = validateConfigObjectRawWithPlugins(next ?? projected);
+    if (validated.ok) {
+      return { cfg: validated.config, pluginDoctorConfig };
+    }
+  }
   if (params.snapshot.legacyIssues.length === 0 || migrationSource === undefined) {
     return null;
   }

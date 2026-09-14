@@ -352,12 +352,14 @@ describe("runPostCorePluginConvergence", () => {
       logger: {},
       onPackageReadError: expect.any(Function),
       beforePersistentApply: expect.any(Function),
+      beforePersistentEffect: expect.any(Function),
     });
     expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(2, {
       npmRoot: "/tmp/openclaw-state/npm/projects/codex",
       logger: {},
       onPackageReadError: expect.any(Function),
       beforePersistentApply: expect.any(Function),
+      beforePersistentEffect: expect.any(Function),
     });
     expect(result.changes).toEqual([
       "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",

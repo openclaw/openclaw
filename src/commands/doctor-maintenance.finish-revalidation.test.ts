@@ -103,6 +103,7 @@ type Continuation =
 async function runDoctorFinishForStoppedUnit(
   scenario: StoppedUnitState,
   continuation?: Continuation,
+  suppliedAuthority?: "current" | "lost-at-stop" | "admission-lost-at-stop",
 ): Promise<{
   finishError: unknown;
   restartCalls: number;
@@ -180,6 +181,7 @@ async function runDoctorFinishForStoppedUnit(
         continuation !== "unrecorded-parked";
       let stopObserved = false;
       let commandReads = 0;
+      let callerRevoked = false;
       const command = {
         programArguments: [
           process.execPath,
@@ -237,7 +239,15 @@ async function runDoctorFinishForStoppedUnit(
                 }
               : { status: "stopped" };
           },
-          stop: vi.fn(async () => {
+          stop: vi.fn(async (args) => {
+            if (suppliedAuthority === "lost-at-stop") {
+              callerRevoked = true;
+            }
+            if (suppliedAuthority === "admission-lost-at-stop") {
+              createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver() } });
+            }
+            // The native owner revalidates the composed callback immediately before effects.
+            args.assertCurrent?.();
             mocks.stops += 1;
             running = false;
             stopObserved = true;
@@ -249,6 +259,15 @@ async function runDoctorFinishForStoppedUnit(
       const maintenance = await beginDoctorMaintenance({
         root: process.cwd(),
         options: { repair: true },
+        ...(suppliedAuthority
+          ? {
+              assertCurrent: () => {
+                if (callerRevoked) {
+                  throw new Error("Supplied Doctor authority revoked");
+                }
+              },
+            }
+          : {}),
         runtime: {
           log: (...args: Array<unknown>) => {
             logs.push(args.map((entry) => String(entry)).join(" "));
@@ -399,3 +418,38 @@ it("reports a failed restoration with a next step after the owner dies", async (
   });
   expect(logs).not.toContain("Gateway restarted and verified after Doctor repair.");
 });
+
+it.each(["lost-at-stop", "admission-lost-at-stop"] as const)(
+  "composes independent Doctor refusal at the native effect boundary: %s",
+  async (authority) => {
+    await expect(runDoctorFinishForStoppedUnit("retained", "own", authority)).rejects.toMatchObject(
+      {
+        cause: {
+          cause: {
+            message: expect.stringContaining(
+              authority === "lost-at-stop"
+                ? "Supplied Doctor authority revoked"
+                : "is still in progress",
+            ),
+          },
+        },
+      },
+    );
+    expect(mocks.stops).toBe(0);
+  },
+);
+
+it.each([undefined, "own"] as const)(
+  "preserves healthy supplied Doctor authority with continuation %s",
+  async (continuation) => {
+    const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(
+      "retained",
+      continuation,
+      "current",
+    );
+    expect(finishError).toBeUndefined();
+    expect(mocks.stops).toBe(1);
+    expect(restartCalls).toBe(1);
+    expect(logs).toContain("Gateway restarted and verified after Doctor repair.");
+  },
+);

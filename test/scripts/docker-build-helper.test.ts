@@ -9202,6 +9202,7 @@ bash "$ROOT_DIR/scripts/e2e/doctor-install-switch-docker.sh"
       'plugins install "$CLAWHUB_PLUGIN_SPEC"',
       'plugins update "$CLAWHUB_PLUGIN_ID"',
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT"',
+      "clawhub:@openclaw/plugin-e2e-fixture",
       'CLAWHUB_PLUGIN_SPEC="${OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC:-',
     ]);
   });

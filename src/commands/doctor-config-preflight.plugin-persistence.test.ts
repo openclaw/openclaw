@@ -632,6 +632,35 @@ describe("Doctor plugin persistence", () => {
     },
   );
 
+  it("refuses checkpoint publication when config identity changes at the persisted reread", async () => {
+    await withPreflightPluginFixture(async (_writeVersion, config) => {
+      const before = await readPluginPreflight();
+      const changed = { ...config, gateway: { mode: "local", port: 19999 } };
+      const record = vi.spyOn(migrationCheckpoint, "recordSuccessfulStateMigrations");
+      onTestFinished(() => record.mockRestore());
+      const operation = runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        requireStateMigrationCheckpoint: true,
+        preparePluginMetadataSnapshot: true,
+        observe: false,
+        measure: async (name, run) => {
+          const value = await run();
+          if (name === "doctor.config-preflight.plugin-index-persistence") {
+            await fs.writeFile(before.snapshot.path, JSON.stringify(changed));
+          }
+          return value;
+        },
+      });
+      await expect(operation.then(() => undefined)).rejects.toThrow(
+        "config identity changed while persisting",
+      );
+      expect(record).not.toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(before.snapshot.path, "utf8"))).toEqual(changed);
+      expect(migrationCheckpoint.hasActiveStartupMigrationLease({ env: process.env })).toBe(false);
+    });
+  });
+
   it("refuses persistence verification when package facts change before the durable reread", async () => {
     const fixturePluginId = "preflight-\u001b[31mfixture";
     await withPreflightPluginFixture(

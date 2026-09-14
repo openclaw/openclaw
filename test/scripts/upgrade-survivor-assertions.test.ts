@@ -364,6 +364,30 @@ describe("upgrade recovery result assertions", () => {
     ).toBe(0);
   });
 
+  it.each([
+    ["accepts", "openclaw doctor", 86, "package-post-install-doctor", true],
+    ["rejects untyped", "openclaw doctor", 86, undefined, false],
+    ["rejects wrong kind", "openclaw doctor", 86, "other", false],
+    ["rejects fatal", "openclaw doctor", 1, "package-post-install-doctor", false],
+    ["rejects unknown exit", "openclaw doctor", 87, "package-post-install-doctor", false],
+    ["rejects other step", "global install swap", 86, "package-post-install-doctor", false],
+  ])(
+    "%s typed post-install Doctor advisory in a successful update",
+    (_label, name, exitCode, kind, accepted) => {
+      const result = {
+        status: "ok",
+        after: { version: "2026.8.1" },
+        steps: [
+          { name: "global update", exitCode: 0 },
+          { name, exitCode, ...(kind ? { advisory: { kind } } : {}) },
+        ],
+        postUpdate: { plugins: { status: "ok", warnings: [], integrityDrifts: [] } },
+      };
+      const actual = runJsonAssertion("assert-successful-update-json", result, "2026.8.1");
+      expect(actual.status === 0, actual.stderr).toBe(accepted);
+    },
+  );
+
   it("accepts only a completed core swap stranded on capability consent", () => {
     expect(
       runPrefixedJsonAssertion("assert-recoverable-update-json", RECOVERABLE_UPDATE, "2026.8.1")

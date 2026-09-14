@@ -1643,7 +1643,14 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
     `successful update version changed: ${String(result?.after?.version)}`,
   );
   assert(
-    Array.isArray(result?.steps) && result.steps.every((step) => step?.exitCode === 0),
+    Array.isArray(result?.steps) &&
+      result.steps.every(
+        (step) =>
+          step?.exitCode === 0 ||
+          (step?.name === "openclaw doctor" &&
+            step.exitCode === 86 &&
+            step.advisory?.kind === "package-post-install-doctor"),
+      ),
     "successful update contained a failed core step",
   );
 }

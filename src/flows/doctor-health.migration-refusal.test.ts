@@ -39,6 +39,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("Doctor refused-migration maintenance outcome", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.runContributions.mockReset();
     vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(maintenance);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
@@ -48,10 +49,13 @@ describe("Doctor refused-migration maintenance outcome", () => {
     await withOpenClawTestState(
       {
         scenario: "minimal",
-        env: buildUpdateDoctorEnv({
-          allowGatewayServiceRepair: true,
-          allowGatewayActivation: false,
-        }),
+        env: {
+          ...buildUpdateDoctorEnv({
+            allowGatewayServiceRepair: true,
+            allowGatewayActivation: false,
+          }),
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+        },
       },
       async (state) => {
         const root = state.path("checkout");

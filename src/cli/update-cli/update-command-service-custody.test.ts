@@ -63,8 +63,6 @@ it.each([
       `
     process.chdir(${JSON.stringify(receiverRoot)});
     ${sourceLoader ? `await import(${JSON.stringify(sourceLoader)});` : ""}
-    const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
-    const {execFileUtf8}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)});
     const fs=await import("node:fs");
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
     if(mode==="check") {
@@ -88,8 +86,15 @@ it.each([
     else if(mode==="check" && ${JSON.stringify(supported)}==="legacy") {
       process.stdout.write(JSON.stringify({updateExecutor:"root-spawner-v1"}));
     }
-    else try { await runGatewayServiceUpdateCommand(mode,"restart",async()=>{
+    else if(mode==="check") {
+      const {tryRunGatewayServiceUpdateCapabilityProbe}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeCapability).href)});
+      if(!await tryRunGatewayServiceUpdateCapabilityProbe(process.argv))throw new Error("Capability fixture received invalid probe arguments.");
+    }
+    else try {
+      const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
+      await runGatewayServiceUpdateCommand(mode,"restart",async()=>{
       fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({pid:process.pid,parent:process.ppid,noRespawn:process.env.OPENCLAW_NO_RESPAWN}));
+      const {execFileUtf8}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)});
       const result=await execFileUtf8(process.execPath,["-e",${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`)}]);
       if(result.code!==0)throw new Error(result.stderr);
       process.stdout.write(JSON.stringify({action:"restart",ok:true,result:"restarted"}));

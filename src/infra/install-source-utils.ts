@@ -12,7 +12,11 @@ import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
-import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
+import {
+  applyNpmFreshnessBypassEnv,
+  resolveUpdateRehearsalNpmCacheEnv,
+  type NpmProjectInstallEnvOptions,
+} from "./npm-install-env.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -75,6 +79,7 @@ function createNpmMetadataEnv(
   const env: NodeJS.ProcessEnv = {
     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
+    ...resolveUpdateRehearsalNpmCacheEnv(),
   };
   applyNpmFreshnessBypassEnv(env, new Date(), scope);
   return env;

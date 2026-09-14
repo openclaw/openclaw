@@ -69,17 +69,22 @@ suite.define(() => {
       const frame = page.locator(".chat-tool-card__preview-frame");
       await frame.waitFor();
       const contentHeight = rowCount * rowHeight;
+      let frameHeight = 0;
+      let overflow = Number.POSITIVE_INFINITY;
+      // The cross-origin child can receive its resized viewport after the host
+      // frame grows. Wait for both within the same polling deadline.
       await expect
-        .poll(async () => Math.round((await frame.boundingBox())?.height ?? 0))
-        .toBeGreaterThanOrEqual(contentHeight);
-      // The document is fully laid out inside the frame, so nothing is hidden
-      // behind a nested scrollbar the transcript cannot reach. The frame is
-      // sandboxed and cross-origin, so measure from inside it.
-      const overflow = await frame
-        .contentFrame()
-        .frameLocator("iframe")
-        .locator("body")
-        .evaluate((body) => body.scrollHeight - window.innerHeight);
+        .poll(async () => {
+          frameHeight = Math.round((await frame.boundingBox())?.height ?? 0);
+          overflow = await frame
+            .contentFrame()
+            .frameLocator("iframe")
+            .locator("body")
+            .evaluate((body) => body.scrollHeight - window.innerHeight);
+          return frameHeight >= contentHeight && overflow <= 0;
+        })
+        .toBe(true);
+      expect(frameHeight).toBeGreaterThanOrEqual(contentHeight);
       expect(overflow).toBeLessThanOrEqual(0);
     });
   });

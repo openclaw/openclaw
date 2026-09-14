@@ -66,10 +66,12 @@ export async function beginDoctorMaintenance(params: {
   options: DoctorOptions;
   root: string | null;
   runtime: RuntimeEnv;
+  assertCurrent?: () => void;
 }): Promise<{ release(): Promise<void>; finish(cfg: OpenClawConfig): Promise<void> } | undefined> {
   if (!(params.options.repair === true || params.options.yes === true)) {
     return undefined;
   }
+  params.assertCurrent?.();
   const env = { ...process.env };
   const parentActivation = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options))
     ? resolveUpdateParentGatewayActivation(env)
@@ -124,7 +126,9 @@ export async function beginDoctorMaintenance(params: {
         shouldRestart: true,
         jsonMode: true,
         phase: "inspect",
+        ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
       });
+      params.assertCurrent?.();
       assertDoctorMaintenanceInspection(inspection, env);
       if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
         const inheritedRunId = env[UPDATE_RUN_ID_ENV]?.trim();
@@ -180,7 +184,12 @@ export async function beginDoctorMaintenance(params: {
             shouldRestart: true,
             jsonMode: true,
             expectedService: inspection,
-            assertCurrent: assertUpdateAdmissionCurrent,
+            assertCurrent: params.assertCurrent
+              ? () => {
+                  params.assertCurrent?.();
+                  assertUpdateAdmissionCurrent?.();
+                }
+              : assertUpdateAdmissionCurrent,
           });
           assertDoctorMaintenanceInspection(stopped, env);
           if (stopped.stopped) {
@@ -198,11 +207,13 @@ export async function beginDoctorMaintenance(params: {
     // Hold the reentrant lifecycle coordinators, not an in-tree Gateway lock:
     // individual migrations acquire their own in-tree locks under this scope.
     // Gateway ownership lasts until that process stops, not for a short transaction.
+    params.assertCurrent?.();
     coordinators.push(acquireGatewayLifecycleCoordinator({ databasePath, busyTimeoutMs: 0 }));
     coordinators.push(acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 250 }));
     const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
       await import("../state/openclaw-agent-db-lease.js");
     try {
+      params.assertCurrent?.();
       assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
     } catch (error) {
       if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {

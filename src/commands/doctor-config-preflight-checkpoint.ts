@@ -37,3 +37,22 @@ export function migrationCheckpointIdentitiesMatch(
     left.pluginMigrationFingerprint === right.pluginMigrationFingerprint
   );
 }
+
+/** Persisting inventory may refresh plugin facts, but cannot change config identity. */
+export function assertPersistedMigrationCheckpointConfigIdentity(
+  migrationCheckpointIdentity: MigrationCheckpointIdentity | null,
+  persistedIdentity: MigrationCheckpointIdentity | null,
+): void {
+  if (
+    !migrationCheckpointIdentity ||
+    !persistedIdentity ||
+    migrationCheckpointIdentity.effectiveConfigFingerprint !==
+      persistedIdentity.effectiveConfigFingerprint ||
+    migrationCheckpointIdentity.pluginDoctorConfigFingerprint !==
+      persistedIdentity.pluginDoctorConfigFingerprint
+  ) {
+    throw new Error(
+      'OpenClaw config identity changed while persisting the refreshed plugin registry; refusing to write the migration checkpoint. Run "openclaw doctor --fix" and retry.',
+    );
+  }
+}

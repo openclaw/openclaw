@@ -45,8 +45,33 @@ suite.define(() => {
       { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page, context }) => {
         let requests = 0;
+        let detailsRequests = 0;
+        await context.addInitScript(() => {
+          if (location.hostname !== "status.example") {
+            return;
+          }
+          for (const type of ["pointerdown", "pointerup", "click"]) {
+            document.addEventListener(
+              type,
+              (event) => {
+                const target = event.target;
+                console.info("[website-navigation]", {
+                  type,
+                  target: target instanceof Element ? target.tagName : null,
+                  href: target instanceof HTMLAnchorElement ? target.getAttribute("href") : null,
+                  x: (event as MouseEvent).clientX,
+                  y: (event as MouseEvent).clientY,
+                });
+              },
+              true,
+            );
+          }
+        });
         await context.route("https://status.example/**", (route) => {
           const path = new URL(route.request().url()).pathname;
+          if (path === "/details") {
+            detailsRequests += 1;
+          }
           if (path === "/api/status") {
             requests += 1;
             return route.fulfill({
@@ -174,7 +199,16 @@ suite.define(() => {
           "Keep this note",
         );
         await content.getByRole("link", { name: "View details" }).click();
-        await content.getByRole("heading", { name: "Service details" }).waitFor();
+        try {
+          await content.getByRole("heading", { name: "Service details" }).waitFor();
+        } catch (error) {
+          console.error("[control-ui-e2e] website navigation", {
+            detailsRequests,
+            frameBounds: await frame.boundingBox({ timeout: 1_000 }).catch(() => null),
+            frameUrls: page.frames().map((currentFrame) => currentFrame.url()),
+          });
+          throw error;
+        }
         const opened = context.waitForEvent("page");
         await page.getByRole("link", { name: "Open website", exact: true }).click();
         const separatePage = await opened;

@@ -159,14 +159,13 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
   });
 
   it("rejects degraded ready responses by default even when failing components are allowlisted", async () => {
-    const server = createHttpServer((_request, response) => {
-      response.writeHead(503, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ready: false, failing: ["telegram"] }));
-    });
-    const baseUrl = await listen(server);
+    const baseUrl = "http://probe.test";
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-degraded.json");
-    try {
-      const result = await runProbe([
+    const nodeArgs = writeProbeImport(
+      'globalThis.fetch = async () => new Response(JSON.stringify({ ready: false, failing: ["telegram"] }), { status: 503, headers: { "content-type": "application/json" } });',
+    );
+    const result = await runProbe(
+      [
         "--base-url",
         baseUrl,
         "--path",
@@ -179,14 +178,15 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
         out,
         "--timeout-ms",
         "300",
-      ]);
+      ],
+      LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+      {},
+      nodeArgs,
+    );
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("probe failed with HTTP 503");
-      expect(fs.existsSync(out)).toBe(false);
-    } finally {
-      server.close();
-    }
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("probe failed with HTTP 503");
+    expect(fs.existsSync(out)).toBe(false);
   });
 
   it("keeps failed probe retries inside the total timeout", async () => {

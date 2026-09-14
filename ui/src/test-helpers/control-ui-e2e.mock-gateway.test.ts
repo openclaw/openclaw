@@ -22,6 +22,27 @@ function waitForMockCycle(): Promise<void> {
   });
 }
 
+it.for([
+  { serverBuildId: undefined, clientBuildId: "production-bundle", expected: "production-bundle" },
+  { serverBuildId: "older-bundle", clientBuildId: "production-bundle", expected: "older-bundle" },
+  { serverBuildId: undefined, clientBuildId: undefined, expected: "e2e" },
+])("keeps mock build identity truthful for $expected", async (scenario, { gatewayPage }) => {
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({
+      serverBuildId: scenario.serverBuildId,
+    }),
+  );
+  const { request } = gatewayPage.connect();
+  await flushMockTimers();
+  const hello = await request("connect-identity", "connect", {
+    client: { buildId: scenario.clientBuildId },
+  });
+  expect(hello.server).toMatchObject({
+    buildId: scenario.expected,
+    controlUiBuildSource: "bundled",
+  });
+});
+
 it("keeps handler responses and events on the requesting socket", async ({ gatewayPage }) => {
   const { window, execute } = gatewayPage;
   execute(createControlUiMockGatewayInitScript());

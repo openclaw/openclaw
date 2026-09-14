@@ -837,9 +837,27 @@ describe("gateway plugin instance bindings", () => {
       reloadEventIndex = proof.events.length;
       proof.events.push({ event: "channel-owner-reload-request" });
       const registryBeforeChannelReload = getActivePluginRegistry();
-      const channelReload = await rpcReq(socket, "plugins.reload", {
-        plugins: [{ pluginId: "instance-binding-channels" }],
-      });
+      // Config settlement does not reserve the cross-process plugin mutation lease.
+      const channelReload = await vi.waitUntil(
+        async () => {
+          const result = await rpcReq(socket, "plugins.reload", {
+            plugins: [{ pluginId: "instance-binding-channels" }],
+          });
+          if (
+            !result.ok &&
+            result.error?.code === "UNAVAILABLE" &&
+            "retryable" in result.error &&
+            result.error.retryable === true &&
+            result.error.message ===
+              "Another plugin or config operation is already running; retry when it completes."
+          ) {
+            proof.observations.push({ phase: "channel-owner-admission-busy", error: result.error });
+            return false;
+          }
+          return result;
+        },
+        { timeout: 30_000, interval: 1_000 },
+      );
       expect(channelReload.ok, channelReload.error?.message).toBe(true);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).not.toBe(registryBeforeChannelReload);

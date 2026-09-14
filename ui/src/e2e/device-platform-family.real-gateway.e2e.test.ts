@@ -4,7 +4,7 @@ import path from "node:path";
 import { validateConnectParams, type ConnectParams } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   loadOrCreateDeviceIdentity,
@@ -19,7 +19,10 @@ import {
 } from "../../../src/infra/device-pairing.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import { startProductionControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import {
+  startBuiltControlUiE2eServer,
+  startProductionControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const readText = async (locator: Locator) =>
@@ -72,6 +75,10 @@ const suite = createControlUiE2eSuite({
   setupTimeoutMs: 180_000,
   startServerBeforeBrowser: true,
   startServer: async () => {
+    if (inject("controlUiE2ePrebuiltGeneration")) {
+      // Read the generation owned and checked by the prebuilt invocation.
+      return startBuiltControlUiE2eServer(path.join(process.cwd(), "dist", "control-ui"));
+    }
     const out = path.join(suite.artifactDir, "production-ui");
     await mkdir(out, { recursive: true });
     return startProductionControlUiE2eServer(out, "synthetic-platform-proof-build-id");
@@ -349,7 +356,9 @@ suite.define(() => {
                 connects,
                 presence,
                 assetHash,
-                sourceBuildMetadata: "synthetic; use source revision and asset hash",
+                sourceBuildMetadata:
+                  inject("controlUiE2ePrebuiltGeneration") ??
+                  "synthetic; use source revision and asset hash",
                 pendingCount: afterList.pending.length,
               });
               await writeFile(

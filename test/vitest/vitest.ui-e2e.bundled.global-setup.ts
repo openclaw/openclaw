@@ -1,6 +1,10 @@
 // The first selected bundle consumer owns the invocation-wide build/preview and teardown.
+import path from "node:path";
 import type { TestProject } from "vitest/node";
-import { startBundledControlUiE2eServer } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  startBuiltControlUiE2eServer,
+  startBundledControlUiE2eServer,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.ts";
 
 declare module "vitest" {
@@ -25,8 +29,17 @@ export default async function setup(project: TestProject) {
   // Local full-suite runs can fan shards into separate processes in one checkout.
   // Keep every build out of canonical dist so those processes cannot clobber it.
   const tempDirs = createTempDirTracker();
-  const outDir = tempDirs.make("openclaw-ui-e2e-");
-  const server = await startBundledControlUiE2eServer(outDir).catch(async (error: unknown) => {
+  const generation = root.getProvidedContext().controlUiE2ePrebuiltGeneration;
+  if (generation !== undefined && !/^[a-f0-9]{64}$/u.test(generation)) {
+    throw new Error("Prebuilt Control UI preview requires an admitted generation");
+  }
+  // The prebuilt setup owns freshness before acquisition and after all readers
+  // close. Borrow its exact UI output; never rebuild or delete that generation.
+  const outDir = generation
+    ? path.join(root.config.root, "dist", "control-ui")
+    : tempDirs.make("openclaw-ui-e2e-");
+  const startServer = generation ? startBuiltControlUiE2eServer : startBundledControlUiE2eServer;
+  const server = await startServer(outDir).catch(async (error: unknown) => {
     try {
       tempDirs.cleanup();
     } catch {}

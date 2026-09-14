@@ -46,6 +46,7 @@ import {
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
+  convergeUpdateDoctorMigrationPlugins,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
 import { collectPostCorePluginFailureFacts } from "./update-command-plugins-internals.js";
@@ -235,9 +236,10 @@ async function updateFinalizeCommandInternal(
   }
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
     await lifecycle.run("configSnapshot", createUpdateConfigSnapshot);
-    await lifecycle.run("doctor", () =>
-      runUpdateFinalizationDoctorInFreshProcess({
-        phase: "pre-plugin",
+    await lifecycle.run("doctor", async () => {
+      await convergeUpdateDoctorMigrationPlugins(opts);
+      await runUpdateFinalizationDoctorInFreshProcess({
+        phase: "post-plugin",
         root,
         runId: invokingRunId,
         yes: opts.yes === true,
@@ -245,8 +247,8 @@ async function updateFinalizeCommandInternal(
         workspaceSuggestions: true,
         timeoutMs: lifecycle.budget("doctor"),
         onWarnings: onDoctorWarnings,
-      }),
-    );
+      });
+    });
     return await lifecycle.run(
       "plugins",
       () =>

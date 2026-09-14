@@ -77,7 +77,7 @@ function smokeFailureGuidance(failure: PluginPayloadSmokeFailure): string[] {
 async function repairInstalledNpmOpenClawHostLinks(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
-  beforePersistentEffect?: () => void;
+  beforePersistentEffect?: (destination?: string) => void;
 }): Promise<{
   changes: string[];
   warnings: PostCoreConvergenceWarning[];
@@ -86,12 +86,12 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
   const packageReadFailures: Array<{ error: unknown; packageDir: string }> = [];
   let effectFailure: { error: unknown } | undefined;
   const beforePersistentEffect = params.beforePersistentEffect
-    ? () => {
+    ? (destination?: string) => {
         if (effectFailure) {
           throw effectFailure.error;
         }
         try {
-          params.beforePersistentEffect?.();
+          params.beforePersistentEffect?.(destination);
         } catch (error) {
           effectFailure ??= { error };
           throw effectFailure.error;
@@ -105,6 +105,7 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
         relinkOpenClawPeerDependenciesInManagedNpmRoot({
           npmRoot,
           beforePersistentApply: beforePersistentEffect,
+          beforePersistentEffect,
           logger: {},
           onPackageReadError: (error, packageDir) => {
             packageReadFailures.push({ error, packageDir });
@@ -131,6 +132,7 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
       env: params.env,
       mode: "repair",
       beforePersistentApply: beforePersistentEffect,
+      beforePersistentEffect,
       onPackageReadError: (error, packageDir) => {
         packageReadFailures.push({ error, packageDir });
       },
@@ -200,14 +202,19 @@ export async function runPostCorePluginConvergence(params: {
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
-  beforePersistentEffect?: () => void;
+  beforePersistentEffect?: (destination?: string) => void;
 }): Promise<PostCoreConvergenceResult> {
   return await withPluginLifecycleLease(
     { env: params.env, assertCurrent: params.beforePersistentEffect },
     (lease) =>
       runPostCorePluginConvergenceWithLease({
         ...params,
-        beforePersistentEffect: () => lease.assertOwned(),
+        beforePersistentEffect: (destination) => {
+          lease.assertOwned();
+          if (destination !== undefined) {
+            params.beforePersistentEffect?.(destination);
+          }
+        },
       }),
   );
 }

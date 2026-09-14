@@ -1783,12 +1783,22 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
 `,
     );
     writeFileSync(
-      path.join(root, "scripts/check-native-state-schema-version.mjs"),
-      `
-import { appendFileSync } from "node:fs";
-appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node scripts/check-native-state-schema-version.mjs"].join("\\t") + "\\n");
-`,
+      path.join(root, "scripts/tsx.mjs"),
+      "// Fixture command recorders use plain ESM syntax.\n",
     );
+    for (const script of [
+      "check-native-state-schema-version.mjs",
+      "check-extension-plugin-sdk-boundary.mts",
+    ]) {
+      writeFileSync(
+        path.join(root, "scripts", script),
+        `
+import { appendFileSync } from "node:fs";
+const command = ["node", ...process.execArgv, "scripts/${script}", ...process.argv.slice(2)].join(" ");
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", command].join("\\t") + "\\n");
+`,
+      );
+    }
   }
   const scripts = Object.fromEntries(options.scripts.map((name) => [name, "true"]));
   if (options.types?.compose) {
@@ -6220,6 +6230,35 @@ setImmediate(() => {
     }
   });
 
+  it("caps manual real-Gateway qualification at 20 minutes on every runner route", () => {
+    const timeout = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"]["timeout-minutes"];
+    for (const runnerBackend of ["", "blacksmith", "github", "hybrid"] as const) {
+      for (const runAttempt of [1, 2]) {
+        for (const repository of ["openclaw/openclaw", "contributor/openclaw"]) {
+          for (const authorAssociation of [
+            "OWNER",
+            "MEMBER",
+            "COLLABORATOR",
+            "CONTRIBUTOR",
+            "FIRST_TIME_CONTRIBUTOR",
+            "FIRST_TIMER",
+            "NONE",
+          ]) {
+            const context = {
+              eventName: "workflow_dispatch" as const,
+              runnerBackend,
+              runAttempt,
+              repository,
+              headRepository: repository,
+              authorAssociation,
+            };
+            expect(evaluateWorkflowExpression(timeout, context), JSON.stringify(context)).toBe(20);
+          }
+        }
+      }
+    }
+  });
+
   it("gives breaker-routed hosted jobs their hosted timeout budgets", () => {
     const workflow = readCiWorkflow();
     const jobs = workflow.jobs as Record<string, { "timeout-minutes": unknown }>;
@@ -6335,7 +6374,7 @@ setImmediate(() => {
               expect(
                 evaluateTimeout("checks-ui-e2e-real-gateway", context),
                 JSON.stringify(context),
-              ).toBe(runner === "ubuntu-24.04" ? 40 : 20);
+              ).toBe(eventName !== "workflow_dispatch" && runner === "ubuntu-24.04" ? 40 : 20);
             }
           }
         }

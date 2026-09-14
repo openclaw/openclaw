@@ -22,7 +22,10 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
-import { resolveMigrationCheckpointIdentity } from "./doctor-config-preflight-checkpoint.js";
+import {
+  assertPersistedMigrationCheckpointConfigIdentity,
+  resolveMigrationCheckpointIdentity,
+} from "./doctor-config-preflight-checkpoint.js";
 import {
   maybeMigrateLegacyConfig,
   prepareDoctorConfigRecovery,
@@ -462,7 +465,11 @@ async function runDoctorConfigPreflightOperation(
         automaticConfigRepair = snapshot.valid ? null : planScopedConfigRepair(snapshot);
       }
     }
-    const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+    const stateMigrationInput = resolveStateMigrationConfigInput({
+      snapshot,
+      baseConfig,
+      migrationPluginsConverged: options.migrationPluginsConverged,
+    });
     if (migrationCheckpoint) {
       migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
         snapshot,
@@ -650,7 +657,9 @@ async function runDoctorConfigPreflightOperation(
       startupMigrationLease?.heartbeat();
       await measurePreflightStep("automatic-config-repair", () =>
         pluginInstallConfigImport
-          ? commitAutomaticConfigRepair(automaticConfigRepair, snapshot, pluginInstallConfigImport)
+          ? commitAutomaticConfigRepair(automaticConfigRepair, snapshot, {
+              pluginInstallConfigImport,
+            })
           : runWithPluginMetadataSnapshot({ config: automaticConfigRepair.config }, () =>
               commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
             ),
@@ -685,35 +694,25 @@ async function runDoctorConfigPreflightOperation(
       freshConfigGuardAllowed &&
       snapshot.valid
     ) {
-      const persistedSnapshotRead = await persistRefreshedPluginIndex({
+      const persistedRead = await persistRefreshedPluginIndex({
         env: startupMigrationEnv,
         lease: startupMigrationLease,
         measure: measurePreflightStep,
         readPersistedSnapshot: () => readConfigSnapshotForPreflight(false),
         snapshotRead: configSnapshotRead,
       });
-      const persistedBaseConfig =
-        persistedSnapshotRead.snapshot.sourceConfig ?? persistedSnapshotRead.snapshot.config ?? {};
       const persistedIdentity = resolveMigrationCheckpointIdentity({
-        snapshot: persistedSnapshotRead.snapshot,
-        baseConfig: persistedBaseConfig,
-        pluginMigrationFingerprint: persistedSnapshotRead.pluginMigrationFingerprint,
+        snapshot: persistedRead.snapshot,
+        baseConfig: persistedRead.snapshot.sourceConfig ?? persistedRead.snapshot.config ?? {},
+        pluginMigrationFingerprint: persistedRead.pluginMigrationFingerprint,
       });
-      if (
-        !migrationCheckpointIdentity ||
-        !persistedIdentity ||
-        migrationCheckpointIdentity.effectiveConfigFingerprint !==
-          persistedIdentity.effectiveConfigFingerprint ||
-        migrationCheckpointIdentity.pluginDoctorConfigFingerprint !==
-          persistedIdentity.pluginDoctorConfigFingerprint
-      ) {
-        throw new Error(
-          'OpenClaw config identity changed while persisting the refreshed plugin registry; refusing to write the migration checkpoint. Run "openclaw doctor --fix" and retry.',
-        );
-      }
+      assertPersistedMigrationCheckpointConfigIdentity(
+        migrationCheckpointIdentity,
+        persistedIdentity,
+      );
       // The durable reread supplies the accepted inventory. Replace both the
       // authoritative snapshot and its checkpoint identity at that boundary.
-      configSnapshotRead = persistedSnapshotRead;
+      configSnapshotRead = persistedRead;
       migrationCheckpointIdentity = persistedIdentity;
     }
     configSnapshotRead = await completeStartupMigrationPreflight({
@@ -731,12 +730,10 @@ async function runDoctorConfigPreflightOperation(
       startupMigrationWarnings,
       stateMigrationsAllowed,
     });
-    snapshot = configSnapshotRead.snapshot;
-    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-
     return {
-      snapshot,
-      baseConfig,
+      snapshot: configSnapshotRead.snapshot,
+      baseConfig:
+        configSnapshotRead.snapshot.sourceConfig ?? configSnapshotRead.snapshot.config ?? {},
       ...(modelBillingRouteMigrationSource ? { modelBillingRouteMigrationSource } : {}),
       ...(configSnapshotRead.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: configSnapshotRead.pluginMetadataSnapshot }

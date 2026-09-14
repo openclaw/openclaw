@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   createOpenClawTestState,
@@ -44,30 +44,34 @@ const refreshInventoryArgs = [
   "--params",
   JSON.stringify({ agentId: "main", view: "all", refresh: true }),
 ];
-async function refreshInventory() {
-  let result = await catalogInstance.cli(refreshInventoryArgs);
+const refreshInventoryForOwner = async (owner: OpenClawTestInstance, commands: unknown[]) => {
+  let result = await owner.cli(refreshInventoryArgs);
+  commands.push({ args: refreshInventoryArgs, ...result });
   expect(result.code, result.stderr).toBe(0);
-  let catalog: ModelCatalogResult = JSON.parse(result.stdout);
-  // Refresh can return the previous inventory while discovery continues.
-  await expect
-    .poll(async () => {
+  // A refresh reply can still be pending. Passive reads await publication without
+  // starting a second acquisition or changing the provider fixture mid-flight.
+  await vi.waitFor(
+    async () => {
+      const catalog = JSON.parse(result.stdout) as ModelCatalogResult;
       if (catalog.pendingProviders?.length) {
-        result = await catalogInstance.cli([
+        const args = [
           "gateway",
           "call",
           "models.list",
           "--json",
           "--params",
           JSON.stringify({ agentId: "main", view: "all" }),
-        ]);
+        ];
+        result = await owner.cli(args);
+        commands.push({ args, ...result });
         expect(result.code, result.stderr).toBe(0);
-        catalog = JSON.parse(result.stdout);
       }
-      return catalog.pendingProviders ?? [];
-    })
-    .toEqual([]);
+      expect((JSON.parse(result.stdout) as ModelCatalogResult).pendingProviders ?? []).toEqual([]);
+    },
+    { interval: 100, timeout: 15_000 },
+  );
   return result;
-}
+};
 const catalogModels = (id: string) => [
   { id: "anchor", name: "Anchor" },
   { id: "selected", name: "Selected" },
@@ -99,6 +103,7 @@ const catalogSuite = createControlUiE2eSuite({
       name: "agents-catalog-publication",
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
+        update: { checkOnStart: false },
         gateway: { controlUi: { enabled: true } },
         agents: {
           defaults: {
@@ -159,6 +164,7 @@ catalogSuite.define(() => {
     url.hash = new URL(browserUrl).hash;
     const frames: unknown[] = [];
     const commands: unknown[] = [];
+    const refreshInventory = () => refreshInventoryForOwner(owner, commands);
     const catalogRequests = new Set<string>();
     const mutations: string[] = [];
     let rejectCatalog = false;
@@ -179,7 +185,6 @@ catalogSuite.define(() => {
     };
     try {
       const initialInventory = await refreshInventory();
-      expect(initialInventory.code, initialInventory.stderr).toBe(0);
       expect(initialInventory.stdout).toContain("inventory-before");
       await catalogSuite.withPage(
         {
@@ -285,8 +290,6 @@ catalogSuite.define(() => {
 
           inventoryModel = "inventory-after";
           const refreshed = await refreshInventory();
-          commands.push({ args: refreshInventoryArgs, publishedInventory: refreshed });
-          expect(refreshed.code, refreshed.stderr).toBe(0);
           expect(refreshed.stdout).toContain("inventory-after");
           await expect
             .poll(() =>

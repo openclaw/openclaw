@@ -1071,7 +1071,7 @@ async function runProductionControlUiBuild(outDir: string): Promise<void> {
   });
 }
 
-async function startBuiltControlUiE2eServer(
+export async function startBuiltControlUiE2eServer(
   outDir: string,
   bootstrapConfig?: Record<string, unknown>,
 ): Promise<ControlUiE2eProductionServer> {
@@ -1207,7 +1207,7 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     heldMethods: scenario.heldMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
-    serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    serverBuildId: scenario.serverBuildId?.trim() || "",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
     gatewaySuspensionPhase: scenario.gatewaySuspensionPhase ?? "accepting",
     updateAvailable: scenario.updateAvailable ?? null,
@@ -2328,6 +2328,10 @@ function installControlUiMockGateway(
             typeof approval.expiresAtMs === "number" && approval.expiresAtMs > Date.now(),
         );
       case "connect": {
+        // Ordinary mocks serve the document under test, including admitted production
+        // bundles. Explicit identities still exercise stale-build rejection/reload.
+        const client = isRecord(params) && isRecord(params.client) ? params.client : null;
+        const clientBuildId = typeof client?.buildId === "string" ? client.buildId.trim() : "";
         const auth = isRecord(params) && isRecord(params.auth) ? params.auth : null;
         const connectedDeviceToken =
           auth && typeof auth.deviceToken === "string" ? auth.deviceToken : scenario.deviceToken;
@@ -2353,7 +2357,7 @@ function installControlUiMockGateway(
           controlUiWidgetKinds: scenario.controlUiWidgetKinds,
           protocol: protocolVersion,
           server: {
-            buildId: serverBuildId,
+            buildId: serverBuildId || clientBuildId || "e2e",
             bootId: gatewayBootId,
             controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",

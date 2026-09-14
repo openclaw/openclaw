@@ -34,6 +34,26 @@ beyond the grace period.
 
 ## Checks 0-2
 
+`doctor --repair` refreshes configured plugin packages before running their
+migrations. During an update, if the parent updater requires plugin repair to
+wait for the new process, Doctor defers plugin-dependent config and state repairs.
+Independent config aliases, including PDF limits and exec policy, still normalize
+through their existing migration owners. A complete private rehearsal started by
+an older updater instead prepares copied plugin dependencies, converges plugins,
+and migrates the copied state before lint. Its resolved config, state, plugin and
+cache roots must remain inside the rehearsal; live and incomplete rehearsal
+contracts still defer. A repair that would require retiring state locators or
+cannot pass normal config validation remains pending with its source unchanged.
+Early alias repair leaves retired plugin install records for the later import owner.
+Writable legacy parents retain their original `meta.lastTouchedVersion` during
+this early pass. A parent that does not advertise config-write support keeps
+both its config and retired install records unchanged.
+Unavailable plugins without migration contracts do not block unrelated repairs.
+The updated process repairs plugins, finishes Doctor, and validates the result
+before reporting completion to the parent. If plugin repair fails, fix the
+reported cause and run `openclaw update repair`; deferred work is not marked
+complete.
+
 <AccordionGroup>
   <Accordion title="0. Optional update (git installs)">
     If this is a git checkout and doctor is running interactively, it offers to update (fetch/rebase/build) before running doctor.

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
@@ -47,6 +48,7 @@ suite.define(() => {
       workspaceGit: true,
     });
 
+    let folderPlacement: unknown;
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const group = page.locator('[data-session-section="category:Client work"]');
@@ -96,6 +98,7 @@ suite.define(() => {
         await expect
           .poll(async () => {
             const bounds = await folderPicker.locator(".new-session-page__browser").boundingBox();
+            folderPlacement = { viewport, bounds };
             return {
               horizontal: Boolean(
                 bounds && bounds.x >= 0 && bounds.x + bounds.width <= viewport.width,
@@ -174,6 +177,13 @@ suite.define(() => {
         message: "prepare the client release",
         worktree: true,
       });
+    } catch (error) {
+      console.error("[control-ui-e2e] group-defaults folder placement", folderPlacement);
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: "session-group-defaults",
+      });
+      throw error;
     } finally {
       await context.close();
     }

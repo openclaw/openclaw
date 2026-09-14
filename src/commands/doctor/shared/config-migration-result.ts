@@ -31,6 +31,8 @@ export type DoctorConfigPreflightOptions = {
   skipPristineStartupStateMigrations?: boolean;
   /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
   doctorOnlyStateMigrations?: boolean;
+  /** Explicit Doctor repair has imported install records and converged migration plugins. */
+  migrationPluginsConverged?: true;
 };
 
 export type DoctorConfigPreflightResult = {

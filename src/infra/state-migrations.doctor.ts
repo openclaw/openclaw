@@ -3018,6 +3018,29 @@ async function runLegacyStateMigrationSteps(
   };
 }
 
+/** Run only the checkpoint-required shared schema owner; never detect plugin or agent work. */
+export async function runDoctorSharedStateSchemaMigration(params: {
+  env?: NodeJS.ProcessEnv;
+  assertCurrent?: () => void;
+}): Promise<LegacyStateMigrationStepReceipt> {
+  const env = params.env ?? process.env;
+  const step = createStateSchemaMigrationStep({
+    stateDir: resolveStateDir(env),
+    env,
+    mode: "doctor",
+    requiredness: "required",
+  });
+  // No await separates this live authority check from the step's synchronous writer.
+  // Keep its original refusal outside the receipt runner's failure conversion.
+  params.assertCurrent?.();
+  const execution = await runLegacyStateMigrationSteps([step]);
+  const receipt = execution.receipts[0];
+  if (!receipt) {
+    throw new Error("Shared state schema migration did not produce its required receipt.");
+  }
+  return receipt;
+}
+
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   config?: OpenClawConfig;

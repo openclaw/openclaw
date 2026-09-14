@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCommandEnv } from "../process/exec-spawn.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -11,6 +13,7 @@ import {
   resolveNpmSpecMetadata,
   withInstallWorkspace,
 } from "./install-source-utils.js";
+import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const runCommandWithTimeoutMock = vi.fn();
@@ -683,4 +686,35 @@ describe("resolveNpmPackArchiveMetadata", () => {
       },
     });
   });
+});
+
+it("pins archive metadata children to the private rehearsal cache", async () => {
+  const root = await createFixtureDir();
+  const archivePath = path.join(root, "fixture.tgz");
+  await fs.writeFile(archivePath, "inert fixture");
+  mockPackCommandResult({
+    stdout: JSON.stringify([{ name: "fixture", version: "1.0.0", filename: "fixture.tgz" }]),
+  });
+  await withEnvAsync(
+    {
+      ...buildUpdateRehearsalPathEnv(root),
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+      OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+      npm_config_cache: "/outside/lower-cache",
+      NPM_CONFIG_CACHE: "/outside/upper-cache",
+    },
+    async () => {
+      expect((await resolveNpmPackArchiveMetadata({ archivePath })).ok).toBe(true);
+      const [argv, options] = runCommandWithTimeoutMock.mock.calls.at(-1)!;
+      expect(argv.slice(0, 2)).toEqual(["npm", "pack"]);
+      const childEnv = resolveCommandEnv({ argv, env: options.env });
+      expect(childEnv.npm_config_cache).toBe(path.join(root, "cache", "npm"));
+      expect(childEnv.NPM_CONFIG_CACHE).toBe(childEnv.npm_config_cache);
+      expect(process.env.npm_config_cache).toBe("/outside/lower-cache");
+      expect(process.env.NPM_CONFIG_CACHE).toBe("/outside/upper-cache");
+    },
+  );
 });

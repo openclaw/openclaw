@@ -29,6 +29,8 @@ const doctorDiagnostics = [
 const scenarios = [
   "json",
   "inherited-json",
+  "migration-consent",
+  "migration-consent-error",
   "doctor-error",
   "plugin-error",
   "human",
@@ -96,6 +98,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         "--channel",
         "dev",
         ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
+        ...(scenario === "migration-consent" ? ["--accept-capabilities"] : []),
         "--no-restart",
         ...(blockedPhase ? [] : ["--timeout", scenario === "borrowed-phase" ? "1" : "9"]),
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
@@ -155,6 +158,31 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           ? 1
           : 0,
       );
+      if (scenario !== "phase-hang") {
+        const diagnostics = json ? result.stderr : result.stdout;
+        expect(diagnostics, failure).toContain("Migration plugin convergence diagnostic");
+        if (scenario === "migration-consent") {
+          expect(diagnostics, failure).toContain("Migration capability consent accepted");
+        }
+      }
+      if (scenario === "migration-consent-error") {
+        expect(JSON.parse(result.stdout), failure).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: "Migration plugin capability consent required" },
+        });
+        for (const diagnostic of doctorDiagnostics) {
+          expect(result.stdout + result.stderr, failure).not.toContain(diagnostic);
+        }
+        expect(result.stderr, failure).toContain("Update failed. Preparing triage diagnostics...");
+        expect(result.stderr, failure).toContain("triage-fixture-prompt.md");
+        expect(readRun(), failure).toMatchObject({
+          status: "failed",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "finalize:doctor", status: "failed" }),
+          ]),
+        });
+        return;
+      }
       if (blockedPhase === "doctor") {
         const output = JSON.parse(result.stdout);
         expect(output, failure).toMatchObject({ status: "failed", stuckPhase: "doctor" });
