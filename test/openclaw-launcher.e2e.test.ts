@@ -1458,19 +1458,33 @@ describe("openclaw launcher", () => {
       await addGitMarker(fixtureRoot);
       await addCompileCacheProbe(fixtureRoot);
       const linkParent = makeTempDir(fixtureRoots, "openclaw-launcher-link-");
-      const linkedRoot = path.join(linkParent, "openclaw-linked");
-      await fs.symlink(fixtureRoot, linkedRoot, "dir");
+      await fs.appendFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        '\nprocess.stdout.write("\\n" + process.argv[1]);\n',
+      );
+      for (const prefix of ["invoked", "on-path"]) {
+        const root = path.join(linkParent, prefix);
+        await fs.mkdir(path.join(root, "lib", "node_modules"), { recursive: true });
+        await fs.mkdir(path.join(root, "bin"));
+        await fs.symlink(fixtureRoot, path.join(root, "lib", "node_modules", "openclaw"), "dir");
+        await fs.symlink(
+          "../lib/node_modules/openclaw/openclaw.mjs",
+          path.join(root, "bin", "openclaw"),
+        );
+      }
+      const launcher = path.join(linkParent, "invoked", "bin", "openclaw");
 
-      const result = spawnSync(process.execPath, [path.join(linkedRoot, "openclaw.mjs")], {
+      const result = spawnSync(process.execPath, [launcher], {
         cwd: linkParent,
         env: launcherEnv({
           NODE_COMPILE_CACHE: path.join(linkParent, ".node-compile-cache"),
+          PATH: [path.join(linkParent, "on-path", "bin"), process.env.PATH].join(path.delimiter),
         }),
         encoding: "utf8",
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toBe("cache:disabled;respawn:1");
+      expect(result.stdout).toBe(`cache:disabled;respawn:1\n${launcher}`);
     },
   );
 

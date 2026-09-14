@@ -141,7 +141,8 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
     process.execPath,
-    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    // The lexical launcher identifies the npm prefix exposing this checkout.
+    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
     env,
   );
 };
