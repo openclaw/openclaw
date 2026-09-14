@@ -25,6 +25,32 @@ import {
 vi.unmock("./agent-scope-config.js");
 
 describe("agent roster resolution", () => {
+  it("keeps full-config SDK calls and readonly roster inputs source-compatible", () => {
+    const broad: typeof import("../plugin-sdk/agent-runtime.js").listAgentIds = listAgentIds;
+    const focused: typeof import("../plugin-sdk/agent-scope-runtime.js").listAgentIds =
+      listAgentIds;
+    const defaultAgent: typeof import("../plugin-sdk/agent-scope-runtime.js").tryResolveDefaultAgentId =
+      tryResolveDefaultAgentId;
+    const listParameter: Parameters<typeof focused>[0] = { logging: { level: "info" } };
+    const defaultParameter: Parameters<typeof defaultAgent>[0] = { logging: { level: "info" } };
+    const readonlyRoster = {
+      agents: { list: [{ id: "OPS", default: true }, { id: "ops" }] },
+    } as const;
+
+    expect(broad({ logging: { level: "info" } })).toEqual(["main"]);
+    expect(focused({ logging: { level: "info" }, agents: { entries: { ops: {} } } })).toEqual([
+      "ops",
+    ]);
+    expect(focused(listParameter)).toEqual(["main"]);
+    expect(focused(readonlyRoster)).toEqual(["ops"]);
+    expect(focused({ agents: { entries: {} } })).toEqual([]);
+    expect(defaultAgent({ logging: { level: "info" } })).toBe("main");
+    expect(defaultAgent({ agents: { defaults: { workspace: "/srv/main" } } })).toBe("main");
+    expect(defaultAgent(defaultParameter)).toBe("main");
+    expect(defaultAgent(readonlyRoster)).toBe("ops");
+    expect(defaultAgent({ agents: { entries: {} } })).toBeUndefined();
+  });
+
   it("rejects unknown configured-agent selections with canonical CLI guidance", () => {
     const cfg = { agents: { entries: { main: {}, ops: {} } } };
 

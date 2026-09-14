@@ -73,6 +73,9 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 }
 
 /** Lists unique configured agent ids. */
+export function listAgentIds(cfg: AgentRosterConfig): string[];
+// Keep shipped full-config overloads last for Parameters<typeof> consumers.
+export function listAgentIds(cfg: OpenClawConfig): string[];
 export function listAgentIds(cfg: AgentRosterConfig): string[] {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
@@ -112,6 +115,9 @@ export function tryResolveRawLegacyDefaultAgentId(cfg: AgentRosterConfig): strin
 }
 
 /** @deprecated Use tryResolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
+export function tryResolveDefaultAgentId(cfg: AgentRosterConfig): string | undefined;
+/** @deprecated Use tryResolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
+export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined;
 export function tryResolveDefaultAgentId(cfg: AgentRosterConfig): string | undefined {
   return tryResolveRawLegacyDefaultAgentId(cfg) ?? tryResolveSoleAgentId(cfg);
 }
