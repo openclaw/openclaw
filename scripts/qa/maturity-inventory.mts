@@ -11,6 +11,7 @@ type MaturityInventoryMember = {
 export type MaturityInventoryProjection = {
   membersBySurface: ReadonlyMap<string, readonly MaturityInventoryMember[]>;
   unmapped: readonly MaturityInventoryMember[];
+  ignored: readonly MaturityInventoryMember[];
 };
 
 const COMMUNITY_CHANNEL_IDS = new Set([
@@ -93,7 +94,7 @@ export function collectChannelMaturityInventory(
   for (const members of membersBySurface.values()) {
     members.sort((left, right) => left.label.localeCompare(right.label));
   }
-  return { membersBySurface, unmapped };
+  return { membersBySurface, unmapped, ignored: [] };
 }
 
 type ProviderCatalog = {
@@ -141,5 +142,58 @@ export function collectProviderMaturityInventory(
   for (const members of membersBySurface.values()) {
     members.sort((left, right) => left.label.localeCompare(right.label));
   }
-  return { membersBySurface, unmapped };
+  return { membersBySurface, unmapped, ignored: [] };
+}
+
+const APP_SURFACE_BY_DIRECTORY = new Map([
+  ["android", "android"],
+  ["ios", "ios"],
+  ["linux", "linux-app"],
+  ["macos", "macos-app"],
+  ["macos-mlx-tts", "voice"],
+  ["swabble", "voice"],
+]);
+
+const APP_DOCS_BY_DIRECTORY = new Map([
+  ["android", "/platforms/android"],
+  ["ios", "/platforms/ios"],
+  ["linux", "/platforms/linux"],
+  ["macos", "/platforms/mac"],
+  ["macos-mlx-tts", "/nodes/talk"],
+  ["swabble", "/nodes/voicewake"],
+]);
+
+const APP_SUPPORT_DIRECTORIES = new Set([".i18n", "mobile", "shared"]);
+
+export function collectAppMaturityInventory(repoRoot = process.cwd()): MaturityInventoryProjection {
+  const appsRoot = path.join(repoRoot, "apps");
+  const membersBySurface = new Map<string, MaturityInventoryMember[]>();
+  const unmapped: MaturityInventoryMember[] = [];
+  const ignored: MaturityInventoryMember[] = [];
+  if (!fs.existsSync(appsRoot)) {
+    return { membersBySurface, unmapped, ignored };
+  }
+  for (const entry of fs
+    .readdirSync(appsRoot, { withFileTypes: true })
+    .filter((candidate) => candidate.isDirectory())
+    .toSorted((left, right) => left.name.localeCompare(right.name))) {
+    const member = {
+      id: entry.name,
+      label: entry.name,
+      docsPath: APP_DOCS_BY_DIRECTORY.get(entry.name) ?? "",
+    };
+    if (APP_SUPPORT_DIRECTORIES.has(entry.name)) {
+      ignored.push(member);
+      continue;
+    }
+    const surfaceId = APP_SURFACE_BY_DIRECTORY.get(entry.name);
+    if (!surfaceId) {
+      unmapped.push(member);
+      continue;
+    }
+    const members = membersBySurface.get(surfaceId) ?? [];
+    members.push(member);
+    membersBySurface.set(surfaceId, members);
+  }
+  return { membersBySurface, unmapped, ignored };
 }
