@@ -411,7 +411,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +5: approved meeting participation contract: four types and one callable (#152327).
       // +2: shared workspace context preparation and bounded instruction snapshots.
       // +1: Gateway-verified legacy webhook endpoint attribution.
-      4580,
+      // +2: shared structured-extraction prompt and result helpers for media providers.
+      4582,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -575,7 +576,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved runMeetingParticipationWithBrowser callable (#152327).
       // +2: shared workspace context preparation and bounded instruction snapshots.
       // +1: Gateway-verified legacy webhook endpoint attribution.
-      2688,
+      // +2: shared structured-extraction prompt and result helpers for media providers.
+      2690,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
