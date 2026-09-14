@@ -457,8 +457,9 @@ describe("channel turn pipeline", () => {
       await params.dispatcherOptions.deliver({ text: "requested final" }, { kind: "final" });
       const nullRejection: unknown = null;
       return new Promise((resolve, reject) => {
+        const rejectWithUnknown = reject as (reason?: unknown) => void;
         void resolve;
-        reject(nullRejection);
+        rejectWithUnknown(nullRejection);
       });
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
