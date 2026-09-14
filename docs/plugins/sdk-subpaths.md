@@ -469,7 +469,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer`, `saveMediaStream`, and `saveMediaSource` (local path or HTTP(S) URL into managed media with core's SSRF, byte, redirect, and timeout limits) |
     | `plugin-sdk/media-generation-runtime` | Private-local after July 2026; Shared media-generation failover helpers, candidate selection, and missing-model messaging |
-    | `plugin-sdk/media-understanding` | Deprecated compatibility facade for media-understanding provider types and helpers; new providers register through the injected plugin API and keep request helpers plugin-owned |
+    | `plugin-sdk/media-understanding` | Deprecated compatibility facade for media-understanding provider types and helpers, including the shared structured-extraction prompt/result helpers (`buildStructuredExtractionPrompt`, `normalizeStructuredExtractionResult`); new providers register through the injected plugin API and keep request helpers plugin-owned |
     | `plugin-sdk/media-understanding-runtime` | Channel audio preflight/echo helpers plus image, video, audio, and structured media-understanding runtime functions |
     | `plugin-sdk/computer-use` | Computer Use v2 action and snapshot schemas, JSON parsers, validation, capability descriptors, and provider registration |
     | `plugin-sdk/native-command-config-runtime` | Dependency-light native command and skill enablement config checks |

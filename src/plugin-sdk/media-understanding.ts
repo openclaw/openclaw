@@ -23,6 +23,10 @@ export type {
 } from "../media-understanding/types.js";
 
 export {
+  buildStructuredExtractionPrompt,
+  normalizeStructuredExtractionResult,
+} from "../media-understanding/structured-extraction.js";
+export {
   describeImageWithModel,
   describeImageWithModelPayloadTransform,
   describeImagesWithModel,

@@ -2,15 +2,15 @@
  * Codex-backed media understanding provider for bounded image description and
  * structured extraction turns.
  */
-import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
-import type {
-  ImagesDescriptionRequest,
-  ImagesDescriptionResult,
-  MediaUnderstandingProvider,
-  StructuredExtractionRequest,
-  StructuredExtractionResult,
+import {
+  buildStructuredExtractionPrompt,
+  normalizeStructuredExtractionResult,
+  type ImagesDescriptionRequest,
+  type ImagesDescriptionResult,
+  type MediaUnderstandingProvider,
+  type StructuredExtractionRequest,
+  type StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexBoundedTurnOptions } from "./src/app-server/bounded-turn.js";
 import type { CodexUserInput } from "./src/app-server/protocol.js";
 
@@ -133,7 +133,14 @@ async function extractCodexStructured(
     requiredModalities: ["text", "image"],
     isolation: "configured-transport",
   });
-  return normalizeStructuredExtractionResult({ text, model, provider: req.provider, req });
+  return await normalizeStructuredExtractionResult({
+    text,
+    model,
+    provider: req.provider,
+    request: req,
+    errorLabel: "Codex structured extraction",
+    validationCacheKey: "codex.media-understanding.extractStructured",
+  });
 }
 
 function buildCodexImagePrompt(req: ImagesDescriptionRequest): string {
@@ -157,52 +164,4 @@ function buildCodexStructuredInput(req: StructuredExtractionRequest): CodexUserI
       };
     }),
   ];
-}
-
-function buildStructuredExtractionPrompt(req: StructuredExtractionRequest): string {
-  return [
-    req.instructions.trim(),
-    req.schemaName ? `Schema name: ${req.schemaName}` : undefined,
-    req.jsonSchema ? `JSON schema:\n${JSON.stringify(req.jsonSchema)}` : undefined,
-    req.jsonMode === false
-      ? "Return the extraction as concise text."
-      : "Return valid JSON only. Do not wrap the JSON in Markdown fences.",
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join("\n\n");
-}
-
-function normalizeStructuredExtractionResult(params: {
-  text: string;
-  model: string;
-  provider: string;
-  req: StructuredExtractionRequest;
-}): StructuredExtractionResult {
-  const result: StructuredExtractionResult = {
-    text: params.text,
-    model: params.model,
-    provider: params.provider,
-    contentType: params.req.jsonMode === false ? "text" : "json",
-  };
-  if (params.req.jsonMode !== false) {
-    try {
-      result.parsed = JSON.parse(params.text);
-    } catch {
-      throw new Error("Codex structured extraction returned invalid JSON.");
-    }
-    if (isRecord(params.req.jsonSchema)) {
-      const validation = validateJsonSchemaValue({
-        schema: params.req.jsonSchema,
-        cacheKey: "codex.media-understanding.extractStructured",
-        value: result.parsed,
-        cache: false,
-      });
-      if (!validation.ok) {
-        const message = validation.errors.map((error) => error.text).join("; ") || "invalid";
-        throw new Error(`Codex structured extraction JSON did not match schema: ${message}`);
-      }
-      result.parsed = validation.value;
-    }
-  }
-  return result;
 }
