@@ -14,6 +14,7 @@ import {
   resolveSandboxedMediaSource,
 } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import type { SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
@@ -144,11 +145,22 @@ export function createReplyMediaPathNormalizer(params: {
   });
   const explicitSandboxRoot = params.sandboxRoot?.trim();
   let sandboxWorkspacePromise:
-    | Promise<{ root: string; containerWorkdir?: string } | undefined>
+    | Promise<
+        | {
+            root: string;
+            containerWorkdir?: string;
+            workspaceAccess: SandboxWorkspaceAccess;
+          }
+        | undefined
+      >
     | undefined = explicitSandboxRoot
     ? Promise.resolve({
         root: explicitSandboxRoot,
         containerWorkdir: params.sandboxContainerWorkdir,
+        // Explicit sandbox roots carry no access metadata; fail closed so host-workspace
+        // staging cannot be reached through sandboxed send paths.
+        // SAFETY: explicit roots have no access metadata, so the fail-closed "none" default preserves the explicit-root compatibility posture.
+        workspaceAccess: "none" as SandboxWorkspaceAccess,
       })
     : undefined;
   const persistedMediaBySource = new Map<string, Promise<{ path: string; contentType?: string }>>();
@@ -162,18 +174,27 @@ export function createReplyMediaPathNormalizer(params: {
         workspaceDir: params.workspaceDir,
       }).then((sandbox) =>
         sandbox
-          ? { root: sandbox.workspaceDir, containerWorkdir: sandbox.containerWorkdir }
+          ? {
+              root: sandbox.workspaceDir,
+              containerWorkdir: sandbox.containerWorkdir,
+              // Fail closed when access metadata is absent: treat as unmounted.
+              workspaceAccess: sandbox.workspaceAccess ?? "none",
+            }
           : undefined,
       );
     }
     return await sandboxWorkspacePromise;
   };
 
-  const resolveMediaAccessForSource = (media: string, sessionWorkspaceDir?: string) =>
+  const resolveMediaAccessForSource = (
+    media: string,
+    sessionWorkspaceDir?: string,
+    workspaceDir?: string,
+  ) =>
     resolveAgentScopedOutboundMediaAccess({
       cfg: params.cfg,
       agentId,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: workspaceDir ?? params.workspaceDir,
       ...(sessionWorkspaceDir ? { sessionWorkspaceDir } : {}),
       mediaSources: [media],
       mediaAccess: params.mediaAccess,
@@ -193,6 +214,7 @@ export function createReplyMediaPathNormalizer(params: {
   const persistLocalReplyMedia = async (
     media: string,
     sessionWorkspaceDir?: string,
+    workspaceDir?: string,
   ): Promise<{ path: string; contentType?: string }> => {
     if (!isLikelyLocalMediaSource(media)) {
       return { path: media };
@@ -209,7 +231,7 @@ export function createReplyMediaPathNormalizer(params: {
       return await cached;
     }
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
-      mediaAccess: resolveMediaAccessForSource(media, sessionWorkspaceDir),
+      mediaAccess: resolveMediaAccessForSource(media, sessionWorkspaceDir, workspaceDir),
     })
       .then((saved) => ({
         ...saved,
@@ -257,7 +279,14 @@ export function createReplyMediaPathNormalizer(params: {
     if (isPassThroughRemoteMediaSource(media)) {
       return { mediaUrl: media, trustedLocalMedia: false };
     }
-    const absoluteWorkspaceMedia = resolveAbsoluteWorkspaceMedia(media);
+    const sandboxWorkspace = await resolveSandboxWorkspace();
+    // A sandboxed session whose workspace is not mounted into the sandbox
+    // (workspaceAccess "none") must not read host-workspace files through media
+    // staging; the sandbox branch below owns those paths and fails closed.
+    const workspaceMounted = !sandboxWorkspace || sandboxWorkspace.workspaceAccess !== "none";
+    const absoluteWorkspaceMedia = workspaceMounted
+      ? resolveAbsoluteWorkspaceMedia(media)
+      : undefined;
     if (absoluteWorkspaceMedia) {
       const persisted = await persistLocalReplyMedia(absoluteWorkspaceMedia);
       return {
@@ -273,7 +302,6 @@ export function createReplyMediaPathNormalizer(params: {
       !media.startsWith("~") &&
       !path.isAbsolute(media) &&
       !WINDOWS_DRIVE_RE.test(media);
-    const sandboxWorkspace = await resolveSandboxWorkspace();
     if (sandboxWorkspace) {
       let sandboxResolvedMedia: string;
       try {
@@ -291,7 +319,13 @@ export function createReplyMediaPathNormalizer(params: {
         }
         throw err;
       }
-      const persisted = await persistLocalReplyMedia(sandboxResolvedMedia, sandboxWorkspace.root);
+      const persisted = await persistLocalReplyMedia(
+        sandboxResolvedMedia,
+        sandboxWorkspace.root,
+        // Without a mounted workspace, the session's media workspace is its sandbox,
+        // never the host agent workspace.
+        workspaceMounted ? undefined : sandboxWorkspace.root,
+      );
       return {
         mediaUrl: persisted.path,
         trustedLocalMedia: true,
