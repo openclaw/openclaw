@@ -745,6 +745,10 @@ describe("maturity docs renderer CLI", () => {
       "**Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack)",
     );
     expect(taxonomy).toContain("[WeChat](/channels/wechat), [WeCom](/channels/wecom)");
+    expect(taxonomy).toContain(
+      "[Amazon Bedrock](/providers/bedrock), [Amazon Bedrock Mantle](/providers/bedrock-mantle)",
+    );
+    expect(taxonomy).toContain("[PixVerse](/providers/pixverse)");
     for (const id of [
       "chromeos-raspberry-pi-and-small-linux-devices",
       "raspberry-pi-and-small-linux-devices",

@@ -5863,6 +5863,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Capability exists across providers, but quality, latency, and parameter compatibility vary too much for beta without per-provider proof.
 
+    **Current catalog members:** [ComfyUI](/providers/comfy), [PixVerse](/providers/pixverse), [Vydra](/providers/vydra)
+
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 61%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <details>
@@ -6074,6 +6076,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <a id="long-tail-hosted-providers" />
 
     Many docs/reference pages exist; score should be generated from provider metadata plus live smoke coverage.
+
+    **Current catalog members:** [Alibaba Token Plan (legacy custom config)](/providers/qwen), [Amazon Bedrock](/providers/bedrock), [Amazon Bedrock Mantle](/providers/bedrock-mantle), [Anthropic Vertex](/providers/models), [Arcee AI](/providers/arcee), [Baseten](/providers/baseten), [BytePlus](/concepts/model-providers#byteplus-international), [Cerebras](/providers/cerebras), [Chutes](/providers/chutes), [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway), [Cohere](/providers/cohere), [DeepInfra](/providers/deepinfra), [DeepSeek](/providers/deepseek), [Featherless AI](/providers/featherless), [Fireworks](/providers/fireworks), [GMI Cloud](/providers/gmi), [Groq](/providers/groq), [Kilo Gateway](/providers/kilocode), [Kimi Coding](/providers/moonshot), [LongCat](/providers/longcat), [Meta](/providers/meta), [Mistral](/providers/mistral), [Moonshot](/providers/moonshot), [NovitaAI](/providers/novita), [OpenCode Go](/providers/opencode-go), [OpenCode Zen](/providers/opencode), [Qianfan](/providers/qianfan), [Qwen Cloud](/providers/qwen), [Qwen Token Plan](/providers/qwen), [Radius](/providers/radius), [StepFun](/providers/stepfun), [StepFun stepfun plan](/providers/stepfun), [Synthetic](/providers/synthetic), [Tencent TokenHub](/providers/tencent), [Tencent TokenPlan](/providers/tencent), [Venice](/providers/venice), [Vercel AI Gateway](/providers/vercel-ai-gateway), [Volcengine](/providers/volcengine), [Volcengine Plan](/providers/volcengine), [Voyage](/reference/memory-config), [Xiaomi](/providers/xiaomi), [Xiaomi Token Plan](/providers/xiaomi), [Z.AI](/providers/zai)
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 61%</span><span>Completeness Alpha - 68%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 

@@ -32,7 +32,9 @@ import { parseDocsDocument, resolveDocsFragment } from "../lib/docs-markdown.mjs
 import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
 import {
   collectChannelMaturityInventory,
+  collectProviderMaturityInventory,
   MATURITY_CHANNEL_COHORT_SURFACE_IDS,
+  MATURITY_PROVIDER_COHORT_SURFACE_IDS,
 } from "./maturity-inventory.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
@@ -228,10 +230,11 @@ const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
 };
 
 function renderCatalogMembers(surfaceId: string): string[] {
-  if (!MATURITY_CHANNEL_COHORT_SURFACE_IDS.has(surfaceId)) {
-    return [];
-  }
-  const members = collectChannelMaturityInventory().membersBySurface.get(surfaceId) ?? [];
+  const members = MATURITY_CHANNEL_COHORT_SURFACE_IDS.has(surfaceId)
+    ? (collectChannelMaturityInventory().membersBySurface.get(surfaceId) ?? [])
+    : MATURITY_PROVIDER_COHORT_SURFACE_IDS.has(surfaceId)
+      ? (collectProviderMaturityInventory().membersBySurface.get(surfaceId) ?? [])
+      : [];
   if (members.length === 0) {
     return [];
   }
