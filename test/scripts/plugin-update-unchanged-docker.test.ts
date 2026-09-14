@@ -350,6 +350,9 @@ describe("plugin update unchanged Docker E2E", () => {
       script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
     ).toBe(1);
     expect(script).toContain("--channel beta");
+    expect(script).toContain(
+      'export OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org/}"',
+    );
     expect(script.match(/--timeout "\$update_step_timeout_seconds"/g)).toHaveLength(1);
     expect(script).not.toContain("OPENCLAW_UPDATE_POST_CORE=1");
     expect(script).not.toContain(

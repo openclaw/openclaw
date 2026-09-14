@@ -1,5 +1,5 @@
 // OpenAI-compatible chat tools tests cover QA Lab HTTP tool-call evidence.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -59,11 +59,17 @@ function runWriteConfig(root: string, env: Record<string, string> = {}) {
 }
 
 function runDockerRunnerAuthPreflight(root: string, env: Record<string, string> = {}) {
+  const repoRoot = path.resolve(import.meta.dirname, "../../../..");
+  const selectedSha = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
   return spawnSync("bash", [dockerRunnerPath], {
     encoding: "utf8",
     env: {
       ...process.env,
       HOME: root,
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot,
+      OPENCLAW_SELECTED_SHA: selectedSha,
       OPENAI_API_KEY: "",
       OPENAI_BASE_URL: "",
       OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE: path.join(root, "missing.profile"),

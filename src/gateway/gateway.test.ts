@@ -914,7 +914,7 @@ module.exports = {
           expect(result).toMatchObject({
             done: true,
             status: "error",
-            error: `Error: Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+            error: `Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
           });
           expect(result.step).toBeUndefined();
         }

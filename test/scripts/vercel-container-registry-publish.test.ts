@@ -951,7 +951,7 @@ describe("Vercel Container Registry publishing", () => {
   it("pins the complete Vercel CLI dependency closure", () => {
     const packageJson = JSON.parse(
       readFileSync(".github/release/vercel-cli/package.json", "utf8"),
-    ) as { dependencies?: Record<string, string> };
+    ) as { dependencies?: Record<string, string>; overrides?: Record<string, string> };
     const packageLockBytes = readFileSync(".github/release/vercel-cli/package-lock.json");
     const packageLock = JSON.parse(packageLockBytes.toString("utf8")) as {
       lockfileVersion?: number;
@@ -961,6 +961,12 @@ describe("Vercel Container Registry publishing", () => {
 
     expect(packageJson.dependencies).toEqual({ sandbox: "4.2.1", vercel: "59.11.7" });
     expect(packageLock.lockfileVersion).toBe(3);
+    expect(packageJson.overrides?.["undici@5.28.4 || 5.29.0"]).toBe("6.28.1");
+    expect(packageLock.packages?.["node_modules/undici"]).toMatchObject({
+      version: "6.28.1",
+      integrity:
+        "sha512-zWpdTVD54H48CIybL0rWQ3ukpb9d23wM7eH5RtfdmeP70cWHNjtfo7P4vZX+5CoDcO53J4Pu5uXp7lNfjc6DRA==",
+    });
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
         "sha512-C+L/JKmlGDypKGcTU/atckydeK/AKa/7fKwUbvcwveguV1QPlY8beiIGgbwkdbb80bbIpPFHRQYrhi5XPAmCBA==",

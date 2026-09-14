@@ -52,6 +52,9 @@ async function fixture(shadow = false) {
   ];
   await dropdown.updateComplete;
   await Promise.all(items.map((entry) => entry.updateComplete));
+  const { page } = await import("vitest/browser");
+  // Reset the prior fixture's pointer before its position can open a new submenu.
+  await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
   dropdown.open = true;
   await expect.poll(() => root.querySelector("wa-dropdown")?.open).toBe(true);
   await expect.poll(() => focused()).toBe(first);
@@ -105,6 +108,17 @@ async function back(key: string, trigger: Item) {
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", () => {
+  it("starts a fresh fixture after the previous menu was hovered", async () => {
+    const { page } = await import("vitest/browser");
+    const previous = await fixture();
+    await page.elementLocator(previous.parent).hover();
+    await expect.poll(() => focused()).toBe(previous.middle);
+    previous.host.remove();
+    const next = await fixture();
+    expect(next.parent.submenuOpen).toBe(false);
+    expect(focused()).toBe(next.first);
+  });
+
   it.each(["ltr", "rtl"] as const)(
     "returns to root after sibling replacement (%s)",
     async (dir) => {

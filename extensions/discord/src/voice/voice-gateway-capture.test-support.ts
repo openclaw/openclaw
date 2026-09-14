@@ -274,6 +274,9 @@ export function createDiscordGatewayCaptureFixture(params: {
 
   return {
     register(api: OpenClawPluginApi) {
+      // The fixture replaces the channel entrypoint, including its runtime setter.
+      installedRuntime = api.runtime;
+      runtimeStore.setRuntime(installedRuntime);
       // Same probe-type erasure used by defineBundledChannelEntry at registration.
       api.registerChannel({ plugin: discordPlugin as ChannelPlugin });
       registerDiscordTranscriptSourceProvider(api);

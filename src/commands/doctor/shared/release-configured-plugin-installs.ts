@@ -376,7 +376,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     };
   }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
-    return { changes: [], warnings: [], completed: true, touchedConfig: !updateInProgress };
+    return { changes: [], warnings: [], completed: true, touchedConfig: false };
   }
   const repaired = await repairMissingPluginInstallsForIds({
     cfg: params.cfg,

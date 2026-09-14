@@ -1,4 +1,6 @@
+import { bindPluginCliProgram } from "./cli-callback-binding.js";
 import { pluginInstanceState, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import type { OpenClawPluginCliRegistrar } from "./plugin-registration.types.js";
 import type { OpenClawPluginApi } from "./types.js";
 
 type PluginApiFacadeFields = Pick<
@@ -98,6 +100,20 @@ export function instrumentPluginInstanceApi(
           (!key.startsWith("register") && key !== "on" && key !== "onConversationBindingResolved")
         ) {
           return value;
+        }
+        if (key === "registerCli" || key === "registerNodeCliFeature") {
+          return (registrar: OpenClawPluginCliRegistrar, ...options: unknown[]) =>
+            instance.run(() =>
+              Reflect.apply(value, target, [
+                instance.wrap((context: Parameters<OpenClawPluginCliRegistrar>[0]) => {
+                  // Commander retains callbacks beyond this registrar's invocation.
+                  // Bind at the typed host boundary, without proxying its native objects.
+                  bindPluginCliProgram(context.program);
+                  return registrar(context);
+                }),
+                ...options.map((option) => instance.wrap(option)),
+              ]),
+            );
         }
         return (...args: unknown[]) =>
           instance.run(() =>

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();
 
-vi.mock("./probe.runtime.js", () => ({
+vi.mock("./client/create-client.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
 }));
 
@@ -31,6 +31,33 @@ describe("probeMatrix", () => {
       accessToken: "tok",
       persistStorage: false,
       localTimeoutMs: 1234,
+    });
+  });
+
+  it.each([
+    { homeserver: " ", accessToken: "tok", error: "missing homeserver" },
+    {
+      homeserver: "https://matrix.example.org",
+      accessToken: " ",
+      error: "missing access token",
+    },
+  ])("rejects $error before creating a client", async ({ homeserver, accessToken, error }) => {
+    const result = await probeMatrix({ homeserver, accessToken });
+
+    expect(result).toMatchObject({ ok: false, error });
+    expect(createMatrixClientMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a token authenticated as a different user", async () => {
+    const result = await probeMatrix({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok",
+      userId: "@other:example.org",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "Matrix access token user does not match configured userId",
     });
   });
 

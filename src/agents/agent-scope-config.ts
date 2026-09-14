@@ -201,6 +201,9 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 }
 
 /** Lists unique configured agent ids. */
+export function listAgentIds(cfg: AgentRosterConfig): string[];
+// Keep the shipped full-config signature last for Parameters<typeof listAgentIds> consumers.
+export function listAgentIds(cfg: OpenClawConfig): string[];
 export function listAgentIds(cfg: AgentRosterConfig): string[] {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {

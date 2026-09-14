@@ -306,7 +306,11 @@ describe("plugin registry facade", () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
     const config = { plugins: { entries: { demo: { enabled: false } } } };
-    const env = hermeticEnv();
+    // This persisted fixture contains only demo, not the checkout's bundled inventory.
+    const env = hermeticEnv({
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    });
     const persisted = loadPluginRegistrySnapshot({
       candidates: [createCandidate(rootDir)],
       config,
@@ -547,7 +551,11 @@ describe("plugin registry facade", () => {
   it("keeps content-equivalent timestamp changes on the persisted path", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
-    const env = hermeticEnv();
+    // This persisted fixture contains only demo, not the checkout's bundled inventory.
+    const env = hermeticEnv({
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    });
     const persisted = loadPluginRegistrySnapshot({
       candidates: [createCandidate(rootDir)],
       env,

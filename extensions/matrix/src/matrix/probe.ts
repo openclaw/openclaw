@@ -7,10 +7,8 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(() =>
-  import("./probe.runtime.js").then((runtimeModule) => ({
-    createMatrixClient: runtimeModule.createMatrixClient,
-  })),
+const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(
+  () => import("./client/create-client.js"),
 );
 
 export type MatrixProbe = BaseProbeResult & {

@@ -46,6 +46,11 @@ Retained compatibility entrypoints keep their shipped caller names:
 `resolvePluginProviders`, and `agent-runtime`'s
 `resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
 
+`listAgentIds` accepts full `OpenClawConfig` inputs, including inline config
+literals, through both `agent-runtime` and `agent-scope-runtime`. Readonly
+roster views remain accepted. Only the roster participates in ID selection;
+additional config fields do not change that behavior.
+
 `resolvePluginProviders` remains synchronous and returns the existing provider
 array. When it borrows from an owned inspection, the Gateway lifecycle or
 executable CLI invocation retains the backing resources until its actual work

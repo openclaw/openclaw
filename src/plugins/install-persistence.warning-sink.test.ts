@@ -73,6 +73,14 @@ describe("plugin install persistence warning audiences", () => {
         recordPluginManifestInstallOwner(
           {
             id: "workboard",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "config",
+            rootDir: install.installPath,
+            source: `${install.installPath}/index.js`,
             manifestPath: `${install.installPath}/openclaw.plugin.json`,
             configSchema: {
               type: "object",

@@ -427,12 +427,15 @@ async function stopManagedServiceBeforeMutableUpdate(
   if (serviceMutationSkipMessage) {
     return { ...uninspected, serviceMutationAllowed: false, serviceMutationSkipMessage };
   }
+  // Preparation must enter the same environment selected by admission and the
+  // native lock. Installed defaults may be explicit here but absent from the CLI.
+  const serviceEnv = params.expectedService?.serviceEnv ?? process.env;
   let service: ReturnType<typeof resolveGatewayService>;
   let serviceState: GatewayServiceState;
   try {
     service = resolveGatewayService();
     serviceState = await readGatewayServiceState(service, {
-      env: process.env,
+      env: serviceEnv,
       requireEffective: true,
       requireLoadedCommand: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
@@ -444,7 +447,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     ) {
       // Re-read the definition too: a timed-out snapshot cannot grant service ownership.
       serviceState = await readGatewayServiceState(service, {
-        env: process.env,
+        env: serviceEnv,
         requireEffective: true,
         validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
         timeoutMs: params.timeoutMs,

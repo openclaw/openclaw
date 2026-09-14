@@ -191,16 +191,22 @@ describe("action client helpers", () => {
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
   });
 
-  it("does not borrow an explicitly injected action client", async () => {
-    const injected = createMockMatrixClient();
+  it.each([false, true])(
+    "does not borrow an explicitly injected action client (started: %s)",
+    async (started) => {
+      const start = vi.fn(async () => undefined);
+      const injected = Object.assign(createMockMatrixClient(), { start });
+      const withClient = started ? withStartedActionClient : withResolvedActionClient;
 
-    await withResolvedActionClient({ client: injected }, async (client) => {
-      expect(client).toBe(injected);
-    });
+      await withClient({ client: injected }, async (client) => {
+        expect(client).toBe(injected);
+        expect(start).toHaveBeenCalledTimes(started ? 1 : 0);
+      });
 
-    expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
-    expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
-  });
+      expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
+      expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves room ids before running wrapped room actions", async () => {
     const sharedClient = createMockMatrixClient();

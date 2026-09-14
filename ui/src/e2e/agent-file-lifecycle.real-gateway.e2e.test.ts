@@ -2,18 +2,23 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
+import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -35,6 +40,8 @@ const suite = createControlUiE2eSuite({
 
 let catalogInstance: OpenClawTestInstance;
 let inventoryModel = "inventory-before";
+let catalogObserver: GatewayClient | undefined;
+let catalogChanged = createDeferred();
 const inventoryRequests: string[] = [];
 const refreshInventoryArgs = [
   "gateway",
@@ -44,30 +51,132 @@ const refreshInventoryArgs = [
   "--params",
   JSON.stringify({ agentId: "main", view: "all", refresh: true }),
 ];
-async function refreshInventory() {
-  let result = await catalogInstance.cli(refreshInventoryArgs);
-  expect(result.code, result.stderr).toBe(0);
-  let catalog: ModelCatalogResult = JSON.parse(result.stdout);
-  // Refresh can return the previous inventory while discovery continues.
-  await expect
-    .poll(async () => {
-      if (catalog.pendingProviders?.length) {
-        result = await catalogInstance.cli([
-          "gateway",
-          "call",
-          "models.list",
-          "--json",
-          "--params",
-          JSON.stringify({ agentId: "main", view: "all" }),
-        ]);
-        expect(result.code, result.stderr).toBe(0);
-        catalog = JSON.parse(result.stdout);
-      }
-      return catalog.pendingProviders ?? [];
-    })
-    .toEqual([]);
-  return result;
+type InventoryRefreshSource = {
+  refresh: () => ReturnType<OpenClawTestInstance["cli"]>;
+  read: () => Promise<ModelCatalogResult>;
+  nextPublication: () => Promise<void>;
+  requests: () => readonly string[];
+};
+const inventoryRefreshSource: InventoryRefreshSource = {
+  refresh: () => catalogInstance.cli(refreshInventoryArgs),
+  read: () =>
+    catalogObserver!.request<ModelCatalogResult>("models.list", {
+      agentId: "main",
+      view: "all",
+    }),
+  nextPublication: () => catalogChanged.promise,
+  requests: () => inventoryRequests,
+};
+async function beginInventoryRefresh(source = inventoryRefreshSource) {
+  const requestsBefore = source.requests().length;
+  const changed = source.nextPublication();
+  const command = await source.refresh();
+  expect(command.code, command.stderr).toBe(0);
+  const foreground: ModelCatalogResult = JSON.parse(command.stdout);
+  return { command, foreground, changed, requestsBefore };
 }
+async function awaitInventoryPublication(
+  started: Awaited<ReturnType<typeof beginInventoryRefresh>>,
+  source = inventoryRefreshSource,
+) {
+  let { foreground: catalog, changed } = started;
+  while (catalog.pendingProviders?.length) {
+    await changed;
+    changed = source.nextPublication();
+    catalog = await source.read();
+  }
+  return {
+    command: started.command,
+    foreground: started.foreground,
+    catalog,
+    providerRequests: source.requests().slice(started.requestsBefore),
+  };
+}
+function containsPublishedInventory(payload: unknown, id: string): boolean {
+  const catalog = createRequireRecord("record", "expected-label-record")(payload, "catalog result");
+  const pending = catalog.pendingProviders;
+  return (
+    (pending === undefined || (Array.isArray(pending) && pending.length === 0)) &&
+    Array.isArray(catalog.models) &&
+    catalog.models.some((row) => {
+      const model = createRequireRecord("record", "expected-label-record")(row, "model row");
+      return model.provider === "ollama" && model.id === id;
+    })
+  );
+}
+
+it("catalog refresh helper separates foreground completion from held publication", async () => {
+  const publication = createDeferred();
+  const heldResponse = createDeferred<ModelCatalogResult>();
+  const held: ModelCatalogResult = {
+    models: [{ provider: "ollama", id: "inventory-held", name: "Held" }],
+  };
+  const latest: ModelCatalogResult = {
+    models: [{ provider: "ollama", id: "inventory-latest", name: "Latest" }],
+  };
+  const foreground: ModelCatalogResult = { ...held, pendingProviders: ["ollama"] };
+  let refreshes = 0;
+  let reads = 0;
+  let foregroundReturned = false;
+  let heldSettled = false;
+  const source: InventoryRefreshSource = {
+    refresh: async () => ({
+      code: 0,
+      signal: null,
+      stderr: "",
+      stdout: JSON.stringify(++refreshes === 1 ? foreground : latest),
+    }),
+    nextPublication: () => publication.promise,
+    requests: () => [],
+    read: async () => {
+      reads += 1;
+      return heldResponse.promise;
+    },
+  };
+  const first = beginInventoryRefresh(source).then((value) => {
+    foregroundReturned = true;
+    return value;
+  });
+  let settling: ReturnType<typeof awaitInventoryPublication> | undefined;
+  try {
+    // The synthetic foreground RPC is already resolved; fence its queued continuations.
+    // Neither publication nor its deliberately held response has been released.
+    await nextTurn();
+    expect(foregroundReturned).toBe(true);
+    expect(reads).toBe(0);
+    const started = await first;
+    expect(started.foreground).toEqual(foreground);
+    expect(containsPublishedInventory(started.foreground, "inventory-held")).toBe(false);
+    settling = awaitInventoryPublication(started, source).then((value) => {
+      heldSettled = true;
+      return value;
+    });
+    publication.resolve();
+    await nextTurn();
+    expect(reads).toBe(1);
+    expect(heldSettled).toBe(false);
+
+    const newest = await awaitInventoryPublication(await beginInventoryRefresh(source), source);
+    expect(newest.catalog).toEqual(latest);
+    expect(heldSettled).toBe(false);
+    expect(refreshes).toBe(2);
+    heldResponse.resolve(held);
+    expect((await settling).catalog).toEqual(held);
+    expect(containsPublishedInventory(held, "inventory-held")).toBe(true);
+    expect(newest.catalog).toEqual(latest);
+    expect(reads).toBe(1);
+    console.log(
+      "CATALOG_HELPER_HELD_CONTROL",
+      JSON.stringify({ refreshes, reads, foregroundReturned, heldSettled }),
+    );
+  } finally {
+    publication.resolve();
+    heldResponse.resolve(held);
+    await first;
+    await settling;
+  }
+});
+
 const catalogModels = (id: string) => [
   { id: "anchor", name: "Anchor" },
   { id: "selected", name: "Selected" },
@@ -107,6 +216,7 @@ const catalogSuite = createControlUiE2eSuite({
           },
         },
         models: {
+          catalogRefresh: { enabled: false },
           providers: {
             ollama: { api: "ollama", baseUrl: `http://127.0.0.1:${inventoryPort}` },
             fixture: {
@@ -120,6 +230,8 @@ const catalogSuite = createControlUiE2eSuite({
       },
     });
     const close = async () => {
+      await catalogObserver?.stopAndWait();
+      catalogObserver = undefined;
       await Promise.all([
         catalogInstance.cleanup(),
         new Promise<void>((resolve, reject) => {
@@ -129,6 +241,30 @@ const catalogSuite = createControlUiE2eSuite({
     };
     try {
       await catalogInstance.startGateway();
+      catalogObserver = await acquireGatewayTestClient(
+        {
+          url: catalogInstance.url,
+          token: catalogInstance.gatewayToken,
+          clientName: "test",
+          mode: "test",
+          scopes: ["operator.admin"],
+          sharedStateMode: "read-only",
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: catalogInstance.state.statePath("catalog-observer-device.sqlite"),
+          }),
+          onEvent: ({ event }) => {
+            if (event === "chat.metadata.changed") {
+              catalogChanged.resolve();
+              catalogChanged = createDeferred();
+            }
+          },
+        },
+        {
+          timeoutMs: 10_000,
+          timeoutMessage: "Catalog observer connection timed out",
+          closeMessage: "Catalog observer closed",
+        },
+      );
       return {
         baseUrl: `http://127.0.0.1:${catalogInstance.port}/`,
         close,
@@ -163,6 +299,7 @@ catalogSuite.define(() => {
     const mutations: string[] = [];
     let rejectCatalog = false;
     let holdCatalog = false;
+    let heldInventoryPublished = false;
     const heldCatalogs: Array<() => void> = [];
     const publish = async (id: string) => {
       const args = [
@@ -178,9 +315,11 @@ catalogSuite.define(() => {
       expect(result.code, result.stderr).toBe(0);
     };
     try {
-      const initialInventory = await refreshInventory();
-      expect(initialInventory.code, initialInventory.stderr).toBe(0);
-      expect(initialInventory.stdout).toContain("inventory-before");
+      const initialInventory = await awaitInventoryPublication(await beginInventoryRefresh());
+      commands.push({ args: refreshInventoryArgs, ...initialInventory });
+      expect(initialInventory.catalog.models).toContainEqual(
+        expect.objectContaining({ provider: "ollama", id: "inventory-before" }),
+      );
       await catalogSuite.withPage(
         {
           locale: "en-US",
@@ -222,8 +361,17 @@ catalogSuite.define(() => {
                   transportFailure: catalogReply && rejectCatalog,
                 });
               }
-              if (catalogReply && holdCatalog) {
+              if (
+                catalogReply &&
+                holdCatalog &&
+                frame.ok === true &&
+                (containsPublishedInventory(frame.payload, "inventory-held") ||
+                  containsPublishedInventory(frame.payload, "inventory-latest"))
+              ) {
+                // Pending replies remain deliverable. Gate only the completed old
+                // publication and its queued replacement to prove single-flight reads.
                 heldCatalogs.push(() => socket.send(message));
+                heldInventoryPublished ||= containsPublishedInventory(frame.payload, "inventory-held");
               } else if (catalogReply && rejectCatalog) {
                 socket.send(
                   JSON.stringify({
@@ -284,10 +432,11 @@ catalogSuite.define(() => {
           }
 
           inventoryModel = "inventory-after";
-          const refreshed = await refreshInventory();
-          commands.push({ args: refreshInventoryArgs, publishedInventory: refreshed });
-          expect(refreshed.code, refreshed.stderr).toBe(0);
-          expect(refreshed.stdout).toContain("inventory-after");
+          const refreshed = await awaitInventoryPublication(await beginInventoryRefresh());
+          commands.push({ args: refreshInventoryArgs, ...refreshed });
+          expect(refreshed.catalog.models).toContainEqual(
+            expect.objectContaining({ provider: "ollama", id: "inventory-after" }),
+          );
           await expect
             .poll(() =>
               picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
@@ -311,11 +460,13 @@ catalogSuite.define(() => {
 
           holdCatalog = true;
           inventoryModel = "inventory-held";
-          commands.push(await refreshInventory());
+          commands.push(await beginInventoryRefresh());
+          // Hold the completed old publication, not its foreground pending response.
+          await expect.poll(() => heldInventoryPublished).toBe(true);
           await expect.poll(() => heldCatalogs.length).toBe(1);
           const readsWhileHeld = catalogRequests.size;
           inventoryModel = "inventory-latest";
-          commands.push(await refreshInventory());
+          commands.push(await awaitInventoryPublication(await beginInventoryRefresh()));
           await settleCatalogFrames();
           expect(catalogRequests.size).toBe(readsWhileHeld);
           expect(heldCatalogs).toHaveLength(1);

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.9.4",
+  "version": "2026.9.5",
   "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -23,7 +23,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.4"
+    "openclaw": ">=2026.9.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -99,11 +99,11 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.9.4"
+      "pluginApi": ">=2026.9.5"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.9.4",
+      "openclawVersion": "2026.9.5",
       "staticAssets": [
         {
           "source": "./assets/embedded-app-sdk.mjs",

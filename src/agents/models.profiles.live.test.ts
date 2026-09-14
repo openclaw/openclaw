@@ -1,10 +1,18 @@
 // Live-sweeps discovered model profiles with optional provider/model filters and probes.
 import { writeSync } from "node:fs";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
-import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
+import {
+  prepareHeadersForSimpleCompletion,
+  prepareModelForSimpleCompletion,
+} from "@openclaw/ai/transports";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
-import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import {
+  type Api,
+  completeSimple,
+  createAssistantMessageEventStream,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,6 +47,7 @@ import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
 import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import {
   appendPrioritizedDynamicLiveModels,
   applyLiveProviderPluginDiscoveryCompat,
@@ -1334,10 +1343,12 @@ async function completeSimpleWithTimeout<TApi extends Api>(
       model,
       cfg: activeLiveCompletionConfig,
     });
+    const headers = prepareHeadersForSimpleCompletion(completionModel, options);
     return await withLiveHeartbeat(
       Promise.race([
         completeSimple(completionModel, context, {
           ...options,
+          ...(headers ? { headers } : {}),
           signal: controller.signal,
         }),
         timeout,
@@ -1351,6 +1362,68 @@ async function completeSimpleWithTimeout<TApi extends Api>(
     }
   }
 }
+
+describe("standalone live completion routing", () => {
+  it("preserves standalone routing in live probes without creating cache sessions", async () => {
+    const api = "openclaw-live-routing-fixture";
+    const model = {
+      api,
+      id: "routing-fixture",
+      name: "Routing fixture",
+      provider: "routing-fixture",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 32,
+    } satisfies Model<typeof api>;
+    const requests: Array<NonNullable<Parameters<typeof completeSimple>[2]>> = [];
+    const response = makeAssistantMessageFixture({
+      api,
+      provider: model.provider,
+      model: model.id,
+      content: [{ type: "text", text: "ok" }],
+      stopReason: "stop",
+      errorMessage: undefined,
+    });
+    const stream = (
+      _model: Model,
+      _context: Parameters<typeof completeSimple>[1],
+      options?: Parameters<typeof completeSimple>[2],
+    ) => {
+      requests.push(options ?? {});
+      const result = createAssistantMessageEventStream();
+      result.end(response);
+      return result;
+    };
+    defaultApiRegistry.registerApiProvider({ api, stream, streamSimple: stream }, api);
+    try {
+      for (let index = 0; index < 2; index++) {
+        await expect(
+          completeSimpleWithTimeout(
+            model,
+            { messages: [{ role: "user", content: "ping", timestamp: 0 }] },
+            { headers: { "X-Probe": "retained" } },
+            1_000,
+            "routing-fixture",
+          ),
+        ).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+      }
+      expect(requests).toHaveLength(2);
+      const first = requests[0]?.headers?.["x-opencode-session"];
+      expect(first).toEqual(expect.any(String));
+      expect(first?.length).toBeGreaterThan(0);
+      expect(requests[1]?.headers?.["x-opencode-session"]).not.toBe(first);
+      for (const request of requests) {
+        expect(request.headers?.["X-Probe"]).toBe("retained");
+        expect(request.sessionId).toBeUndefined();
+      }
+    } finally {
+      defaultApiRegistry.unregisterApiProviders(api);
+    }
+  });
+});
 
 function requireToolChoicePayload(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
