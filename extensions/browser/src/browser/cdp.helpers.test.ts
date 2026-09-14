@@ -56,6 +56,7 @@ import {
   resolveCdpTabOwnership,
   scopeCdpPolicyToConfiguredEndpoint,
 } from "./cdp.helpers.js";
+import { captureScreenshot } from "./cdp.screenshot.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 const remoteOwnership = {
@@ -696,6 +697,62 @@ describe("CDP websocket transport", () => {
       }
     }
   });
+
+  it("aborts an unanswered command issued after the handshake", async () => {
+    const server = await startWsServer();
+    const commandReceived = Promise.withResolvers<void>();
+    onCommand(server, (message) => {
+      if (message.method === "Test.hang") {
+        commandReceived.resolve();
+      }
+    });
+    const controller = new AbortController();
+    const pending = withCdpSocket(
+      wsUrl(server),
+      async (send) => {
+        const command = send("Test.hang");
+        await commandReceived.promise;
+        controller.abort(new Error("browser request cancelled"));
+        return await command;
+      },
+      {
+        commandTimeoutMs: 2_000,
+        handshakeRetries: 0,
+        signal: controller.signal,
+        abortScope: "operation",
+      },
+    );
+
+    await expect(pending).rejects.toThrow(
+      /browser request cancelled|CDP socket closed|WebSocket was closed/i,
+    );
+  });
+
+  it("cancels an unanswered screenshot command through captureScreenshot", async () => {
+    const server = await startWsServer();
+    const captureCommandReceived = Promise.withResolvers<void>();
+    onCommand(server, (message, socket) => {
+      if (message.method === "Page.captureScreenshot") {
+        captureCommandReceived.resolve();
+        return;
+      }
+      socket.send(JSON.stringify({ id: message.id, result: {} }));
+    });
+
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const pending = captureScreenshot({
+      wsUrl: wsUrl(server),
+      signal: controller.signal,
+      timeoutMs: 5_000,
+    });
+
+    await captureCommandReceived.promise;
+    controller.abort(new Error("screenshot request cancelled"));
+
+    await expect(pending).rejects.toThrow("screenshot request cancelled");
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  }, 3_000);
 
   it("keeps an admitted write socket available for compensation after caller abort", async () => {
     const server = await startWsServer();
