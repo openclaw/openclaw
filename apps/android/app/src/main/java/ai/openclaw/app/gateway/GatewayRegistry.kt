@@ -29,6 +29,7 @@ data class GatewayRegistryEntry(
   val tls: Boolean = true,
   val lastConnectedAtMs: Long = 0L,
   val contextPath: String = "",
+  val accessOrigin: String? = null,
 )
 
 @Serializable
@@ -85,6 +86,7 @@ class GatewayRegistryStore(
           name = entry.name.trim().ifEmpty { stableId },
           host = entry.host?.trim()?.takeIf { it.isNotEmpty() },
           contextPath = normalizeGatewayContextPath(entry.contextPath),
+          accessOrigin = entry.accessOrigin ?: existing?.accessOrigin,
           lastConnectedAtMs =
             if (entry.lastConnectedAtMs == 0L) {
               existing?.lastConnectedAtMs ?: 0L
@@ -94,6 +96,20 @@ class GatewayRegistryStore(
         )
       _entries.value = (_entries.value.filterNot { it.stableId == stableId } + normalized).sortedForStorage()
       persist()
+    }
+
+  /** Verified ownership metadata is committed before an Access grant; it never implies authentication. */
+  internal fun setAccessOrigin(
+    stableId: String,
+    origin: CloudflareAccessOrigin?,
+  ): Boolean =
+    synchronized(mutationLock) {
+      if (!mutationsAllowed) return@synchronized false
+      val entry = _entries.value.firstOrNull { it.stableId == stableId } ?: return@synchronized false
+      val next = _entries.value.map { if (it === entry) it.copy(accessOrigin = origin?.uri?.toString()) else it }
+      if (!persistSynchronously(next, _activeStableId.value, _connectedStableIds.value)) return@synchronized false
+      _entries.value = next
+      true
     }
 
   fun setActive(stableId: String?): Unit =
