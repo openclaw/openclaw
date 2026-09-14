@@ -109,13 +109,14 @@ export type SlackMonitorContext = {
   ) => SlackMessageEvent["channel_type"] | undefined;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<SlackUserInfo>;
   resolveUserAvatar: (userId: string, eventScope?: SlackEventScope) => string | undefined;
+  /** True means Slack accepted the status write, not that every client rendered it. */
   setSlackSessionStatus: (params: {
     channelId: string;
     threadTs?: string;
     status: "processing" | "active" | "suspended";
     title?: string;
     eventScope?: SlackEventScope;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   recordSlackSessionTitle: (params: {
     channelId: string;
     threadTs: string;

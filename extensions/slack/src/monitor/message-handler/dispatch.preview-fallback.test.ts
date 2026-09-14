@@ -372,7 +372,7 @@ function createPreparedSlackMessage(params?: {
     threadTs?: string;
     status: string;
     title?: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   sessionDisplayName?: string;
   typingReaction?: string;
   ackReactionMessageTs?: string;
@@ -412,7 +412,7 @@ function createPreparedSlackMessage(params?: {
       channelHistories: new Map(),
       allowFrom: [],
       dispatchReplyFromConfig: params?.dispatchReplyFromConfig,
-      setSlackSessionStatus: params?.setSlackSessionStatus ?? (async () => undefined),
+      setSlackSessionStatus: params?.setSlackSessionStatus ?? (async () => true),
     },
     account: {
       accountId: "default",
@@ -2233,7 +2233,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       const draftStream = createDraftStreamStub();
       draftStream.messageId = () => undefined;
       createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-      const setSlackSessionStatus = vi.fn(async () => undefined);
+      const setSlackSessionStatus = vi.fn(async () => true);
       mockedReplyOptionEvents = [
         {
           kind: "checkpoint",
@@ -2268,7 +2268,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   );
 
   it("does not restart Slack session status once the turn has visible output", async () => {
-    const setSlackSessionStatus = vi.fn(async () => undefined);
+    const setSlackSessionStatus = vi.fn(async () => true);
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({ setSlackSessionStatus }));
 
@@ -2281,7 +2281,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps Slack typing callbacks when channel replies are message-tool-only", async () => {
-    const setSlackSessionStatus = vi.fn(async () => undefined);
+    const setSlackSessionStatus = vi.fn(async () => true);
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
