@@ -73,6 +73,11 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("sessions.companion.ask")).length)
           .toBe(2);
+        const retriedQuestion = entry === "new-question" ? "retry" : question;
+        expect((await gateway.getRequests("sessions.companion.ask"))[1]).toMatchObject({
+          params: { question: retriedQuestion },
+        });
+        expect(await side.getByText(retriedQuestion, { exact: true }).count()).toBe(1);
         await page.screenshot({ path: path.join(artifactDir, "retry-pending.png") });
         expect(await page.getByText(mainAnswer, { exact: true }).isVisible()).toBe(true);
         expect(await side.getByText(sideAnswer, { exact: true }).isVisible()).toBe(true);
@@ -96,6 +101,12 @@ suite.define(() => {
         });
         await retry.click();
         await side.getByText("Retry recovered the answer.", { exact: true }).waitFor();
+        expect(await gateway.getRequests("sessions.companion.ask")).toMatchObject([
+          { params: { question } },
+          { params: { question: retriedQuestion } },
+          { params: { question: retriedQuestion } },
+        ]);
+        expect(await side.getByText(retriedQuestion, { exact: true }).count()).toBe(1);
         await page.screenshot({ path: path.join(artifactDir, "retry-recovered.png") });
         expect(await page.getByText(mainAnswer, { exact: true }).isVisible()).toBe(true);
         expect(await side.getByText(sideAnswer, { exact: true }).isVisible()).toBe(true);
