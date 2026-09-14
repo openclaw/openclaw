@@ -167,6 +167,17 @@ function isAppleSharedBuildInput(path) {
   );
 }
 
+/** @param {Record<string, string | undefined>} scripts */
+export function listWindowsCiTestFiles(scripts) {
+  return [1, 2].flatMap((part) => {
+    const targets = scripts[`test:windows:ci:${part}`]?.match(/[^\s"']+\.test\.ts/g);
+    if (!targets) {
+      throw new Error(`Windows CI part ${part} must declare explicit test paths`);
+    }
+    return targets;
+  });
+}
+
 /**
  * Detects high-level CI scope from changed file paths.
  * @param {string[]} changedPaths
@@ -181,15 +192,7 @@ export function detectChangedScope(changedPaths) {
   const scripts = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   ).scripts;
-  const windowsCiTests = new Set(
-    [1, 2].flatMap((part) => {
-      const targets = scripts[`test:windows:ci:${part}`].match(/[^\s"']+\.test\.ts/g);
-      if (!targets) {
-        throw new Error(`Windows CI part ${part} must declare explicit test paths`);
-      }
-      return targets;
-    }),
-  );
+  const windowsCiTests = new Set(listWindowsCiTestFiles(scripts));
 
   let runNode = false;
   let runMacos = false;

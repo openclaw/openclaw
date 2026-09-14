@@ -1417,6 +1417,13 @@ jobs:
               return null;
             }
           })();
+          // A leaf-test-only PR needs its native tests, not two unrelated full
+          // suites. Source/support changes and uncertain consumers stay full.
+          const changedWindowsTests =
+            eventName === "pull_request" && !frozenTarget && changedPaths &&
+            typeof changedNodeTestPlan.resolveChangedWindowsTestTargets === "function"
+              ? changedNodeTestPlan.resolveChangedWindowsTestTargets(changedPaths)
+              : undefined;
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
@@ -1961,7 +1968,9 @@ jobs:
             // file cost; historical targets retain their original package commands.
             checks_windows_matrix: createMatrix(
               runWindows
-                ? windowsTestPlan
+                ? changedWindowsTests
+                  ? [{ check_name: "checks-windows-node-test-selected", runtime: "node", task: "test", targets: changedWindowsTests }]
+                  : windowsTestPlan
                   ? windowsTestPlan.createWindowsTestShards(packageScripts).map((shard) => ({
                       ...shard,
                       runtime: "node",

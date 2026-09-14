@@ -603,6 +603,7 @@ function runCiManifestFixture(options: {
   changedPlannerDependencies?: string[];
   changedPaths?: string[] | null;
   changedCoreTestSupport?: boolean;
+  windowsTestTargets?: string[] | null;
   repository?: string;
   eventName?: "pull_request" | "push" | "workflow_dispatch";
   historicalCompatibility?: boolean;
@@ -808,6 +809,12 @@ function runCiManifestFixture(options: {
           export const resolveChangedDockerSeedLanes = (changedPaths) => changedPaths.includes("scripts/e2e/docker-openai-seed.ts") ? ["mcp-channels", "cron-mcp-cleanup"] : [];
         `,
         "utf8",
+      );
+    }
+    if (options.windowsTestTargets !== undefined) {
+      appendFileSync(
+        path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
+        `\nexport const resolveChangedWindowsTestTargets = () => ${JSON.stringify(options.windowsTestTargets)};\n`,
       );
     }
     if (options.bundledPlanner) {
@@ -5492,6 +5499,80 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       );
       expect(evaluateCondition(expectDefined(step.if, name)), name).toBe(fixture.proof);
     }
+  });
+
+
+  it.each(["pull_request", "push", "workflow_dispatch"] as const)(
+    "uses independent Windows test selection only for ordinary PRs (%s)",
+    (eventName) => {
+      const targets = ["extensions/canvas/scripts/pnpm-runner.test.ts"];
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        historicalCompatibility: false,
+        eventName,
+        changedPaths: targets,
+        windowsTestTargets: targets,
+      });
+      expect(result.status, result.output).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(result.outputs.checks_windows_matrix, "Windows matrix"),
+      ).include;
+      expect(rows).toEqual(
+        eventName === "pull_request"
+          ? [
+              {
+                check_name: "checks-windows-node-test-selected",
+                runtime: "node",
+                task: "test-selected",
+                targets,
+              },
+            ]
+          : [
+              { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
+              { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
+            ],
+      );
+    },
+  );
+
+  it("runs selected Windows test arguments unchanged and propagates failures", () => {
+    const step = readCiWorkflow().jobs["checks-windows"].steps.find(
+      (candidate: WorkflowStep) =>
+        candidate.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+    const cwd = tempDirs.make("windows-selected-execution-");
+    mkdirSync(path.join(cwd, "scripts"));
+    writeFileSync(path.join(cwd, "scripts/tsx.mjs"), "export {};\n");
+    writeFileSync(
+      path.join(cwd, "scripts/test-projects.mts"),
+      `console.log(JSON.stringify({ targets: process.argv.slice(2), parallelism: process.env.OPENCLAW_TEST_PROJECTS_PARALLEL }));
+process.exitCode = Number(process.env.FIXTURE_EXIT);`,
+    );
+    const targets = ["test/path with spaces.test.ts", 'test/quote";echo.test.ts'];
+    for (const exitCode of [0, 7]) {
+      const result = runWorkflowShellScript(step.run, {
+        cwd,
+        env: {
+          ...process.env,
+          TASK: "test-selected",
+          SELECTED_TESTS_JSON: JSON.stringify(targets),
+          FIXTURE_EXIT: String(exitCode),
+        },
+      });
+      expect(result.status, result.stderr).toBe(exitCode);
+      expect(JSON.parse(result.stdout)).toEqual({ targets, parallelism: "1" });
+    }
+    const empty = runWorkflowShellScript(step.run, {
+      cwd,
+      env: {
+        ...process.env,
+        TASK: "test-selected",
+        SELECTED_TESTS_JSON: "[]",
+        FIXTURE_EXIT: "0",
+      },
+    });
+    expect(empty.status).not.toBe(0);
+    expect(empty.stderr).toContain("nonempty test-file list");
   });
 
   it("uses target-owned Windows shards on every runner backend and preserves frozen plans", () => {
