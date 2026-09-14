@@ -37,6 +37,7 @@ import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
 import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
+import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.mts";
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
@@ -57,6 +58,12 @@ export const vitestWorkerBuildEntries = {
       stateDirGatewayFixtureEntrypoint,
       ...Object.values(doctorConfigRuntimeEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
+      ...(nativeSchtasksIntegrationEnabled
+        ? Object.values(
+            (await import("../../src/daemon/schtasks-native-entrypoints.test-support.ts"))
+              .schtasksNativeEntrypoints,
+          )
+        : []),
       ...Object.values(tuiPtyRuntimeEntrypoints),
       ...Object.values(sessionTitleRetentionEntrypoints),
       sessionListCacheRetentionEntrypoint,

@@ -9,7 +9,10 @@ import {
   resolveVitestWorkerDeclaration,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
-import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
+import {
+  nativeSchtasksIntegrationEnabled,
+  vitestWorkerDeclarationEntries,
+} from "../../scripts/lib/vitest-worker-declarations.mts";
 
 // Configs may be separately bundled per project. The Vitest instance, not a
 // module singleton or project globalSetup, owns their one preparation request.
@@ -39,9 +42,13 @@ export function compiledSubprocessesPlugin(): Plugin {
       }
       const instance = vitest as WorkerVitest;
       if (!instance[ownerKey]) {
-        // Source and compiled imports differ, but generations within this mode
-        // share parent transforms. Keep Vitest's source/config hashing intact.
-        defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
+        // Declaration selection changes source versus compiled imports; generations
+        // with the same selection can share parent transforms.
+        defineCacheKeyGenerator(() =>
+          nativeSchtasksIntegrationEnabled
+            ? "openclaw:compiled-subprocesses:native-schtasks"
+            : "openclaw:compiled-subprocesses",
+        );
         const directory = supplied.directory;
         let preparation: Promise<string> | undefined;
         let failure: unknown;

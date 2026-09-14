@@ -1,4 +1,7 @@
 // Declaration paths are shared metadata; only the runner imports their build values.
+export const nativeSchtasksIntegrationEnabled =
+  process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
+
 export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
     "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
@@ -20,6 +23,12 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
+  ...(nativeSchtasksIntegrationEnabled
+    ? {
+        "daemon/schtasks-native-entrypoints.test-support":
+          "src/daemon/schtasks-native-entrypoints.test-support.ts",
+      }
+    : {}),
   "cli/update-cli/update-command-executor-native-runtime.test-support":
     "src/cli/update-cli/update-command-executor-native-runtime.test-support.ts",
   "commands/doctor-config-runtime.test-support":

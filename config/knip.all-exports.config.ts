@@ -9,9 +9,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
+import { createRuntimeProcessBuildEntries } from "../scripts/lib/runtime-process-core-build-entries.mts";
 import { vitestWorkerBuildEntries } from "../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../scripts/lib/vitest-worker-declarations.mts";
+import { schtasksNativeEntrypoints } from "../src/daemon/schtasks-native-entrypoints.test-support.ts";
 import productionConfig from "./knip.config.ts";
+
+// Audit native entrypoints on every host without opting into their compilation.
+const nativeSchtasksAuditEntries = createRuntimeProcessBuildEntries(
+  Object.values(schtasksNativeEntrypoints),
+);
 
 const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!";
 
@@ -109,6 +116,7 @@ const workspaces = Object.fromEntries(
         // Both compiler registries emit entry modules, including declarations
         // imported by generated child scripts. Keep workspace-relative entries.
         ...Object.values({
+          ...nativeSchtasksAuditEntries,
           ...vitestWorkerBuildEntries,
           ...vitestWorkerDeclarationEntries,
         }).flatMap((source) => {
