@@ -29,7 +29,13 @@ import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
-/** The structured artifact the safeguard commits when quality validation is exhausted. */
+/**
+ * The structured artifact the safeguard commits when quality validation is exhausted.
+ *
+ * The pending ask is CARRIED here rather than dropped: the degrade is lossy on purpose, but
+ * the active request is the one fact a later turn cannot recover from the transcript, and
+ * earlier this section read "None." while the user was still waiting on that prompt.
+ */
 const DEGRADED_FALLBACK_SUMMARY = [
   "## Decisions",
   "No prior history.",
@@ -41,7 +47,8 @@ const DEGRADED_FALLBACK_SUMMARY = [
   "None.",
   "",
   "## Pending user asks",
-  "None.",
+  "Latest user request context:",
+  '"old prompt"',
   "",
   "## Exact identifiers",
   "None captured.",
