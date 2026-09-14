@@ -85,6 +85,49 @@ describe("queued implicit reply targets", () => {
     ).toMatchObject([{ text: "queued answer", replyToId: "explicit-1" }]);
   });
 
+  it.each<ReplyPayload>([{ replyToId: "" }, { replyToCurrent: false }])(
+    "preserves a resolver-less payload opt-out: %j",
+    (optOut) => {
+      const payload = { text: "queued answer", ...optOut };
+      expect(
+        resolveFollowupDeliveryPayloads({
+          cfg: baseConfig,
+          payloads: [payload],
+          originatingChannel: "telegram",
+          originatingReplyToMode: "all",
+          currentMessageId: "tg-msg-2",
+        }),
+      ).toEqual([payload]);
+    },
+  );
+
+  it("does not spend the first reply slot on an empty target opt-out", () => {
+    const payloads = resolveFollowupDeliveryPayloads({
+      cfg: baseConfig,
+      payloads: [{ text: "standalone", replyToId: "" }, { text: "first" }, { text: "second" }],
+      originatingChannel: "telegram",
+      originatingReplyToMode: "first",
+      currentMessageId: "tg-msg-2",
+    });
+    expect(payloads.map((payload) => payload.replyToId)).toEqual(["", "tg-msg-2", undefined]);
+  });
+
+  it("does not spend the first reply slot on a deduplicated payload", () => {
+    const payloads = resolveFollowupDeliveryPayloads({
+      cfg: baseConfig,
+      payloads: [{ text: "already sent" }, { text: "new answer" }],
+      originatingChannel: "telegram",
+      originatingTo: "telegram:123",
+      originatingReplyToMode: "first",
+      currentMessageId: "tg-msg-2",
+      sentTexts: ["already sent"],
+      sentTargets: [
+        { tool: "message", provider: "telegram", to: "telegram:123", text: "already sent" },
+      ],
+    });
+    expect(payloads).toMatchObject([{ text: "new answer", replyToId: "tg-msg-2" }]);
+  });
+
   it("uses originatingReplyToId as the current message for restart-sentinel followups", () => {
     expect(
       resolveFollowupImplicitReplyCurrentMessageId({
