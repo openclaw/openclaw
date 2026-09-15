@@ -54,12 +54,25 @@
   flex-shrink: 0;
 }
 
+@media (max-width: 768px), (pointer: coarse) {
+  .chat-reply-preview:has(> .chat-reply-preview__dismiss) {
+    /* Allocate the target in flow without making the preview needlessly tall. */
+    padding-block: 1px;
+  }
+
+  .chat-reply-preview__dismiss {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 .chat-reply-preview__dismiss:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
-.chat-reply-preview__dismiss svg {
+/* Keep the icon compact even under generic mobile composer SVG sizing. */
+button.chat-reply-preview__dismiss svg {
   width: 16px;
   height: 16px;
   stroke: currentColor;
