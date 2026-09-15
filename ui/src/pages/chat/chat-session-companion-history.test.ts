@@ -1,140 +1,377 @@
-import { describe, expect, it } from "vitest";
-import {
-  ChatSessionCompanionThreads,
-  sessionCompanionDisplayTurns,
-} from "./chat-session-companion.ts";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { ChatSessionCompanionThreads } from "./chat-session-companion.ts";
 
 const unavailable = async () => {
-  throw Object.assign(new Error("Side chat timed out."), {
-    details: { reason: "unavailable" },
-    retryable: false,
-  });
+  throw new Error("Side chat timed out.");
 };
 const answered = (answer: string, ts: number) => async () => ({ answer, ts });
 const questions = (threads: ChatSessionCompanionThreads) =>
-  sessionCompanionDisplayTurns(threads.view("one")).map((turn) => turn.question);
+  threads.view("one").turns.map((turn) => turn.question);
 
-describe("Side chat failed-question history", () => {
-  it("keeps unanswered questions in order across follow-ups and repeated failures", async () => {
+describe("Side chat turn history", () => {
+  it("retains failed questions in order while a different follow-up is pending and answered", async () => {
     const threads = new ChatSessionCompanionThreads();
-    await threads.submit("one", "Earlier answer", answered("Ready", 1));
+    await threads.submit("one", "Earlier question", answered("Ready", 1));
     await threads.submit("one", "Original question", unavailable);
-    let reject!: (error: Error) => void;
-    const next = threads.submit(
-      "one",
-      "retry",
-      () =>
-        new Promise((_resolve, fail) => {
-          reject = fail;
-        }),
-    );
-    expect(questions(threads)).toEqual(["Earlier answer", "Original question"]);
-    expect(threads.view("one").pendingQuestion).toBe("retry");
-    reject(new Error("socket closed"));
-    await next;
-    await threads.submit("one", "New question", answered("Recovered", 2));
-    expect(questions(threads)).toEqual([
-      "Earlier answer",
-      "Original question",
-      "retry",
-      "New question",
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", "New question", () => response.promise);
+    expect(questions(threads)).toEqual(["Earlier question", "Original question", "New question"]);
+    expect(threads.view("one").turns.map((turn) => turn.status)).toEqual([
+      "answered",
+      "failed",
+      "pending",
     ]);
-    await threads.hydrate("one", async () => ({ exchanges: threads.view("one").exchanges }));
-    expect(questions(threads)).toEqual([
-      "Earlier answer",
-      "Original question",
-      "retry",
-      "New question",
+    const blocked = vi.fn(answered("Must not be sent", 9));
+    await threads.submit("one", "Another question", blocked);
+    expect(blocked).not.toHaveBeenCalled();
+    response.resolve({ answer: "Recovered", ts: 2 });
+    await pending;
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Earlier question", status: "answered" },
+      { question: "Original question", status: "failed" },
+      { question: "New question", status: "answered", answer: "Recovered" },
     ]);
-    expect(threads.view("one").exchanges).toHaveLength(2);
   });
 
-  it("updates an explicit retry in place without duplicating the failed question", async () => {
+  it("retries the selected failure in place even when another turn has the same question", async () => {
     const threads = new ChatSessionCompanionThreads();
-    await threads.submit("one", "Original question", unavailable);
-    await threads.submit("one", "Original question", unavailable);
-    expect(questions(threads)).toEqual([]);
-    expect(threads.view("one").failedQuestion).toBe("Original question");
-    await threads.submit("one", "Original question", answered("Recovered", 1));
-    expect(questions(threads)).toEqual(["Original question"]);
-    expect(threads.view("one").failedQuestion).toBeNull();
+    await threads.submit("one", "Same question", unavailable);
+    await threads.submit("one", "Different question", unavailable);
+    await threads.submit("one", "Same question", unavailable);
+    const selected = threads.view("one").turns[0]!;
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const ask = vi.fn(() => response.promise);
+    const pending = threads.submit("one", selected, ask);
+    expect(ask).toHaveBeenCalledWith("one", "Same question");
+    expect(questions(threads)).toEqual(["Same question", "Different question", "Same question"]);
+    expect(threads.view("one").turns.map((turn) => turn.status)).toEqual([
+      "pending",
+      "failed",
+      "failed",
+    ]);
+    response.resolve({ answer: "First recovered", ts: 2 });
+    await pending;
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Same question", status: "answered", answer: "First recovered" },
+      { question: "Different question", status: "failed" },
+      { question: "Same question", status: "failed" },
+    ]);
   });
 
-  it.each([{ history: ["A", "A"] }, { history: ["A", "B", "A"] }])(
-    "keeps one failed attempt after the final answered exchange in $history",
-    async ({ history }) => {
+  it("reconciles a late answer into the earlier failed turn without consuming an old answer", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    const old = { question: "A", answer: "Old", ts: 1 };
+    await threads.hydrate("one", async () => ({ exchanges: [old] }));
+    await threads.submit("one", "A", unavailable);
+    await threads.submit("one", "B", answered("Later", 3));
+    await threads.hydrate("one", async () => ({
+      exchanges: [old, { question: "B", answer: "Later", ts: 3 }],
+    }));
+    expect(threads.view("one").turns.map((turn) => turn.status)).toEqual([
+      "answered",
+      "failed",
+      "answered",
+    ]);
+    await threads.hydrate("one", async () => ({
+      exchanges: [
+        old,
+        { question: "A", answer: "Recovered", ts: 2 },
+        { question: "B", answer: "Later", ts: 3 },
+      ],
+    }));
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "A", status: "answered", answer: "Old" },
+      { question: "A", status: "answered", answer: "Recovered" },
+      { question: "B", status: "answered", answer: "Later" },
+    ]);
+  });
+
+  it("waits for the pending same-text request before associating its hydrated answer", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "A", unavailable);
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", "A", () => response.promise);
+    const load = async () => ({ exchanges: [{ question: "A", answer: "New answer", ts: 2 }] });
+    const hydration = threads.hydrate("one", load);
+    expect(threads.view("one").turns.map((turn) => turn.status)).toEqual(["failed", "pending"]);
+    response.resolve({ answer: "New answer", ts: 2 });
+    await pending;
+    await hydration;
+    await threads.hydrate("one", load);
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "A", status: "failed" },
+      { question: "A", status: "answered", answer: "New answer" },
+    ]);
+  });
+
+  it("recovers a committed answer when a pending request rejects before hydration", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", "A", () => response.promise);
+    const load = vi.fn(async () => ({
+      exchanges: [{ question: "A", answer: "Committed", ts: 1 }],
+    }));
+    const hydration = threads.hydrate("one", load);
+    expect(load).not.toHaveBeenCalled();
+    response.reject(new Error("socket closed"));
+    await pending;
+    await hydration;
+    expect(load).toHaveBeenCalledOnce();
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "A", status: "answered", answer: "Committed" },
+    ]);
+  });
+
+  it("retires hydration waiting for an answer when the thread is cleared", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", "A", () => response.promise);
+    const load = vi.fn(async () => ({ exchanges: [{ question: "A", answer: "Late", ts: 1 }] }));
+    const hydration = threads.hydrate("one", load);
+    await threads.reset("one", async () => ({ ok: true }));
+    response.resolve({ answer: "Late", ts: 1 });
+    await pending;
+    await hydration;
+    expect(load).not.toHaveBeenCalled();
+    expect(threads.view("one").turns).toEqual([]);
+  });
+
+  it("does not reuse a separately answered question after an older retry and pruning", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "A", unavailable);
+    const retry = threads.view("one").turns[0]!;
+    const exchanges = Array.from({ length: 23 }, (_, index) => ({
+      question: index === 0 ? "A" : `Later ${index}`,
+      answer: "Known answer",
+      ts: index + 1,
+    }));
+    await threads.submit("one", "A", answered("Known answer", 1));
+    for (const exchange of exchanges.slice(1)) {
+      await threads.submit("one", exchange.question, answered(exchange.answer, exchange.ts));
+    }
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", retry, () => response.promise);
+    const load = async () => ({
+      exchanges: [...exchanges, { question: "Remote", answer: "New remote answer", ts: 24 }],
+    });
+    const hydration = threads.hydrate("one", load);
+    await Promise.resolve();
+    response.reject(new Error("offline"));
+    await pending;
+    await hydration;
+    await threads.hydrate("one", load);
+    expect(retry.status).toBe("failed");
+    expect(questions(threads).filter((question) => question === "A")).toHaveLength(1);
+  });
+
+  it.each(["append", "hydrate", "interleaved", "clock-rollback"])(
+    "keeps a successful retry pruned by %s across repeated hydration",
+    async (pruneBy) => {
       const threads = new ChatSessionCompanionThreads();
-      await threads.hydrate("one", async () => ({
-        exchanges: history.map((question) => ({ question, answer: "Answered", ts: 1 })),
+      await threads.submit("one", "A", unavailable);
+      await threads.submit("one", "A", unavailable);
+      const retry = threads.view("one").turns[0]!;
+      const exchanges = Array.from({ length: 22 }, (_, index) => ({
+        question: `Answer ${index}`,
+        answer: "Known",
+        ts: index + 1,
       }));
-      await threads.submit("one", "Failed", unavailable);
-      await threads.submit("one", "Next", answered("Recovered", 2));
-      expect(questions(threads)).toEqual([...history, "Failed", "Next"]);
+      for (const exchange of exchanges) {
+        await threads.submit("one", exchange.question, answered(exchange.answer, exchange.ts));
+      }
+      await threads.submit("one", retry, answered("Recovered A", 23));
+      exchanges.push({ question: "A", answer: "Recovered A", ts: 23 });
+      const load = async () => ({ exchanges });
+      if (pruneBy === "append") {
+        await threads.submit("one", "C", unavailable);
+      } else {
+        const remote = {
+          question: "Remote",
+          answer: "New",
+          ts: pruneBy === "clock-rollback" ? 0 : 10.5,
+        };
+        if (pruneBy === "hydrate") {
+          exchanges.push({ ...remote, ts: 24 });
+        } else {
+          exchanges.splice(10, 0, remote);
+        }
+        await threads.hydrate("one", load);
+        expect(questions(threads)).toContain("Remote");
+      }
+      const before = threads.view("one").turns.map((turn) => Object.assign({}, turn));
+      expect(before[0]).toMatchObject({ question: "A", status: "failed" });
+      expect(threads.view("one").turns).not.toContain(retry);
+      await threads.hydrate("one", load);
+      expect(threads.view("one").turns).toEqual(before);
+      await threads.hydrate("one", load);
+      expect(threads.view("one").turns).toEqual(before);
     },
   );
 
-  it("does not erase earlier failed attempts when later answers repeat their question", async () => {
+  it.each([1, 24])("does not revive pruned answers after %i new failures", async (count) => {
     const threads = new ChatSessionCompanionThreads();
-    await threads.submit("one", "B", unavailable);
-    await threads.submit("one", "C", unavailable);
-    await threads.submit("one", "B", unavailable);
-    await threads.submit("one", "D", answered("Last", 4));
-    const answer = { question: "B", answer: "A later answer", ts: 3 };
-    const last = { question: "D", answer: "Last", ts: 4 };
-    await threads.hydrate("one", async () => ({ exchanges: [answer, last] }));
-    const turns = sessionCompanionDisplayTurns(threads.view("one"));
-    expect(turns.filter((turn) => "hint" in turn).map((turn) => turn.question)).toEqual([
-      "B",
-      "C",
-      "B",
-    ]);
-    expect(threads.view("one").exchanges).toEqual([answer, last]);
+    const exchanges = Array.from({ length: 24 }, (_, index) => ({
+      question: `Old ${index}`,
+      answer: "Old answer",
+      ts: index + 1,
+    }));
+    await threads.hydrate("one", async () => ({ exchanges }));
+    for (let index = 0; index < count; index += 1) {
+      await threads.submit("one", index === 0 ? "Old 0" : `New ${index}`, unavailable);
+    }
+    const before = threads
+      .view("one")
+      .turns.map((turn) => ({ question: turn.question, status: turn.status }));
+    await threads.hydrate("one", async () => ({ exchanges }));
+    expect(
+      threads.view("one").turns.map((turn) => ({ question: turn.question, status: turn.status })),
+    ).toEqual(before);
   });
 
-  it("keeps a failed question's position when exact Retry follows an unrelated hydrated answer", async () => {
+  it("inserts newly hydrated answers around existing answers without moving local failures", async () => {
     const threads = new ChatSessionCompanionThreads();
     const first = { question: "A", answer: "First", ts: 1 };
-    const later = { question: "C", answer: "Another answer", ts: 3 };
-    await threads.submit("one", "A", answered(first.answer, first.ts));
+    const last = { question: "D", answer: "Last", ts: 4 };
+    await threads.hydrate("one", async () => ({ exchanges: [first] }));
     await threads.submit("one", "B", unavailable);
-    await threads.hydrate("one", async () => ({ exchanges: [first, later] }));
-    await threads.submit("one", "B", unavailable);
-    await threads.submit("one", "D", answered("Last", 4));
+    await threads.hydrate("one", async () => ({ exchanges: [first, last] }));
+    await threads.hydrate("one", async () => ({
+      exchanges: [first, { question: "C", answer: "Middle", ts: 3 }, last],
+    }));
     expect(questions(threads)).toEqual(["A", "B", "C", "D"]);
   });
 
-  it("keeps local failed questions through empty hydration but retires them on explicit clear", async () => {
+  it("preserves duplicate answered exchanges on repeated hydration", async () => {
     const threads = new ChatSessionCompanionThreads();
-    await threads.submit("one", "Earlier answer", answered("Ready", 1));
-    await threads.submit("one", "Original question", unavailable);
-    await threads.submit("one", "New question", answered("Later answer", 2));
-    threads.setDraft("one", "Unsent draft");
-    await threads.hydrate("one", async () => ({ exchanges: [] }));
-    expect(questions(threads)).toEqual(["Original question"]);
-    expect(threads.view("one").draft).toBe("Unsent draft");
-    await threads.reset("one", async () => ({ ok: true }));
-    expect(questions(threads)).toEqual([]);
+    const exchange = { question: "A", answer: "Repeated", ts: 1 };
+    const load = async () => ({ exchanges: [exchange, exchange] });
+    await threads.hydrate("one", async () => ({ exchanges: [exchange] }));
+    await threads.hydrate("one", load);
+    await threads.submit("one", "B", unavailable);
+    await threads.hydrate("one", load);
+    expect(questions(threads)).toEqual(["A", "A", "B"]);
   });
 
-  it.each([0, 24])(
-    "bounds local failed-question history with %i repeated answers",
-    async (count) => {
+  it.each([false, true])(
+    "keeps unseen shared history between local answers (duplicate identities: %s)",
+    async (duplicates) => {
       const threads = new ChatSessionCompanionThreads();
-      await threads.hydrate("one", async () => ({
-        exchanges: Array.from({ length: count }, () => ({
-          question: "A",
-          answer: "Answered",
-          ts: 1,
-        })),
-      }));
-      for (let index = 0; index < 30; index += 1) {
-        await threads.submit("one", "Question " + index, unavailable);
-      }
-      expect(questions(threads)).toEqual([
-        ...Array.from({ length: count }, () => "A"),
-        ...Array.from({ length: 24 }, (_, index) => "Question " + (index + 5)),
-      ]);
-      expect(threads.view("one").failedQuestion).toBe("Question 29");
+      const first = { question: "A", answer: "First", ts: 1 };
+      const remote = { question: "X", answer: "Other client", ts: 2 };
+      const last = duplicates ? first : { question: "B", answer: "Last", ts: 3 };
+      await threads.submit("one", first.question, answered(first.answer, first.ts));
+      await threads.submit("one", last.question, answered(last.answer, last.ts));
+      await threads.submit("one", "C", unavailable);
+      const load = async () => ({ exchanges: [first, remote, last] });
+      await threads.hydrate("one", load);
+      expect(questions(threads)).toEqual(["A", "X", last.question, "C"]);
+      await threads.hydrate("one", load);
+      expect(questions(threads)).toEqual(["A", "X", last.question, "C"]);
     },
   );
+
+  it.each([false, true])(
+    "retains the correct response after pruning a key collision (identical answers: %s)",
+    async (identical) => {
+      const threads = new ChatSessionCompanionThreads();
+      const first = { question: "A", answer: "First", ts: 1 };
+      const last = { ...first, answer: identical ? first.answer : "Second" };
+      await threads.submit("one", first.question, answered(first.answer, first.ts));
+      await threads.submit("one", last.question, answered(last.answer, last.ts));
+      for (let index = 0; index < 23; index += 1) {
+        await threads.submit("one", `Failure ${index}`, unavailable);
+      }
+      const before = threads.view("one").turns.map((turn) => Object.assign({}, turn));
+      const load = async () => ({
+        exchanges: identical
+          ? [first, { question: "X", answer: "Shared", ts: 2 }, last]
+          : [first, last],
+      });
+      await threads.hydrate("one", load);
+      expect(threads.view("one").turns).toEqual(before);
+      await threads.hydrate("one", load);
+      expect(threads.view("one").turns).toEqual(before);
+    },
+  );
+
+  it("recognizes a new identical response when Gateway pruning removes the oldest occurrence", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    const repeated = { question: "A", answer: "Repeated", ts: 1 };
+    const middle = Array.from({ length: 22 }, (_, index) => ({
+      question: `Answer ${index}`,
+      answer: "Known",
+      ts: index + 2,
+    }));
+    await threads.hydrate("one", async () => ({ exchanges: [repeated, ...middle] }));
+    await threads.submit("one", "Local failure", unavailable);
+    await threads.submit("one", repeated.question, answered(repeated.answer, repeated.ts));
+    const load = async () => ({ exchanges: [...middle, repeated, repeated] });
+    await threads.hydrate("one", load);
+    expect(questions(threads)).toEqual([
+      ...middle.slice(1).map((exchange) => exchange.question),
+      "Local failure",
+      "A",
+      "A",
+    ]);
+    await threads.hydrate("one", load);
+    expect(questions(threads).slice(-3)).toEqual(["Local failure", "A", "A"]);
+  });
+
+  it("keeps failures and draft through empty hydration and clears everything on explicit reset", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "Earlier question", answered("Ready", 1));
+    await threads.submit("one", "Original question", unavailable);
+    await threads.submit("one", "New question", unavailable);
+    threads.setDraft("one", "Unsent draft");
+    await threads.hydrate("one", async () => ({ exchanges: [] }));
+    expect(questions(threads)).toEqual(["Original question", "New question"]);
+    expect(threads.view("one").draft).toBe("Unsent draft");
+    const stale = threads.view("one").turns[0]!;
+    await threads.reset("one", async () => ({ ok: true }));
+    const ask = vi.fn(answered("Must not be sent", 2));
+    await threads.submit("one", stale, ask);
+    expect(ask).not.toHaveBeenCalled();
+    expect(threads.view("one")).toMatchObject({ turns: [], draft: "" });
+  });
+
+  it("caps mixed history at 24 turns and retains an active retry through hydration", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    for (let index = 0; index < 30; index += 1) {
+      await threads.submit(
+        "one",
+        `Question ${index}`,
+        index % 2 ? answered("Answer", index) : unavailable,
+      );
+    }
+    expect(questions(threads)).toEqual(
+      Array.from({ length: 24 }, (_, index) => `Question ${index + 6}`),
+    );
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", threads.view("one").turns[0]!, () => response.promise);
+    const hydration = threads.hydrate("one", async () => ({
+      exchanges: [
+        ...Array.from({ length: 23 }, (_, index) => ({
+          question: `Remote ${index}`,
+          answer: "Remote answer",
+          ts: 100 + index,
+        })),
+        { question: "Question 6", answer: "Recovered", ts: 200 },
+      ],
+    }));
+    expect(threads.view("one").turns).toHaveLength(24);
+    expect(threads.view("one").turns[0]).toMatchObject({
+      question: "Question 6",
+      status: "pending",
+    });
+    response.resolve({ answer: "Recovered", ts: 200 });
+    await pending;
+    await hydration;
+    expect(threads.view("one").turns).toHaveLength(24);
+    expect(threads.view("one").turns.find((turn) => turn.question === "Question 6")).toMatchObject({
+      question: "Question 6",
+      status: "answered",
+      answer: "Recovered",
+    });
+  });
 });
