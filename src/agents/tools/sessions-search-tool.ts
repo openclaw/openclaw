@@ -370,7 +370,10 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      const requestedSessionKey = readToolStringParam(params, "sessionKey");
+      // The host-bound scope is already the complete search universe. Reuse the
+      // targeted authorization path instead of listing every session to filter it back down.
+      const requestedSessionKey =
+        readToolStringParam(params, "sessionKey") || opts?.sessionReadScopeKey;
       const {
         cfg,
         mainKey,

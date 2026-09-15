@@ -71,9 +71,15 @@ describe("host-bound session read scope", () => {
         ).toBe(false);
       }
       if (kind === "search") {
+        callGateway.mockClear();
         expect((await tool.execute("unscoped", { query: "evidence" })).details).toMatchObject({
           results: [{ sessionKey: observed }],
         });
+        // A bound read scope already identifies the only searchable session.
+        // Listing every active/archived session can exhaust Side chat’s deadline.
+        expect(callGateway.mock.calls.map(([request]) => request.method)).not.toContain(
+          "sessions.list",
+        );
         expect(callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
             method: "sessions.search",
