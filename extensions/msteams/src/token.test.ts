@@ -8,6 +8,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
+import { MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES } from "./delegated-state.js";
 import * as delegatedState from "./delegated-state.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
@@ -93,6 +94,15 @@ describe("token – secret credentials", () => {
     expect(hasConfiguredMSTeamsCredentials(undefined)).toBe(false);
   });
 
+  it("returns true only when the environment provides complete secret credentials", () => {
+    process.env.MSTEAMS_APP_ID = "env-app-id";
+    expect(hasConfiguredMSTeamsCredentials(undefined)).toBe(false);
+
+    process.env.MSTEAMS_APP_PASSWORD = "env-secret";
+    process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+    expect(hasConfiguredMSTeamsCredentials(undefined)).toBe(true);
+  });
+
   it("resolves secret credentials from config", () => {
     const cfg = {
       appId: "app-id",
@@ -118,6 +128,34 @@ describe("token – secret credentials", () => {
       appId: "env-app-id",
       appPassword: "env-app-pw",
       tenantId: "env-tenant-id",
+    });
+  });
+
+  it("can disable env fallback for named accounts", () => {
+    process.env.MSTEAMS_APP_ID = "env-app-id";
+    process.env.MSTEAMS_APP_PASSWORD = "env-app-pw";
+    process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+
+    expect(resolveMSTeamsCredentials(undefined, { allowEnvFallback: false })).toBeUndefined();
+  });
+
+  it("does not inherit env auth type when env fallback is disabled", () => {
+    process.env.MSTEAMS_AUTH_TYPE = "federated";
+
+    expect(
+      resolveMSTeamsCredentials(
+        {
+          appId: "named-app-id",
+          appPassword: "named-app-pw",
+          tenantId: "tenant-id",
+        } satisfies MSTeamsConfig,
+        { allowEnvFallback: false },
+      ),
+    ).toEqual({
+      type: "secret",
+      appId: "named-app-id",
+      appPassword: "named-app-pw",
+      tenantId: "tenant-id",
     });
   });
 
@@ -447,6 +485,13 @@ describe("resolveDelegatedAccessToken", () => {
     });
   }
 
+  const delegatedTokens = {
+    accessToken: "stale-access",
+    refreshToken: "refresh-token",
+    expiresAt: Date.now() + 60_000,
+    scopes: ["User.Read"],
+  };
+
   it("roundtrips delegated tokens through reopened plugin-state SQLite without a sidecar", async () => {
     await writeDelegatedTokens(Date.now() + 60_000);
     await closeOpenClawStateDatabaseAsync();
@@ -485,6 +530,41 @@ describe("resolveDelegatedAccessToken", () => {
       }),
     ).resolves.toBeUndefined();
     expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).toHaveBeenCalledOnce();
+  });
+
+  it("stores delegated tokens separately per account in plugin-state SQLite", async () => {
+    await saveDelegatedTokens({ ...delegatedTokens, accessToken: "default-access" });
+    await saveDelegatedTokens(
+      { ...delegatedTokens, accessToken: "secondary-access" },
+      { accountId: "secondary" },
+    );
+
+    expect((await loadDelegatedTokens())?.accessToken).toBe("default-access");
+    expect((await loadDelegatedTokens({ accountId: "secondary" }))?.accessToken).toBe(
+      "secondary-access",
+    );
+    expect(await loadDelegatedTokens({ accountId: "finance" })).toBeUndefined();
+    expect(existsSync(path.join(stateDir ?? "", "state", "openclaw.sqlite"))).toBe(true);
+    expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.json"))).toBe(false);
+  });
+
+  it("isolates delegated-token capacity across named accounts", async () => {
+    for (let index = 0; index < MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES; index += 1) {
+      await saveDelegatedTokens(
+        { ...delegatedTokens, accessToken: `account-${index}-access` },
+        { accountId: `account-${index}` },
+      );
+    }
+
+    await expect(
+      saveDelegatedTokens(
+        { ...delegatedTokens, accessToken: "isolated-access" },
+        { accountId: "isolated" },
+      ),
+    ).resolves.toBeUndefined();
+    expect((await loadDelegatedTokens({ accountId: "isolated" }))?.accessToken).toBe(
+      "isolated-access",
+    );
   });
 
   it.each([false, true])(

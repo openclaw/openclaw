@@ -80,19 +80,28 @@ This creates an Entra ID (Azure AD) application, generates a client secret, buil
 
 ```json5
 {
+  bindings: [{ agentId: "main", match: { channel: "msteams", accountId: "default" } }],
   channels: {
     msteams: {
       enabled: true,
-      appId: "<CLIENT_ID>",
-      appPassword: "<CLIENT_SECRET>",
       tenantId: "<TENANT_ID>",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<CLIENT_ID>",
+          appPassword: "<CLIENT_SECRET>",
+          webhook: { port: 3978 },
+        },
+      },
     },
   },
 }
 ```
 
-Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
+This account-based shape works for one bot or many. Environment variables
+(`MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`) apply only to
+the default account; named accounts need explicit config and unique webhook
+ports.
 
 **5. Install the app in Teams**
 
@@ -186,19 +195,27 @@ Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single 
 
 ```json5
 {
+  bindings: [{ agentId: "main", match: { channel: "msteams", accountId: "default" } }],
   channels: {
     msteams: {
       enabled: true,
-      appId: "<APP_ID>",
-      appPassword: "<APP_PASSWORD>",
       tenantId: "<TENANT_ID>",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<APP_ID>",
+          appPassword: "<APP_PASSWORD>",
+          webhook: { port: 3978 },
+        },
+      },
     },
   },
 }
 ```
 
-Environment variables: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
+Environment variables configure only the default account. See [Multiple bot
+accounts](/channels/msteams/configuration#multiple-bot-accounts) for additional
+bot registrations and routing.
 
 ### Step 7: Run the gateway
 

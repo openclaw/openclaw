@@ -25,6 +25,7 @@ vi.mock("./token-response.js", () => ({
 }));
 
 vi.mock("./token.js", () => ({
+  hasConfiguredMSTeamsCredentials: () => false,
   async resolveDelegatedAccessToken() {
     return undefined;
   },

@@ -66,6 +66,18 @@ describe("resolveMSTeamsUserAllowlist", () => {
     });
   });
 
+  it("uses the selected named account for Graph user lookup credentials", async () => {
+    const cfg = { channels: { msteams: { defaultAccount: "default" } } };
+    findGraphUsersByExactIdentity.mockResolvedValueOnce({
+      items: [{ id: "user-1", displayName: "Alice" }],
+      truncated: false,
+    });
+
+    await resolveMSTeamsUserAllowlist({ cfg, accountId: "support", entries: ["Alice"] });
+
+    expect(resolveGraphToken).toHaveBeenCalledWith(cfg, { accountId: "support" });
+  });
+
   it("rejects ambiguous and incomplete Graph user identities", async () => {
     findGraphUsersByExactIdentity
       .mockResolvedValueOnce({
