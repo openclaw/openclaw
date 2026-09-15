@@ -82,6 +82,17 @@ and first-run noninteractive setup retain their existing behavior.
 
 Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
 
+Auth usage and cooldown updates wait for write admission on their actual agent
+database owner, including the legacy shared store. Relocated shared-state auth
+uses its own coordinator. Queued updates retain their selected state root and
+shared owner, then read the current profile after admission. Runtime snapshots
+publish after the durable commit and before the next admitted writer; removing
+a profile while its health update waits does not recreate its health state.
+Cold agent opens validate integrity asynchronously and recheck ownership before
+writing.
+OAuth upserts recheck the current local or inherited credential after admission,
+before applying the existing generation-replacement rules.
+
 Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
 - `api_key` and `token` profiles are portable unless `copyToAgents: false`.
