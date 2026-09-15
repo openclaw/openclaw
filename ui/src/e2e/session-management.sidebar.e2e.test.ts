@@ -182,13 +182,14 @@ suite.define(() => {
       const tree = page.locator(`[data-session-tree="${parentKey}"]`);
       expect(await tree.locator("xpath=ancestor::nav").count()).toBe(pinned ? 1 : 0);
       const nesting = await tree.evaluate((element) => {
-        const parentRow = element.querySelector(".sidebar-recent-session")!;
-        const children = element.querySelector(".sidebar-session-tree__children")!;
+        const parentElement = element.querySelector(".sidebar-recent-session")!;
+        const childContainer = element.querySelector(".sidebar-session-tree__children")!;
         return {
-          parentLeft: parentRow.getBoundingClientRect().left,
-          childLeft: children.querySelector(".sidebar-recent-session")!.getBoundingClientRect()
-            .left,
-          guide: getComputedStyle(children).backgroundImage,
+          parentLeft: parentElement.getBoundingClientRect().left,
+          childLeft: childContainer
+            .querySelector(".sidebar-recent-session")!
+            .getBoundingClientRect().left,
+          guide: getComputedStyle(childContainer).backgroundImage,
         };
       });
       expect(nesting.childLeft - nesting.parentLeft).toBeGreaterThan(8);
