@@ -3141,8 +3141,8 @@ openclaw-chat-ci-details {
   line-height: 1.5;
 }
 
-.chat-annotation-editor:focus-within {
-  border-color: var(--ring);
+.chat-annotation-editor:has(textarea:focus) {
+  border-color: color-mix(in srgb, var(--border) 94%, var(--text-strong));
 }
 
 .chat-annotation-editor textarea {
@@ -3175,6 +3175,17 @@ openclaw-chat-ci-details {
   border-radius: var(--radius-full);
   font-size: 12px;
   line-height: 20px;
+}
+
+.chat-annotation-editor .btn,
+.chat-annotation-editor .btn:hover {
+  border: 0;
+  box-shadow: none;
+}
+
+.chat-annotation-editor .btn:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: 2px;
 }
 
 .chat-annotation-editor .chat-annotation-editor__confirm {

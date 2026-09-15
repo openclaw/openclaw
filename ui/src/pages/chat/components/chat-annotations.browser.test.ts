@@ -190,6 +190,63 @@ function openEditor(expanded = false) {
 }
 
 describe("annotation editor", () => {
+  it.each(["light", "dark"])("keeps creation and edit focus frames subtle in %s", async (theme) => {
+    document.documentElement.dataset.themeMode = theme;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d")!;
+    const expectNonRed = (color: string) => {
+      context.fillStyle = "white";
+      context.fillRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+      if (alpha) {
+        expect(red! - Math.max(green!, blue!)).toBeLessThanOrEqual(8);
+      }
+    };
+    const expectQuietFrame = (element: HTMLElement) => {
+      const style = getComputedStyle(element);
+      expect(Number.parseFloat(style.borderTopWidth)).toBeLessThanOrEqual(1);
+      if (Number.parseFloat(style.borderTopWidth) > 0) {
+        expectNonRed(style.borderTopColor);
+      }
+      if (style.outlineStyle !== "none") {
+        expect(Number.parseFloat(style.outlineWidth)).toBeLessThanOrEqual(1);
+        expectNonRed(style.outlineColor);
+      }
+      for (const color of style.boxShadow.match(/(?:rgba?|color)\([^)]*\)/g) ?? []) {
+        expectNonRed(color);
+      }
+    };
+    for (const expanded of [false, true]) {
+      const { input, popup } = openEditor(expanded);
+      input.blur();
+      const idleBorder = getComputedStyle(popup).borderTopColor;
+      const controls = [input, ...popup.querySelectorAll("button")].filter(
+        (element) => element.getClientRects().length > 0,
+      );
+      for (const element of [popup, ...controls]) {
+        expectQuietFrame(element);
+      }
+      await userEvent.keyboard("{ArrowRight}");
+      for (const control of controls) {
+        await page.elementLocator(control).hover();
+        expectQuietFrame(control);
+        control.focus();
+        expect(control.matches(":focus-visible")).toBe(true);
+        expectQuietFrame(popup);
+        expectQuietFrame(control);
+        if (control === input) {
+          expect(getComputedStyle(popup).borderTopColor).not.toBe(idleBorder);
+        } else {
+          expect(Number.parseFloat(getComputedStyle(control).outlineWidth)).toBeGreaterThan(0);
+        }
+      }
+      removeChatSelectionPopup();
+    }
+  });
+
   it.each(["Cancel", "Delete comment"])(
     "activates %s with Enter without saving edits",
     async (name) => {
