@@ -59,6 +59,7 @@ export async function captureScreenshot(opts: {
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** Effective launch mode recorded on the owned Chrome process, when known. */
   headless?: boolean;
 }): Promise<Buffer> {
@@ -91,7 +92,11 @@ export async function captureScreenshot(opts: {
       }
       return Buffer.from(base64, "base64");
     },
-    { commandTimeoutMs: opts.timeoutMs, lookup: opts.lookup },
+    {
+      commandTimeoutMs: opts.timeoutMs,
+      lookup: opts.lookup,
+      signal: opts.signal,
+    },
   );
 }
 

@@ -450,6 +450,7 @@ export async function closeTrackedCdpTarget(
         handshakeTimeoutMs: params.timeoutMs,
         handshakeRetries: 0,
         lookup: resolved.browserWebSocketLookup,
+        signal: params.signal,
       },
     );
   } catch (error) {
