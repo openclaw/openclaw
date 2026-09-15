@@ -823,7 +823,13 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         await gateway.resolveDeferred("models.authStatus");
         await waitForControlUiRoute(page, { routeId: "model-providers" });
         await gateway.waitForRequest("usage.status");
-        await gateway.waitForRequest("sessions.usage");
+        const usageRequest = await gateway.waitForRequest("sessions.usage");
+        expect(usageRequest.params).toMatchObject({
+          agentScope: "all",
+          groupBy: "family",
+          limit: 1,
+          includeContextWeight: false,
+        });
         const provider = page.locator('[data-provider-id="openai"]');
         await provider.waitFor();
         await expect.poll(async () => provider.textContent()).toContain("Credentials configured");

@@ -133,6 +133,7 @@ export function loadModelProviderCost(
       endDate: localDate(0),
       scope: "family",
       timeZone: "local",
+      limit: 1,
     },
     { signal },
   )
