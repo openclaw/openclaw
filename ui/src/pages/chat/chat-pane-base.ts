@@ -354,13 +354,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
-    target: () => {
-      const state = this.state;
-      if (!state || this.isCurrentSessionArchived(state) || !this.secondarySessionReadsReady()) {
-        return undefined;
-      }
-      return this.resolveChatReadTarget();
-    },
+    target: () => this.initialProgressCardTarget(),
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
@@ -746,6 +740,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   ): boolean;
   protected abstract publishHeaderError(error: unknown, owner?: string): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
+  protected abstract initialProgressCardTarget():
+    | ReturnType<typeof resolveUiConversationIdentity>
+    | undefined;
   protected abstract secondarySessionReadsReady(explicit?: boolean): boolean;
   protected abstract loadHeaderPlatform(
     client: GatewayBrowserClient,

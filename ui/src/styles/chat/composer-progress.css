@@ -79,6 +79,10 @@
   transition-behavior: allow-discrete;
 }
 
+.session-progress-card--composer.session-progress-card--settling::details-content {
+  transition: none;
+}
+
 .session-progress-card--composer[open]::details-content {
   block-size: auto;
   opacity: 1;

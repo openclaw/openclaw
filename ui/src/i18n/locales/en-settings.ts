@@ -1004,7 +1004,7 @@ const enSettings = {
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       collapseTaskProgress: "Collapse task progress by default",
       collapseTaskProgressHint:
-        "Keep task progress collapsed while work is active, then expand it at the bottom when the response finishes. Manual changes last for the current task.",
+        "Start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session.",
     },
     sessionSources: {
       title: "Session sources",
