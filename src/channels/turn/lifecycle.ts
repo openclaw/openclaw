@@ -25,6 +25,7 @@ import {
 } from "../../infra/outbound/message-sent-hook.js";
 import { summarizeOutboundPayloadForTransport } from "../../infra/outbound/payloads.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { bindCurrentPluginInstanceCallbacks } from "../../plugins/plugin-instance-scope.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
@@ -390,16 +391,20 @@ async function dispatchChannelTurnWithDeliveryOwner(
     | [params: RoutedAssembledChannelTurn, ownership: "routed-delivery"]
 ): Promise<ChannelTurnResult> {
   const [params, ownership] = args;
-  const replyPipeline = resolveAssembledReplyPipeline(params);
+  const pipeline = resolveAssembledReplyPipeline(params);
+  pipeline.dispatcherOptions = bindCurrentPluginInstanceCallbacks(pipeline.dispatcherOptions);
+  pipeline.replyOptions = bindCurrentPluginInstanceCallbacks(pipeline.replyOptions);
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery =
-    params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
+    params.admission?.kind === "observeOnly"
+      ? createObserveOnlyDeliveryAdapter()
+      : bindCurrentPluginInstanceCallbacks(params.delivery);
   const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
   const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
-  const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
+  const onAgentRunStart = pipeline.replyOptions?.onAgentRunStart;
   const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
-    ...replyPipeline.replyOptions,
+    ...pipeline.replyOptions,
     onAgentRunStart: (...runStartArgs) => {
       agentRun = [runStartArgs[0], runStartArgs[1]];
       return onAgentRunStart?.(...runStartArgs);
@@ -493,9 +498,9 @@ async function dispatchChannelTurnWithDeliveryOwner(
                     }
                   : {}),
                 dispatcherOptions: {
-                  ...replyPipeline.dispatcherOptions,
+                  ...pipeline.dispatcherOptions,
                   onSkip: (payload, info) => {
-                    replyPipeline.dispatcherOptions?.onSkip?.(payload, info);
+                    pipeline.dispatcherOptions?.onSkip?.(payload, info);
                     if (info.reason !== "channel_transform") {
                       return;
                     }
