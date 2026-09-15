@@ -56,8 +56,13 @@ const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
 );
 
 type DiscordOutboundMessageContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+type DiscordDeliveryContext = Pick<
+  DiscordOutboundMessageContext,
+  "onPlatformSendDispatch" | "assertDirectAdapterHandoff" | "onDeliveryResult"
+>;
+type DiscordPollContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0];
 
-function resolveDiscordDeliveryOptions(params: DiscordOutboundMessageContext) {
+function resolveDiscordDeliveryOptions(params: DiscordDeliveryContext) {
   return {
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
@@ -66,6 +71,22 @@ function resolveDiscordDeliveryOptions(params: DiscordOutboundMessageContext) {
           params.onDeliveryResult?.(
             attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
           )
+      : undefined,
+  };
+}
+
+function resolveDiscordPollDeliveryOptions(
+  params: Pick<
+    DiscordPollContext,
+    "onPlatformSendDispatch" | "assertDirectAdapterHandoff" | "onDeliveryResult"
+  >,
+) {
+  return {
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
+    onDeliveryResult: params.onDeliveryResult
+      ? async (result: DiscordSendResult) =>
+          params.onDeliveryResult?.(toDiscordOutboundDeliveryResult(result))
       : undefined,
   };
 }
@@ -245,6 +266,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       inboundEventKind,
       onPlatformSendDispatch,
       assertDirectAdapterHandoff,
+      onDeliveryResult,
     }) => {
       if (!createDiscordActionGate({ cfg, accountId })("polls")) {
         throw new Error("Discord polls are disabled.");
@@ -258,8 +280,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
         threadId: threadId ?? undefined,
         silent: silent ?? undefined,
         cfg,
-        onPlatformSendDispatch,
-        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
+        ...resolveDiscordPollDeliveryOptions({
+          onPlatformSendDispatch,
+          assertDirectAdapterHandoff,
+          onDeliveryResult,
+        }),
       });
       discordInboundEventDelivery.notify({
         sessionKey,

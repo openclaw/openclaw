@@ -372,6 +372,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     inboundEventKind,
     conversationReadOrigin,
     reply,
+    onDeliveryResult,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -391,6 +392,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
       ...(reply ? { reply } : {}),
+      ...(onDeliveryResult ? { onDeliveryResult } : {}),
     });
   },
 };
