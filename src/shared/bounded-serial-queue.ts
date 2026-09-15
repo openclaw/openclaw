@@ -1,3 +1,5 @@
+import { createDeferredCore } from "./deferred.js";
+
 type BoundedSerialQueueAdmission<T> =
   | { accepted: true; completion: Promise<T> }
   | { accepted: false; reason: "capacity" | "overflow" | "sealed" };
@@ -72,12 +74,7 @@ export class BoundedSerialQueue {
       return { accepted: false, reason: "overflow" };
     }
 
-    let resolve!: (value: T | PromiseLike<T>) => void;
-    let reject!: (reason: unknown) => void;
-    const completion = new Promise<T>((accept, fail) => {
-      resolve = accept;
-      reject = fail;
-    });
+    const { promise: completion, resolve, reject } = createDeferredCore<T>();
     const task: BoundedSerialQueueTask = {
       sequence: ++this.acceptedSequence,
       weight,
