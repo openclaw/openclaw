@@ -496,14 +496,16 @@ describe("monitorLineProvider lifecycle", () => {
     },
   );
 
-  it("paces block replies with the humanDelay the turn's own config carries", async () => {
-    // humanDelay lives on the agent, but only the dispatcher can act on it, so a
-    // turn that never forwards it paces every block reply at zero.
+  // Runs one inbound LINE message through the monitor and returns the turn it hands core.
+  async function captureInboundTurn(
+    ctx: { ctxPayload: Record<string, string>; replyToken?: string; agentId: string },
+    cfg: Record<string, unknown> = {},
+  ) {
     const { setLineRuntime } = await import("./runtime.js");
-    type ResolvedTurn = { dispatcherOptions?: { humanDelay?: unknown } };
-    let resolvedTurn: ResolvedTurn | undefined;
+    type CapturedTurn = Pick<ChannelInboundTurnPlan, "delivery" | "dispatcherOptions">;
+    let resolvedTurn: CapturedTurn | undefined;
     const runTurn = async (params: {
-      adapter: { resolveTurn: () => ResolvedTurn };
+      adapter: { resolveTurn: () => CapturedTurn };
     }): Promise<{ dispatched: false }> => {
       resolvedTurn = params.adapter.resolveTurn();
       return { dispatched: false };
@@ -521,37 +523,66 @@ describe("monitorLineProvider lifecycle", () => {
     if (!onMessage) {
       throw new Error("expected the LINE bot to receive an inbound message handler");
     }
-
     try {
       await onMessage(
         {
-          ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
-          replyToken: "reply-token",
-          route: { accountId: "default", agentId: "ops", sessionKey: "line:U1" },
+          ctxPayload: ctx.ctxPayload,
+          replyToken: ctx.replyToken,
+          route: { accountId: "default", agentId: ctx.agentId, sessionKey: "line:U1" },
           isGroup: false,
           accountId: "default",
           turn: { record: {} },
         } as unknown as Parameters<typeof onMessage>[0],
-        {
-          // The per-agent entry wins, so a turn reading only the defaults would
-          // pace at the wrong interval rather than not at all.
-          cfg: {
-            agents: {
-              defaults: { humanDelay: { mode: "natural" } },
-              entries: { ops: { humanDelay: { mode: "custom", minMs: 3_000, maxMs: 4_000 } } },
-            },
-          },
-        } as Parameters<typeof onMessage>[1],
+        { cfg } as Parameters<typeof onMessage>[1],
       );
-
-      expect(resolvedTurn?.dispatcherOptions?.humanDelay).toEqual({
-        mode: "custom",
-        minMs: 3_000,
-        maxMs: 4_000,
-      });
     } finally {
       await monitor.stop();
     }
+    return resolvedTurn;
+  }
+
+  it("paces block replies with the humanDelay the turn's own config carries", async () => {
+    // humanDelay lives on the agent, but only the dispatcher can act on it, so a
+    // turn that never forwards it paces every block reply at zero.
+    const turn = await captureInboundTurn(
+      {
+        ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
+        replyToken: "reply-token",
+        agentId: "ops",
+      },
+      {
+        // The per-agent entry wins, so a turn reading only the defaults would
+        // pace at the wrong interval rather than not at all.
+        agents: {
+          defaults: { humanDelay: { mode: "natural" } },
+          entries: { ops: { humanDelay: { mode: "custom", minMs: 3_000, maxMs: 4_000 } } },
+        },
+      },
+    );
+
+    expect(turn?.dispatcherOptions?.humanDelay).toEqual({
+      mode: "custom",
+      minMs: 3_000,
+      maxMs: 4_000,
+    });
+  });
+
+  it("keeps a final reply that answers a message on the durable path", async () => {
+    // Core threads the answered message onto the reply. The selector must keep that
+    // reply durable and leave its reply-to for core to carry into the quote; sending
+    // it inline would lose it to a crash exactly when it quotes what it answers.
+    const turn = await captureInboundTurn({
+      ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
+      agentId: "main",
+    });
+
+    const durable = turn?.delivery.durable;
+    if (typeof durable !== "function") {
+      throw new Error("expected LINE to choose durable delivery per reply");
+    }
+    expect(await durable({ text: "answering you", replyToId: "m1" }, { kind: "final" })).toEqual({
+      to: "line:U1",
+    });
   });
 
   it("carries a group's skill scope into the turn that answers it", async () => {

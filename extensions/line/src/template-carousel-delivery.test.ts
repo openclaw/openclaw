@@ -45,20 +45,16 @@ function createOutboundRuntime() {
   const pushMessageLine = vi.fn(async (_to: string, _text: string, _options: unknown) =>
     lineResult("text"),
   );
-  const pushMessagesLine = vi.fn(async () => lineResult("batch"));
-  const pushTemplateMessage = vi.fn(async () => lineResult("template"));
+  const pushMessagesLine = vi.fn(async (_to: string, _messages: unknown[], _options: unknown) =>
+    lineResult("batch"),
+  );
   const runtime = {
     channel: {
       line: {
         buildTemplateMessageFromPayload,
         pushMessageLine,
         pushMessagesLine,
-        pushTemplateMessage,
-        pushFlexMessage: vi.fn(async () => lineResult("flex")),
-        pushLocationMessage: vi.fn(async () => lineResult("location")),
-        pushTextMessageWithQuickReplies: vi.fn(async () => lineResult("quick")),
         createQuickReplyItems: vi.fn((labels: string[]) => ({ items: labels })),
-        sendMessageLine: vi.fn(async () => lineResult("media")),
       },
       text: {
         chunkMarkdownText: (text: string) => [text],
@@ -67,14 +63,17 @@ function createOutboundRuntime() {
     },
   } as unknown as PluginRuntime;
 
-  return { runtime, pushMessageLine, pushMessagesLine, pushTemplateMessage };
+  // Every push leaves through the one batch sender, so what reached LINE is the
+  // ordered list of what each push carried.
+  const pushes = () => pushMessagesLine.mock.calls.map((call) => call[1]);
+  return { runtime, pushMessageLine, pushMessagesLine, pushes };
 }
 
 describe("LINE carousel fallback delivery", () => {
   it.each(["", "After"])(
     "quotes the direct carousel fallback once when the following text is %j",
     async (text) => {
-      const { runtime, pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
+      const { runtime, pushes } = createOutboundRuntime();
       setLineRuntime(runtime);
       recordLineQuoteToken({
         accountId: "default",
@@ -92,28 +91,15 @@ describe("LINE carousel fallback delivery", () => {
         cfg: { channels: { line: {} } },
       });
 
-      expect(pushTemplateMessage).not.toHaveBeenCalled();
-      expect(pushMessageLine).toHaveBeenNthCalledWith(
-        1,
-        "line:user:Ucarousel",
-        fallbackText,
-        expect.objectContaining({ quoteToken: "q-carousel" }),
-      );
-      expect(pushMessageLine).toHaveBeenCalledTimes(text ? 2 : 1);
-      if (text) {
-        expect(pushMessageLine).toHaveBeenNthCalledWith(
-          2,
-          "line:user:Ucarousel",
-          text,
-          expect.not.objectContaining({ quoteToken: expect.anything() }),
-        );
-      }
+      expect(pushes()).toEqual([
+        [{ type: "text", text: fallbackText, quoteToken: "q-carousel" }],
+        ...(text ? [[{ type: "text", text }]] : []),
+      ]);
     },
   );
 
   it("quotes the carousel fallback once with inline quick replies", async () => {
-    const { runtime, pushMessagesLine, pushMessageLine, pushTemplateMessage } =
-      createOutboundRuntime();
+    const { runtime, pushMessagesLine, pushMessageLine } = createOutboundRuntime();
     setLineRuntime(runtime);
     recordLineQuoteToken({
       accountId: "default",
@@ -131,7 +117,6 @@ describe("LINE carousel fallback delivery", () => {
       cfg: { channels: { line: {} } },
     });
 
-    expect(pushTemplateMessage).not.toHaveBeenCalled();
     expect(pushMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
       "line:user:Ucarousel-quick",
@@ -147,8 +132,8 @@ describe("LINE carousel fallback delivery", () => {
     );
   });
 
-  it("sends direct fallback before the ordinary text without calling template delivery", async () => {
-    const { runtime, pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
+  it("sends the direct fallback before the ordinary text instead of a template", async () => {
+    const { runtime, pushes } = createOutboundRuntime();
     setLineRuntime(runtime);
 
     await lineOutboundAdapter.sendPayload!({
@@ -159,8 +144,10 @@ describe("LINE carousel fallback delivery", () => {
       cfg: { channels: { line: {} } },
     });
 
-    expect(pushTemplateMessage).not.toHaveBeenCalled();
-    expect(pushMessageLine.mock.calls.map((call) => call[1])).toEqual([fallbackText, "After"]);
+    expect(pushes()).toEqual([
+      [{ type: "text", text: fallbackText }],
+      [{ type: "text", text: "After" }],
+    ]);
   });
 
   it("keeps the auto-reply fallback and ordinary text in the same reply", async () => {
@@ -184,7 +171,7 @@ describe("LINE carousel fallback delivery", () => {
   });
 
   it("keeps quick replies inline on a direct textual fallback", async () => {
-    const { runtime, pushMessagesLine, pushTemplateMessage } = createOutboundRuntime();
+    const { runtime, pushMessagesLine } = createOutboundRuntime();
     setLineRuntime(runtime);
 
     await lineOutboundAdapter.sendPayload!({
@@ -198,7 +185,6 @@ describe("LINE carousel fallback delivery", () => {
       cfg: { channels: { line: {} } },
     });
 
-    expect(pushTemplateMessage).not.toHaveBeenCalled();
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
       [{ type: "text", text: fallbackText, quickReply: { items: ["Continue"] } }],

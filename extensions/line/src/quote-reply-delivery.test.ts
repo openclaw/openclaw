@@ -5,16 +5,25 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
-import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { createRuntime } from "./outbound-harness.test-support.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
+const ssrfMocks = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: logVerboseMock,
   danger: (t: string) => t,
+}));
+
+// The payload owner builds its own media message, so the media URL is validated
+// in-process instead of behind a stand-in sender.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
 }));
 
 // baseDeliveryParams answers on account "acc" in chat "line:user:1".
@@ -28,6 +37,14 @@ function rememberInboundMessage(messageId: string, quoteToken: string) {
     messageId,
     quoteToken,
   });
+}
+
+type PushedMessage = { type: string; text?: string; quoteToken?: string };
+
+// Every push leaves through the one batch sender, so what reached LINE is the
+// ordered list of what each push carried.
+function pushedMessages(mocks: ReturnType<typeof createRuntime>["mocks"]): PushedMessage[][] {
+  return mocks.pushMessagesLine.mock.calls.map((call) => call[1]);
 }
 
 describe("the reply-token delivery path", () => {
@@ -176,9 +193,9 @@ describe("the push delivery path", () => {
       cfg,
     });
 
-    expect(mocks.pushMessageLine.mock.calls.map((args) => [args[1], args[2].quoteToken])).toEqual([
-      ["first", "token-push"],
-      ["second", undefined],
+    expect(pushedMessages(mocks)).toEqual([
+      [{ type: "text", text: "first", quoteToken: "token-push" }],
+      [{ type: "text", text: "second" }],
     ]);
   });
 
@@ -201,12 +218,16 @@ describe("the push delivery path", () => {
       cfg,
     });
 
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledExactlyOnceWith(
-      "line:group:Cquick",
-      "pick one",
-      ["Yes", "No"],
-      expect.objectContaining({ quoteToken: "token-quick" }),
-    );
+    expect(pushedMessages(mocks)).toEqual([
+      [
+        {
+          type: "text",
+          text: "pick one",
+          quickReply: { items: ["Yes", "No"] },
+          quoteToken: "token-quick",
+        },
+      ],
+    ]);
   });
 
   it("quotes a plain-text send routed through the message adapter", async () => {
@@ -229,11 +250,9 @@ describe("the push delivery path", () => {
       accountId: "default",
     });
 
-    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "line:group:Cadapter",
-      "answering you",
-      expect.objectContaining({ quoteToken: "token-adapter" }),
-    );
+    expect(pushedMessages(mocks)).toEqual([
+      [{ type: "text", text: "answering you", quoteToken: "token-adapter" }],
+    ]);
   });
 
   it("quotes a media send routed through the message adapter", async () => {
@@ -242,6 +261,10 @@ describe("the push delivery path", () => {
       chatId: "Cmedia",
       messageId: "inbound-media",
       quoteToken: "token-media",
+    });
+    ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
     });
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -256,11 +279,16 @@ describe("the push delivery path", () => {
     });
 
     // The caption is the only part LINE lets a quote ride on; the image itself cannot.
-    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "line:group:Cmedia",
-      "here you go",
-      expect.objectContaining({ quoteToken: "token-media" }),
-    );
+    expect(pushedMessages(mocks)).toEqual([
+      [{ type: "text", text: "here you go", quoteToken: "token-media" }],
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/image.jpg",
+          previewImageUrl: "https://example.com/image.jpg",
+        },
+      ],
+    ]);
   });
 
   it("quotes the first text of a reply whose leading part cannot carry a quote", async () => {
@@ -290,11 +318,40 @@ describe("the push delivery path", () => {
       cfg,
     });
 
-    expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "line:group:Cordered",
-      "After the card",
-      expect.objectContaining({ quoteToken: "token-ordered" }),
+    const [card, text] = pushedMessages(mocks);
+    expect(card?.map((message) => [message.type, message.quoteToken])).toEqual([
+      ["flex", undefined],
+    ]);
+    expect(text).toEqual([{ type: "text", text: "After the card", quoteToken: "token-ordered" }]);
+  });
+
+  it("reports a push that answered a message but could carry no quote", async () => {
+    recordLineQuoteToken({
+      accountId: "default",
+      chatId: "Ccard",
+      messageId: "inbound-card",
+      quoteToken: "token-card",
+    });
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    logVerboseMock.mockClear();
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:group:Ccard",
+      text: "",
+      payload: {
+        channelData: { line: { flexMessage: { altText: "card", contents: { type: "bubble" } } } },
+      },
+      replyToId: "inbound-card",
+      accountId: "default",
+      cfg,
+    });
+
+    expect(pushedMessages(mocks).flat()).not.toContainEqual(
+      expect.objectContaining({ quoteToken: expect.anything() }),
+    );
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      expect.stringContaining("nothing in this reply to line:group:Ccard can carry a quote"),
     );
   });
 
@@ -310,8 +367,6 @@ describe("the push delivery path", () => {
       cfg,
     });
 
-    expect(expectDefined(mocks.pushMessageLine.mock.calls[0], "push call")[2]).not.toHaveProperty(
-      "quoteToken",
-    );
+    expect(pushedMessages(mocks)).toEqual([[{ type: "text", text: "just saying" }]]);
   });
 });
