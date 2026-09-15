@@ -17,6 +17,7 @@ import {
   isSessionProjectionErrorMessage,
 } from "./session-projection-message-content.js";
 import {
+  isLocallyOptimisticSessionMessage,
   normalizeSessionProjectionRunId,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
@@ -36,6 +37,7 @@ export {
 } from "./session-projection-run-event.js";
 
 export {
+  isLocallyOptimisticSessionMessage,
   normalizeSessionProjectionRunId,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
@@ -139,17 +141,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-/** Local turns have no durable transcript metadata beyond their own optional send key. */
-export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
-  const record = readRecord(message);
-  const role = readNonemptyString(record?.role)?.toLowerCase();
-  if (role !== "user" && role !== "assistant") {
-    return false;
-  }
-  const metadata = readRecord(record?.["__openclaw"]);
-  return !metadata || Object.keys(metadata).every((key) => key === "idempotencyKey");
-}
 
 function createEntry(
   message: unknown,
@@ -380,11 +371,12 @@ function insertEntry(
 }
 
 export function projectLiveSessionMessage(
-  state: SessionProjectionState,
+  initialState: SessionProjectionState,
   message: unknown,
   envelope?: SessionMessageEnvelope,
   scope: SessionProjectionScope = {},
 ): SessionProjectionState {
+  let state = initialState;
   if (!scopesMatch(state.scope, scope)) {
     return state;
   }
