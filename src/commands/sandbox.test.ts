@@ -123,7 +123,7 @@ describe("sandboxListCommand", () => {
     });
 
     it("should display browsers when --browser flag is set", async () => {
-      const browser = createBrowser({ containerName: "browser-1" });
+      const browser = createBrowser({ containerName: "browser-1", imageMatch: false });
       mocks.listSandboxBrowsers.mockResolvedValue([browser]);
 
       await sandboxListCommand({ browser: true, json: false }, runtime as never);
@@ -131,6 +131,7 @@ describe("sandboxListCommand", () => {
       expectLogContains(runtime, "🌐 Sandbox Browser Containers");
       expectLogContains(runtime, browser.containerName);
       expectLogContains(runtime, String(browser.cdpPort));
+      expectLogContains(runtime, "sandbox recreate --all --browser --mismatched");
     });
 
     it.each([
@@ -143,8 +144,21 @@ describe("sandboxListCommand", () => {
       await sandboxListCommand({ browser, json: false }, runtime as never);
 
       expectLogContains(runtime, "1 runtime(s) with config mismatch detected.");
-      expectLogContains(runtime, `${command}' to update all runtimes.`);
+      expectLogContains(runtime, `${command} --mismatched' to update image-mismatched runtimes.`);
       expect(runtime.log).toHaveBeenCalledWith("Total: 1 (1 running)");
+    });
+
+    it("should keep broad recreate guidance when remote backends also mismatch", async () => {
+      mocks.listSandboxContainers.mockResolvedValue([
+        createContainer({ imageMatch: false }),
+        createContainer({ backendId: "ssh", configLabelKind: undefined, imageMatch: false }),
+        createContainer({ backendId: "openshell", configLabelKind: "Image", imageMatch: false }),
+      ]);
+
+      await sandboxListCommand({ browser: false, json: false }, runtime as never);
+
+      expectLogContains(runtime, "openclaw sandbox recreate --all'");
+      expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("--mismatched"));
     });
 
     it("should display message when no containers found", async () => {
@@ -282,6 +296,85 @@ describe("sandboxRecreateCommand", () => {
 
       expect(mocks.removeSandboxBrowserContainer).toHaveBeenCalledTimes(2);
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
+    });
+
+    it("should recreate only normal runtimes with an image mismatch", async () => {
+      const matching = createContainer({ containerName: "matching", imageMatch: true });
+      const mismatched = createContainer({ containerName: "mismatched", imageMatch: false });
+      const legacyMismatch = createContainer({
+        containerName: "legacy-mismatch",
+        configLabelKind: undefined,
+        imageMatch: false,
+      });
+      const podmanMismatch = createContainer({
+        backendId: "podman",
+        containerName: "podman-mismatch",
+        imageMatch: false,
+      });
+      const legacySshMismatch = createContainer({
+        backendId: "ssh",
+        containerName: "legacy-ssh-mismatch",
+        configLabelKind: undefined,
+        imageMatch: false,
+      });
+      const legacyOpenShellMismatch = createContainer({
+        backendId: "openshell",
+        containerName: "legacy-openshell-mismatch",
+        configLabelKind: "Image",
+        imageMatch: false,
+      });
+      const targetMismatch = createContainer({
+        containerName: "target-mismatch",
+        configLabelKind: "Target",
+        imageMatch: false,
+      });
+      const sourceMismatch = createContainer({
+        containerName: "source-mismatch",
+        configLabelKind: "Source",
+        imageMatch: false,
+      });
+      mocks.listSandboxContainers.mockResolvedValue([
+        matching,
+        mismatched,
+        legacyMismatch,
+        podmanMismatch,
+        legacySshMismatch,
+        legacyOpenShellMismatch,
+        targetMismatch,
+        sourceMismatch,
+      ]);
+
+      await sandboxRecreateCommand(
+        { all: true, browser: false, mismatched: true, force: true },
+        runtime as never,
+      );
+
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(3);
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(mismatched.containerName);
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(legacyMismatch.containerName);
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(podmanMismatch.containerName);
+      expect(mocks.removeSandboxContainer).not.toHaveBeenCalledWith(
+        legacySshMismatch.containerName,
+      );
+      expect(mocks.removeSandboxContainer).not.toHaveBeenCalledWith(
+        legacyOpenShellMismatch.containerName,
+      );
+      expect(mocks.removeSandboxContainer).not.toHaveBeenCalledWith(targetMismatch.containerName);
+      expect(mocks.removeSandboxContainer).not.toHaveBeenCalledWith(sourceMismatch.containerName);
+    });
+
+    it("should recreate only browser runtimes with an image mismatch", async () => {
+      const matching = createBrowser({ containerName: "matching", imageMatch: true });
+      const mismatched = createBrowser({ containerName: "mismatched", imageMatch: false });
+      mocks.listSandboxBrowsers.mockResolvedValue([matching, mismatched]);
+
+      await sandboxRecreateCommand(
+        { all: true, browser: true, mismatched: true, force: true },
+        runtime as never,
+      );
+
+      expect(mocks.removeSandboxBrowserContainer).toHaveBeenCalledTimes(1);
+      expect(mocks.removeSandboxBrowserContainer).toHaveBeenCalledWith(mismatched.containerName);
     });
   });
 

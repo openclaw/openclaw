@@ -6,6 +6,7 @@ import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import type { RuntimeEnv } from "../runtime.js";
+import { isImageBackedSandboxMismatch } from "./sandbox-runtime-filter.js";
 
 export function displayContainers(containers: SandboxContainerInfo[], runtime: RuntimeEnv): void {
   if (containers.length === 0) {
@@ -65,15 +66,21 @@ export function displaySummary(
 ): void {
   const runningCount = entries.filter((entry) => entry.running).length;
   const mismatchCount = entries.filter((entry) => !entry.imageMatch).length;
+  const imageMismatchCount = browser
+    ? mismatchCount
+    : entries.filter(isImageBackedSandboxMismatch).length;
 
   runtime.log(`Total: ${entries.length} (${runningCount} running)`);
 
   if (mismatchCount > 0) {
     runtime.log(`\n⚠️  ${mismatchCount} runtime(s) with config mismatch detected.`);
+    const onlyImageMismatches = imageMismatchCount === mismatchCount;
     const command = formatCliCommand(
-      `openclaw sandbox recreate --all${browser ? " --browser" : ""}`,
+      `openclaw sandbox recreate --all${browser ? " --browser" : ""}${onlyImageMismatches ? " --mismatched" : ""}`,
     );
-    runtime.log(`   Run '${command}' to update all runtimes.`);
+    runtime.log(
+      `   Run '${command}' to update ${onlyImageMismatches ? "image-mismatched" : "all"} runtimes.`,
+    );
   }
 }
 
