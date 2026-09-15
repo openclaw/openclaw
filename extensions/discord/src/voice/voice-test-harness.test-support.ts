@@ -43,6 +43,7 @@ const {
   loggerWarnMock,
   loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
+  registerRealtimeVoiceSelectionMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
   createRealtimeSessionMock,
@@ -160,6 +161,7 @@ function buildVoiceTestHarness() {
       suppress: false,
     });
     resolveConfiguredRealtimeVoiceProviderMock.mockClear();
+    registerRealtimeVoiceSelectionMock.mockClear();
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
       provider: { id: "openai" },
       capabilities: { supportsActivationNameGating: true },
@@ -676,6 +678,7 @@ function buildVoiceTestHarness() {
     loggerWarnMock,
     loggerErrorMock,
     resolveConfiguredRealtimeVoiceProviderMock,
+    registerRealtimeVoiceSelectionMock,
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,
     createRealtimeSessionMock,
@@ -739,7 +742,5 @@ export type DiscordVoiceTestHarness = ReturnType<typeof buildVoiceTestHarness>;
 export function defineDiscordVoiceTests(
   register: (harness: DiscordVoiceTestHarness) => void,
 ): void {
-  describe("DiscordVoiceManager", () => {
-    register(buildVoiceTestHarness());
-  });
+  describe("DiscordVoiceManager", () => register(buildVoiceTestHarness()));
 }

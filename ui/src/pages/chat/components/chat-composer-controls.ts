@@ -12,9 +12,11 @@ import {
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
-} from "../realtime-talk-input.ts";
-import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
-import type { RealtimeTalkStatus } from "../realtime-talk.ts";
+} from "../talk/input.ts";
+import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import type { RealtimeTalkStatus } from "../talk/session.ts";
+import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
+import { renderRealtimeVoicePicker } from "./chat-realtime-controls.ts";
 import {
   renderChatVoiceStatus,
   renderMicrophoneActivity,
@@ -51,6 +53,8 @@ export type ChatRunControlsProps = {
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
+  voice?: RealtimeVoiceSelectionState;
+  onSelectVoice?: (voice: string) => void;
 };
 
 type MicrophonePickerProps = {
@@ -647,6 +651,11 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     ${
       props.voiceActive && props.onToggleVoice
         ? html`
+            ${renderRealtimeVoicePicker({
+              ...props.voice,
+              disabled: !props.connected || voiceErrored,
+              onChange: props.onSelectVoice,
+            })}
             <span class="chat-talk-control chat-talk-control--active">
               <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
                 <button

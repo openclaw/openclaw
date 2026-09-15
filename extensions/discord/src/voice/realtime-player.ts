@@ -113,7 +113,8 @@ export class DiscordRealtimePlayer {
     this.player.stop(true);
   }
 
-  private transition(action: () => void): void {
+  /** Prevent retiring one lane from granting playback to a sibling that is also retiring. */
+  transition(action: () => void): void {
     const wasChanging = this.changing;
     this.changing = true;
     try {

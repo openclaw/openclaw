@@ -438,7 +438,6 @@ export function createManagedServiceManagerBoundary({
       await waitForHandoffResponse(runningHelper.stdout, "OPENCLAW_UPDATE_HANDOFF_READY");
 
       const databasePath = String(generated.updateLeaseDatabasePath);
-      const owner = String(generated.updateLeaseOwner);
       const readLease = (): Record<string, unknown> | null => {
         const db = new DatabaseSync(databasePath, { readOnly: true });
         try {
@@ -446,7 +445,7 @@ export function createManagedServiceManagerBoundary({
             .prepare(
               "SELECT payload_json FROM managed_update_handoffs WHERE install_root = ? AND owner = ?",
             )
-            .get(root, owner) as { payload_json: string } | undefined;
+            .get(root, String(generated.updateLeaseOwner)) as { payload_json: string } | undefined;
           return row ? (JSON.parse(row.payload_json) as Record<string, unknown>) : null;
         } finally {
           db.close();

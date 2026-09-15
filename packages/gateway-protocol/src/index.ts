@@ -20,6 +20,7 @@ export * from "./schema/computer.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/ui-command.js";
+export { TALK_VOICE_CHANGE_TIMEOUT_MS } from "./schema/talk-voice.js";
 export * from "./schema/board.js";
 export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";

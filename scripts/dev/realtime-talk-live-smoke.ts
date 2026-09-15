@@ -218,7 +218,7 @@ function transcriptIncludesMarker(transcripts: string[], marker: string): boolea
 }
 
 function resolveGatewayRelayModulePath(repoRoot = process.cwd()): string {
-  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/realtime-talk-gateway-relay.ts`;
+  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/talk/gateway-relay.ts`;
 }
 
 async function sendPcmAudioInChunks(

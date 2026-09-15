@@ -69,7 +69,7 @@ defineDiscordVoiceTests(
           expect(agentCommandArgsAt(index)).toMatchObject({
             senderIsOwner: index === 1,
             sessionKey: "discord:g1:c1",
-            abortSignal: signal,
+            abortSignal: expect.any(AbortSignal),
           });
         }
         await manager.destroy();

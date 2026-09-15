@@ -679,6 +679,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.activitySummary.ensure", "session-activity-summary", "operator.write", "2026.9"],
   ["controlUi.sessionPullRequests.checks", "control-ui", "operator.read", "2026.9"],
   ["diagnostics.cpuProfile", "diagnostics", "operator.admin", "2026.9"],
+  ["talk.voice.get", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.set", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.complete", "talk", "operator.talk", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
@@ -722,12 +725,11 @@ export function listCoreGatewayHandlerMethodNames(): ReadonlyMap<
 > {
   const methodsByFamily = new Map<CoreGatewayHandlerFamily, string[]>();
   for (const [name, family] of CORE_GATEWAY_METHOD_SPECS) {
-    if (!family) {
-      continue;
+    if (family) {
+      const methods = methodsByFamily.get(family) ?? [];
+      methods.push(name);
+      methodsByFamily.set(family, methods);
     }
-    const methods = methodsByFamily.get(family) ?? [];
-    methods.push(name);
-    methodsByFamily.set(family, methods);
   }
   return methodsByFamily;
 }

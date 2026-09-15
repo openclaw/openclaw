@@ -144,9 +144,9 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "hooks-status": () => import("./hooks-status.js").then((module) => module.hooksStatusHandlers),
   skills: () => import("./skills.js").then((module) => module.skillsHandlers),
   system: () => import("./system.js").then((module) => module.systemHandlers),
-  talk: () => import("./talk.js").then((module) => module.talkHandlers),
+  talk: () => import("../talk/handlers/index.js").then((module) => module.talkHandlers),
   // Mode synchronization does not depend on loading speech or realtime providers.
-  "talk-mode": () => import("./talk-mode.js").then((module) => module.talkModeHandlers),
+  "talk-mode": () => import("../talk/handlers/mode.js").then((module) => module.talkModeHandlers),
   tasks: () => import("./tasks.js").then((module) => module.tasksHandlers),
   "task-suggestions": () =>
     import("./task-suggestions.js").then((module) => module.taskSuggestionsHandlers),

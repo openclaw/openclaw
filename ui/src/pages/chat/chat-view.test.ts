@@ -71,7 +71,7 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
-import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
   workspaceResultConflictFromTranscript,

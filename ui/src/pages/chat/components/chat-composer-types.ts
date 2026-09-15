@@ -22,11 +22,12 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
-import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type { RealtimeTalkCameraDevice } from "../realtime-talk-input.ts";
-import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
-import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
+import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import type { RealtimeTalkStatus } from "../talk/session.ts";
+import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
@@ -134,6 +135,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
+  realtimeTalkVoice?: RealtimeVoiceSelectionState;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
@@ -155,6 +157,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     submissionAction?: Event,
   ) => void | Promise<boolean | void>;
   onToggleRealtimeTalk?: () => void;
+  onSelectRealtimeVoice?: (voice: string) => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;

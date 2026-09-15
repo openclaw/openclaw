@@ -616,7 +616,7 @@ describe("script-specific dev tooling hardening", () => {
   it("resolves the realtime relay smoke to an existing Control UI module", () => {
     const modulePath = realtimeSmokeTesting.resolveGatewayRelayModulePath(process.cwd());
 
-    expect(modulePath.endsWith("/ui/src/pages/chat/realtime-talk-gateway-relay.ts")).toBe(true);
+    expect(modulePath.endsWith("/ui/src/pages/chat/talk/gateway-relay.ts")).toBe(true);
     expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
   });
 

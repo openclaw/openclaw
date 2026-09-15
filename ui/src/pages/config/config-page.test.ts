@@ -17,7 +17,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import * as realtimeTalk from "../chat/realtime-talk.ts";
+import * as realtimeTalk from "../chat/talk/session.ts";
 import { ConfigPage, extractQuickSettingsSecurity } from "./config-page.ts";
 import { serverUiPrefProvenanceHint } from "./view-appearance-preferences.ts";
 import type { ConfigViewState } from "./view.ts";

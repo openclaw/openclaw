@@ -53,7 +53,7 @@ vi.mock("../../infra/system-presence.js", () => ({
 vi.mock("./presence-events.js", () => ({
   broadcastPresenceSnapshot: broadcastPresenceSnapshotMock,
 }));
-vi.mock("../talk-session-registry.js", () => ({
+vi.mock("../talk/session-registry.js", () => ({
   cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 

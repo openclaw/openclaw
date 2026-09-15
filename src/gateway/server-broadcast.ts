@@ -71,6 +71,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   tick: [],
   "talk.event": [READ_SCOPE],
   "talk.mode": [TALK_SCOPE],
+  "talk.voice.change": [TALK_SCOPE],
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],

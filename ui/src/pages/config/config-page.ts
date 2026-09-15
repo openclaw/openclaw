@@ -67,8 +67,8 @@ import {
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
-} from "../chat/realtime-talk-input.ts";
-import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
+} from "../chat/talk/input.ts";
+import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import {

@@ -609,8 +609,6 @@ src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
 src/gateway/server-methods/skills.ts
-src/gateway/server-methods/talk.test.ts
-src/gateway/server-methods/talk.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
@@ -636,7 +634,9 @@ src/gateway/session-utils.subagent.test.ts
 src/gateway/session-utils.test.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
-src/gateway/talk-realtime-relay.test.ts
+src/gateway/talk/handlers/index.test.ts
+src/gateway/talk/handlers/index.ts
+src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
@@ -814,7 +814,7 @@ ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts
-ui/src/pages/chat/realtime-talk-gateway-relay.test.ts
+ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts

@@ -15,7 +15,7 @@ import {
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
-import * as realtimeTalkInput from "./realtime-talk-input.ts";
+import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
 const openMicrophoneMock = vi.fn();

@@ -12,7 +12,7 @@ import {
 } from "../infra/device-identity.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
-import { withSpeechProviders } from "./talk.test-helpers.js";
+import { withSpeechProviders } from "./talk/test-helpers.js";
 import {
   connectOk,
   createGatewaySuiteHarness,

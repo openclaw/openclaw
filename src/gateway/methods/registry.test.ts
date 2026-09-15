@@ -144,6 +144,8 @@ describe("gateway method registry", () => {
     // talk.config projects the caller's profile accent; a pending GitHub
     // identity sync must complete before the handler runs.
     expect(registry.requiresAuthenticatedProfile("talk.config")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.get")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.set")).toBe(true);
     for (const method of listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod)) {
       expect(registry.requiresAuthenticatedProfile(method), method).toBe(true);
     }
